@@ -35,7 +35,13 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 # `'` is a valid URI sub-delimiter, so it stays IN the match (`/o'reilly?token=x`
 # must not be cut short of its query); `"`, `<` and `>` cannot appear unencoded in
 # a URI, so they still terminate it.
-_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}://[^\s<>\"]+", re.IGNORECASE)
+#
+# The authority is optional — an MCP resource uri need not have one
+# (`resource:guide?token=...`, `file:/guide.md?token=...`), and `[^\s<>"]+`
+# absorbs a `//host` when there is one. That over-matches prose (`Error:foo`,
+# `at12:30`, `C:\path`), which is harmless: a match with nothing to redact is
+# returned byte-for-byte, never re-serialized.
+_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}:[^\s<>\"]+", re.IGNORECASE)
 # Prose puts URLs in sentences ("see https://x?sig=a, then retry"), in parentheses
 # and in single quotes, and the terminal class above swallows the punctuation that
 # closes them. It is split off before parsing and re-appended to whatever comes
@@ -168,7 +174,7 @@ def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
     # A retained value can carry a URL of its own (a gateway's `?url=`). The budget
     # for that is one level: sanitize the first, and drop any value still carrying
     # a URL past it rather than trusting what we did not look inside.
-    if "://" in value:
+    if _URL_PATTERN.search(value):
         return _sanitize_urls(value, nested=False) if nested else _REDACTED_VALUE
     return value
 

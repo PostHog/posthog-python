@@ -167,6 +167,23 @@ def test_sanitize_redacts_large_base64():
             "https://%5Bredacted%5D@en.wikipedia.org/wiki/Foo_(bar).",
         ),
         ("file:///guide.md", "file:///guide.md"),
+        # An MCP resource uri need not have an authority, so the `//` is optional.
+        # `urlunsplit` re-serializes an authority-less `file:` uri as `file:///`,
+        # which is also what JS's `new URL()` produces.
+        (
+            "file:/guide.md?token=fakesecret",
+            "file:///guide.md?token=%5Bredacted%5D",
+        ),
+        # Same rewrite for `resource:guide?token=...` — but the entropy pass that
+        # follows for free-text values judges the rewritten string a credential and
+        # drops it whole. The token is gone either way; `$mcp_resource_name`, which
+        # skips that pass, keeps the readable form (see the resource_name test).
+        ("resource:guide?token=fakesecret", "[redacted]"),
+        # An optional authority over-matches prose, which costs nothing: a match
+        # with nothing to redact is returned byte-for-byte.
+        ("Error: see resource:guide.", "Error: see resource:guide."),
+        ("Meet at12:30 today", "Meet at12:30 today"),
+        ("resource:guide", "resource:guide"),
         (
             "https://example.com/o'reilly?token=fakesecret",
             "https://example.com/o'reilly?token=%5Bredacted%5D",
@@ -473,6 +490,12 @@ def test_redact_pii_is_not_quadratic_on_pathological_input():
             MCPAnalyticsEventType.MCP_RESOURCES_READ,
             "https://example.com/guide?token=fakesecret",
             "https://example.com/guide?token=%5Bredacted%5D",
+        ),
+        # An authority-less resource uri is redacted the same way.
+        (
+            MCPAnalyticsEventType.MCP_RESOURCES_READ,
+            "resource:guide?token=fakesecret",
+            "resource:guide?token=%5Bredacted%5D",
         ),
     ],
 )
