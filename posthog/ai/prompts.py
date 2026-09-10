@@ -129,6 +129,12 @@ def _row_resolves_label(row: Dict[str, Any], label: str) -> bool:
     )
 
 
+def _is_same_origin(url: str, host: str) -> bool:
+    parsed = urllib.parse.urlsplit(url)
+    expected = urllib.parse.urlsplit(host)
+    return (parsed.scheme, parsed.netloc) == (expected.scheme, expected.netloc)
+
+
 def _authentication_error(reference: str) -> Exception:
     return Exception(
         f"[PostHog Prompts] Authentication failed for {reference}. "
@@ -669,7 +675,19 @@ class Prompts:
                 )
 
             rows.extend(data["results"])
-            url = data.get("next")
+
+            # The Authorization header goes to every followed link, so a link
+            # off the configured host must never be requested.
+            next_url = data.get("next")
+            if next_url is not None and (
+                not isinstance(next_url, str)
+                or not _is_same_origin(next_url, self._host)
+            ):
+                raise Exception(
+                    f"[PostHog Prompts] Refusing to follow a pagination link off the "
+                    f"configured host while fetching {reference}."
+                )
+            url = next_url
             pages += 1
 
         return rows

@@ -1459,6 +1459,21 @@ class TestPromptsGetAll(TestPrompts):
         self.assertEqual(list(results), ["prompt-b"])
 
     @patch("posthog.ai.prompts._get_session")
+    def test_refuses_a_pagination_link_off_the_configured_host(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = self.list_response(
+            [self.labeled_row("prompt-a")],
+            next_url="https://attacker.example.com/collect",
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("off the configured host", str(ctx.exception))
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("posthog.ai.prompts._get_session")
     def test_raises_on_http_error(self, mock_get_session):
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(status_code=500, ok=False)
