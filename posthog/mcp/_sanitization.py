@@ -123,16 +123,26 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
         # A fragment is only a field list when it looks like one; `#section-2` is
         # left byte-for-byte rather than re-serialized as `section-2=`.
         route, fragment_fields = _split_fragment_route(url.fragment)
+        is_field_list = "=" in fragment_fields
         fragment, sanitized_fragment = (
             _sanitize_url_fields(fragment_fields, nested=nested)
-            if "=" in fragment_fields
+            if is_field_list
             else ([], [])
         )
+        # A fragment that is not a field list is plain text, and text can carry an
+        # address of its own. A match runs to the first `#`, so such an address is
+        # never split off as a second one and this is the only pass that sees it.
+        plain_fragment = (
+            url.fragment
+            if is_field_list
+            else _sanitize_urls(url.fragment, nested=False)
+        )
         netloc = _redact_userinfo(url.netloc)
-        if (netloc, sanitized_query, sanitized_fragment) == (
+        if (netloc, sanitized_query, sanitized_fragment, plain_fragment) == (
             url.netloc,
             query,
             fragment,
+            url.fragment,
         ):
             return value
         # The split-off punctuation can be the tail of the credential rather than
@@ -158,7 +168,7 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
                     else url.query,
                     route + urlencode(sanitized_fragment)
                     if sanitized_fragment != fragment
-                    else url.fragment,
+                    else plain_fragment,
                 )
             )
             + suffix

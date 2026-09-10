@@ -111,6 +111,16 @@ def test_sanitize_redacts_large_base64():
             "https://app.example.com/cb#access_token=%5Bredacted%5D&token_type=%5Bredacted%5D",
         ),
         ("https://example.com/doc#section-2", "https://example.com/doc#section-2"),
+        # A plain fragment is text, and text can carry an address: a match ends at
+        # the first `#`, so this pass is the only one that sees that address.
+        (
+            "[a](https://public.test/#intro)[b](https://fakeuser:fakepass@private.test/doc)",
+            "[a](https://public.test/#intro)[b](https://%5Bredacted%5D@private.test/doc)",
+        ),
+        (
+            "[a](https://public.test/#intro)[b](https://private.test/doc)",
+            "[a](https://public.test/#intro)[b](https://private.test/doc)",
+        ),
         # A hash-routed URL puts the route in the fragment: it stays verbatim, and
         # only what follows the first `?` is a field list.
         (
