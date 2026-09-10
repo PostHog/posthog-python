@@ -157,6 +157,17 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/#/docs/id=1?token=fakesecret",
             "https://example.com/#/docs/id=1?token=%5Bredacted%5D",
         ),
+        # ... but when the half before the `?` ends in a value we just redacted,
+        # that `?` may be a character of the credential rather than a boundary, so
+        # what follows it goes too.
+        (
+            "https://example.com/#password=prefix?fakesecret",
+            "https://example.com/#password=%5Bredacted%5D?[redacted]",
+        ),
+        (
+            "https://example.com/#password=prefix?token=x&page=1",
+            "https://example.com/#password=%5Bredacted%5D?[redacted]",
+        ),
         ("https://example.com/#/docs/id=1", "https://example.com/#/docs/id=1"),
         # A field list whose key happens to start with a `/`; re-serializing the
         # redacted field percent-encodes that `/`.
@@ -291,6 +302,12 @@ def test_sanitize_redacts_large_base64():
         (
             "https://host/a=b/c,https://fakeuser:fakepass@x.test/doc",
             "https://host/a=b/c,https://%5Bredacted%5D@x.test/doc",
+        ),
+        # Only the fields region holds values, so a `=` in the path never makes
+        # the address that follows it part of one.
+        (
+            "https://example.com/redirect=https://fakeuser:fakepass@private.example.com/doc",
+            "https://example.com/redirect=https://%5Bredacted%5D@private.example.com/doc",
         ),
         (
             "https://example.com/?https://fakeuser:fakepass@x.test/doc",

@@ -58,8 +58,8 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
-# What separates one field, or one path segment, from the next.
-_FIELD_STRUCTURE_CHARACTERS = "=&;?#/"
+# What separates one field from the next inside a query or fragment.
+_FIELD_STRUCTURE_CHARACTERS = "=&;?#"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`/`/`-delimited segment matches, which
@@ -121,16 +121,23 @@ def _split_addresses(value: str) -> List[str]:
     The exception is an address in value position (`?url=https://...`,
     `?token=foo%20https://...`): it belongs to the field that holds it, and the
     nested pass sanitizes it there — splitting it off would cut the field's value
-    in two and publish the tail. What decides is the nearest structural character
-    before the authority: a `=` means the authority is inside a field's value,
-    while a `&`, `;`, `?`, `#`, `/` — or nothing at all — means a new address
-    begins. `/` is in that set so a `=` in a path (`/a=b/c,https://...`) does not
-    read as a field. One pass over the match finds them all.
+    in two and publish the tail. Only the fields region has values, so an address
+    before the first `?` or `#` is always its own, `=` in the path or not
+    (`/redirect=https://user:pw@host/doc`). Inside that region the nearest
+    structural character decides: a `=` puts the authority in a value, a field
+    separator — or nothing at all — starts a new address. One pass over the match
+    finds them all.
     """
+    fields_start = min(
+        (value.index(char) for char in "?#" if char in value), default=len(value)
+    )
     starts = [
         match.start()
         for match in _URL_AUTHORITY_SEARCH.finditer(value)
-        if match.start() > 0 and not _in_value_position(value, match.start())
+        if match.start() > 0
+        and (
+            match.start() < fields_start or not _in_value_position(value, match.start())
+        )
     ]
     if not starts:
         return [value]
@@ -160,8 +167,13 @@ def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
         # is a field list — so each half is judged only on whether it holds a `=`.
         head, separator, fragment_tail = url.fragment.partition("?")
         sanitized_head, head_rewrote_last = _sanitize_fragment_part(head, nested=nested)
-        sanitized_tail, tail_rewrote_last = _sanitize_fragment_part(
-            fragment_tail, nested=nested
+        # A `?` can fall inside a credential (`#password=pre?fix`), and nothing
+        # here can tell that from a real boundary. When the head ends in a value
+        # just redacted, the tail may be the rest of it, so it goes too.
+        sanitized_tail, tail_rewrote_last = (
+            (_REDACTED_VALUE, True)
+            if head_rewrote_last and fragment_tail
+            else _sanitize_fragment_part(fragment_tail, nested=nested)
         )
         fragment = sanitized_head + separator + sanitized_tail
         netloc = _redact_userinfo(url.netloc)
