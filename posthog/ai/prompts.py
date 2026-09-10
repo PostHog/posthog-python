@@ -21,7 +21,8 @@ log = logging.getLogger("posthog")
 APP_ENDPOINT = "https://us.posthog.com"
 DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # Backstop against a server whose pagination never terminates. 100 pages of the
-# default page size covers 10,000 prompts.
+# default page size covers 10,000 prompts; past that get_all raises rather than
+# returning a truncated result.
 _MAX_PROMPT_LIST_PAGES = 100
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
@@ -643,13 +644,13 @@ class Prompts:
         pages = 0
         while url:
             if pages >= _MAX_PROMPT_LIST_PAGES:
-                log.warning(
-                    "[PostHog Prompts] Stopped following pagination for %s after %d pages. "
-                    "The result may be incomplete.",
-                    reference,
-                    pages,
+                # A truncated result must not look complete: callers would cache
+                # a partial prompt set and treat missing prompts as unlabeled.
+                raise Exception(
+                    f"[PostHog Prompts] {reference} spans more than "
+                    f"{_MAX_PROMPT_LIST_PAGES} pages. Refusing to return an "
+                    "incomplete result."
                 )
-                break
 
             response = _get_session().get(url, headers=headers, timeout=10)
 
