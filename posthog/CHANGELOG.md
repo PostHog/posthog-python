@@ -1,5 +1,11 @@
 # posthog
 
+## 7.49.0 — 2026-09-10
+
+### Minor changes
+
+- [e85647b](https://github.com/posthog/posthog-python/commit/e85647b351192c93a58f7687b2f42e51d04e5f17) OpenAI and LangChain generations now also emit the served service tier as the explicit `$ai_service_tier` event property, next to the copy inside `$ai_model_parameters`. Cost processing prices tiered calls only from the explicit property, whose writers assert response-derived values. — Thanks @bernatixer!
+
 ## 7.48.0 — 2026-09-09
 
 ### Minor changes
