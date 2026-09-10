@@ -194,10 +194,19 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/#%2Ftoken=%5Bredacted%5D"
             "&next=https%3A%2F%2Fother.test%2F?page=1",
         ),
+        # A `;` is a field separator to some servers and a value character to
+        # others, so a value holding one goes whole rather than being split: the
+        # legacy field is still redacted, and `password=pre;fix` keeps its tail
+        # out of the payload.
         (
             "https://example.com/x?a=1;token=fakesecret",
-            "https://example.com/x?a=1&token=%5Bredacted%5D",
+            "https://example.com/x?a=%5Bredacted%5D",
         ),
+        (
+            "https://example.com/guide?password=prefix;remainingsecret",
+            "https://example.com/guide?password=%5Bredacted%5D",
+        ),
+        ("https://example.com/x?a=1;b=2", "https://example.com/x?a=1;b=2"),
         (
             "https://example.com/x?jwt=fakejwt&sessionid=fakesession&code=fakecode&country_code=BR",
             "https://example.com/x?jwt=%5Bredacted%5D&sessionid=%5Bredacted%5D&code=%5Bredacted%5D&country_code=BR",

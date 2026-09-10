@@ -291,11 +291,11 @@ def _redact_userinfo(netloc: str) -> str:
 
 def _sanitize_url_fields(text: str, *, nested: bool) -> Tuple[_UrlFields, _UrlFields]:
     """Parse a query (or fragment) and return both the original and the sanitized
-    fields, so the caller can tell whether anything was redacted. ``;`` is
-    normalized to ``&``: servers still emit it as a field separator, and a query
-    split only on ``&`` would hide the credential behind it."""
+    fields, so the caller can tell whether anything was redacted. Only ``&``
+    separates fields — see ``_sanitize_url_field_value`` for the ``;`` a value can
+    carry — so the field bound counts ``&`` too."""
     fields = parse_qsl(
-        text.replace(";", "&"),
+        text,
         keep_blank_values=True,
         max_num_fields=_MAX_URL_QUERY_FIELDS,
     )
@@ -308,12 +308,26 @@ def _sanitize_url_fields(text: str, *, nested: bool) -> Tuple[_UrlFields, _UrlFi
 def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
     if _should_redact_query_key(key):
         return _REDACTED_VALUE
+    # A `;` is a legacy field separator to some servers and an ordinary character
+    # to others, and the value alone cannot say which. Splitting on it would cut
+    # `password=pre;fix` in two and publish the second half, so instead the whole
+    # value goes whenever any `;`-separated piece of it names a credential.
+    if ";" in value and _names_a_credential(value):
+        return _REDACTED_VALUE
     # A retained value can carry a URL of its own (a gateway's `?url=`). The budget
     # for that is one level: sanitize the first, and drop any value still carrying
     # a URL past it rather than trusting what we did not look inside.
     if _URL_PATTERN.search(value):
         return _sanitize_urls(value, nested=False) if nested else _REDACTED_VALUE
     return value
+
+
+def _names_a_credential(value: str) -> bool:
+    """Whether any ``;``-separated piece of a field's value reads as a field of
+    its own with a sensitive name (``a=1;token=x``)."""
+    return any(
+        _should_redact_query_key(piece.partition("=")[0]) for piece in value.split(";")
+    )
 
 
 # PII redaction for the agent-narrated intent string only. $mcp_intent is free
