@@ -125,32 +125,37 @@ def _split_addresses(value: str) -> List[str]:
     before the first `?` or `#` is always its own, `=` in the path or not
     (`/redirect=https://user:pw@host/doc`). Inside that region the nearest
     structural character decides: a `=` puts the authority in a value, a field
-    separator — or nothing at all — starts a new address. One pass over the match
-    finds them all.
+    separator — or nothing at all — starts a new address. One forward pass over
+    the match finds them all.
     """
     fields_start = min(
         (value.index(char) for char in "?#" if char in value), default=len(value)
     )
     starts = [
-        match.start()
-        for match in _URL_AUTHORITY_SEARCH.finditer(value)
-        if match.start() > 0
-        and (
-            match.start() < fields_start or not _in_value_position(value, match.start())
-        )
+        start
+        for start, structural in _authority_starts(value)
+        if start > 0 and (start < fields_start or structural != "=")
     ]
     if not starts:
         return [value]
     return [value[begin:end] for begin, end in zip([0] + starts, starts + [len(value)])]
 
 
-def _in_value_position(value: str, start: int) -> bool:
-    """Whether the authority at ``start`` sits inside a field's value: the nearest
-    structural character before it is a `=`."""
-    for index in range(start - 1, -1, -1):
-        if value[index] in _FIELD_STRUCTURE_CHARACTERS:
-            return value[index] == "="
-    return False
+def _authority_starts(value: str) -> List[Tuple[int, str]]:
+    """Every authority start in ``value``, each paired with the last structural
+    character seen before it. One forward pass: the cursor never moves backwards,
+    so a value carrying thousands of addresses costs the same per character as one
+    carrying a single address."""
+    starts: List[Tuple[int, str]] = []
+    cursor = 0
+    structural = ""
+    for match in _URL_AUTHORITY_SEARCH.finditer(value):
+        for index in range(cursor, match.start()):
+            if value[index] in _FIELD_STRUCTURE_CHARACTERS:
+                structural = value[index]
+        cursor = match.start()
+        starts.append((match.start(), structural))
+    return starts
 
 
 def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:

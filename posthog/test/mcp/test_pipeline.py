@@ -619,6 +619,19 @@ def test_redact_pii_redacts_multiple_identifiers():
     )
 
 
+def test_sanitize_url_is_not_quadratic_on_many_addresses():
+    # Every address here sits after the same `?`, which is the worst case for a
+    # value-position check that scans backwards from each one. The forward pass
+    # sees each character once; a regression to a per-address scan would spend
+    # seconds on this, on the server's own event loop.
+    import time
+
+    pathological = "https://a.test/?" + "https://b.test/x," * 4_000
+    start = time.monotonic()
+    assert sanitize_captured_value(pathological) == pathological
+    assert time.monotonic() - start < 1.0
+
+
 def test_redact_pii_is_not_quadratic_on_pathological_input():
     # A 100k-char run with an `@` but no valid TLD is the worst case for an
     # unbounded email pattern. With bounded quantifiers this stays linear; a
