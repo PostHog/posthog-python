@@ -50,6 +50,11 @@ _URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}:[^\s<>\"]+", re.IGNORECASE)
 # `[...]+$` pattern: backtracking that pattern over an interior run of punctuation
 # is quadratic, and the URL comes from an attacker-influenceable request.
 _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
+# The length bound below caps parsing work on an attacker-shaped authority URL, so
+# it only applies to a match that opens with one. A match this long with no
+# authority is a data uri, which the bound must not eat — the binary-data branch
+# deliberately keeps those, and the field count is already bounded when parsing.
+_URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
@@ -93,7 +98,7 @@ def _sanitize_urls(text: str, *, nested: bool = True) -> str:
 
 
 def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
-    if len(value) > _MAX_URL_LENGTH:
+    if len(value) > _MAX_URL_LENGTH and _URL_AUTHORITY_PATTERN.match(value):
         return _REDACTED_VALUE
     url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
     suffix = value[len(url_text) :]

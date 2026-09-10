@@ -247,6 +247,13 @@ def test_sanitize_url_credentials(value: str, expected: str) -> None:
             True,
             id="empty-fields",
         ),
+        # The length bound guards authority parsing, so it must not swallow a long
+        # data uri — not valid base64, so the binary-data branch keeps it too.
+        pytest.param(
+            "data:application/octet-stream;base64,AAAA%ZZ" + "A" * 10_000,
+            False,
+            id="authority-less-over-limit",
+        ),
     ],
 )
 def test_sanitize_url_bounds(uri: str, oversized: bool) -> None:
