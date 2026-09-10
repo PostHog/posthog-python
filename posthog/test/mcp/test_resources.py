@@ -126,3 +126,32 @@ async def test_highlevel_resource_templates_listing_is_captured(server) -> None:
     assert props["$mcp_parameters"]["request"]["method"] == "resources/templates/list"
     assert listed_uris(props["$mcp_response"]) == ["users://{user_id}/profile"]
     assert props["$mcp_is_error"] is False
+
+
+async def test_failed_read_reports_the_handler_failure(server) -> None:
+    """The SDK wraps a failing read in its own error before it reaches the caller.
+    The captured failure detail follows that chain to what the handler actually
+    raised, while the caller still receives the SDK's wrapper unchanged."""
+    client = FakeClient()
+
+    @server.resource("file:///guide.md")
+    async def guide() -> str:
+        raise TimeoutError("storage backend timed out")
+
+    instrument(server, client)
+
+    with pytest.raises(Exception, match="Error reading resource"):
+        await dispatch(
+            server,
+            "resources/read",
+            mcp_types.ReadResourceRequestParams(uri="file:///guide.md"),
+        )
+    await flush_background()
+
+    props = events_named(client, "$mcp_resource_read")[0]["properties"]
+    assert props["$mcp_is_error"] is True
+    assert "storage backend timed out" in props["$mcp_error_message"]
+    # v2 masks the handler's message out of its wrapper, so the scalars step past
+    # it. v1's wrapper keeps that message, and is reported as it always was.
+    expected_type = "TimeoutError" if MCP_MAJOR >= 2 else "ResourceError"
+    assert props["$mcp_error_type"] == expected_type
