@@ -121,6 +121,28 @@ def test_sanitize_redacts_large_base64():
             "[a](https://public.test/#intro)[b](https://private.test/doc)",
             "[a](https://public.test/#intro)[b](https://private.test/doc)",
         ),
+        # A route prefix is that same plain text: it is kept verbatim, so it has to
+        # be sanitized too.
+        (
+            "https://public.test/#https://fakeuser:fakepass@private.test/doc?page=1",
+            "https://public.test/#https://%5Bredacted%5D@private.test/doc?page=1",
+        ),
+        (
+            "[a](https://public.test/#intro)[b](https://fakeuser:fakepass@private.test/doc?page=1)",
+            "[a](https://public.test/#intro)[b](https://%5Bredacted%5D@private.test/doc?page=1)",
+        ),
+        # Neither the fragment text pass nor the address split may recurse per URL:
+        # both of these are one match, and both used to grow the stack with it.
+        pytest.param(
+            "resource:x#" * 10_000 + "intro",
+            "resource:x#resource:x#[redacted]",
+            id="fragment-chain",
+        ),
+        pytest.param(
+            "https://a.test/x," * 10_000 + "https://fakeuser:fakepass@b.test/doc",
+            "https://a.test/x," * 10_000 + "https://%5Bredacted%5D@b.test/doc",
+            id="address-chain",
+        ),
         # A hash-routed URL puts the route in the fragment: it stays verbatim, and
         # only what follows the first `?` is a field list.
         (

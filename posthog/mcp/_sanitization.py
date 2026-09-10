@@ -11,7 +11,7 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
@@ -101,48 +101,65 @@ def _sanitize_urls(text: str, *, nested: bool = True) -> str:
 
 
 def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
+    return "".join(
+        _sanitize_single_url(piece, nested=nested, in_prose=in_prose)
+        for piece in _split_addresses(value)
+    )
+
+
+def _split_addresses(value: str) -> List[str]:
+    """Cut a match into the addresses it runs together.
+
+    One match can hold a prose word in front of the address (`URL:https://...`,
+    `a:b:https://...`) or several addresses joined without whitespace
+    (`/doc,https://...`). Each address after the first begins inside what would
+    parse as its predecessor's path, where nothing — its userinfo least of all —
+    is redacted. An authority AFTER the first `?` or `#` is a query or fragment
+    value instead, which the field and fragment passes already handle.
+
+    One pass is enough: every piece but the last ends before the first `?`/`#`, so
+    it holds neither, and in the last piece every remaining authority sits in
+    field data.
+    """
+    boundary = min(
+        (value.index(char) for char in "?#" if char in value), default=len(value)
+    )
+    starts = [
+        match.start()
+        for match in _URL_AUTHORITY_SEARCH.finditer(value)
+        if 0 < match.start() < boundary
+    ]
+    if not starts:
+        return [value]
+    return [value[begin:end] for begin, end in zip([0] + starts, starts + [len(value)])]
+
+
+def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
     if len(value) > _MAX_URL_LENGTH and _URL_AUTHORITY_PATTERN.match(value):
         return _REDACTED_VALUE
-    # One match can hold a prose word in front of the address (`URL:https://...`,
-    # `a:b:https://...`) or two addresses run together (`/doc,https://...`). Either
-    # way the second address begins inside what would parse as the first one's
-    # path, where nothing — its userinfo least of all — is redacted. So the match
-    # is split at that authority and each part sanitized on its own. An authority
-    # AFTER the first `?` or `#` is a query or fragment value instead, which the
-    # field pass already handles (a sensitive key, or the nested pass).
-    split = _split_at_second_address(value)
-    if split is not None:
-        return _sanitize_url(
-            value[:split], nested=nested, in_prose=in_prose
-        ) + _sanitize_url(value[split:], nested=nested, in_prose=in_prose)
     url_text = value.rstrip(_URL_TRAILING_PUNCTUATION) if in_prose else value
     suffix = value[len(url_text) :]
     try:
         url = urlsplit(url_text)
         query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
         # A fragment is only a field list when it looks like one; `#section-2` is
-        # left byte-for-byte rather than re-serialized as `section-2=`.
-        route, fragment_fields = _split_fragment_route(url.fragment)
+        # left byte-for-byte rather than re-serialized as `section-2=`. What is not
+        # a field list — a route prefix, or the whole fragment — is plain text.
+        route, separator, fragment_fields = _split_fragment_route(url.fragment)
         is_field_list = "=" in fragment_fields
         fragment, sanitized_fragment = (
             _sanitize_url_fields(fragment_fields, nested=nested)
             if is_field_list
             else ([], [])
         )
-        # A fragment that is not a field list is plain text, and text can carry an
-        # address of its own. A match runs to the first `#`, so such an address is
-        # never split off as a second one and this is the only pass that sees it.
-        plain_fragment = (
-            url.fragment
-            if is_field_list
-            else _sanitize_urls(url.fragment, nested=False)
-        )
+        text = route if is_field_list else url.fragment
+        sanitized_text = _sanitize_fragment_text(text, nested=nested)
         netloc = _redact_userinfo(url.netloc)
-        if (netloc, sanitized_query, sanitized_fragment, plain_fragment) == (
+        if (netloc, sanitized_query, sanitized_fragment, sanitized_text) == (
             url.netloc,
             query,
             fragment,
-            url.fragment,
+            text,
         ):
             return value
         # The split-off punctuation can be the tail of the credential rather than
@@ -166,9 +183,9 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
                     urlencode(sanitized_query)
                     if sanitized_query != query
                     else url.query,
-                    route + urlencode(sanitized_fragment)
+                    sanitized_text + separator + urlencode(sanitized_fragment)
                     if sanitized_fragment != fragment
-                    else plain_fragment,
+                    else sanitized_text + separator + fragment_fields,
                 )
             )
             + suffix
@@ -177,34 +194,31 @@ def _sanitize_url(value: str, *, nested: bool, in_prose: bool) -> str:
         return _REDACTED_VALUE + suffix
 
 
-def _split_fragment_route(fragment: str) -> Tuple[str, str]:
-    """Split a fragment into its route prefix and its fields. A hash-routed URL
-    (`#/callback?token=...`) puts the route in the fragment, and parsing the whole
-    thing as fields yields one key of `/callback?token` that matches nothing. The
-    route, up to and including the first `?`, stays verbatim."""
+def _sanitize_fragment_text(text: str, *, nested: bool) -> str:
+    """Sanitize the plain-text part of a fragment: a route prefix, or a fragment
+    that is not a field list. Text can carry an address of its own, and a match
+    ends at the first `#`, so this is the only pass that sees it. It gets the same
+    one-level budget as a nested field value — past it, text still carrying an
+    address is dropped rather than trusted, which is also what stops a
+    `#`-chained uri from recursing without end."""
+    if nested:
+        return _sanitize_urls(text, nested=False)
+    return _REDACTED_VALUE if _URL_PATTERN.search(text) else text
+
+
+def _split_fragment_route(fragment: str) -> Tuple[str, str, str]:
+    """Split a fragment into its route, the `?` that ends the route, and its
+    fields. A hash-routed URL (`#/callback?token=...`) puts the route in the
+    fragment, and parsing the whole thing as fields yields one key of
+    `/callback?token` that matches nothing. The three parts concatenate back to
+    the fragment, so the route keeps its own text while the fields are re-encoded."""
     route, separator, fields = fragment.partition("?")
     # A route comes first or not at all. Once a `=` has appeared the fragment is
     # already a field list, and the `?` belongs to one of its values
     # (`#access_token=x&next=https://other.test/?page=1`).
     if "=" in route:
-        return "", fragment
-    return route + separator, fields
-
-
-def _split_at_second_address(value: str) -> Optional[int]:
-    """Where a second address starts inside ``value``, or None. Each half is
-    strictly shorter than the whole, so the split recursion terminates."""
-    boundary = min(
-        (value.index(char) for char in "?#" if char in value), default=len(value)
-    )
-    return next(
-        (
-            match.start()
-            for match in _URL_AUTHORITY_SEARCH.finditer(value)
-            if 0 < match.start() < boundary
-        ),
-        None,
-    )
+        return "", "", fragment
+    return route, separator, fields
 
 
 def _redact_userinfo(netloc: str) -> str:
