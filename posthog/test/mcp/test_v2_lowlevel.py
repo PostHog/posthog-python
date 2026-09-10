@@ -20,11 +20,12 @@ from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    listed_uris,
 )
 from posthog.test.mcp._helpers_v2 import fake_ctx
 
 
-def make_server(*, resource_error: bool = False) -> Server:
+def make_server(*, resource_error: bool = False, listing: str = "resources") -> Server:
     async def on_call_tool(ctx, params):
         if params.name == "boom":
             raise ValueError("explode")
@@ -68,10 +69,25 @@ def make_server(*, resource_error: bool = False) -> Server:
     )
 
     async def on_list_resources(ctx, params):
+        if listing == "error":
+            raise ValueError("listing unavailable")
         return mcp_types.ListResourcesResult(
-            resources=[
+            resources=[]
+            if listing == "empty"
+            else [
                 mcp_types.Resource(
                     name="Guide", uri="file:///guide.md", mime_type="text/markdown"
+                )
+            ]
+        )
+
+    async def on_list_resource_templates(ctx, params):
+        return mcp_types.ListResourceTemplatesResult(
+            resource_templates=[
+                mcp_types.ResourceTemplate(
+                    name="Profile",
+                    uri_template="users://{user_id}/profile",
+                    mime_type="text/markdown",
                 )
             ]
         )
@@ -91,6 +107,11 @@ def make_server(*, resource_error: bool = False) -> Server:
 
     server.add_request_handler(
         "resources/list", mcp_types.PaginatedRequestParams, on_list_resources
+    )
+    server.add_request_handler(
+        "resources/templates/list",
+        mcp_types.PaginatedRequestParams,
+        on_list_resource_templates,
     )
     server.add_request_handler(
         "resources/read", mcp_types.ReadResourceRequestParams, on_read_resource
@@ -237,6 +258,58 @@ async def test_resource_discovery_and_read_are_captured(
     ):
         assert secret not in json.dumps(client.events)
     assert props["$mcp_protocol_version"] == "2026-07-28"
+
+
+@pytest.mark.parametrize(
+    "method, listing, listed",
+    [
+        ("resources/list", "resources", ["file:///guide.md"]),
+        ("resources/list", "empty", []),
+        ("resources/templates/list", "resources", ["users://{user_id}/profile"]),
+    ],
+)
+async def test_resource_listing_event_carries_the_listing(
+    method: str, listing: str, listed: list
+) -> None:
+    server = make_server(listing=listing)
+    client = FakeClient()
+    instrument(server, client)
+
+    await _resource_request(server, method)
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_parameters"]["request"]["method"] == method
+    assert listed_uris(props["$mcp_response"]) == listed
+    # An empty listing is a legitimate answer (a template-only server lists no
+    # static resources), unlike an empty tools/list.
+    assert props["$mcp_is_error"] is False
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_resource_name" not in props
+    assert not _events(client, "$exception")
+
+
+async def test_failed_resource_listing_is_captured() -> None:
+    server = make_server(listing="error")
+    client = FakeClient()
+    instrument(server, client)
+
+    with pytest.raises(ValueError, match="listing unavailable"):
+        await _resource_request(server, "resources/list")
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_is_error"] is True
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_response" not in props
+    assert "$mcp_resource_name" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == 1
+    assert "listing unavailable" in json.dumps(exceptions[0]["properties"])
 
 
 # --- tools/call --------------------------------------------------------------

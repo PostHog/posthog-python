@@ -32,6 +32,7 @@ from ._instrumentation import (
     prepare_request,
     record_resource_request,
     request_to_dict,
+    resource_listing_response,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
@@ -83,6 +84,12 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
 def _wrap_resource_requests(server: Any, data: MCPAnalyticsData) -> None:
     for request_type, event_type in (
         (mcp_types.ListResourcesRequest, MCPAnalyticsEventType.MCP_RESOURCES_LIST),
+        # Templates are listings too: the captured request method separates
+        # `resources/templates/list` from `resources/list` on the same event.
+        (
+            mcp_types.ListResourceTemplatesRequest,
+            MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+        ),
         (mcp_types.ReadResourceRequest, MCPAnalyticsEventType.MCP_RESOURCES_READ),
     ):
         _wrap_resource_request(server, data, request_type, event_type)
@@ -148,6 +155,7 @@ def _wrap_resource_request(
             session_id,
             event_type=event_type,
             request=request,
+            response=resource_listing_response(event_type, result),
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,

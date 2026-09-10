@@ -11,6 +11,7 @@ from posthog.test.mcp._helpers import (
     FakeClient,
     events_named,
     flush_background,
+    listed_uris,
 )
 
 
@@ -19,6 +20,7 @@ def server(request):
     if request.param == "fastmcp":
         if MCP_MAJOR >= 2:
             pytest.skip("jlowin FastMCP requires MCP SDK v1")
+        pytest.importorskip("fastmcp")
         from fastmcp import FastMCP as Server
     elif MCP_MAJOR < 2:
         from mcp.server.fastmcp import FastMCP as Server
@@ -26,6 +28,27 @@ def server(request):
         from mcp.server.mcpserver import MCPServer as Server
 
     return Server("resource-test")
+
+
+_V1_REQUEST_TYPES = {
+    "resources/list": mcp_types.ListResourcesRequest,
+    "resources/templates/list": mcp_types.ListResourceTemplatesRequest,
+    "resources/read": mcp_types.ReadResourceRequest,
+}
+
+
+async def dispatch(server, method, params=None):
+    """Send one request through the server's own handler registry, whichever MCP
+    SDK major is installed."""
+    if MCP_MAJOR < 2:
+        request = _V1_REQUEST_TYPES[method](params=params)
+        handler = server._mcp_server.request_handlers[type(request)]
+        return (await handler(request)).root
+
+    from posthog.test.mcp._helpers_v2 import fake_ctx
+
+    entry = server._lowlevel_server.get_request_handler(method)
+    return await entry.handler(fake_ctx(method=method), params)
 
 
 @pytest.mark.parametrize("register_late", [False, True])
@@ -46,25 +69,12 @@ async def test_highlevel_resource_tracking(
 
     instrument(server, client)
 
-    async def dispatch(method, params=None):
-        if MCP_MAJOR < 2:
-            request = (
-                mcp_types.ListResourcesRequest()
-                if method == "resources/list"
-                else mcp_types.ReadResourceRequest(params=params)
-            )
-            handler = server._mcp_server.request_handlers[type(request)]
-            return (await handler(request)).root
-
-        from posthog.test.mcp._helpers_v2 import fake_ctx
-
-        entry = server._lowlevel_server.get_request_handler(method)
-        return await entry.handler(fake_ctx(method=method), params)
-
-    listing = await dispatch("resources/list")
+    listing = await dispatch(server, "resources/list")
     assert str(listing.resources[0].uri) == "file:///guide.md"
     read = dispatch(
-        "resources/read", mcp_types.ReadResourceRequestParams(uri="file:///guide.md")
+        server,
+        "resources/read",
+        mcp_types.ReadResourceRequestParams(uri="file:///guide.md"),
     )
     if resource_error:
         message = "resource unavailable" if MCP_MAJOR < 2 else "Error reading resource"
@@ -76,7 +86,15 @@ async def test_highlevel_resource_tracking(
         assert str(result.contents[0].uri) == "file:///guide.md"
     await flush_background()
 
-    assert len(events_named(client, "$mcp_resources_list")) == 1
+    lists = events_named(client, "$mcp_resources_list")
+    assert len(lists) == 1
+    list_props = lists[0]["properties"]
+    assert list_props["$mcp_parameters"]["request"]["method"] == "resources/list"
+    assert listed_uris(list_props["$mcp_response"]) == ["file:///guide.md"]
+    assert list_props["$mcp_is_error"] is False
+    assert list_props["$mcp_duration_ms"] >= 0
+    assert "$mcp_resource_name" not in list_props
+
     reads = events_named(client, "$mcp_resource_read")
     assert len(reads) == 1
     props = reads[0]["properties"]
@@ -86,3 +104,25 @@ async def test_highlevel_resource_tracking(
     assert "$mcp_response" not in props
     assert len(events_named(client, "$exception")) == int(resource_error)
     assert body not in json.dumps(client.events)
+
+
+async def test_highlevel_resource_templates_listing_is_captured(server) -> None:
+    client = FakeClient()
+
+    @server.resource("users://{user_id}/profile")
+    async def profile(user_id: str) -> str:
+        return f"profile for {user_id}"
+
+    instrument(server, client)
+
+    await dispatch(server, "resources/templates/list")
+    await flush_background()
+
+    lists = events_named(client, "$mcp_resources_list")
+    assert len(lists) == 1
+    props = lists[0]["properties"]
+    # Same event as resources/list; the captured request method is what tells a
+    # template listing apart.
+    assert props["$mcp_parameters"]["request"]["method"] == "resources/templates/list"
+    assert listed_uris(props["$mcp_response"]) == ["users://{user_id}/profile"]
+    assert props["$mcp_is_error"] is False

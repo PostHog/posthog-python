@@ -11,10 +11,8 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict
+from typing import Any, Dict, List, Tuple
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
-
-from ._event_types import MCPAnalyticsEventType
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
@@ -30,42 +28,127 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_URL_PATTERN = re.compile(r"\b[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
+# No leading `\b`: a word boundary needs a non-word character before the scheme,
+# so `resource_https://user:pw@host` (an `_` before the scheme) would match
+# nothing and stay unredacted. Without it the leftmost match wins — `foo.https://x`
+# is read as scheme `foo.https`, which redacts the same credentials either way.
+_URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
+# Prose puts URLs in sentences ("see https://x?sig=a, then retry") and in
+# parentheses, and the terminal class above swallows the punctuation. It is split
+# off before parsing and re-appended to whatever comes back.
+_URL_TRAILING_PUNCTUATION_PATTERN = re.compile(r"[.,;:!?)\]}]+$")
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
+# A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
+# covers the compound names credentials actually travel under: `private_token`,
+# `oauth_signature`, `id_token`, `subscription-key`, `X-Amz-Security-Token`.
+# Over-redacting a benign `sort_key` is the accepted trade for an analytics payload.
+_SENSITIVE_QUERY_SEGMENT_PATTERN = re.compile(
+    r"(^|[-_.])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
+    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_.]|$)",
+    re.IGNORECASE,
+)
+# Matched whole rather than per segment: `code` (an OAuth authorization code) as a
+# segment would eat `country_code`, `zip_code` and `lang_code`.
 _SENSITIVE_QUERY_KEY_PATTERN = re.compile(
-    r"^(auth|key|credential|signature|sig|AWSAccessKeyId|GoogleAccessId|"
-    r"Policy|Key-Pair-Id|X-Amz-(Credential|Signature|Security-Token)|"
-    r"X-Goog-(Credential|Signature))$",
+    r"^(code|AWSAccessKeyId|GoogleAccessId|Policy)$",
     re.IGNORECASE,
 )
 
+_UrlFields = List[Tuple[str, str]]
 
-def _sanitize_url(match: re.Match[str]) -> str:
-    if match.end() - match.start() > _MAX_URL_LENGTH:
+
+def _should_redact_query_key(key: str) -> bool:
+    """Whether a URL query/fragment field's value must be dropped: the dict-key
+    rule, plus the two URL-only rules above."""
+    return bool(
+        _should_redact_key(key)
+        or _SENSITIVE_QUERY_SEGMENT_PATTERN.search(key)
+        or _SENSITIVE_QUERY_KEY_PATTERN.match(key)
+    )
+
+
+def _sanitize_urls(text: str, *, nested: bool = True) -> str:
+    return _URL_PATTERN.sub(
+        lambda match: _sanitize_url(match.group(0), nested=nested), text
+    )
+
+
+def _sanitize_url(value: str, *, nested: bool) -> str:
+    if len(value) > _MAX_URL_LENGTH:
         return _REDACTED_VALUE
-    value = match.group(0)
+    url_text = _URL_TRAILING_PUNCTUATION_PATTERN.sub("", value)
+    suffix = value[len(url_text) :]
     try:
-        url = urlsplit(value)
-        query = parse_qsl(
-            url.query, keep_blank_values=True, max_num_fields=_MAX_URL_QUERY_FIELDS
+        url = urlsplit(url_text)
+        query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
+        # A fragment is only a field list when it looks like one; `#section-2` is
+        # left byte-for-byte rather than re-serialized as `section-2=`.
+        fragment, sanitized_fragment = (
+            _sanitize_url_fields(url.fragment, nested=nested)
+            if "=" in url.fragment
+            else ([], [])
         )
-        sanitized_query = [
-            (key, _REDACTED_VALUE)
-            if _should_redact_key(key) or _SENSITIVE_QUERY_KEY_PATTERN.fullmatch(key)
-            else (key, item)
-            for key, item in query
-        ]
-        netloc = url.netloc
-        if "@" in netloc:
-            netloc = "%5Bredacted%5D@" + netloc.rsplit("@", 1)[1]
-        if netloc == url.netloc and sanitized_query == query:
+        netloc = _redact_userinfo(url.netloc)
+        if (netloc, sanitized_query, sanitized_fragment) == (
+            url.netloc,
+            query,
+            fragment,
+        ):
             return value
-        return urlunsplit(
-            (url.scheme, netloc, url.path, urlencode(sanitized_query), url.fragment)
+        # Only the part that changed is re-serialized, so an untouched query or
+        # fragment keeps its original encoding.
+        return (
+            urlunsplit(
+                (
+                    url.scheme,
+                    netloc,
+                    url.path,
+                    urlencode(sanitized_query)
+                    if sanitized_query != query
+                    else url.query,
+                    urlencode(sanitized_fragment)
+                    if sanitized_fragment != fragment
+                    else url.fragment,
+                )
+            )
+            + suffix
         )
     except ValueError:
+        return _REDACTED_VALUE + suffix
+
+
+def _redact_userinfo(netloc: str) -> str:
+    if "@" not in netloc:
+        return netloc
+    return "%5Bredacted%5D@" + netloc.rsplit("@", 1)[1]
+
+
+def _sanitize_url_fields(text: str, *, nested: bool) -> Tuple[_UrlFields, _UrlFields]:
+    """Parse a query (or fragment) and return both the original and the sanitized
+    fields, so the caller can tell whether anything was redacted. ``;`` is
+    normalized to ``&``: servers still emit it as a field separator, and a query
+    split only on ``&`` would hide the credential behind it."""
+    fields = parse_qsl(
+        text.replace(";", "&"),
+        keep_blank_values=True,
+        max_num_fields=_MAX_URL_QUERY_FIELDS,
+    )
+    return fields, [
+        (key, _sanitize_url_field_value(key, value, nested=nested))
+        for key, value in fields
+    ]
+
+
+def _sanitize_url_field_value(key: str, value: str, *, nested: bool) -> str:
+    if _should_redact_query_key(key):
         return _REDACTED_VALUE
+    # A retained value can carry a URL of its own (a gateway's `?url=`). Sanitize
+    # that one too, one level deep — a URL nested inside it is already covered by
+    # the credentials rules applied here.
+    if nested and "://" in value:
+        return _sanitize_urls(value, nested=False)
+    return value
 
 
 # PII redaction for the agent-narrated intent string only. $mcp_intent is free
@@ -149,7 +232,7 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
-    value = _URL_PATTERN.sub(_sanitize_url, value)
+    value = _sanitize_urls(value)
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
@@ -289,9 +372,8 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("parameters") is not None:
         result["parameters"] = sanitize_captured_value(result["parameters"])
 
-    if result.get("event_type") == MCPAnalyticsEventType.MCP_RESOURCES_READ:
-        if result.get("resource_name") is not None:
-            result["resource_name"] = sanitize_captured_value(result["resource_name"])
+    if result.get("resource_name") is not None:
+        result["resource_name"] = sanitize_captured_value(result["resource_name"])
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about

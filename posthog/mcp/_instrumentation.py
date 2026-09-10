@@ -905,12 +905,23 @@ async def record_tools_list(
         log(f"record_tools_list failed (event dropped): {err}")
 
 
+def resource_listing_response(event_type: str, result: Any) -> Any:
+    """The result an adapter should capture as the event ``response``. A listing
+    (``resources/list``, ``resources/templates/list``) is metadata — names, uris,
+    mime types — so it is captured; a read's result is the resource body itself,
+    which this SDK never captures."""
+    if event_type != MCPAnalyticsEventType.MCP_RESOURCES_LIST:
+        return None
+    return _to_jsonable(result)
+
+
 async def record_resource_request(
     data: MCPAnalyticsData,
     session_id: str,
     *,
     event_type: str,
     request: Dict[str, Any],
+    response: Any = None,
     error: Any = None,
     duration_ms: Optional[float] = None,
     client_name: Optional[str] = None,
@@ -918,7 +929,7 @@ async def record_resource_request(
     protocol_version: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Record resources/list or resources/read without affecting dispatch."""
+    """Record a resources listing or read without affecting dispatch."""
     try:
         params = request.get("params")
         uri = params.get("uri") if isinstance(params, dict) else None
@@ -929,6 +940,7 @@ async def record_resource_request(
             if event_type == MCPAnalyticsEventType.MCP_RESOURCES_READ
             else None,
             "parameters": build_captured_mcp_parameters(request),
+            "response": _wrap_response(response) if response is not None else None,
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,

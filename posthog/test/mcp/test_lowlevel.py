@@ -8,14 +8,16 @@ import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
 
 from posthog.mcp import instrument
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
     flush_background as _flush,
+    listed_uris,
 )
 
 
-def make_server(*, resource_error: bool = False) -> Server:
+def make_server(*, resource_error: bool = False, listing: str = "resources") -> Server:
     server = Server("test-lowlevel")
 
     @server.list_tools()
@@ -39,12 +41,29 @@ def make_server(*, resource_error: bool = False) -> Server:
         raise ValueError("boom")
 
     async def list_resources(_request):
+        if listing == "error":
+            raise ValueError("listing unavailable")
         return mcp_types.ServerResult(
             mcp_types.ListResourcesResult(
-                resources=[
+                resources=[]
+                if listing == "empty"
+                else [
                     mcp_types.Resource(
                         name="Guide",
                         uri="file:///guide.md",
+                        mimeType="text/markdown",
+                    )
+                ]
+            )
+        )
+
+    async def list_resource_templates(_request):
+        return mcp_types.ServerResult(
+            mcp_types.ListResourceTemplatesResult(
+                resourceTemplates=[
+                    mcp_types.ResourceTemplate(
+                        name="Profile",
+                        uriTemplate="users://{user_id}/profile",
                         mimeType="text/markdown",
                     )
                 ]
@@ -67,6 +86,9 @@ def make_server(*, resource_error: bool = False) -> Server:
         )
 
     server.request_handlers[mcp_types.ListResourcesRequest] = list_resources
+    server.request_handlers[mcp_types.ListResourceTemplatesRequest] = (
+        list_resource_templates
+    )
     server.request_handlers[mcp_types.ReadResourceRequest] = read_resource
 
     return server
@@ -199,6 +221,95 @@ async def test_resource_discovery_and_read_are_captured(
         "fakesignature",
     ):
         assert secret not in json.dumps(client.events)
+
+
+@pytest.mark.parametrize(
+    "method, listing, listed",
+    [
+        ("resources/list", "resources", ["file:///guide.md"]),
+        ("resources/list", "empty", []),
+        ("resources/templates/list", "resources", ["users://{user_id}/profile"]),
+    ],
+)
+async def test_resource_listing_event_carries_the_listing(
+    method: str, listing: str, listed: list
+) -> None:
+    server = make_server(listing=listing)
+    client = FakeClient()
+    instrument(server, client)
+
+    request_type = (
+        mcp_types.ListResourcesRequest
+        if method == "resources/list"
+        else mcp_types.ListResourceTemplatesRequest
+    )
+    await server.request_handlers[request_type](request_type())
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_parameters"]["request"]["method"] == method
+    assert listed_uris(props["$mcp_response"]) == listed
+    # An empty listing is a legitimate answer (a template-only server lists no
+    # static resources), unlike an empty tools/list.
+    assert props["$mcp_is_error"] is False
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_resource_name" not in props
+    assert not _events(client, "$exception")
+
+
+async def test_failed_resource_listing_is_captured() -> None:
+    server = make_server(listing="error")
+    client = FakeClient()
+    instrument(server, client)
+
+    with pytest.raises(ValueError, match="listing unavailable"):
+        await server.request_handlers[mcp_types.ListResourcesRequest](
+            mcp_types.ListResourcesRequest()
+        )
+    await _flush()
+
+    events = _events(client, "$mcp_resources_list")
+    assert len(events) == 1
+    props = events[0]["properties"]
+    assert props["$mcp_is_error"] is True
+    assert props["$mcp_duration_ms"] >= 0
+    assert "$mcp_response" not in props
+    assert "$mcp_resource_name" not in props
+    exceptions = _events(client, "$exception")
+    assert len(exceptions) == 1
+    assert "listing unavailable" in json.dumps(exceptions[0]["properties"])
+
+
+async def test_identify_on_a_resource_read_is_named_by_the_uri() -> None:
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            identify=lambda request, extra: UserIdentity(distinct_id="user_42")
+        ),
+    )
+
+    await server.request_handlers[mcp_types.ReadResourceRequest](
+        mcp_types.ReadResourceRequest(
+            params=mcp_types.ReadResourceRequestParams(
+                uri="https://fakeuser:fakepass@example.com/guide"
+            )
+        )
+    )
+    await _flush()
+
+    identified = _events(client, "$identify")
+    assert len(identified) == 1
+    # A resources/read request carries no `name`, so the uri is the only thing
+    # that can name it — sanitized like any other captured URL.
+    assert (
+        identified[0]["properties"]["$mcp_resource_name"]
+        == "https://%5Bredacted%5D@example.com/guide"
+    )
 
 
 async def test_tool_call_success_captures_intent():

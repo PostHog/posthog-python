@@ -106,6 +106,52 @@ def test_sanitize_redacts_large_base64():
             "Cannot read https://%5Bredacted%5D@example.com/guide or https://example.com/guide?token=%5Bredacted%5D",
         ),
         ("https://fakeuser:fakepass@[invalid/guide?token=fakesecret", "[redacted]"),
+        (
+            "https://app.example.com/cb#access_token=fakeaccess&token_type=bearer",
+            "https://app.example.com/cb#access_token=%5Bredacted%5D&token_type=%5Bredacted%5D",
+        ),
+        ("https://example.com/doc#section-2", "https://example.com/doc#section-2"),
+        (
+            "https://example.com/x?a=1;token=fakesecret",
+            "https://example.com/x?a=1&token=%5Bredacted%5D",
+        ),
+        (
+            "https://example.com/x?jwt=fakejwt&sessionid=fakesession&code=fakecode&country_code=BR",
+            "https://example.com/x?jwt=%5Bredacted%5D&sessionid=%5Bredacted%5D&code=%5Bredacted%5D&country_code=BR",
+        ),
+        (
+            "See https://example.com/x?sig=fakesignature, then retry.",
+            "See https://example.com/x?sig=%5Bredacted%5D, then retry.",
+        ),
+        (
+            "Failed (https://example.com/x?sig=fakesignature).",
+            "Failed (https://example.com/x?sig=%5Bredacted%5D).",
+        ),
+        ("Failed (https://example.com/x?a=b).", "Failed (https://example.com/x?a=b)."),
+        (
+            "resource_https://fakeuser:fakepass@example.com/doc",
+            "resource_https://%5Bredacted%5D@example.com/doc",
+        ),
+        (
+            "https://gitlab.example.com/api?private_token=fakesecret&oauth_signature=fakesignature"
+            "&id_token=fakeaccess&subscription-key=fakekey&sort_key=name",
+            "https://gitlab.example.com/api?private_token=%5Bredacted%5D&oauth_signature=%5Bredacted%5D"
+            "&id_token=%5Bredacted%5D&subscription-key=%5Bredacted%5D&sort_key=%5Bredacted%5D",
+        ),
+        (
+            "https://gateway.example.com/fetch?url=https://svc:fakepass@internal.example.com/doc%3Ftoken%3Dfakesecret",
+            "https://gateway.example.com/fetch?url=https%3A%2F%2F%255Bredacted%255D%40internal.example.com"
+            "%2Fdoc%3Ftoken%3D%255Bredacted%255D",
+        ),
+        (
+            "https://en.wikipedia.org/wiki/Foo_(bar)",
+            "https://en.wikipedia.org/wiki/Foo_(bar)",
+        ),
+        (
+            "https://fakeuser:fakepass@en.wikipedia.org/wiki/Foo_(bar).",
+            "https://%5Bredacted%5D@en.wikipedia.org/wiki/Foo_(bar).",
+        ),
+        ("file:///guide.md", "file:///guide.md"),
     ],
 )
 def test_sanitize_url_credentials(value: str, expected: str) -> None:

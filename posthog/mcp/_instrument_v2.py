@@ -45,6 +45,7 @@ from ._instrumentation import (
     params_to_request_dict,
     prepare_request,
     record_resource_request,
+    resource_listing_response,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
@@ -73,6 +74,9 @@ _CALL_METHOD = "tools/call"
 _LIST_METHOD = "tools/list"
 _RESOURCE_METHODS = {
     "resources/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+    # Templates are listings too: the captured request method separates
+    # `resources/templates/list` from `resources/list` on the same event.
+    "resources/templates/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
     "resources/read": MCPAnalyticsEventType.MCP_RESOURCES_READ,
 }
 
@@ -530,6 +534,7 @@ def _wrap_v2_resource_request(
             session_id,
             event_type=event_type,
             request=request,
+            response=resource_listing_response(event_type, result),
             duration_ms=(time.monotonic() - start) * 1000,
             client_name=client_name,
             client_version=client_version,

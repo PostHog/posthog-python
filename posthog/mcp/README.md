@@ -4,14 +4,19 @@ Product analytics for Model Context Protocol servers. Wrap a Python MCP server s
 tool calls, agent intent, resource discovery and reads, and failures are captured
 to PostHog as `$mcp_*` events.
 
-Resource bodies are not captured. Captured URLs redact usernames, passwords, and
-known credential query parameters, including signed URL credentials. URLs longer
-than 8,192 characters or with more than 128 query fields are redacted entirely
-to bound parsing work. This also
-applies when a failed read repeats the URL in its error message. Other query
-parameters and fragments can still contain application-specific sensitive data.
-Requests and responses keep their original addresses. Use `before_send` to remove
-any additional application-specific sensitive data.
+Resource bodies are not captured. Resource and resource-template listings are:
+a listing is metadata (names, uris, mime types), so `$mcp_resources_list` carries
+it as `$mcp_response`.
+
+Captured URLs redact usernames, passwords, and credential-named query and
+fragment parameters, including signed URL credentials. This applies to every
+captured string, tool call parameters, responses and error messages included, so
+it also covers a failed read that repeats the URL in its error message. URLs
+longer than 8,192 characters or with more than 128 query fields are redacted
+entirely to bound parsing work. Other query and fragment parameters can still
+contain application-specific sensitive data. Requests and responses keep their
+original addresses. Use `before_send` to remove any additional
+application-specific sensitive data.
 
 ```python
 from posthog import Posthog
