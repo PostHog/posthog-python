@@ -276,9 +276,21 @@ def test_sanitize_redacts_large_base64():
             "[a](https://public.test/?download)[b](https://fakeuser:fakepass@private.test/doc)",
             "[a](https://public.test/?download)[b](https://%5Bredacted%5D@private.test/doc)",
         ),
+        # ... unless it sits in a field's value, where splitting it off would cut
+        # that value in two and publish the tail. The nearest structural character
+        # before the authority decides: `=` means value, `/` and the field
+        # separators mean a new address.
+        (
+            "https://host/x?token=foo%20https://secret.test/private",
+            "https://host/x?token=%5Bredacted%5D",
+        ),
         (
             "https://example.com/?q=see,https://fakeuser:fakepass@x.test/doc",
-            "https://example.com/?q=see,https://%5Bredacted%5D@x.test/doc",
+            "https://example.com/?q=see%2Chttps%3A%2F%2F%255Bredacted%255D%40x.test%2Fdoc",
+        ),
+        (
+            "https://host/a=b/c,https://fakeuser:fakepass@x.test/doc",
+            "https://host/a=b/c,https://%5Bredacted%5D@x.test/doc",
         ),
         (
             "https://example.com/?https://fakeuser:fakepass@x.test/doc",

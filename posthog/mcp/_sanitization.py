@@ -58,6 +58,8 @@ _URL_TRAILING_PUNCTUATION = ".,;:!?)]}'"
 # deliberately keeps those, and the field count is already bounded when parsing.
 _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
+# What separates one field, or one path segment, from the next.
+_FIELD_STRUCTURE_CHARACTERS = "=&;?#/"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`/`/`-delimited segment matches, which
@@ -116,19 +118,32 @@ def _split_addresses(value: str) -> List[str]:
     first begins inside what would parse as its predecessor's path, query key or
     fragment, none of which is redacted.
 
-    The exception is an address in value position, right after a `=`
-    (`?url=https://...`): it belongs to the field that holds it, and the nested
-    pass sanitizes it there. Everywhere else an authority starts an adjacent
-    address, and one pass over the match finds them all.
+    The exception is an address in value position (`?url=https://...`,
+    `?token=foo%20https://...`): it belongs to the field that holds it, and the
+    nested pass sanitizes it there — splitting it off would cut the field's value
+    in two and publish the tail. What decides is the nearest structural character
+    before the authority: a `=` means the authority is inside a field's value,
+    while a `&`, `;`, `?`, `#`, `/` — or nothing at all — means a new address
+    begins. `/` is in that set so a `=` in a path (`/a=b/c,https://...`) does not
+    read as a field. One pass over the match finds them all.
     """
     starts = [
         match.start()
         for match in _URL_AUTHORITY_SEARCH.finditer(value)
-        if match.start() > 0 and value[match.start() - 1] != "="
+        if match.start() > 0 and not _in_value_position(value, match.start())
     ]
     if not starts:
         return [value]
     return [value[begin:end] for begin, end in zip([0] + starts, starts + [len(value)])]
+
+
+def _in_value_position(value: str, start: int) -> bool:
+    """Whether the authority at ``start`` sits inside a field's value: the nearest
+    structural character before it is a `=`."""
+    for index in range(start - 1, -1, -1):
+        if value[index] in _FIELD_STRUCTURE_CHARACTERS:
+            return value[index] == "="
+    return False
 
 
 def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
