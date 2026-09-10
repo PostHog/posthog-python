@@ -174,11 +174,11 @@ def test_sanitize_redacts_large_base64():
             "file:/guide.md?token=fakesecret",
             "file:///guide.md?token=%5Bredacted%5D",
         ),
-        # Same rewrite for `resource:guide?token=...` — but the entropy pass that
-        # follows for free-text values judges the rewritten string a credential and
-        # drops it whole. The token is gone either way; `$mcp_resource_name`, which
-        # skips that pass, keeps the readable form (see the resource_name test).
-        ("resource:guide?token=fakesecret", "[redacted]"),
+        ("resource:guide?token=fakesecret", "resource:guide?token=%5Bredacted%5D"),
+        (
+            "see:resource:guide?token=fakesecret",
+            "see:resource:guide?token=%5Bredacted%5D",
+        ),
         # An optional authority over-matches prose, which costs nothing: a match
         # with nothing to redact is returned byte-for-byte.
         ("Error: see resource:guide.", "Error: see resource:guide."),
@@ -216,10 +216,19 @@ def test_sanitize_redacts_large_base64():
             "file:/guide?password=fakepass&url=https://example.com",
             "file:///guide?password=%5Bredacted%5D&url=https%3A%2F%2Fexample.com",
         ),
-        # Same shape, and the entropy pass then drops the rewritten authority-less
-        # string whole (as above); the credential and the inner userinfo are gone
-        # either way.
-        ("resource:g?token=fakesecret+https://fakeuser:fakepass@b", "[redacted]"),
+        # The `+` decodes to a space, so the inner address is part of the token's
+        # value and goes with it.
+        (
+            "resource:g?token=fakesecret+https://fakeuser:fakepass@b",
+            "resource:g?token=%5Bredacted%5D",
+        ),
+        # The credential detectors run before the URL pass: rewriting a URL can
+        # push a word past the window the detector scans, and a known token format
+        # in a long URL would survive.
+        (
+            "https://example.com/" + "a" * 120 + "?ref=ghp_" + "A" * 36 + "&token=x",
+            "[redacted]",
+        ),
         (
             "https://example.com/o'reilly?token=fakesecret",
             "https://example.com/o'reilly?token=%5Bredacted%5D",

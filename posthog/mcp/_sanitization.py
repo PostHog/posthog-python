@@ -18,6 +18,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
 _REDACTED_VALUE = "[redacted]"
+_ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
 _POSTHOG_TOKEN_PATTERN = re.compile(r"\bph[a-z]_[A-Za-z0-9_-]{20,}\b")
@@ -294,11 +295,14 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if len(value) >= _SIZE_GATE and _BASE64_PATTERN.match(value):
         return "[binary data redacted - not supported by PostHog MCP analytics]"
-    # PostHog tokens before URLs: rewriting a query percent-encodes `/`, and a
-    # `?ref=/phx_...` token would then sit behind `%2F` where the pattern's `\bph`
-    # boundary no longer matches it.
+    # Both credential passes run before the URL pass, because rewriting a URL
+    # changes the text they match on: it percent-encodes `/`, hiding a
+    # `?ref=/phx_...` token behind `%2F` from the `\bph` boundary, and it can grow
+    # a word past the length window the entropy detector scans. Running the URL
+    # pass last loses nothing — it only redacts or percent-encodes, so it never
+    # exposes a credential the detectors could have matched.
     value = _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
-    return _redact_secret_tokens(_sanitize_urls(value))
+    return _sanitize_urls(_redact_secret_tokens(value))
 
 
 def _sanitize_resource_name(value: Any) -> Any:
@@ -336,6 +340,13 @@ def _redact_secret_tokens(value: str) -> str:
 
 
 def _is_secret(word: str) -> bool:
+    # Judge the word without this sanitizer's own markers. A value can be
+    # sanitized twice (a response's content blocks are), and the marker's
+    # character mix is enough to push a short uri like
+    # `resource:guide?token=%5Bredacted%5D` over the entropy bar — dropping a
+    # value we had already made safe. Stripping the marker rather than skipping
+    # the word keeps a real credential written around one detectable.
+    word = word.replace(_ENCODED_REDACTED_VALUE, "").replace(_REDACTED_VALUE, "")
     try:
         from posthog.exception_utils import _looks_like_secret
 

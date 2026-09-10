@@ -176,6 +176,12 @@ async def test_list_tools_injects_optional_context_and_captures():
             "https://example.com/guide?token=[redacted]",
             True,
         ),
+        # An MCP resource uri need not have an authority.
+        (
+            "resource:guide?token=fakesecret",
+            "resource:guide?token=%5Bredacted%5D",
+            False,
+        ),
     ],
 )
 async def test_resource_discovery_and_read_are_captured(
@@ -283,30 +289,6 @@ async def test_failed_resource_listing_is_captured() -> None:
     exceptions = _events(client, "$exception")
     assert len(exceptions) == 1
     assert "listing unavailable" in json.dumps(exceptions[0]["properties"])
-
-
-async def test_authority_less_resource_uri_is_redacted() -> None:
-    """An MCP resource uri need not have an authority. The captured name keeps the
-    redacted uri; the captured parameter is dropped whole, because the entropy
-    detector that guards free-text values reads the rewritten `resource:...` string
-    as a credential. Either way the token never reaches PostHog."""
-    server = make_server()
-    client = FakeClient()
-    instrument(server, client)
-
-    await server.request_handlers[mcp_types.ReadResourceRequest](
-        mcp_types.ReadResourceRequest(
-            params=mcp_types.ReadResourceRequestParams(
-                uri="resource:guide?token=fakesecret"
-            )
-        )
-    )
-    await _flush()
-
-    props = _events(client, "$mcp_resource_read")[0]["properties"]
-    assert props["$mcp_resource_name"] == "resource:guide?token=%5Bredacted%5D"
-    assert props["$mcp_parameters"]["request"]["params"]["uri"] == "[redacted]"
-    assert "fakesecret" not in json.dumps(client.events)
 
 
 async def test_identify_on_a_resource_read_is_named_by_the_uri() -> None:
