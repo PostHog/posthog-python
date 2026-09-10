@@ -2864,6 +2864,7 @@ def test_served_service_tier_merges_into_model_parameters(mock_client):
     props = mock_client.capture.call_args.kwargs["properties"]
     assert props["$ai_model_parameters"]["service_tier"] == "flex"
     assert props["$ai_model_parameters"]["temperature"] == 0.5
+    assert props["$ai_service_tier"] == "flex"
 
 
 @pytest.mark.parametrize(

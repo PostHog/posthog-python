@@ -2683,6 +2683,7 @@ def test_served_service_tier_lands_in_model_parameters(
 
         props = mock_client.capture.call_args[1]["properties"]
         assert props["$ai_model_parameters"]["service_tier"] == "flex"
+        assert props["$ai_service_tier"] == "flex"
 
 
 def test_response_without_service_tier_omits_it(mock_client, mock_openai_response):
@@ -2699,6 +2700,7 @@ def test_response_without_service_tier_omits_it(mock_client, mock_openai_respons
 
         props = mock_client.capture.call_args[1]["properties"]
         assert "service_tier" not in props["$ai_model_parameters"]
+        assert "$ai_service_tier" not in props
 
 
 def test_streaming_state_tracks_served_service_tier():

@@ -619,6 +619,7 @@ class CallbackHandler(BaseCallbackHandler):
     ):
         # The served tier comes from the response, because a requested tier can be refused.
         model_params = run.model_params
+        served_tier = None
         if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
             served_tier = output.llm_output.get("service_tier")
             if served_tier is not None:
@@ -632,6 +633,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_provider": run.provider,
             "$ai_model": run.model,
             "$ai_model_parameters": model_params,
+            # The explicit served-tier signal cost processing prices from.
+            **({"$ai_service_tier": served_tier} if served_tier is not None else {}),
             "$ai_input": with_privacy_mode(
                 self._ph_client,
                 self._privacy_mode,

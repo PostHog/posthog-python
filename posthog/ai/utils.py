@@ -521,10 +521,11 @@ def call_llm_and_track_usage(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag(
-                "$ai_model_parameters",
-                get_model_params(kwargs, getattr(response, "service_tier", None)),
-            )
+            served_service_tier = getattr(response, "service_tier", None)
+            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
+            if served_service_tier is not None:
+                # The explicit served-tier signal cost processing prices from.
+                tag("$ai_service_tier", served_service_tier)
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -687,10 +688,11 @@ async def call_llm_and_track_usage_async(
 
             tag("$ai_provider", provider)
             tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            tag(
-                "$ai_model_parameters",
-                get_model_params(kwargs, getattr(response, "service_tier", None)),
-            )
+            served_service_tier = getattr(response, "service_tier", None)
+            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
+            if served_service_tier is not None:
+                # The explicit served-tier signal cost processing prices from.
+                tag("$ai_service_tier", served_service_tier)
             tag(
                 "$ai_input",
                 with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
@@ -839,6 +841,11 @@ def capture_streaming_event(
         "$ai_model": event_data["model"],
         "$ai_model_parameters": get_model_params(
             event_data["kwargs"], event_data.get("service_tier")
+        ),
+        **(
+            {"$ai_service_tier": event_data["service_tier"]}
+            if event_data.get("service_tier") is not None
+            else {}
         ),
         "$ai_input": with_privacy_mode(
             ph_client,
