@@ -263,6 +263,20 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/doc,https://fakeuser:fakepass@other.example.com/doc",
             "https://example.com/doc,https://%5Bredacted%5D@other.example.com/doc",
         ),
+        # An adjacent address is adjacent wherever it sits: a query key holds one
+        # as readily as a path, and a key is never redacted on its own.
+        (
+            "[a](https://public.test/?download)[b](https://fakeuser:fakepass@private.test/doc)",
+            "[a](https://public.test/?download)[b](https://%5Bredacted%5D@private.test/doc)",
+        ),
+        (
+            "https://example.com/?q=see,https://fakeuser:fakepass@x.test/doc",
+            "https://example.com/?q=see,https://%5Bredacted%5D@x.test/doc",
+        ),
+        (
+            "https://example.com/?https://fakeuser:fakepass@x.test/doc",
+            "https://example.com/?https://%5Bredacted%5D@x.test/doc",
+        ),
         # The closing `)` goes with the redacted trailing field, by the rule above:
         # punctuation after a rewritten last field may be the credential's own.
         (

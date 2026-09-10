@@ -112,22 +112,19 @@ def _split_addresses(value: str) -> List[str]:
 
     One match can hold a prose word in front of the address (`URL:https://...`,
     `a:b:https://...`) or several addresses joined without whitespace
-    (`/doc,https://...`). Each address after the first begins inside what would
-    parse as its predecessor's path, where nothing — its userinfo least of all —
-    is redacted. An authority AFTER the first `?` or `#` is a query or fragment
-    value instead, which the field and fragment passes already handle.
+    (`/doc,https://...`, `/?download)[b](https://...`). Each address after the
+    first begins inside what would parse as its predecessor's path, query key or
+    fragment, none of which is redacted.
 
-    One pass is enough: every piece but the last ends before the first `?`/`#`, so
-    it holds neither, and in the last piece every remaining authority sits in
-    field data.
+    The exception is an address in value position, right after a `=`
+    (`?url=https://...`): it belongs to the field that holds it, and the nested
+    pass sanitizes it there. Everywhere else an authority starts an adjacent
+    address, and one pass over the match finds them all.
     """
-    boundary = min(
-        (value.index(char) for char in "?#" if char in value), default=len(value)
-    )
     starts = [
         match.start()
         for match in _URL_AUTHORITY_SEARCH.finditer(value)
-        if 0 < match.start() < boundary
+        if match.start() > 0 and value[match.start() - 1] != "="
     ]
     if not starts:
         return [value]
