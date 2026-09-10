@@ -119,6 +119,12 @@ def test_sanitize_redacts_large_base64():
         ),
         ("https://example.com/#/docs?page=2", "https://example.com/#/docs?page=2"),
         ("https://example.com/#/callback", "https://example.com/#/callback"),
+        # ... but a `?` that follows a `=` is inside a field's value, not a route.
+        (
+            "https://example.com/#access_token=fakesecret&next=https://other.test/?page=1",
+            "https://example.com/#access_token=%5Bredacted%5D"
+            "&next=https%3A%2F%2Fother.test%2F%3Fpage%3D1",
+        ),
         (
             "https://example.com/x?a=1;token=fakesecret",
             "https://example.com/x?a=1&token=%5Bredacted%5D",

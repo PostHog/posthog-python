@@ -171,10 +171,13 @@ def _split_fragment_route(fragment: str) -> Tuple[str, str]:
     (`#/callback?token=...`) puts the route in the fragment, and parsing the whole
     thing as fields yields one key of `/callback?token` that matches nothing. The
     route, up to and including the first `?`, stays verbatim."""
-    if "?" not in fragment:
+    route, separator, fields = fragment.partition("?")
+    # A route comes first or not at all. Once a `=` has appeared the fragment is
+    # already a field list, and the `?` belongs to one of its values
+    # (`#access_token=x&next=https://other.test/?page=1`).
+    if "=" in route:
         return "", fragment
-    route, _, fields = fragment.partition("?")
-    return route + "?", fields
+    return route + separator, fields
 
 
 def _split_at_second_address(value: str) -> Optional[int]:
