@@ -286,6 +286,9 @@ def instrument(
         if is_fastmcp_v2(server) and uses_v2_handler_registry(key):
             data.standalone_fastmcp = weakref.ref(server)
 
+        # A standalone FastMCP wrapper and its low-level server share one tracking
+        # key, so instrumenting the second of the pair must still attach what only
+        # that object provides: the wrapper's schema lookup and ASGI app factories.
         if existing_data is not None:
             autowire_stateless_mint(server)
             log("instrument() - server already instrumented, skipping initialization")

@@ -207,3 +207,46 @@ async def test_preserve_parameters_of_requested_tool_version():
         assert result["content"][0]["text"] == "example|application-context"
         await flush_background()
     assert len(events_named(sink, "$mcp_tool_call")) == 1
+
+
+async def test_strip_analytics_parameters_from_middleware_tools():
+    from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware
+    from fastmcp.tools import Tool
+
+    def echo(text: str) -> str:
+        return text
+
+    server = FastMCP("example-middleware-tools")
+    server.add_middleware(ToolInjectionMiddleware(tools=[Tool.from_function(echo)]))
+    sink = FakeClient()
+    instrument(
+        server,
+        sink,
+        MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True),
+    )
+    async with wire(server) as http:
+        listed = await rpc(http, MODERN_PROTOCOL_VERSION, "tools/list", {})
+        schema = next(t for t in listed["tools"] if t["name"] == "echo")["inputSchema"]
+        assert {"context", "conversation_id", "llm_model"} <= schema[
+            "properties"
+        ].keys()
+        result = await rpc(
+            http,
+            MODERN_PROTOCOL_VERSION,
+            "tools/call",
+            {
+                "name": "echo",
+                "arguments": {
+                    "text": "example",
+                    "context": "example intent",
+                    "llm_model": "example-model",
+                },
+            },
+        )
+        assert not result.get("isError", False), result
+        assert result["content"][0]["text"] == "example"
+        await flush_background()
+    calls = events_named(sink, "$mcp_tool_call")
+    assert len(calls) == 1
+    assert calls[0]["properties"]["$mcp_intent"] == "example intent"
+    assert calls[0]["properties"]["$mcp_llm_model"] == "example-model"
