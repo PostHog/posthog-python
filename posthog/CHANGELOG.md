@@ -1,5 +1,11 @@
 # posthog
 
+## 7.50.0 — 2026-09-10
+
+### Minor changes
+
+- [7db5105](https://github.com/posthog/posthog-python/commit/7db51053d3c4006cf21dd118d3947c6b9e77322c) `Prompts.get_all(label="production")` fetches every prompt that carries a label in one request and stores them in the prompt cache, so later `get(name, label=...)` calls are cache hits. Apps with many prompts no longer need one request per prompt per cache cycle. Against a PostHog server that does not support labels on the prompt list endpoint yet, the call fails with a clear error instead of caching wrong versions. — Thanks @jurajmajerik!
+
 ## 7.49.0 — 2026-09-10
 
 ### Minor changes
