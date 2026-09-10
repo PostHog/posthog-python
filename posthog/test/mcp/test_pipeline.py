@@ -207,6 +207,33 @@ def test_sanitize_redacts_large_base64():
             "https://example.com/guide?password=%5Bredacted%5D",
         ),
         ("https://example.com/x?a=1;b=2", "https://example.com/x?a=1;b=2"),
+        # A `;` inside a KEY names the credential just as a `-` or `_` would.
+        (
+            "https://example.com/?download;token=fakesecret",
+            "https://example.com/?download%3Btoken=%5Bredacted%5D",
+        ),
+        # Neither a `;` nor the fragment's own `?` ends a value that is already
+        # open, so the address behind one stays with its field and goes with it.
+        (
+            "https://example.com/?password=prefix;https://private.example/remainingsecret",
+            "https://example.com/?password=%5Bredacted%5D",
+        ),
+        (
+            "https://example.com/#password=prefix?https://private.example/remainingsecret",
+            "https://example.com/#password=%5Bredacted%5D?[redacted]",
+        ),
+        # Attached the same way, but this head holds no credential, so the tail is
+        # sanitized as the text it is.
+        (
+            "https://example.com/#/docs/id=1?https://fakeuser:fakepass@x.test/doc",
+            "https://example.com/#/docs/id=1?https://%5Bredacted%5D@x.test/doc",
+        ),
+        # ... while a `?` that opens no value still divides: the address after it
+        # is its own.
+        (
+            "https://example.com/?a=1#b?https://fakeuser:fakepass@x.test/doc",
+            "https://example.com/?a=1#b?https://%5Bredacted%5D@x.test/doc",
+        ),
         (
             "https://example.com/x?jwt=fakejwt&sessionid=fakesession&code=fakecode&country_code=BR",
             "https://example.com/x?jwt=%5Bredacted%5D&sessionid=%5Bredacted%5D&code=%5Bredacted%5D&country_code=BR",

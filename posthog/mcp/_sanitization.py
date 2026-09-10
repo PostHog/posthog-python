@@ -11,7 +11,7 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
@@ -60,17 +60,18 @@ _URL_AUTHORITY_PATTERN = re.compile(r"^[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE
 _URL_AUTHORITY_SEARCH = re.compile(r"[a-z][a-z0-9+.-]{0,63}://", re.IGNORECASE)
 # What separates one field from the next inside a query or fragment. `?` and `#`
 # are not here: whether one of those divides a URL depends on where it sits, and
-# `_structural_delimiters` works that out per value.
-_FIELD_SEPARATORS = "=&;"
+# `_structural_delimiters` works that out per value. Neither is `;` — fields are
+# parsed on `&` alone, so a `;` is a character of whatever value holds it.
+_FIELD_SEPARATORS = "=&"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
-# A query key is sensitive when ANY `-`/`_`/`.`/`/`-delimited segment matches, which
+# A query key is sensitive when ANY `-`/`_`/`.`/`/`/`;`-delimited segment matches, which
 # covers the compound names credentials actually travel under: `private_token`,
 # `oauth_signature`, `id_token`, `subscription-key`, `X-Amz-Security-Token`.
 # Over-redacting a benign `sort_key` is the accepted trade for an analytics payload.
 _SENSITIVE_QUERY_SEGMENT_PATTERN = re.compile(
-    r"(^|[-_./])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
-    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_./]|$)",
+    r"(^|[-_./;])(auth|token|secret|password|passwd|pwd|credential|signature|sig|"
+    r"key|hmac|sas|bearer|jwt|session|sessionid)([-_./;]|$)",
     re.IGNORECASE,
 )
 # Matched whole rather than per segment: `code` (an OAuth authorization code) as a
@@ -148,30 +149,38 @@ def _authority_starts(value: str) -> List[Tuple[int, str]]:
     character seen before it. One forward pass: the cursor never moves backwards,
     so a value carrying thousands of addresses costs the same per character as one
     carrying a single address."""
-    delimiters = _structural_delimiters(value)
+    query, fragment, fragment_tail = _structural_delimiters(value)
     starts: List[Tuple[int, str]] = []
     cursor = 0
     structural = ""
     for match in _URL_AUTHORITY_SEARCH.finditer(value):
         for index in range(cursor, match.start()):
-            if value[index] in _FIELD_SEPARATORS or index in delimiters:
+            # The fragment's own `?` divides it only when a value is not already
+            # open: straight after a `=` that `?` may be a character of the value,
+            # and the address behind it belongs to the field — where the fragment
+            # split and its fail-closed rule can see the whole of it.
+            if (
+                value[index] in _FIELD_SEPARATORS
+                or index in (query, fragment)
+                or (index == fragment_tail and structural != "=")
+            ):
                 structural = value[index]
         cursor = match.start()
         starts.append((match.start(), structural))
     return starts
 
 
-def _structural_delimiters(value: str) -> Set[int]:
-    """The positions where a `?` or `#` actually divides the URL: the query's `?`,
-    the fragment's `#`, and the `?` that splits the fragment into head and tail.
-    Every other one is a character inside a value — `?token=pre?fix` has one `?`
-    of structure and one of credential."""
+def _structural_delimiters(value: str) -> Tuple[int, int, int]:
+    """Where a `?` or `#` can divide the URL: the query's `?`, the fragment's `#`,
+    and the `?` that splits the fragment into head and tail (``-1`` for each one
+    the value does not have). Every other `?` or `#` is a character inside a value
+    — `?token=pre?fix` has one `?` of structure and one of credential."""
     fragment = value.find("#")
     query = value.find("?")
     if fragment != -1 and (query == -1 or query > fragment):
         query = -1
     fragment_tail = value.find("?", fragment + 1) if fragment != -1 else -1
-    return {index for index in (query, fragment, fragment_tail) if index != -1}
+    return query, fragment, fragment_tail
 
 
 def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
