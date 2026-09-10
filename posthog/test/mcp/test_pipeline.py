@@ -151,24 +151,31 @@ def test_sanitize_redacts_large_base64():
         ),
         ("https://example.com/#/docs?page=2", "https://example.com/#/docs?page=2"),
         ("https://example.com/#/callback", "https://example.com/#/callback"),
-        # A route can hold a `=` of its own: what makes it a route is the path
-        # shape, not the absence of one.
+        # Shape says nothing: this half of the fragment holds a `=`, so it is read
+        # as fields even though it looks like a path.
         (
             "https://example.com/#/docs/id=1?token=fakesecret",
             "https://example.com/#/docs/id=1?token=%5Bredacted%5D",
         ),
         ("https://example.com/#/docs/id=1", "https://example.com/#/docs/id=1"),
-        # No `?`, so this is a field list whose key happens to start with a `/`;
-        # re-serializing the redacted field percent-encodes that `/`.
+        # A field list whose key happens to start with a `/`; re-serializing the
+        # redacted field percent-encodes that `/`.
         (
             "https://example.com/#/token=fakesecret",
             "https://example.com/#%2Ftoken=%5Bredacted%5D",
         ),
-        # ... but a `?` that follows a `=` is inside a field's value, not a route.
+        # A `?` splits a fragment in two, and each half is a field list or plain
+        # text on its own terms — the half before the `?` here is fields, and the
+        # half after keeps its own encoding.
         (
             "https://example.com/#access_token=fakesecret&next=https://other.test/?page=1",
             "https://example.com/#access_token=%5Bredacted%5D"
-            "&next=https%3A%2F%2Fother.test%2F%3Fpage%3D1",
+            "&next=https%3A%2F%2Fother.test%2F?page=1",
+        ),
+        (
+            "https://example.com/#/token=fakesecret&next=https://other.test/?page=1",
+            "https://example.com/#%2Ftoken=%5Bredacted%5D"
+            "&next=https%3A%2F%2Fother.test%2F?page=1",
         ),
         (
             "https://example.com/x?a=1;token=fakesecret",

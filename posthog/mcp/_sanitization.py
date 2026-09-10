@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Tuple
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
@@ -139,24 +139,21 @@ def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
     try:
         url = urlsplit(url_text)
         query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
-        # A fragment is only a field list when it looks like one; `#section-2` is
-        # left byte-for-byte rather than re-serialized as `section-2=`. What is not
-        # a field list — a route prefix, or the whole fragment — is plain text.
-        route, separator, fragment_fields = _split_fragment_route(url.fragment)
-        is_field_list = "=" in fragment_fields
-        fragment, sanitized_fragment = (
-            _sanitize_url_fields(fragment_fields, nested=nested)
-            if is_field_list
-            else ([], [])
+        # A `?` inside a fragment splits it in two, and each half stands on its
+        # own: `#/callback?token=x` is text then fields, `#a=1?b=2` is fields
+        # twice. Shape cannot tell them apart — `#/token=x` looks like a route and
+        # is a field list — so each half is judged only on whether it holds a `=`.
+        head, separator, fragment_tail = url.fragment.partition("?")
+        sanitized_head, head_rewrote_last = _sanitize_fragment_part(head, nested=nested)
+        sanitized_tail, tail_rewrote_last = _sanitize_fragment_part(
+            fragment_tail, nested=nested
         )
-        text = route if is_field_list else url.fragment
-        sanitized_text = _sanitize_fragment_text(text, nested=nested)
+        fragment = sanitized_head + separator + sanitized_tail
         netloc = _redact_userinfo(url.netloc)
-        if (netloc, sanitized_query, sanitized_fragment, sanitized_text) == (
+        if (netloc, sanitized_query, fragment) == (
             url.netloc,
             query,
-            fragment,
-            text,
+            url.fragment,
         ):
             return value
         # The split-off punctuation can be the tail of the credential rather than
@@ -164,10 +161,9 @@ def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
         # `?password=[redacted]!!!`. So when the last field of the part the URL
         # ends in was rewritten, its punctuation goes with it. Losing a comma from
         # the surrounding prose is the accepted cost.
-        tail, sanitized_tail = (
-            (fragment, sanitized_fragment) if url.fragment else (query, sanitized_query)
-        )
-        if tail and sanitized_tail[-1] != tail[-1]:
+        if _rewrote_the_last_field(
+            url, query, sanitized_query, head_rewrote_last, tail_rewrote_last
+        ):
             suffix = ""
         # Only the part that changed is re-serialized, so an untouched query or
         # fragment keeps its original encoding.
@@ -180,15 +176,40 @@ def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
                     urlencode(sanitized_query)
                     if sanitized_query != query
                     else url.query,
-                    sanitized_text + separator + urlencode(sanitized_fragment)
-                    if sanitized_fragment != fragment
-                    else sanitized_text + separator + fragment_fields,
+                    fragment,
                 )
             )
             + suffix
         )
     except ValueError:
         return _REDACTED_VALUE + suffix
+
+
+def _rewrote_the_last_field(
+    url: SplitResult,
+    query: _UrlFields,
+    sanitized_query: _UrlFields,
+    head_rewrote_last: bool,
+    tail_rewrote_last: bool,
+) -> bool:
+    """Whether the URL ends in a field whose value was just redacted — the part it
+    ends in being its fragment when it has one, its query otherwise."""
+    if not url.fragment:
+        return bool(query) and sanitized_query[-1] != query[-1]
+    return tail_rewrote_last if "?" in url.fragment else head_rewrote_last
+
+
+def _sanitize_fragment_part(text: str, *, nested: bool) -> Tuple[str, bool]:
+    """Sanitize one half of a fragment: the field pass when it holds a `=`, the
+    text pass otherwise. Also reports whether its last field was rewritten, which
+    is what tells the caller that trailing punctuation may belong to the
+    credential rather than to the surrounding prose."""
+    if "=" not in text:
+        return _sanitize_fragment_text(text, nested=nested), False
+    fields, sanitized = _sanitize_url_fields(text, nested=nested)
+    if sanitized == fields:
+        return text, False
+    return urlencode(sanitized), bool(fields) and sanitized[-1] != fields[-1]
 
 
 def _sanitize_fragment_text(text: str, *, nested: bool) -> str:
@@ -201,25 +222,6 @@ def _sanitize_fragment_text(text: str, *, nested: bool) -> str:
     if nested:
         return _sanitize_urls(text, nested=False)
     return _REDACTED_VALUE if _URL_PATTERN.search(text) else text
-
-
-def _split_fragment_route(fragment: str) -> Tuple[str, str, str]:
-    """Split a fragment into its route, the `?` that ends the route, and its
-    fields. A hash-routed URL (`#/callback?token=...`) puts the route in the
-    fragment, and parsing the whole thing as fields yields one key of
-    `/callback?token` that matches nothing. The three parts concatenate back to
-    the fragment, so the route keeps its own text while the fields are re-encoded."""
-    route, separator, fields = fragment.partition("?")
-    # A route ends at the first `?`, and there is one when the fragment either
-    # reads as a path (`#/docs/id=1?token=...`) or has nothing field-shaped in
-    # front of that `?` (`#/callback?token=...`). Otherwise the `?` belongs to a
-    # field's value (`#access_token=x&next=https://other.test/?page=1`), and the
-    # fragment is a field list — or plain text when it holds no fields at all.
-    if separator and (fragment.startswith("/") or "=" not in route):
-        return route, separator, fields
-    if "=" in fragment:
-        return "", "", fragment
-    return fragment, "", ""
 
 
 def _redact_userinfo(netloc: str) -> str:
