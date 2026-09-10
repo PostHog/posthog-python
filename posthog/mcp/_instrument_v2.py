@@ -42,10 +42,12 @@ from ._instrumentation import (
     collect_listed_tools,
     mutate_tool_schema,
     params_to_request_dict,
+    refresh_feedback_shadow,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
 )
+from .feedback import get_feedback_tool_descriptor, resolve_collect_feedback_options
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
@@ -286,6 +288,14 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
+        if lifecycle.is_feedback and not _feedback_name_owned_by_real_tool_v2(
+            server, name
+        ):
+            reply = await lifecycle.record_feedback()
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text=reply)]
+            )
+
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never
         # one the tool's own schema declares (that's a real argument).
@@ -432,6 +442,14 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
+        # No registry to probe on a raw low-level server; interception relies on
+        # the listing-derived collision flag alone.
+        if lifecycle.is_feedback:
+            reply = await lifecycle.record_feedback()
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text=reply)]
+            )
+
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
         await lifecycle.prime_session()
@@ -510,6 +528,7 @@ def _wrap_v2_list_tools(
         tools = list(getattr(result, "tools", []) or [])
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
+        feedback_name = refresh_feedback_shadow(data, tools)
 
         for tool in tools:
             schema = getattr(tool, "input_schema", None)
@@ -532,6 +551,10 @@ def _wrap_v2_list_tools(
                 _append_get_more_tools_v2(result, missing_name, data)
                 names.append(missing_name)
 
+        if feedback_name is not None:
+            _append_send_feedback_v2(result, data)
+            names.append(feedback_name)
+
         await lifecycle.record_result(
             names=names,
             response=_to_jsonable(result),
@@ -543,6 +566,43 @@ def _wrap_v2_list_tools(
 
     setattr(handler, _WRAPPED_FLAG, True)
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
+
+
+def _feedback_name_owned_by_real_tool_v2(high_level: Any, name: str) -> bool:
+    """Live registry probe so a real tool by the feedback tool's name is never
+    shadowed even before the first listing refreshes the collision flag."""
+    try:
+        return high_level._tool_manager.get_tool(name) is not None
+    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+        return False
+
+
+def _append_send_feedback_v2(result: Any, data: MCPAnalyticsData) -> None:
+    """Append the send_feedback virtual tool to a v2 ListToolsResult. Callers gate
+    on :func:`refresh_feedback_shadow` returning a name."""
+    options = resolve_collect_feedback_options(data.options.collect_feedback)
+    if options is None:
+        return
+    descriptor = get_feedback_tool_descriptor(options)
+    tool = mcp_types.Tool(
+        name=descriptor["name"],
+        description=descriptor["description"],
+        input_schema=descriptor["inputSchema"],
+        annotations=descriptor["annotations"],
+    )
+    # `owns_context=True`: the tool carries its intent in its own summary /
+    # details arguments, so no `context` parameter is injected — but the
+    # capture_model pass still runs, so it advertises `llm_model` too.
+    mutate_tool_schema(
+        data,
+        tool,
+        schema_attribute="input_schema",
+        owns_context=True,
+        context_required=True,
+    )
+    tools_list = getattr(result, "tools", None)
+    if isinstance(tools_list, list):
+        tools_list.append(tool)
 
 
 def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) -> None:

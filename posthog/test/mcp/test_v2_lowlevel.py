@@ -252,6 +252,68 @@ async def test_report_missing_appends_virtual_tool():
     assert missing and missing[0]["properties"]["$mcp_intent"] == "need an email tool"
 
 
+async def test_collect_feedback_appends_virtual_tool():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    result = await _list_tools(server)
+    assert "send_feedback" in [t.name for t in result.tools]
+
+    call_result = await _call_tool(
+        server,
+        "send_feedback",
+        {"feedback_type": "issue", "summary": "add rejects floats."},
+    )
+    await _flush()
+
+    assert call_result.is_error is False
+    feedback = _events(client, "$mcp_feedback")
+    assert len(feedback) == 1
+    assert feedback[0]["properties"]["$mcp_feedback_type"] == "issue"
+    assert "$mcp_parameters" not in feedback[0]["properties"]
+    assert _events(client, "$mcp_tool_call") == []
+
+
+async def test_collect_feedback_collision_fails_open_after_listing():
+    async def on_call_tool(ctx, params):
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="real tool ran")]
+        )
+
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(
+                    name="send_feedback",
+                    description="A real application tool",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"note": {"type": "string"}},
+                    },
+                )
+            ]
+        )
+
+    server = Server(
+        "low-v2-feedback-collision",
+        on_call_tool=on_call_tool,
+        on_list_tools=on_list_tools,
+    )
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    result = await _list_tools(server)
+    assert [t.name for t in result.tools].count("send_feedback") == 1
+
+    out = await _call_tool(server, "send_feedback", {"note": "hi"})
+    await _flush()
+
+    assert out.content[0].text == "real tool ran"
+    assert _events(client, "$mcp_feedback") == []
+    assert _events(client, "$mcp_tool_call")
+
+
 async def test_callbacks_can_read_headers_through_the_helper():
     """The same `identify` body must work on both SDK majors: `extra["ctx"]` is
     the SDK's own context and `get_request_headers` normalises the read."""

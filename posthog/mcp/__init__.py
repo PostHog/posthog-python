@@ -69,9 +69,17 @@ from .asgi import (
     get_mcp_session,
 )
 from ._sink import McpEventSink
+from .feedback import (
+    SEND_FEEDBACK_TOOL_NAME,
+    get_feedback_tool_descriptor,
+    resolve_collect_feedback_options,
+    send_feedback_result,
+)
 from .tools import get_more_tools_result
 from .types import (
     CaptureEventData,
+    CollectFeedbackOptions,
+    FeedbackReport,
     MCPAnalyticsContextOptions,
     MCPAnalyticsModelOptions,
     MCPAnalyticsModelSource,
@@ -91,8 +99,12 @@ __all__ = [
     "MCPAnalyticsModelSource",
     "UserIdentity",
     "CaptureEventData",
+    "CollectFeedbackOptions",
+    "FeedbackReport",
     "PreparedToolCall",
     "get_more_tools_result",
+    "send_feedback_result",
+    "SEND_FEEDBACK_TOOL_NAME",
     # Read HTTP headers inside identify / intent_fallback /
     # event_properties callbacks on either SDK major: the per-request context
     # arrives as extra["ctx"] and its shape differs between them.
@@ -253,6 +265,13 @@ def instrument(
             "(PostHogMCP for custom dispatchers works without it.)"
         )
     _warn_if_unsupported_mcp_version()
+
+    # Fail fast on a `collect_feedback` config error (reserved extra key,
+    # undeclared extra_required) — before the try below, so it raises instead of
+    # degrading to the no-op handle and first surfacing at tools/list time.
+    feedback_options = resolve_collect_feedback_options(opts.collect_feedback)
+    if feedback_options is not None:
+        get_feedback_tool_descriptor(feedback_options)
 
     key = _canonical_server(server)
 

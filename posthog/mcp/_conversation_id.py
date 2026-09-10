@@ -79,15 +79,21 @@ def resolve_conversation_id(
     args: Any,
     tool_name: Optional[str],
     missing_capability_tool_name: str,
+    feedback_tool_name: Optional[str] = None,
 ) -> Tuple[Optional[str], bool]:
-    """Return ``(conversation_id, minted)``. Disabled or get_more_tools → ``(None, False)``;
-    agent echoed a handle we could have minted → ``(value, False)``; anything
-    else (omitted, or a value the agent made up) → ``(new uuid, True)``.
+    """Return ``(conversation_id, minted)``. Disabled, get_more_tools, or
+    send_feedback → ``(None, False)``; agent echoed a handle we could have minted
+    → ``(value, False)``; anything else (omitted, or a value the agent made up)
+    → ``(new uuid, True)``.
 
     Lowercased on the way in: the shape test is case-insensitive but the hash
     behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
     uuids) would land in a different session than the call that minted it."""
-    if not enabled or tool_name == missing_capability_tool_name:
+    if (
+        not enabled
+        or tool_name == missing_capability_tool_name
+        or (feedback_tool_name is not None and tool_name == feedback_tool_name)
+    ):
         return None, False
     supplied = extract_conversation_id(args)
     if supplied and _MINTED_CONVERSATION_ID.match(supplied):

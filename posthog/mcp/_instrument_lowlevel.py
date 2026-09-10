@@ -25,9 +25,11 @@ from ._conversation_id import build_prompt_back
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
+    append_send_feedback,
     collect_listed_tools,
     extract_tools,
     mutate_tool_schema,
+    refresh_feedback_shadow,
     request_to_dict,
     resolve_session_and_client,
     start_tool_call_lifecycle,
@@ -119,6 +121,17 @@ def _wrap_call_tool(
                             type="text", text=get_more_tools_result_text()
                         )
                     ],
+                    isError=False,
+                )
+            )
+
+        if lifecycle.is_feedback and not await _feedback_name_owned_by_real_tool(
+            high_level, name
+        ):
+            reply = await lifecycle.record_feedback()
+            return mcp_types.ServerResult(
+                mcp_types.CallToolResult(
+                    content=[mcp_types.TextContent(type="text", text=reply)],
                     isError=False,
                 )
             )
@@ -247,9 +260,12 @@ def _wrap_list_tools(
         # `additionalProperties: false`.
         if req is None:
             result = await original(req)
-            _inject_tool_schemas(
-                data, extract_tools(result), context_required=context_required
-            )
+            tools = extract_tools(result)
+            # Refresh the collision flag here too: this pass sees the real tool
+            # registry, so a real tool named like the feedback tool is detected
+            # before any client-facing listing.
+            refresh_feedback_shadow(data, tools)
+            _inject_tool_schemas(data, tools, context_required=context_required)
             return result
 
         client_name, client_version = _client_info(server)
@@ -291,6 +307,7 @@ def _wrap_list_tools(
         # Zero advertised tools is treated as an errored tools/list before the
         # virtual missing-capability tool is appended.
         names, empty = collect_listed_tools(data, tools)
+        feedback_name = refresh_feedback_shadow(data, tools)
 
         _inject_tool_schemas(data, tools, context_required=context_required)
 
@@ -299,6 +316,10 @@ def _wrap_list_tools(
             if not any(t.name == missing_name for t in tools):
                 append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
+
+        if feedback_name is not None:
+            append_send_feedback(result, data)
+            names.append(feedback_name)
 
         await lifecycle.record_result(
             names=names,
@@ -311,6 +332,19 @@ def _wrap_list_tools(
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
+
+
+async def _feedback_name_owned_by_real_tool(high_level: Any, name: str) -> bool:
+    """Live registry probe on the standalone-fastmcp path, so a real tool by the
+    feedback tool's name is never shadowed even before the first listing refreshes
+    the collision flag. Raw low-level servers have no registry to probe; they rely
+    on the listing-derived flag alone."""
+    if high_level is None:
+        return False
+    try:
+        return await high_level.get_tool(name) is not None
+    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+        return False
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:

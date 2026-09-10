@@ -30,9 +30,11 @@ from ._conversation_id import build_prompt_back
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
+    append_send_feedback,
     collect_listed_tools,
     extract_tools,
     mutate_tool_schema,
+    refresh_feedback_shadow,
     request_to_dict,
     resolve_session_and_client,
     start_tool_call_lifecycle,
@@ -113,6 +115,12 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
+
+        if lifecycle.is_feedback and not _feedback_name_owned_by_real_tool(
+            server, name
+        ):
+            reply = await lifecycle.record_feedback()
+            return [mcp_types.TextContent(type="text", text=reply)]
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -215,7 +223,12 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         # advertise and write, the SDK rejects the customer's own tool result.
         if req is None:
             result = await original(req)
-            _inject_tool_schemas(server, data, extract_tools(result))
+            tools = extract_tools(result)
+            # Refresh the collision flag here too: this pass sees the real tool
+            # registry, so a real tool named like the feedback tool is detected
+            # before any client-facing listing.
+            refresh_feedback_shadow(data, tools)
+            _inject_tool_schemas(server, data, tools)
             return result
 
         client_name, client_version = _low_level_client_info(server)
@@ -254,6 +267,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         tools = extract_tools(result)
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
+        feedback_name = refresh_feedback_shadow(data, tools)
 
         _inject_tool_schemas(server, data, tools)
 
@@ -262,6 +276,10 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             if not any(t.name == missing_name for t in tools):
                 append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
+
+        if feedback_name is not None:
+            append_send_feedback(result, data)
+            names.append(feedback_name)
 
         await lifecycle.record_result(
             names=names,
@@ -297,6 +315,16 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     if isinstance(result, dict) and isinstance(result.get("content"), list):
         return {**result, "content": [*result["content"], block]}
     return result
+
+
+def _feedback_name_owned_by_real_tool(server: Any, name: str) -> bool:
+    """Live registry probe so a real tool by the feedback tool's name is never
+    shadowed even before the first listing refreshes the collision flag."""
+    try:
+        tool_manager = getattr(server, "_tool_manager", None)
+        return tool_manager is not None and tool_manager.get_tool(name) is not None
+    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+        return False
 
 
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:
