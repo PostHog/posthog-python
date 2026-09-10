@@ -35,8 +35,11 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 _URL_PATTERN = re.compile(r"[a-z][a-z0-9+.-]{0,63}://[^\s<>\"']+", re.IGNORECASE)
 # Prose puts URLs in sentences ("see https://x?sig=a, then retry") and in
 # parentheses, and the terminal class above swallows the punctuation. It is split
-# off before parsing and re-appended to whatever comes back.
-_URL_TRAILING_PUNCTUATION_PATTERN = re.compile(r"[.,;:!?)\]}]+$")
+# off before parsing and re-appended to whatever comes back. A character set
+# stripped with `rstrip` rather than an anchored `[...]+$` pattern: backtracking
+# that pattern over an interior run of punctuation is quadratic, and the URL
+# comes from an attacker-influenceable request.
+_URL_TRAILING_PUNCTUATION = ".,;:!?)]}"
 _MAX_URL_LENGTH = 8192
 _MAX_URL_QUERY_FIELDS = 128
 # A query key is sensitive when ANY `-`/`_`/`.`-delimited segment matches, which
@@ -77,7 +80,7 @@ def _sanitize_urls(text: str, *, nested: bool = True) -> str:
 def _sanitize_url(value: str, *, nested: bool) -> str:
     if len(value) > _MAX_URL_LENGTH:
         return _REDACTED_VALUE
-    url_text = _URL_TRAILING_PUNCTUATION_PATTERN.sub("", value)
+    url_text = value.rstrip(_URL_TRAILING_PUNCTUATION)
     suffix = value[len(url_text) :]
     try:
         url = urlsplit(url_text)
