@@ -453,6 +453,36 @@ def test_redact_pii_is_not_quadratic_on_pathological_input():
     assert time.monotonic() - start < 1.0
 
 
+@pytest.mark.parametrize(
+    "event_type, resource_name, expected",
+    [
+        # A tool name is an identifier, not free text: the entropy detector that
+        # guards captured values reads this one as a credential, and a redacted
+        # name costs every per-tool metric the event exists for.
+        (
+            MCPAnalyticsEventType.MCP_TOOLS_CALL,
+            "Get_Organization_Memberships",
+            "Get_Organization_Memberships",
+        ),
+        (
+            MCPAnalyticsEventType.IDENTIFY,
+            "https://fakeuser:fakepass@example.com/doc",
+            "https://%5Bredacted%5D@example.com/doc",
+        ),
+        (
+            MCPAnalyticsEventType.MCP_RESOURCES_READ,
+            "https://example.com/guide?token=fakesecret",
+            "https://example.com/guide?token=%5Bredacted%5D",
+        ),
+    ],
+)
+def test_sanitize_event_resource_name_keeps_identifiers_and_redacts_uris(
+    event_type: str, resource_name: str, expected: str
+) -> None:
+    result = sanitize_event({"event_type": event_type, "resource_name": resource_name})
+    assert result["resource_name"] == expected
+
+
 def test_sanitize_event_redacts_pii_from_intent():
     event = {
         "user_intent": "Looking up orders for jane.doe@acme.com and calling +1 (415) 555-0142 about a refund.",

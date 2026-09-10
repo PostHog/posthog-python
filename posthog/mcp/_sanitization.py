@@ -261,6 +261,18 @@ def _sanitize_string(value: str) -> str:
     return _redact_secret_tokens(_sanitize_urls(value))
 
 
+def _sanitize_resource_name(value: Any) -> Any:
+    """Sanitize a ``resource_name``: either an identifier (a tool or prompt name)
+    or a resource uri, so only the passes that matter for a uri run. The entropy
+    detector ``sanitize_captured_value`` applies to free text is deliberately left
+    out — it reads a name like ``Get_Organization_Memberships`` as a credential,
+    and a redacted name costs every per-tool metric the event exists for. A name
+    with no url in it comes back untouched."""
+    if not isinstance(value, str):
+        return value
+    return _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
 def _redact_secret_tokens(value: str) -> str:
     """Redact credential-looking words, leaving the surrounding text intact.
 
@@ -398,7 +410,7 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
         result["parameters"] = sanitize_captured_value(result["parameters"])
 
     if result.get("resource_name") is not None:
-        result["resource_name"] = sanitize_captured_value(result["resource_name"])
+        result["resource_name"] = _sanitize_resource_name(result["resource_name"])
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about
