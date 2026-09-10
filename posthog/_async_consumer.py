@@ -117,15 +117,17 @@ class _AsyncConsumer:
     async def _get_or_flush(self, timeout: float) -> tuple[Any, bool]:
         get_task = asyncio.create_task(self.queue.get())
         flush_task = asyncio.create_task(self._flush_event.wait())
-        done, pending = await asyncio.wait(
-            {get_task, flush_task},
-            timeout=timeout,
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
+        try:
+            done, _ = await asyncio.wait(
+                {get_task, flush_task},
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for task in (get_task, flush_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(get_task, flush_task, return_exceptions=True)
 
         if get_task in done:
             return get_task.result(), False
