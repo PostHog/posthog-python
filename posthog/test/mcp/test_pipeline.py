@@ -734,6 +734,14 @@ def test_sanitize_event_redacts_pii_from_intent():
             "Open https://example.com/?email=alice@example.com&token=fakesecret",
             "Open https://example.com/?email=%5Bredacted%5D&token=%5Bredacted%5D",
         ),
+        # Credentials are redacted before PII: the phone pattern reads the middle
+        # of this token as a number, and redacting that first would leave the
+        # token's two halves behind.
+        (
+            "token-a-pii-pattern-would-cut-in-half",
+            "Rotating phx_AAAAAAAA-415-555-0142-AAAAAAAAAAAAAAAAAAAA",
+            "Rotating [redacted]",
+        ),
         # The binary gate runs before PII: splicing a redaction into a base64 blob
         # would stop it looking like base64, and the blob would be captured whole.
         (

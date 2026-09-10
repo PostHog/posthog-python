@@ -419,30 +419,38 @@ def _is_binary_blob(value: str) -> bool:
 
 
 def _sanitize_text(value: str) -> str:
-    # Both credential passes run before the URL pass, because rewriting a URL
-    # changes the text they match on: it percent-encodes `/`, hiding a
-    # `?ref=/phx_...` token behind `%2F` from the `\bph` boundary, and it can grow
-    # a word past the length window the entropy detector scans. Running the URL
-    # pass last loses nothing — it only redacts or percent-encodes, so it never
-    # exposes a credential the detectors could have matched.
-    value = _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value)
-    return _sanitize_urls(_redact_secret_tokens(value))
+    return _sanitize_urls(_redact_credentials(value))
+
+
+def _redact_credentials(value: str) -> str:
+    """Redact PostHog tokens, then any other word that reads as a credential.
+
+    Both run before the URL pass, because rewriting a URL changes the text they
+    match on: it percent-encodes `/`, hiding a `?ref=/phx_...` token behind `%2F`
+    from the `\bph` boundary, and it can grow a word past the length window the
+    entropy detector scans. Running the URL pass last loses nothing — it only
+    redacts or percent-encodes, so it never exposes a credential the detectors
+    could have matched."""
+    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
 def sanitize_intent(value: Any) -> Any:
-    """Sanitize the agent-narrated intent: the binary gate, then structured PII,
-    then the same passes every captured string gets.
+    """Sanitize the agent-narrated intent: the binary gate, the credential passes,
+    structured PII, then URLs.
 
-    Order matters in both places. The binary gate runs first because splicing a
-    redaction into a base64 blob stops it looking like base64, and the blob would
-    then be captured almost whole instead of as the marker. PII runs before the
-    URL pass because a rewritten URL percent-encodes the `@` the email pattern
-    needs to see."""
+    Every step sits where it does for a reason. The binary gate runs first
+    because splicing a redaction into a base64 blob stops it looking like base64,
+    and the blob would then be captured almost whole instead of as the marker.
+    Credentials run before PII because a PII pattern can cut a token in half — the
+    phone pattern reads `phx_AAAA-415-555-0142-AAAA` as a number and redacts only
+    the middle, leaving the token's halves in the payload. PII runs before the URL
+    pass because a rewritten URL percent-encodes the `@` the email pattern needs
+    to see."""
     if not isinstance(value, str):
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    return _sanitize_text(redact_pii(value))
+    return _sanitize_urls(redact_pii(_redact_credentials(value)))
 
 
 def _sanitize_resource_name(value: Any) -> Any:
