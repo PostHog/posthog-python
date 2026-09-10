@@ -1359,5 +1359,131 @@ class TestPromptsClearCache(TestPrompts):
         self.assertEqual(mock_get.call_count, 4)
 
 
+class TestPromptsGetAll(TestPrompts):
+    """Tests for fetching all prompts at a label in one request."""
+
+    def labeled_row(self, name, version=1, label="production", config=None):
+        return {
+            "id": f"id-{name}",
+            "name": name,
+            "prompt": f"Prompt for {name}",
+            "version": version,
+            "all_labels": [{"name": label, "version": version}],
+            "config": config,
+        }
+
+    def list_response(self, rows, next_url=None):
+        return MockResponse(
+            json_data={
+                "count": len(rows),
+                "next": next_url,
+                "previous": None,
+                "results": rows,
+            }
+        )
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_fetches_all_pages_and_seeds_the_cache(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        next_url = "https://us.posthog.com/api/environments/@current/llm_prompts/?token=phc_test_key&label=production&content=full&limit=100&offset=100"
+        mock_get.side_effect = [
+            self.list_response(
+                [self.labeled_row("prompt-a", config={"temperature": 0})],
+                next_url=next_url,
+            ),
+            self.list_response([self.labeled_row("prompt-b", version=3)]),
+        ]
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all(label="production")
+
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_args_list[1].args[0], next_url)
+        self.assertEqual(
+            results,
+            {
+                "prompt-a": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-a",
+                    name="prompt-a",
+                    version=1,
+                    label="production",
+                    config={"temperature": 0},
+                ),
+                "prompt-b": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-b",
+                    name="prompt-b",
+                    version=3,
+                    label="production",
+                ),
+            },
+        )
+
+        # Later labeled get() calls are cache hits, not new requests.
+        cached = prompts.get("prompt-b", label="production", with_metadata=True)
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(cached.source, "cache")
+        self.assertEqual(cached.version, 3)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_when_the_server_ignores_the_label(self, mock_get_session):
+        # An old server ignores ?label= and returns latest versions; none of the
+        # rows resolve the label, and caching them would serve wrong versions.
+        mock_get = mock_get_session.return_value.get
+        row = self.labeled_row("prompt-a")
+        row["all_labels"] = []
+        mock_get.return_value = self.list_response([row])
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("none resolve label", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_skips_a_row_whose_label_moved_and_keeps_the_rest(self, mock_get_session):
+        # A label that moved between the query and the response leaves one stale
+        # row; the rest of the batch must still be returned and cached.
+        mock_get = mock_get_session.return_value.get
+        moved = self.labeled_row("prompt-a")
+        moved["all_labels"] = [{"name": "production", "version": 2}]
+        mock_get.return_value = self.list_response(
+            [moved, self.labeled_row("prompt-b")]
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all(label="production")
+
+        self.assertEqual(list(results), ["prompt-b"])
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_refuses_a_pagination_link_off_the_configured_host(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = self.list_response(
+            [self.labeled_row("prompt-a")],
+            next_url="https://attacker.example.com/collect",
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("off the configured host", str(ctx.exception))
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_on_http_error(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(status_code=500, ok=False)
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("HTTP 500", str(ctx.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
