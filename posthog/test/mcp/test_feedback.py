@@ -312,6 +312,22 @@ def test_tool_name_gets_pii_redaction():
     assert props["$mcp_feedback_tool"] == "ask [redacted]"
 
 
+def test_pii_inside_urls_is_redacted():
+    # Guards the ordering of sanitize vs redact: a sanitizer that re-serializes
+    # URLs (percent-encoding "@") before redaction would hide the email from the
+    # redaction pattern (the TS SDK's veria finding on this feature).
+    report = parse_feedback_report(
+        {
+            "feedback_type": "issue",
+            "summary": "Login fails at https://example.com/?email=jane@example.com",
+        }
+    )
+    props = build_feedback_event_properties(report)
+    assert "jane@example.com" not in props["$mcp_feedback_summary"]
+    assert "jane%40example.com" not in props["$mcp_feedback_summary"]
+    assert "[redacted]" in props["$mcp_feedback_summary"]
+
+
 def test_intent_joins_summary_and_details():
     report = parse_feedback_report(_REPORT_ARGS)
     assert (
