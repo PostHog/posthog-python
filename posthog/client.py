@@ -19,6 +19,13 @@ from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
+from posthog.tracing._config import resolve_traces_config
+from posthog.tracing._drops import DropLog
+from posthog.tracing._export import SpanExporter
+from posthog.tracing._otlp import host_resource_attributes
+from posthog.tracing._pipeline import PostHogTraces
+from posthog.tracing.span import Span
+from posthog.tracing._span import inert_span as _inert_span
 from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
@@ -126,6 +133,9 @@ _configure_posthog_logging()
 
 MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
+# The final span flush shutdown() allows; a request already in flight may
+# overrun it by up to the client's request timeout.
+_TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
 
@@ -714,6 +724,7 @@ class Client(object):
         capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
+        traces: Optional[dict] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -796,6 +807,20 @@ class Client(object):
                 ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
+            traces: Config dict for distributed tracing: ``service_name``,
+                ``service_version``, ``environment``, ``resource_attributes``,
+                ``flush_interval`` (5 s), ``max_queue_size`` (2048),
+                ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
+                ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
+                ``max_events_per_span`` (128), ``max_attribute_value_length``
+                (8192). ``before_span_send`` is a callable, or a
+                list run in order, that receives each finished span as a dict
+                (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)
+                and returns it, edited, or ``None`` to drop it; a hook that
+                raises drops the span. Tracing is off until this is provided.
+                Spans export on a background timer even with ``sync_mode``;
+                serverless handlers should call ``flush()`` before returning.
+                Defaults to None.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -907,6 +932,14 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
+        self._traces_config: Any = traces
+        self._traces: Optional[PostHogTraces] = None
+        self._traces_lock = threading.Lock()
+        # The active span, scoped to this client so two instances in one
+        # process never parent to each other's spans.
+        self._active_span_var: ContextVar[Optional[Span]] = ContextVar(
+            "posthog_active_span", default=None
+        )
         # `_use_ai_lane` / `_enable_multimodal_capture` are deprecated aliases.
         self.enable_full_ai_capture = (
             enable_full_ai_capture is True
@@ -2242,6 +2275,10 @@ class Client(object):
         self._metrics_lock = threading.Lock()
         if self._metrics is not None:
             self._metrics._reinit_after_fork()
+        self._traces_lock = threading.Lock()
+        if self._traces is not None:
+            self._traces.reinit_after_fork()
+        self._active_span_var.set(None)
 
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
@@ -2466,6 +2503,127 @@ class Client(object):
                         self._metrics = PostHogMetrics(self, None)
         return self._metrics
 
+    @property
+    def _traces_pipeline(self) -> Optional[PostHogTraces]:
+        if (
+            self._traces_config is None
+            or self._traces_config is False
+            or self._shutdown_requested
+        ):
+            return self._traces
+        if self._traces is None:
+            with self._traces_lock:
+                if self._traces is None:
+                    try:
+                        config = resolve_traces_config(
+                            self._traces_config, host_resource_attributes()
+                        )
+                        drops = DropLog(config.flush_interval)
+                        self._traces = PostHogTraces(
+                            self,
+                            config,
+                            self._tracing_context,
+                            self._active_span_var,
+                            SpanExporter(self, config, drops),
+                            drops,
+                        )
+                        # Sync mode has no exit hook for events; spans still
+                        # queue for the timer, so they need their own.
+                        if self.sync_mode and self.send:
+                            atexit.register(self._atexit_spans)
+                    except Exception:
+                        # Off rather than defaults: defaults would drop a
+                        # before_span_send hook and export unscrubbed spans.
+                        self.log.exception("Error initializing traces; tracing is off")
+                        self._traces_config = None
+        return self._traces
+
+    def _tracing_context(self) -> Dict[str, Optional[str]]:
+        # The request context's identity, which the Django middleware fills
+        # from the X-POSTHOG-* headers: the span's person/session join keys.
+        return {
+            "distinct_id": get_context_distinct_id(),
+            "session_id": get_context_session_id(),
+        }
+
+    def start_span(
+        self,
+        name: str,
+        *,
+        kind: Optional[str] = None,
+        attributes: Optional[Mapping[str, Any]] = None,
+        parent: Union[Span, str, None] = None,
+        tracestate: Optional[str] = None,
+        start_time: Union[datetime, float, None] = None,
+    ) -> Span:
+        """
+        Start a span for distributed tracing. Alpha.
+
+        Returns a span handle. Use it as a context manager to make it the active
+        span for the block and end it on exit (recording a raised exception on
+        the way out); or call ``end()`` yourself for a span that cannot wrap a
+        block. Spans started inside the block nest under it automatically.
+        Always returns a usable handle, even when tracing is off, so calling
+        code never branches.
+
+        Args:
+            name: A low-cardinality operation name, e.g. ``GET /users/:id``.
+                Variable values belong in attributes, not the name.
+            kind: ``internal`` (default), ``server``, ``client``, ``producer``
+                or ``consumer``.
+            attributes: Initial attributes.
+            parent: A span handle, or an inbound W3C ``traceparent`` header
+                value to continue a remote trace. Defaults to the active span.
+            tracestate: The inbound ``tracestate`` header accompanying a
+                ``traceparent`` string ``parent``; preserved and propagated.
+            start_time: A ``datetime`` or epoch seconds, to backdate the span.
+
+        Examples:
+            ```python
+            posthog = Posthog("<ph_project_api_key>", traces={"service_name": "checkout-api"})
+
+            with posthog.start_span("POST /checkout", parent=request.headers.get("traceparent")) as span:
+                span.set_attribute("plan", user.plan)
+                with posthog.start_span("db.query", kind="client"):
+                    ...
+                outgoing_headers = {"traceparent": span.traceparent()}
+            ```
+
+        Category:
+            Tracing
+        """
+        pipeline = self._traces_pipeline
+        if pipeline is None:
+            return _inert_span(parent, tracestate, self._active_span_var)
+        return pipeline.start_span(
+            name,
+            kind=kind,
+            attributes=attributes,
+            parent=parent,
+            tracestate=tracestate,
+            start_time=start_time,
+        )
+
+    def get_active_span(self) -> Optional[Span]:
+        """
+        The span that is active in the current context, or ``None``. Alpha.
+
+        Only entering a span (``with posthog.start_span(...) as span:``) makes
+        it active; a span started manually is not. Use it to propagate the
+        trace to the next service: ``span.traceparent()`` is the header value.
+
+        Examples:
+            ```python
+            span = posthog.get_active_span()
+            if span is not None:
+                headers["traceparent"] = span.traceparent()
+            ```
+
+        Category:
+            Tracing
+        """
+        return self._active_span_var.get()
+
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
@@ -2473,6 +2631,10 @@ class Client(object):
         Args:
             timeout_seconds: Maximum seconds to wait for the queue to flush.
                 Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
+                Queued spans are sent at the same time, within the same
+                budget: at least one span request is attempted even when the
+                budget is already spent, no further one starts once it is, and
+                each request is bounded by ``timeout``.
 
         Examples:
             ```python
@@ -2483,19 +2645,48 @@ class Client(object):
         if self._defer_flush_from_callback(timeout_seconds):
             return
         try:
+            # Spans drain with events: serverless handlers call flush(), not
+            # shutdown(), and leaving spans on their own timer would lose them.
+            span_flush = self._start_span_flush(timeout_seconds)
             if timeout_seconds is None:
                 for lane in self._lanes:
                     lane.flush(None)
-                return
-
-            # The timeout is a total budget shared by the lanes, so flush()
-            # returns within roughly `timeout_seconds` overall.
-            deadline = time.monotonic() + timeout_seconds
-            for lane in self._lanes:
-                lane.flush(max(0.0, deadline - time.monotonic()))
+            else:
+                deadline = time.monotonic() + timeout_seconds
+                for lane in self._lanes:
+                    lane.flush(max(0.0, deadline - time.monotonic()))
+            if span_flush is not None:
+                # The first span request is exempt from the budget and bounded
+                # only by the request timeout, so the join is not.
+                span_flush.join()
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
+
+    def _start_span_flush(
+        self, timeout_seconds: Optional[float]
+    ) -> Optional[threading.Thread]:
+        """Flush spans alongside the events, so a handler waits one round trip, not two."""
+        traces = self._traces
+        if traces is None:
+            return None
+
+        def flush_spans() -> None:
+            try:
+                traces.flush(timeout_seconds)
+            except Exception as e:
+                self.log.exception("error flushing spans: %s", e)
+
+        flusher = threading.Thread(
+            target=flush_spans, name="posthog-span-flush", daemon=True
+        )
+        try:
+            flusher.start()
+        except RuntimeError:
+            # No new threads at interpreter shutdown; flush on this one.
+            flush_spans()
+            return None
+        return flusher
 
     def _is_consumer_thread(self) -> bool:
         current = threading.current_thread()
@@ -2687,6 +2878,16 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
+        if self._traces is not None:
+            traces = self._traces
+            self._run_lifecycle_cleanup(
+                "Failed to flush spans on shutdown",
+                lambda: traces.flush(_TRACES_SHUTDOWN_FLUSH_SECONDS),
+                errors,
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to close traces on shutdown", self._traces.close, errors
+            )
         self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",
@@ -2772,8 +2973,12 @@ class Client(object):
                     lane.close()
 
                 deadline = _get_atexit_deadline()
+                span_flush = self._start_span_flush(
+                    max(0.0, deadline - time.monotonic())
+                )
                 for lane in self._lanes:
                     lane.flush(max(0.0, deadline - time.monotonic()))
+                self._join_span_flush(span_flush, deadline)
             finally:
                 # Consumers are daemon threads. Publish a non-draining stop to
                 # every consumer, but do not join in-flight requests at exit.
@@ -2784,6 +2989,22 @@ class Client(object):
             with self._lifecycle_condition:
                 self._lifecycle_owner = None
                 self._lifecycle_condition.notify_all()
+
+    @no_throw()
+    def _atexit_spans(self) -> None:
+        # The span timer is a daemon thread that dies at exit.
+        deadline = _get_atexit_deadline()
+        span_flush = self._start_span_flush(max(0.0, deadline - time.monotonic()))
+        self._join_span_flush(span_flush, deadline)
+
+    def _join_span_flush(
+        self, flusher: Optional[threading.Thread], deadline: float
+    ) -> None:
+        if flusher is not None:
+            flusher.join(max(0.0, deadline - time.monotonic()))
+        if self._traces is not None:
+            # Not close(): an app's own shutdown() hook may still run and send them.
+            self._traces.warn_if_queued()
 
     @no_throw()
     def join(self) -> None:
@@ -2813,7 +3034,10 @@ class Client(object):
         Normally this method blocks until queued events have been attempted and
         cleanup finishes. Failed or undrainable events may be dropped and
         reported through logging or ``on_error``; returning does not guarantee
-        server receipt. Lifecycle cleanup is attempted once, and cleanup failures
+        server receipt. Queued spans get one final flush of up to 30 s (plus a
+        request already in flight); any it cannot send are discarded with a
+        warning, as are spans still open.
+        Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
         invoked the callback. If the callback must coordinate a blocking

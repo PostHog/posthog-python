@@ -28,6 +28,7 @@ alias posthog.OptionalCaptureArgs -> posthog.args.OptionalCaptureArgs
 alias posthog.OptionalSetArgs -> posthog.args.OptionalSetArgs
 alias posthog.RequiresServerEvaluation -> posthog.feature_flags.RequiresServerEvaluation
 alias posthog.SocketOptions -> posthog.request.SocketOptions
+alias posthog.Span -> posthog.tracing.span.Span
 alias posthog.VERSION -> posthog.version.VERSION
 alias posthog.ai.PromptResult -> posthog.ai.prompts.PromptResult
 alias posthog.ai.PromptSource -> posthog.ai.prompts.PromptSource
@@ -268,6 +269,7 @@ alias posthog.client.RequestsTimeout -> posthog.request.RequestsTimeout
 alias posthog.client.RequiresServerEvaluation -> posthog.feature_flags.RequiresServerEvaluation
 alias posthog.client.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
 alias posthog.client.SizeLimitedDict -> posthog.utils.SizeLimitedDict
+alias posthog.client.Span -> posthog.tracing.span.Span
 alias posthog.client.VERSION -> posthog.version.VERSION
 alias posthog.client.batch_post -> posthog.request.batch_post
 alias posthog.client.clean -> posthog.utils.clean
@@ -887,6 +889,7 @@ attribute posthog.secret_key = None
 attribute posthog.send = True
 attribute posthog.super_properties = None
 attribute posthog.sync_mode = False
+attribute posthog.traces = None
 attribute posthog.types.BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.FeatureFlag.enabled: bool
 attribute posthog.types.FeatureFlag.key: str
@@ -1010,7 +1013,7 @@ class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, ref
 class posthog.capture_compression.CaptureCompression 
 class posthog.capture_mode.CaptureMode 
 class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout=15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
@@ -1213,6 +1216,7 @@ function posthog.feature_flags.relative_date_parse_for_feature_flag_matching(val
 function posthog.feature_flags.resolve_bucketing_value(flag, distinct_id, device_id=None)
 function posthog.feature_flags.variant_lookup_table(feature_flag)
 function posthog.flush(timeout_seconds: Optional[float] = 10) -> None
+function posthog.get_active_span() -> Optional[Span]
 function posthog.get_all_flags(distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> Optional[dict[str, FlagValue]]
 function posthog.get_all_flags_and_payloads(distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> FlagsAndPayloads
 function posthog.get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
@@ -1261,6 +1265,7 @@ function posthog.set_context_session(session_id: str)
 function posthog.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 function posthog.setup() -> Client
 function posthog.shutdown() -> None
+function posthog.start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mapping[str, Any]] = None, parent: Union[Span, str, None] = None, tracestate: Optional[str] = None, start_time: Union[datetime.datetime, float, None] = None) -> Span
 function posthog.tag(name: str, value: Any)
 function posthog.types.normalize_flags_response(resp: Any) -> FlagsResponse
 function posthog.types.to_flags_and_payloads(resp: FlagsResponse) -> FlagsAndPayloads
@@ -1374,6 +1379,7 @@ method posthog.client.Client.evaluate_flags(distinct_id: Optional[ID_TYPES] = No
 method posthog.client.Client.feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 method posthog.client.Client.feature_flag_definitions()
 method posthog.client.Client.flush(timeout_seconds: Optional[float] = 10) -> None
+method posthog.client.Client.get_active_span() -> Optional[Span]
 method posthog.client.Client.get_all_flags(distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> Optional[dict[str, Union[bool, str]]]
 method posthog.client.Client.get_all_flags_and_payloads(distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
 method posthog.client.Client.get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
@@ -1396,6 +1402,7 @@ method posthog.client.Client.set_context_device_id(device_id: str) -> None
 method posthog.client.Client.set_context_session(session_id: str) -> None
 method posthog.client.Client.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.shutdown() -> None
+method posthog.client.Client.start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mapping[str, Any]] = None, parent: Union[Span, str, None] = None, tracestate: Optional[str] = None, start_time: Union[datetime, float, None] = None) -> Span
 method posthog.client.Client.tag(name: str, value: Any) -> None
 method posthog.consumer.Consumer.next()
 method posthog.consumer.Consumer.pause()

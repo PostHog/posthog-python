@@ -12,6 +12,7 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
+from posthog.tracing.span import Span
 from posthog.async_client import AsyncClient as AsyncClient
 from posthog.async_client import AsyncPosthog as AsyncPosthog
 from posthog.exception_capture import ExceptionCapture
@@ -340,6 +341,20 @@ Attributes:
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
         call if the metrics API hasn't been used yet.
+    traces: Config dict for distributed tracing: ``service_name``,
+        ``service_version``, ``environment``, ``resource_attributes``,
+        ``flush_interval`` (5 s), ``max_queue_size`` (2048),
+        ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
+        ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
+        ``max_events_per_span`` (128), ``max_attribute_value_length`` (8192).
+        ``before_span_send`` is a callable, or a list run in order,
+        that receives each finished span as a dict (``trace_id``, ``span_id``
+        and ``parent_span_id`` are read-only) and returns it, edited, or
+        ``None`` to drop it; a hook that raises drops the span. Tracing is off
+        until set. Spans export on a background timer even with ``sync_mode``;
+        serverless handlers should call ``flush()`` before returning. Applied
+        when ``setup()`` builds the global client, or on a later ``setup()``
+        call if no span has been started yet.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     project_root: Root path used to determine in-app exception stack frames.
@@ -396,6 +411,7 @@ feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
 metrics = None  # type: Optional[Dict]
+traces = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
@@ -1197,6 +1213,83 @@ def join() -> None:
     _proxy("join")
 
 
+def start_span(
+    name: str,
+    *,
+    kind: Optional[str] = None,
+    attributes: Optional[Mapping[str, Any]] = None,
+    parent: Union[Span, str, None] = None,
+    tracestate: Optional[str] = None,
+    start_time: Union[datetime.datetime, float, None] = None,
+) -> Span:
+    """
+    Start a span for distributed tracing. Alpha.
+
+    Returns a span handle. Use it as a context manager to make it the active
+    span for the block and end it on exit (recording a raised exception on the
+    way out); or call ``end()`` yourself for a span that cannot wrap a block.
+    Spans started inside the block nest under it automatically. Always returns
+    a usable handle, even when tracing is off, so calling code never branches.
+
+    Args:
+        name: A low-cardinality operation name, e.g. ``GET /users/:id``.
+            Variable values belong in attributes, not the name.
+        kind: ``internal`` (default), ``server``, ``client``, ``producer`` or
+            ``consumer``.
+        attributes: Initial attributes.
+        parent: A span handle, or an inbound W3C ``traceparent`` header value
+            to continue a remote trace. Defaults to the active span.
+        tracestate: The inbound ``tracestate`` header accompanying a
+            ``traceparent`` string ``parent``; preserved and propagated.
+        start_time: A ``datetime`` or epoch seconds, to backdate the span.
+
+    Examples:
+        ```python
+        import posthog
+        posthog.traces = {"service_name": "checkout-api"}
+
+        with posthog.start_span("POST /checkout", parent=request.headers.get("traceparent")) as span:
+            span.set_attribute("plan", user.plan)
+            with posthog.start_span("db.query", kind="client"):
+                ...
+            outgoing_headers = {"traceparent": span.traceparent()}
+        ```
+
+    Category:
+        Tracing
+    """
+    return _proxy(
+        "start_span",
+        name,
+        kind=kind,
+        attributes=attributes,
+        parent=parent,
+        tracestate=tracestate,
+        start_time=start_time,
+    )
+
+
+def get_active_span() -> Optional[Span]:
+    """
+    The span that is active in the current context, or ``None``. Alpha.
+
+    Only entering a span (``with posthog.start_span(...) as span:``) makes it
+    active; a span started manually is not. Use it to propagate the trace to
+    the next service: ``span.traceparent()`` is the header value.
+
+    Examples:
+        ```python
+        span = posthog.get_active_span()
+        if span is not None:
+            headers["traceparent"] = span.traceparent()
+        ```
+
+    Category:
+        Tracing
+    """
+    return _proxy("get_active_span")
+
+
 def shutdown() -> None:
     """
     Flush all messages and cleanly shutdown the client.
@@ -1259,6 +1352,7 @@ def setup() -> Client:
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
             metrics=metrics,
+            traces=traces,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
@@ -1299,6 +1393,8 @@ def setup() -> Client:
     # already forced setup()) still applies until the metrics API is first used.
     if default_client._metrics is None:
         default_client._metrics_config = metrics
+    if default_client._traces is None:
+        default_client._traces_config = traces
 
     return default_client
 
