@@ -31,11 +31,12 @@ v2 models expose snake_case attributes (``is_error``, ``input_schema``,
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import schema_has_param
+from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
@@ -109,7 +110,8 @@ def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
     """Instrument a raw v2 low-level ``Server``. ``context`` is injected as an
     *optional* schema property and NOT stripped — the schema doubles as the
     call's validation surface, and a typical ``(ctx, params)`` handler ignores
-    extra argument keys."""
+    extra argument keys. For standalone FastMCP, the shared tracking state supplies
+    the tool schemas so injected arguments are removed before validation."""
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
     _wrap_v2_call_tool(server, data)
@@ -422,6 +424,59 @@ def _deliver_conversation_id(
 # --- low-level: tools/call ------------------------------------------------------
 
 
+def _requested_tool_version(ctx: Any) -> Optional[str]:
+    """The FastMCP tool version a client pinned via request ``_meta``, if any."""
+    try:
+        # Standalone FastMCP is optional even when the official MCP SDK is installed.
+        from fastmcp.server.dependencies import extract_version_spec
+
+        params = getattr(ctx, "params", None)
+        meta = params.get("_meta") if isinstance(params, Mapping) else None
+        return extract_version_spec(meta)
+    except Exception:  # noqa: BLE001 - version parsing must not prevent dispatch
+        return None
+
+
+async def _standalone_injected_parameters(
+    server: Any, data: MCPAnalyticsData, name: str, version: Optional[str]
+) -> Optional[FrozenSet[str]]:
+    """Resolve ownership in the current request, including middleware and versions.
+
+    Listings from other requests can have different application-owned parameters.
+    Without a schema, stripping could delete application arguments.
+    """
+    try:
+        from fastmcp.utilities.versions import VersionSpec, version_sort_key
+
+        version_spec = VersionSpec(eq=version) if version else None
+        # Middleware can shadow registered tools, so resolve the effective listing.
+        candidates = [
+            tool
+            for tool in await server.list_tools()
+            if tool.name == name
+            and (version_spec is None or version_spec.matches(tool.version))
+        ]
+        tool = max(candidates, key=version_sort_key, default=None)
+        if tool is None:
+            tool = await server.get_tool(name, version=version_spec)
+        schema = getattr(tool, "parameters", None)
+    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
+        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
+        return None
+    if not isinstance(schema, dict):
+        return None
+    injected = set()
+    if is_context_enabled(data.options.context):
+        injected.add("context")
+    if data.options.enable_conversation_id:
+        injected.add("conversation_id")
+    if is_capture_model_enabled(data.options.capture_model) and (
+        can_inject_model_parameter(schema)
+    ):
+        injected.add("llm_model")
+    return frozenset(key for key in injected if not schema_has_param(schema, key))
+
+
 def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     entry = server.get_request_handler(_CALL_METHOD)
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
@@ -431,6 +486,21 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     async def handler(ctx: Any, params: Any) -> Any:
         name = params.name
         arguments = dict(params.arguments or {})
+        analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
+        standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
+        if standalone is not None:
+            version = _requested_tool_version(ctx)
+            injected = await _standalone_injected_parameters(
+                standalone, data, name, version
+            )
+            analytics_owns_model = injected is not None and "llm_model" in injected
+            if injected is not None:
+                call_arguments = {
+                    key: value
+                    for key, value in arguments.items()
+                    if key not in injected
+                }
+                params = params.model_copy(update={"arguments": call_arguments})
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -439,9 +509,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             name=name,
             arguments=arguments,
             request_meta=request_meta_from_context(ctx),
-            allow_self_reported_model=data.tool_model_parameter_injected.get(
-                name, False
-            ),
+            allow_self_reported_model=analytics_owns_model,
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,

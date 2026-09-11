@@ -37,8 +37,8 @@ _INSTRUCTIONS_FIELD_DESCRIPTION = "Server-issued metadata for this conversation.
 _CONVERSATION_ID_FIELD_DESCRIPTION = "The server-issued conversation identifier."
 
 # `outputSchema` on MCP SDK 1.x models, `output_schema` on 2.x (same wire field).
-_OUTPUT_SCHEMA_ATTRS = ("outputSchema", "output_schema")
-_STRUCTURED_CONTENT_ATTRS = ("structuredContent", "structured_content")
+_OUTPUT_SCHEMA_ATTRS = ("output_schema", "outputSchema")
+_STRUCTURED_CONTENT_ATTRS = ("structured_content", "structuredContent")
 
 
 def _read_attr(obj: Any, names: Tuple[str, ...]) -> Tuple[Optional[str], Any]:

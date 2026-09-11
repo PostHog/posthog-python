@@ -155,10 +155,11 @@ jobs:
         # The MCP suite as a named gate per MCP Python SDK major. The v1 leg uses
         # the lockfile's mcp 1.x (also exercised incidentally by the `tests`
         # matrix — this leg exists as an explicit, named signal); the v2 leg
-        # (spec 2026-07-28) swaps in mcp>=2 and drops jlowin fastmcp, which pins
-        # mcp<2. posthog/test/mcp/conftest.py splits collection by major.
+        # (spec 2026-07-28) swaps in mcp>=2 and standalone FastMCP 4, which uses
+        # the v2 registry. posthog/test/mcp/conftest.py splits collection by major.
         name: MCP SDK ${{ matrix.mcp-major }} (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest
+        timeout-minutes: 20
         strategy:
             matrix:
                 python-version: ['3.10', '3.14']
@@ -189,8 +190,8 @@ jobs:
               if: matrix.mcp-major == 'v2'
               shell: bash
               run: |
-                  uv pip uninstall --python $pythonLocation fastmcp
-                  uv pip install --python $pythonLocation 'mcp>=2,<3'
+                  uv pip uninstall --python "$pythonLocation" fastmcp
+                  uv pip install --python "$pythonLocation" 'mcp>=2,<3' 'fastmcp>=4,<5'
 
             - name: Run MCP tests against SDK ${{ matrix.mcp-major }}
               run: |

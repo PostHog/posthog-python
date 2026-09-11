@@ -56,7 +56,7 @@ def _is_call_tool_result(value: Any) -> bool:
     dict or a pydantic model from the ``mcp`` SDK."""
     if isinstance(value, dict):
         return "isError" in value and isinstance(value.get("content"), list)
-    return hasattr(value, "isError") and isinstance(
+    return (hasattr(value, "is_error") or hasattr(value, "isError")) and isinstance(
         getattr(value, "content", None), list
     )
 
