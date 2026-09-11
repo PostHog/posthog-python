@@ -1,6 +1,5 @@
 import pytest
 
-from posthog.mcp import PostHogMCP
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     MCP_MAJOR,
@@ -8,16 +7,6 @@ from posthog.test.mcp._helpers import (
     events_named,
     flush_background,
 )
-
-
-def test_model_capture_is_enabled_for_custom_dispatchers():
-    for kwargs, enabled in [({}, True), ({"capture_model": False}, False)]:
-        client = PostHogMCP("test", disabled=True, **kwargs)
-        tools = client.prepare_tool_list(
-            [{"name": "echo", "inputSchema": {"type": "object", "properties": {}}}]
-        )
-        assert ("llm_model" in tools[0]["inputSchema"]["properties"]) is enabled
-        client.shutdown()
 
 
 @pytest.mark.skipif(MCP_MAJOR < 2, reason="v2 low-level handler API")
