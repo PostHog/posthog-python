@@ -509,6 +509,57 @@ def get_error_message(exc_value):
     return safe_str(message)
 
 
+def _valid_mechanism(mechanism):
+    # type: (Optional[Dict[str, Any]]) -> Dict[str, Any]
+    """Validate common mechanism fields without dropping safe extensions."""
+    if not isinstance(mechanism, dict):
+        return {}
+
+    result = {
+        key: value
+        for key, value in mechanism.items()
+        if key
+        not in {"type", "handled", "source", "synthetic", "exception_id", "parent_id"}
+    }
+    if isinstance(mechanism.get("type"), str) and mechanism["type"]:
+        result["type"] = mechanism["type"]
+    if isinstance(mechanism.get("handled"), bool):
+        result["handled"] = mechanism["handled"]
+    if isinstance(mechanism.get("source"), str) and mechanism["source"]:
+        result["source"] = mechanism["source"]
+    if isinstance(mechanism.get("synthetic"), bool):
+        result["synthetic"] = mechanism["synthetic"]
+    return result
+
+
+_EXCEPTION_LEVELS = {
+    "fatal": "fatal",
+    "critical": "fatal",
+    "alert": "fatal",
+    "emergency": "fatal",
+    "error": "error",
+    "warning": "warning",
+    "warn": "warning",
+    "log": "log",
+    "notice": "info",
+    "info": "info",
+    "trace": "debug",
+    "debug": "debug",
+}
+
+
+def _normalize_exception_level(level):
+    # type: (Any) -> Optional[str]
+    return _EXCEPTION_LEVELS.get(level.lower()) if isinstance(level, str) else None
+
+
+def _capture_exception_with_metadata(client, exception, capture_metadata, **kwargs):
+    # type: (Any, ExceptionArg, Dict[str, Any], **Any) -> Optional[str]
+    """Call capture_exception through the SDK-internal typed integration channel."""
+    capture = client.capture_exception  # type: Any
+    return capture(exception, _capture_metadata=capture_metadata, **kwargs)
+
+
 def single_exception_from_error_tuple(
     exc_type,  # type: Optional[type]
     exc_value,  # type: Optional[BaseException]
@@ -523,9 +574,7 @@ def single_exception_from_error_tuple(
     Creates a dict that goes into the events `exception.values` list
     """
     exception_value = {}  # type: Dict[str, Any]
-    exception_value["mechanism"] = (
-        mechanism.copy() if mechanism else {"type": "generic", "handled": True}
-    )
+    exception_value["mechanism"] = _valid_mechanism(mechanism)
     if exception_id is not None:
         exception_value["mechanism"]["exception_id"] = exception_id
 
@@ -539,16 +588,23 @@ def single_exception_from_error_tuple(
             "errno", {}
         ).setdefault("number", errno)
 
-    if source is not None:
+    if isinstance(source, str) and source:
         exception_value["mechanism"]["source"] = source
 
     is_root_exception = exception_id == 0
     if not is_root_exception and parent_id is not None:
         exception_value["mechanism"]["parent_id"] = parent_id
         exception_value["mechanism"]["type"] = "chained"
+        exception_value["mechanism"].pop("handled", None)
 
-    if is_root_exception and "type" not in exception_value["mechanism"]:
-        exception_value["mechanism"]["type"] = "generic"
+    if is_root_exception:
+        exception_value["mechanism"].setdefault("type", "generic")
+        exception_value["mechanism"].setdefault("handled", True)
+        exception_value["mechanism"].pop("source", None)
+
+    # Python capture inputs are runtime exceptions and this builder never
+    # replaces their stack with an SDK-generated current stack.
+    exception_value["mechanism"].setdefault("synthetic", False)
 
     is_exception_group = BaseExceptionGroup is not None and isinstance(
         exc_value, BaseExceptionGroup
@@ -618,7 +674,7 @@ else:
         yield exc_info
 
 
-def exceptions_from_error(
+def _exceptions_from_error(
     exc_type,  # type: Optional[type]
     exc_value,  # type: Optional[BaseException]
     tb,  # type: Optional[TracebackType]
@@ -626,12 +682,20 @@ def exceptions_from_error(
     exception_id=0,  # type: int
     parent_id=0,  # type: int
     source=None,  # type: Optional[str]
+    seen_exception_ids=None,  # type: Optional[Set[int]]
 ):
     # type: (...) -> Tuple[int, List[Dict[str, Any]]]
     """
     Creates the list of exceptions.
     This can include chained exceptions and exceptions from an ExceptionGroup.
     """
+
+    if seen_exception_ids is None:
+        seen_exception_ids = set()
+    if exc_value is not None:
+        if id(exc_value) in seen_exception_ids or exception_id >= 50:
+            return (exception_id, [])
+        seen_exception_ids.add(id(exc_value))
 
     parent = single_exception_from_error_tuple(
         exc_type=exc_type,
@@ -647,65 +711,74 @@ def exceptions_from_error(
     parent_id = exception_id
     exception_id += 1
 
-    should_supress_context = (
+    causing_exception = None  # type: Optional[BaseException]
+    relationship = None  # type: Optional[str]
+    should_suppress_context = (
         hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
     )
-    if should_supress_context:
-        # Add direct cause.
-        # The field `__cause__` is set when raised with the exception (using the `from` keyword).
-        exception_has_cause = (
-            exc_value
-            and hasattr(exc_value, "__cause__")
-            and exc_value.__cause__ is not None
-        )
-        if exception_has_cause:
-            cause = exc_value.__cause__  # type: ignore
-            (exception_id, child_exceptions) = exceptions_from_error(
-                exc_type=type(cause),
-                exc_value=cause,
-                tb=getattr(cause, "__traceback__", None),
-                mechanism=mechanism,
-                exception_id=exception_id,
-                source="__cause__",
-            )
-            exceptions.extend(child_exceptions)
-
+    if should_suppress_context and exc_value is not None:
+        causing_exception = getattr(exc_value, "__cause__", None)
+        relationship = "cause"
     else:
-        # Add indirect cause.
-        # The field `__context__` is assigned if another exception occurs while handling the exception.
-        exception_has_content = (
-            exc_value
-            and hasattr(exc_value, "__context__")
-            and exc_value.__context__ is not None
+        causing_exception = getattr(exc_value, "__context__", None)
+        relationship = "context"
+
+    if causing_exception is not None and exception_id < 50:
+        (exception_id, child_exceptions) = _exceptions_from_error(
+            exc_type=type(causing_exception),
+            exc_value=causing_exception,
+            tb=getattr(causing_exception, "__traceback__", None),
+            mechanism=None,
+            exception_id=exception_id,
+            parent_id=parent_id,
+            source=relationship,
+            seen_exception_ids=seen_exception_ids,
         )
-        if exception_has_content:
-            context = exc_value.__context__  # type: ignore
-            (exception_id, child_exceptions) = exceptions_from_error(
-                exc_type=type(context),
-                exc_value=context,
-                tb=getattr(context, "__traceback__", None),
-                mechanism=mechanism,
-                exception_id=exception_id,
-                source="__context__",
-            )
-            exceptions.extend(child_exceptions)
+        exceptions.extend(child_exceptions)
 
     # Add exceptions from an ExceptionGroup.
-    is_exception_group = exc_value and hasattr(exc_value, "exceptions")
+    is_exception_group = BaseExceptionGroup is not None and isinstance(
+        exc_value, BaseExceptionGroup
+    )
     if is_exception_group:
-        for idx, e in enumerate(exc_value.exceptions):  # type: ignore
-            (exception_id, child_exceptions) = exceptions_from_error(
+        for e in exc_value.exceptions:  # type: ignore
+            if exception_id >= 50:
+                break
+            (exception_id, child_exceptions) = _exceptions_from_error(
                 exc_type=type(e),
                 exc_value=e,
                 tb=getattr(e, "__traceback__", None),
-                mechanism=mechanism,
+                mechanism=None,
                 exception_id=exception_id,
                 parent_id=parent_id,
-                source="exceptions[%s]" % idx,
+                source="member",
+                seen_exception_ids=seen_exception_ids,
             )
             exceptions.extend(child_exceptions)
 
     return (exception_id, exceptions)
+
+
+def exceptions_from_error(
+    exc_type,  # type: Optional[type]
+    exc_value,  # type: Optional[BaseException]
+    tb,  # type: Optional[TracebackType]
+    mechanism=None,  # type: Optional[Dict[str, Any]]
+    exception_id=0,  # type: int
+    parent_id=0,  # type: int
+    source=None,  # type: Optional[str]
+):
+    # type: (...) -> Tuple[int, List[Dict[str, Any]]]
+    """Compatibility wrapper around the bounded exception-tree traversal."""
+    return _exceptions_from_error(
+        exc_type,
+        exc_value,
+        tb,
+        mechanism=mechanism,
+        exception_id=exception_id,
+        parent_id=parent_id,
+        source=source,
+    )
 
 
 def exceptions_from_error_tuple(
@@ -715,26 +788,14 @@ def exceptions_from_error_tuple(
     # type: (...) -> List[Dict[str, Any]]
     exc_type, exc_value, tb = exc_info
 
-    is_exception_group = BaseExceptionGroup is not None and isinstance(
-        exc_value, BaseExceptionGroup
+    (_, exceptions) = _exceptions_from_error(
+        exc_type=exc_type,
+        exc_value=exc_value,
+        tb=tb,
+        mechanism=mechanism,
+        exception_id=0,
+        parent_id=0,
     )
-
-    if is_exception_group:
-        (_, exceptions) = exceptions_from_error(
-            exc_type=exc_type,
-            exc_value=exc_value,
-            tb=tb,
-            mechanism=mechanism,
-            exception_id=0,
-            parent_id=0,
-        )
-
-    else:
-        exceptions = []
-        for exc_type, exc_value, tb in walk_exception_chain(exc_info):
-            exceptions.append(
-                single_exception_from_error_tuple(exc_type, exc_value, tb, mechanism)
-            )
 
     # Canonical ordering: $exception_list[0] is the caught/outermost exception,
     # with each cause appended after its wrapper in unwrap order and the root
