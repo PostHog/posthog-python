@@ -537,8 +537,11 @@ class CallbackHandler(BaseCallbackHandler):
         run: SpanMetadata,
         outputs: Any,
         parent_run_id: Optional[UUID],
+        event_name_override: Optional[str] = None,
     ):
-        event_name = "$ai_trace" if parent_run_id is None else "$ai_span"
+        event_name = event_name_override or (
+            "$ai_trace" if parent_run_id is None else "$ai_span"
+        )
         event_properties = {
             "$ai_trace_id": trace_id,
             "$ai_input_state": with_privacy_mode(
@@ -616,6 +619,7 @@ class CallbackHandler(BaseCallbackHandler):
         run: GenerationMetadata,
         output: Union[LLMResult, BaseException],
         parent_run_id: Optional[UUID] = None,
+        include_parent_id: bool = True,
     ):
         # The served tier comes from the response, because a requested tier can be refused.
         model_params = run.model_params
@@ -629,7 +633,6 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_trace_id": trace_id,
             "$ai_span_id": run_id,
             "$ai_span_name": run.name,
-            "$ai_parent_id": parent_run_id,
             "$ai_provider": run.provider,
             "$ai_model": run.model,
             "$ai_model_parameters": model_params,
@@ -645,6 +648,8 @@ class CallbackHandler(BaseCallbackHandler):
             "$ai_base_url": run.base_url,
             "$ai_framework": "langchain",
         }
+        if include_parent_id:
+            event_properties["$ai_parent_id"] = parent_run_id
 
         warn_if_posthog_ai_gateway(run.base_url)
 
