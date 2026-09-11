@@ -312,20 +312,55 @@ def test_tool_name_gets_pii_redaction():
     assert props["$mcp_feedback_tool"] == "ask [redacted]"
 
 
-def test_pii_inside_urls_is_redacted():
-    # Guards the ordering of sanitize vs redact: a sanitizer that re-serializes
-    # URLs (percent-encoding "@") before redaction would hide the email from the
-    # redaction pattern (the TS SDK's veria finding on this feature).
+def test_pii_inside_urls_is_redacted_on_every_surface():
+    # Guards the ordering of the free-text pass: running the URL rewrite before
+    # PII redaction percent-encodes the "@" the email pattern anchors on, letting
+    # the email through (the TS SDK's veria finding on this feature).
+    url = "https://example.com/?email=jane@example.com"
+    options = CollectFeedbackOptions(extra_properties={"area": {"type": "string"}})
     report = parse_feedback_report(
         {
             "feedback_type": "issue",
-            "summary": "Login fails at https://example.com/?email=jane@example.com",
-        }
+            "summary": f"Login fails at {url}",
+            "details": f"see {url} too",
+            "friction_points": f"url {url} slow",
+            "suggested_improvement": f"fix {url}",
+            "tool_name": url,
+            "area": url,
+        },
+        options,
     )
     props = build_feedback_event_properties(report)
-    assert "jane@example.com" not in props["$mcp_feedback_summary"]
-    assert "jane%40example.com" not in props["$mcp_feedback_summary"]
-    assert "[redacted]" in props["$mcp_feedback_summary"]
+    for key in (
+        "$mcp_feedback_summary",
+        "$mcp_feedback_details",
+        "$mcp_feedback_friction_points",
+        "$mcp_feedback_suggested_improvement",
+        "$mcp_feedback_tool",
+        "$mcp_feedback_area",
+    ):
+        assert "jane@example.com" not in props[key], key
+        assert "jane%40example.com" not in props[key], key
+        assert "[redacted]" in props[key], key
+
+
+def test_nested_extras_keep_key_based_redaction():
+    # The feedback path walks extras with the free-text pass; nothing else
+    # asserts that credential-named keys inside a nested extra still redact by
+    # key name, so a stringify-first refactor could drop that protection silently.
+    options = CollectFeedbackOptions(extra_properties={"meta": {"type": "object"}})
+    report = parse_feedback_report(
+        {
+            "feedback_type": "issue",
+            "summary": "s",
+            "meta": {"note": "ping jane@example.com", "password": "hunter2"},
+        },
+        options,
+    )
+    props = build_feedback_event_properties(report)
+    assert '"password": "[redacted]"' in props["$mcp_feedback_meta"]
+    assert "hunter2" not in props["$mcp_feedback_meta"]
+    assert '"note": "ping [redacted]"' in props["$mcp_feedback_meta"]
 
 
 def test_intent_joins_summary_and_details():

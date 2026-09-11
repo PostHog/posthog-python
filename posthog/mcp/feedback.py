@@ -10,7 +10,7 @@ import json
 from typing import Any, Dict, Optional, Union
 
 from ._internal import _maybe_await
-from ._sanitization import redact_pii, sanitize_captured_value
+from ._sanitization import sanitize_free_text, sanitize_free_text_value
 from .constants import PostHogMCPAnalyticsProperty
 from .logger import log
 from .types import CollectFeedbackOptions, FeedbackReport, JsonRecord
@@ -257,25 +257,26 @@ def _truncate_feedback_text(value: str, max_length: int) -> str:
 
 def _capture_free_text(value: str) -> str:
     """Agent-narrated free text can contain a secret the LLM read aloud or personal
-    data it narrated, so it gets the ``$mcp_intent`` treatment: sanitize, strip
-    structured PII, then bound the length. The event pipeline does not process
+    data it narrated, so it gets exactly the ``$mcp_intent`` pass
+    (``sanitize_free_text``: credentials -> structured PII -> URLs — the order is
+    load-bearing, the URL rewrite would percent-encode the ``@`` the email pattern
+    anchors on), then a length bound. The event pipeline does not process
     ``event["properties"]``, so this happens here."""
-    return _truncate_feedback_text(
-        redact_pii(sanitize_captured_value(value)), _MAX_FEEDBACK_TEXT_LENGTH
-    )
+    return _truncate_feedback_text(sanitize_free_text(value), _MAX_FEEDBACK_TEXT_LENGTH)
 
 
 def _capture_extra_value(value: Any) -> Any:
-    """A declared extra is agent-supplied like the core free-text fields, so it
-    gets the same treatment. Non-scalars are JSON-stringified first so the
-    redaction sees the full text; unserializable values are dropped."""
-    sanitized = sanitize_captured_value(value)
+    """A declared extra is agent-supplied like the core free-text fields, so its
+    string leaves get the same free-text pass (with the key-based redaction
+    ``sanitize_free_text_value`` keeps for nested objects), then non-scalars are
+    JSON-stringified and everything is bounded. Unserializable values are dropped."""
+    sanitized = sanitize_free_text_value(value)
     if isinstance(sanitized, str):
-        return _capture_free_text(sanitized)
+        return _truncate_feedback_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
     if sanitized is None or isinstance(sanitized, (bool, int, float)):
         return sanitized
     try:
-        return _capture_free_text(json.dumps(sanitized))
+        return _truncate_feedback_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
     except Exception:  # noqa: BLE001 - capture must never raise into the tool path
         return None
 
@@ -306,10 +307,10 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
         )
     if report.tool_name:
         # Nominally an identifier, but the schema can't stop an agent from
-        # writing prose into it — so it gets the same PII redaction as the
-        # other free text.
+        # writing prose into it — so it gets the same free-text pass as the
+        # other fields.
         properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = _truncate_feedback_text(
-            redact_pii(sanitize_captured_value(report.tool_name)),
+            sanitize_free_text(report.tool_name),
             _MAX_FEEDBACK_TOOL_NAME_LENGTH,
         )
     if report.task_completed is not None:
