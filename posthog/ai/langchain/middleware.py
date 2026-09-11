@@ -1,5 +1,6 @@
 """LangChain v1 agent middleware for PostHog AI observability."""
 
+import asyncio
 import logging
 import time
 from collections.abc import Awaitable, Callable, Mapping
@@ -85,7 +86,7 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
     async def aafter_agent(
         self, state: _PostHogMiddlewareState, runtime: Any
     ) -> dict[str, Any]:
-        self._safely_call(self._finish_agent, state)
+        await self._asafely_call(self._finish_agent, state)
         return self._clear_agent_state()
 
     def wrap_model_call(
@@ -111,9 +112,13 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         try:
             response = await handler(request)
         except BaseException as error:
-            self._safely_call(self._finish_model, request.state, run_id, error, False)
+            await self._asafely_call(
+                self._finish_model, request.state, run_id, error, False
+            )
             raise
-        self._safely_call(self._finish_model, request.state, run_id, response, True)
+        await self._asafely_call(
+            self._finish_model, request.state, run_id, response, True
+        )
         return response
 
     def wrap_tool_call(
@@ -142,12 +147,14 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         try:
             response = await handler(request)
         except BaseException as error:
-            self._safely_call(self._finish_tool, request.state, run_id, error, False)
+            await self._asafely_call(
+                self._finish_tool, request.state, run_id, error, False
+            )
             raise
         output: Any = response
         if isinstance(response, ToolMessage) and response.status == "error":
             output = self._returned_tool_error(response)
-        self._safely_call(self._finish_tool, request.state, run_id, output, True)
+        await self._asafely_call(self._finish_tool, request.state, run_id, output, True)
         return response
 
     def _start_agent(self, state: Mapping[str, Any]) -> dict[str, Any]:
@@ -336,6 +343,11 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
             return function(*args)
         except Exception:
             log.exception("Failed to capture PostHog LangChain telemetry")
+
+    async def _asafely_call(self, function: Callable[..., Any], *args: Any) -> Any:
+        if getattr(self._callback._ph_client, "sync_mode", False):
+            return await asyncio.to_thread(self._safely_call, function, *args)
+        return self._safely_call(function, *args)
 
 
 def _root_id(state: Mapping[str, Any]) -> UUID | None:

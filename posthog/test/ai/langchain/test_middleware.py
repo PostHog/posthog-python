@@ -1,6 +1,7 @@
 import asyncio
 import subprocess
 import sys
+import threading
 import time
 from typing import Any, Callable, Sequence
 from unittest.mock import MagicMock
@@ -107,6 +108,7 @@ def weather(city: str) -> str:
 def _client() -> MagicMock:
     client = MagicMock()
     client.privacy_mode = False
+    client.sync_mode = False
     client.enable_exception_autocapture = False
     return client
 
@@ -276,6 +278,42 @@ async def test_instruments_async_agent_and_preserves_custom_state() -> None:
     assert trace["$ai_output_state"]["workflow"] == "support"
     assert not any(key.startswith("_posthog_") for key in trace["$ai_input_state"])
     assert not any(key.startswith("_posthog_") for key in trace["$ai_output_state"])
+
+
+@pytest.mark.asyncio
+async def test_async_hooks_do_not_capture_on_the_event_loop_thread() -> None:
+    client = _client()
+    client.sync_mode = True
+    event_loop_thread = threading.get_ident()
+    capture_threads: list[int] = []
+    client.capture.side_effect = lambda **_: capture_threads.append(
+        threading.get_ident()
+    )
+    middleware = PostHogMiddleware(client)
+    state = {"messages": [HumanMessage(content="Hello")]}
+    state.update(await middleware.abefore_agent(state, None))
+
+    model_request = _model_request(StubAgentModel(responses=[]), state)
+
+    async def model_handler(_: ModelRequest[Any]) -> ModelResponse[Any]:
+        return ModelResponse(result=[AIMessage(content="Done")])
+
+    await middleware.awrap_model_call(model_request, model_handler)
+
+    tool_request = _tool_request(state)
+
+    async def tool_handler(_: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(
+            content="Sunny",
+            tool_call_id="weather-call",
+            name="weather",
+        )
+
+    await middleware.awrap_tool_call(tool_request, tool_handler)
+    await middleware.aafter_agent(state, None)
+
+    assert len(capture_threads) == 3
+    assert all(thread_id != event_loop_thread for thread_id in capture_threads)
 
 
 @pytest.mark.parametrize("privacy_source", ["middleware", "client"])
