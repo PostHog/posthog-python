@@ -81,8 +81,10 @@ class Span:
     def record_exception(self, exception: BaseException) -> "Span":
         """Record an exception as an ``exception`` event and mark the span ``error``.
 
-        Ignored after ``end()``. The event carries ``exception.type`` and
-        ``exception.message``. Returns the span, so calls chain. Inside
+        Ignored after ``end()``. The event carries ``exception.type``,
+        ``exception.message`` and, for a raised exception,
+        ``exception.stacktrace`` (its last ``max_attribute_value_length``
+        characters). Returns the span, so calls chain. Inside
         ``with span:`` a raised ``Exception`` is recorded automatically, so
         this is for exceptions that are caught and handled.
 

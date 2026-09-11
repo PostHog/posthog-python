@@ -15,6 +15,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from ..capture_v1 import _MAX_BACKOFF_SECONDS
 from ._config import ResolvedTracesConfig
 from ._drops import DropLog
+from ._limits import truncate_attributes
 from ._otlp import (
     SpanRecord,
     build_otlp_span,
@@ -104,11 +105,14 @@ class SpanExporter:
         self._send = send
         # Encoded once: the resource is the same for every batch.
         self._resource = to_resource_key_value_list(
-            build_resource_attributes(
-                config.service_name,
-                config.service_version,
-                config.environment,
-                config.resource_attributes,
+            truncate_attributes(
+                build_resource_attributes(
+                    config.service_name,
+                    config.service_version,
+                    config.environment,
+                    config.resource_attributes,
+                ),
+                config.max_attribute_value_length,
             )
         )
 

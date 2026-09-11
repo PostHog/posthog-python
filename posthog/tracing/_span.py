@@ -3,10 +3,18 @@
 import logging
 import threading
 import time
+import traceback
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional
 
+from ._config import (
+    DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH,
+    DEFAULT_MAX_ATTRIBUTES_PER_SPAN,
+    DEFAULT_MAX_EVENTS_PER_SPAN,
+    MAX_ATTRIBUTES_PER_EVENT,
+)
+from ._limits import bound_attributes, truncate_attribute_value, truncate_string
 from ._otlp import SpanEventRecord, SpanRecord, SpanStatus
 from ._sanitize import (
     SpanTimeInput,
@@ -165,6 +173,33 @@ def describe_error(error: Any) -> "tuple[str, str]":
         return type(error).__name__, ""
 
 
+def describe_stacktrace(error: Any) -> Optional[str]:
+    """The OTel ``exception.stacktrace``, or ``None`` for an exception never raised."""
+    try:
+        if isinstance(error, BaseException) and error.__traceback__ is not None:
+            return "".join(
+                traceback.format_exception(type(error), error, error.__traceback__)
+            )
+    except Exception:
+        pass
+    return None
+
+
+def _exception_event_attributes(
+    error: Any, max_length: int
+) -> "tuple[Dict[str, Any], str]":
+    exc_type, message = describe_error(error)
+    attributes: Dict[str, Any] = {
+        "exception.type": exc_type,
+        "exception.message": message,
+    }
+    # The tail is kept: Python lists the raising frame last.
+    stacktrace = describe_stacktrace(error)
+    if stacktrace:
+        attributes["exception.stacktrace"] = stacktrace[-max_length:]
+    return attributes, message
+
+
 class RecordingSpan(_Activatable, Span):
     """A span that records and, on ``end()``, hands one record to the pipeline."""
 
@@ -185,6 +220,10 @@ class RecordingSpan(_Activatable, Span):
         parent_is_remote: bool = False,
         active_var: Optional[ContextVar] = None,
         clock_anchor: Optional[ClockAnchor] = None,
+        auto_attribute_keys: Iterable[str] = (),
+        max_attributes: int = DEFAULT_MAX_ATTRIBUTES_PER_SPAN,
+        max_events: int = DEFAULT_MAX_EVENTS_PER_SPAN,
+        max_attribute_value_length: int = DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH,
     ) -> None:
         self._trace_id = trace_id
         self._span_id = span_id
@@ -208,7 +247,18 @@ class RecordingSpan(_Activatable, Span):
 
         self._name = name
         self._kind = kind
-        self._attributes: Dict[str, Any] = attributes if attributes is not None else {}
+        # The SDK's own join keys, exempt from the attribute cap.
+        self._auto_keys = frozenset(auto_attribute_keys)
+        self._max_attributes = max_attributes
+        self._max_events = max_events
+        self._max_attribute_value_length = max_attribute_value_length
+        self._user_attribute_count = 0
+        self._user_event_count = 0
+        self._dropped_attributes = 0
+        self._dropped_events = 0
+        self._attributes: Dict[str, Any] = {}
+        for key, value in (attributes or {}).items():
+            self._write_attribute(key, value)
         self._events: List[SpanEventRecord] = []
         self._status: Optional[SpanStatus] = None
         self._ended = False
@@ -225,16 +275,35 @@ class RecordingSpan(_Activatable, Span):
             return False
         return True
 
+    def _write_attribute(self, key: str, value: Any) -> None:
+        """Write an attribute unless the span is at its cap of distinct user keys."""
+        if value is None:
+            # None removes the key, freeing its slot.
+            if key in self._attributes and key not in self._auto_keys:
+                self._user_attribute_count -= 1
+            self._attributes.pop(key, None)
+            return
+        # Checked before the value is walked, which is the costly part.
+        if key not in self._auto_keys and key not in self._attributes:
+            if self._user_attribute_count >= self._max_attributes:
+                self._dropped_attributes += 1
+                return
+            self._user_attribute_count += 1
+        self._attributes[key] = truncate_attribute_value(
+            value, self._max_attribute_value_length
+        )
+
     def set_attribute(self, key: str, value: Any) -> "Span":
         if self._mutable("set_attribute"):
             key_str = attribute_key(key)
             if key_str is not None:
-                self._attributes[key_str] = value
+                self._write_attribute(key_str, value)
         return self
 
     def set_attributes(self, attributes: Mapping[str, Any]) -> "Span":
         if self._mutable("set_attributes"):
-            copy_user_attributes(self._attributes, attributes)
+            for key, value in copy_user_attributes({}, attributes).items():
+                self._write_attribute(key, value)
         return self
 
     def add_event(
@@ -244,15 +313,29 @@ class RecordingSpan(_Activatable, Span):
         timestamp: Optional[SpanTimeInput] = None,
     ) -> "Span":
         if self._mutable("add_event"):
+            # A recorded exception spends a slot like any other event.
+            if self._user_event_count >= self._max_events:
+                self._dropped_events += 1
+                return self
+            self._user_event_count += 1
+            bounded: Optional[Dict[str, Any]] = None
+            dropped = 0
+            if attributes is not None:
+                bounded, dropped = bound_attributes(
+                    attributes,
+                    MAX_ATTRIBUTES_PER_EVENT,
+                    self._max_attribute_value_length,
+                )
             self._events.append(
                 SpanEventRecord(
-                    name=sanitize_name(name, "Span event name"),
+                    name=sanitize_name(
+                        name, "Span event name", self._max_attribute_value_length
+                    ),
                     timestamp_ns=resolve_supplied_ns(
                         timestamp, self._now_ns(), "event timestamp"
                     ),
-                    attributes=copy_user_attributes({}, attributes)
-                    if attributes is not None
-                    else None,
+                    attributes=bounded,
+                    dropped_attributes_count=dropped,
                 )
             )
         return self
@@ -263,7 +346,12 @@ class RecordingSpan(_Activatable, Span):
                 log.debug('Ignoring an unknown span status; expected "ok" or "error"')
                 return self
             text = None if message is None else safe_str(message)
-            self._status = SpanStatus(code, text or None)
+            self._status = SpanStatus(
+                code,
+                truncate_string(text, self._max_attribute_value_length)
+                if text
+                else None,
+            )
         return self
 
     @property
@@ -276,17 +364,19 @@ class RecordingSpan(_Activatable, Span):
         return self
 
     def _record_exception(self, exception: BaseException, keep_ok: bool) -> None:
-        exc_type, message = describe_error(exception)
-        self.add_event(
-            "exception", {"exception.type": exc_type, "exception.message": message}
+        attributes, message = _exception_event_attributes(
+            exception, self._max_attribute_value_length
         )
+        self.add_event("exception", attributes)
         # Only the scoped form treats an explicit `ok` as final.
         if not (keep_ok and self._status_is_explicitly_ok):
             self.set_status("error", message)
 
     def update_name(self, name: str) -> "Span":
         if self._mutable("update_name"):
-            self._name = sanitize_name(name, "Span name")
+            self._name = sanitize_name(
+                name, "Span name", self._max_attribute_value_length
+            )
         return self
 
     def traceparent(self) -> Optional[str]:
@@ -327,6 +417,8 @@ class RecordingSpan(_Activatable, Span):
             events=self._events,
             start_ns=self._start_ns,
             end_ns=clamp_end_ns(resolved, self._start_ns),
+            dropped_attributes_count=self._dropped_attributes,
+            dropped_events_count=self._dropped_events,
         )
         try:
             self._on_end(record)
