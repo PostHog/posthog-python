@@ -8,6 +8,8 @@ import pytest
 pytest.importorskip("fastmcp", minversion="4")
 
 from fastmcp import FastMCP  # noqa: E402
+from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware  # noqa: E402
+from fastmcp.tools import Tool  # noqa: E402
 
 from posthog.mcp import MCPAnalyticsOptions, instrument  # noqa: E402
 from posthog.test.mcp._helpers import (  # noqa: E402
@@ -137,18 +139,23 @@ async def test_capture_success_failure_and_sink_outage(protocol, order):
 
 
 @pytest.mark.parametrize("list_first", [False, True])
-@pytest.mark.parametrize("mounted", [False, True])
-async def test_preserve_application_parameters(list_first, mounted):
+@pytest.mark.parametrize("source", ["direct", "mounted", "middleware"])
+async def test_preserve_application_parameters(list_first, source):
     child = FastMCP("example-tools")
 
-    @child.tool()
     def echo(context: str, conversation_id: str, llm_model: str) -> str:
         return f"{context}|{conversation_id}|{llm_model}"
 
-    server = FastMCP("example-app") if mounted else child
-    if mounted:
+    tool = Tool.from_function(echo)
+    if source == "middleware":
+        child.add_middleware(ToolInjectionMiddleware(tools=[tool]))
+        assert await child.get_tool("echo") is None
+    else:
+        child.add_tool(tool)
+    server = FastMCP("example-app") if source == "mounted" else child
+    if source == "mounted":
         server.mount(child, namespace="shared")
-    name = "shared_echo" if mounted else "echo"
+    name = "shared_echo" if source == "mounted" else "echo"
     sink = FakeClient()
     instrument(
         server,
@@ -210,14 +217,12 @@ async def test_preserve_parameters_of_requested_tool_version():
 
 
 async def test_strip_analytics_parameters_from_middleware_tools():
-    from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware
-    from fastmcp.tools import Tool
-
     def echo(text: str) -> str:
         return text
 
     server = FastMCP("example-middleware-tools")
     server.add_middleware(ToolInjectionMiddleware(tools=[Tool.from_function(echo)]))
+    assert await server.get_tool("echo") is None
     sink = FakeClient()
     instrument(
         server,
@@ -225,6 +230,14 @@ async def test_strip_analytics_parameters_from_middleware_tools():
         MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True),
     )
     async with wire(server) as http:
+        unlisted = await rpc(
+            http,
+            MODERN_PROTOCOL_VERSION,
+            "tools/call",
+            {"name": "echo", "arguments": {"text": "before listing"}},
+        )
+        assert not unlisted.get("isError", False), unlisted
+        assert unlisted["content"][0]["text"] == "before listing"
         listed = await rpc(http, MODERN_PROTOCOL_VERSION, "tools/list", {})
         schema = next(t for t in listed["tools"] if t["name"] == "echo")["inputSchema"]
         assert {"context", "conversation_id", "llm_model"} <= schema[
@@ -239,6 +252,7 @@ async def test_strip_analytics_parameters_from_middleware_tools():
                 "arguments": {
                     "text": "example",
                     "context": "example intent",
+                    "conversation_id": "example-conversation",
                     "llm_model": "example-model",
                 },
             },
@@ -247,6 +261,7 @@ async def test_strip_analytics_parameters_from_middleware_tools():
         assert result["content"][0]["text"] == "example"
         await flush_background()
     calls = events_named(sink, "$mcp_tool_call")
-    assert len(calls) == 1
-    assert calls[0]["properties"]["$mcp_intent"] == "example intent"
-    assert calls[0]["properties"]["$mcp_llm_model"] == "example-model"
+    assert len(calls) == 2
+    assert all(not call["properties"]["$mcp_is_error"] for call in calls)
+    assert calls[1]["properties"]["$mcp_intent"] == "example intent"
+    assert calls[1]["properties"]["$mcp_llm_model"] == "example-model"

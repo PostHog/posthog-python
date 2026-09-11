@@ -414,8 +414,9 @@ async def _standalone_injected_parameters(
 ) -> Optional[FrozenSet[str]]:
     """Which analytics parameters to strip, derived from the tool's own schema, for
     a tool this process never listed or a client-pinned version. ``None`` when the
-    tool cannot be resolved (for example, tools supplied by middleware), in which
-    case nothing is stripped."""
+    tool cannot be resolved. Without a schema, stripping could delete application
+    arguments. Middleware tools normally use the recorded tools/list ownership
+    instead, since they can dispatch without resolving through get_tool()."""
     try:
         from fastmcp.utilities.versions import VersionSpec
 
