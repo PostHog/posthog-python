@@ -207,7 +207,15 @@ def _matches_extra_schema(value: Any, schema: Dict[str, Any]) -> bool:
     else:
         actual = "object"
     declared = schema.get("type")
-    if declared != actual and not (declared == "integer" and actual == "number"):
+    if declared == "integer" and actual == "number":
+        # A JSON Schema `integer` also accepts a whole-valued float (`3.0`), but
+        # not a fractional one (`3.5`) - Python's numeric tower conflates int and
+        # float here, so the type name alone can't tell them apart.
+        if not (
+            isinstance(value, int) or (isinstance(value, float) and value.is_integer())
+        ):
+            return False
+    elif declared != actual:
         return False
     enum = schema.get("enum")
     return not isinstance(enum, list) or value in enum
@@ -352,8 +360,13 @@ async def handle_feedback(
             if isinstance(reply, str) and reply.strip():
                 return reply
         except Exception as error:  # noqa: BLE001 - never break the agent's turn
+            # Only the exception's type, matching the report log above: a
+            # handler can echo the unsanitized report (PII, credentials,
+            # log-forging newlines, unbounded length) into its error message,
+            # and that agent-controlled text does not belong in host logs
+            # any more than `report.summary` does.
             log(
-                "Warning: on_feedback handler threw; returning the default "
-                f"acknowledgement - {error}"
+                "Warning: on_feedback handler threw "
+                f"({type(error).__name__}); returning the default acknowledgement"
             )
     return _SEND_FEEDBACK_RESULT_TEXT

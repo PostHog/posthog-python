@@ -553,7 +553,11 @@ def start_tool_call_lifecycle(
     feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
     feedback_name = (
         resolve_send_feedback_tool_name(feedback_options)
-        if feedback_options is not None
+        # Mirrors `ToolCallLifecycle.is_feedback`'s fail-open guard below: once a
+        # real application tool is known to own this name, conversation-id
+        # resolution must treat calls to it like any other tool too, not skip
+        # them as if they were the (shadowed) virtual feedback tool.
+        if feedback_options is not None and not data.feedback_tool_shadowed
         else None
     )
     conversation_id, minted = resolve_conversation_id(

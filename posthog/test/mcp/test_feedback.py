@@ -304,6 +304,28 @@ def test_extras_must_match_declared_type_and_enum():
     assert conforming.extras == {"score": 9, "channel": "web"}
 
 
+def test_extras_declared_integer_rejects_fractional_float():
+    # `isinstance(value, (int, float))` alone can't tell `3` from `3.5` - both
+    # are Python `number`s - so a declared `integer` extra must additionally
+    # check the value has no fractional part before it's trusted downstream.
+    options = CollectFeedbackOptions(extra_properties={"score": {"type": "integer"}})
+
+    fractional = parse_feedback_report(
+        {"feedback_type": "praise", "summary": "s", "score": 3.5}, options
+    )
+    assert fractional.extras == {}
+
+    whole_float = parse_feedback_report(
+        {"feedback_type": "praise", "summary": "s", "score": 3.0}, options
+    )
+    assert whole_float.extras == {"score": 3.0}
+
+    whole_int = parse_feedback_report(
+        {"feedback_type": "praise", "summary": "s", "score": 3}, options
+    )
+    assert whole_int.extras == {"score": 3}
+
+
 def test_tool_name_gets_pii_redaction():
     report = parse_feedback_report(
         {"feedback_type": "issue", "summary": "s", "tool_name": "ask jane@example.com"}
@@ -586,6 +608,42 @@ async def test_on_feedback_raise_falls_back_and_still_captures():
 
     assert canned[0].text == send_feedback_result_text()
     assert _events(client, "$mcp_feedback")
+
+
+async def test_on_feedback_raise_does_not_log_agent_text():
+    # A raising backend can echo the unsanitized report (PII, credentials,
+    # forged newlines) into its exception message; the warning log must not
+    # repeat it, mirroring the report log just above it that logs only the type.
+    from posthog.mcp import set_logger
+
+    server = make_fastmcp()
+    client = FakeClient()
+    secret_summary = "credit card 4242-4242-4242-4242 jane@example.com"
+
+    def on_feedback(report):
+        raise RuntimeError(f"backend rejected: {report.summary}")
+
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            collect_feedback=CollectFeedbackOptions(on_feedback=on_feedback)
+        ),
+    )
+
+    messages = []
+    set_logger(messages.append)
+    try:
+        canned = await server._tool_manager.call_tool(
+            "send_feedback", {**dict(_REPORT_ARGS), "summary": secret_summary}
+        )
+        await _flush()
+    finally:
+        set_logger(None)
+
+    assert canned[0].text == send_feedback_result_text()
+    assert any("on_feedback handler threw" in message for message in messages)
+    assert not any(secret_summary in message for message in messages)
 
 
 # --- instrument(): low-level v1 ----------------------------------------------------
