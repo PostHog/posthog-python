@@ -16,6 +16,7 @@ _V1_ONLY = [
     "test_fastmcp.py",
     "test_fastmcp_v2.py",
     "test_features_m4.py",
+    "test_feedback.py",
     "test_lowlevel.py",
     "test_review_fixes.py",
 ]

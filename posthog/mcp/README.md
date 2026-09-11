@@ -105,6 +105,85 @@ Model injection copies tool objects instead of changing their original schemas.
 Always advertise the returned list and pass the original application tool to
 `prepare_tool_call()`. Repeatedly preparing the original list preserves ownership.
 
+## Collect agent feedback
+
+Feedback collection is off by default. Enable it to advertise a `send_feedback`
+virtual tool. Agents use it to report a missing capability (the priority
+category), a tool that failed or confused them, or praise:
+
+```python
+from posthog.mcp import MCPAnalyticsOptions, instrument
+
+analytics = instrument(
+    server,
+    posthog,
+    MCPAnalyticsOptions(collect_feedback=True),
+)
+```
+
+Each call emits one `$mcp_feedback` event (never a `$mcp_tool_call`) with
+`$mcp_feedback_type`, `$mcp_feedback_summary`, `$mcp_feedback_details`,
+`$mcp_feedback_friction_points`, `$mcp_feedback_suggested_improvement`,
+`$mcp_feedback_tool`, `$mcp_feedback_sentiment`, and
+`$mcp_feedback_task_completed`. The summary and details also map to
+`$mcp_intent`. Free-text fields are sanitized, PII-redacted, and length-bounded;
+the raw arguments are never captured. An invalid `feedback_type` falls back to
+`other`. The agent receives an honest acknowledgement: the call records feedback
+and adds no tools.
+
+The tool covers what `report_missing` covers (as feedback_type
+`missing_capability`), so new integrations should enable only one of the two.
+
+If a real tool already uses the name, the SDK logs a warning, does not inject
+the virtual tool, and never intercepts the real tool.
+
+Use the object form to rename the tool, declare host-specific fields, or route
+reports to a real backend:
+
+```python
+from posthog.mcp import CollectFeedbackOptions, MCPAnalyticsOptions
+
+options = MCPAnalyticsOptions(
+    collect_feedback=CollectFeedbackOptions(
+        extra_properties={
+            "product_area": {
+                "type": "string",
+                "description": "The product the feedback is about.",
+            },
+        },
+        extra_required=["product_area"],
+        on_feedback=lambda report: feedback_backend.record(report),
+    ),
+)
+```
+
+Declared extras merge into the advertised schema and are captured as
+`$mcp_feedback_<key>`. Arguments the agent invents are never captured; the
+handler reads them from `report.raw`. A key that collides with a core field
+raises at configuration time. `on_feedback` may be sync or async; a returned
+non-blank string replaces the default reply, and a raised handler is logged and
+falls back to it. The event is captured either way.
+
+For a custom dispatcher, use the same option on `PostHogMCP`:
+
+```python
+from posthog.mcp import PostHogMCP, send_feedback_result
+
+posthog = PostHogMCP("phc_...", collect_feedback=True)
+
+# tools/list handler
+tools = posthog.prepare_tool_list(server_tools, collect_feedback=True)
+
+# tools/call dispatcher
+call = posthog.prepare_tool_call(tool_name, raw_args)
+if call.is_feedback:
+    posthog.capture_feedback(report=call.feedback_report)  # emits $mcp_feedback
+    return send_feedback_result()  # replies to the agent and stops dispatch
+```
+
+`on_feedback` is ignored on this path — the dispatcher routes reports itself via
+`call.feedback_report`.
+
 ## Stateless / multi-pod servers
 
 A stateless MCP server issues no session id, so `$session_id` fragments across pods

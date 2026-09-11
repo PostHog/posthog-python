@@ -379,6 +379,83 @@ async def test_report_missing_accepts_omitted_arguments():
     assert "$mcp_intent" not in missing[0]["properties"]
 
 
+async def test_collect_feedback_advertises_and_captures():
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    listed = await _list_tools(server)
+    assert "send_feedback" in [t.name for t in listed.tools]
+
+    result = await _call_tool(
+        server,
+        "send_feedback",
+        {
+            "feedback_type": "missing_capability",
+            "summary": "No email tool.",
+            "details": "Wanted to notify a teammate.",
+        },
+    )
+    await _flush()
+
+    assert result.is_error is False
+    feedback = _events(client, "$mcp_feedback")
+    assert len(feedback) == 1
+    props = feedback[0]["properties"]
+    assert props["$mcp_feedback_type"] == "missing_capability"
+    assert props["$mcp_intent"] == "No email tool.\n\nWanted to notify a teammate."
+    assert "$mcp_parameters" not in props
+    # A send_feedback call is NOT a normal tool call.
+    assert _events(client, "$mcp_tool_call") == []
+
+
+async def test_collect_feedback_collision_fails_open():
+    server = make_server()
+
+    @server.tool()
+    def send_feedback(note: str) -> str:
+        return f"real tool got {note}"
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    listed = await _list_tools(server)
+    assert [t.name for t in listed.tools].count("send_feedback") == 1
+
+    await _call_tool(server, "send_feedback", {"note": "hi", "context": "real tool"})
+    await _flush()
+
+    assert _events(client, "$mcp_feedback") == []
+    assert _events(client, "$mcp_tool_call")
+
+
+async def test_collect_feedback_collision_keeps_conversation_id():
+    # The name collision must fail open for every feature keyed off the
+    # feedback tool name, not just dispatch - conversation-id resolution used
+    # to keep skipping the real tool because it checked the configured name
+    # alone, ignoring the listing-derived shadow flag.
+    server = make_server()
+
+    @server.tool()
+    def send_feedback(note: str) -> str:
+        return f"real tool got {note}"
+
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, enable_conversation_id=True),
+    )
+
+    await _list_tools(server)
+    await _call_tool(server, "send_feedback", {"note": "hi", "context": "real tool"})
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 1
+    assert calls[0]["properties"].get("$mcp_conversation_id")
+
+
 async def test_instrument_is_idempotent():
     server = make_server()
     client = FakeClient()

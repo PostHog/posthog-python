@@ -26,6 +26,7 @@ from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from ._instrumentation import drain_pending_sync, fire_and_forget
 from ._lib_identity import apply_mcp_lib_identity
+from .logger import log
 from ._model_parameters import (
     add_model_parameter_to_schema,
     can_inject_model_parameter,
@@ -35,8 +36,18 @@ from ._model_parameters import (
     resolve_model,
 )
 from ._sink import McpCaptureOptions, McpEventSink
+from .feedback import (
+    build_feedback_event_properties,
+    build_feedback_intent,
+    get_feedback_tool_descriptor,
+    parse_feedback_report,
+    resolve_collect_feedback_options,
+    resolve_send_feedback_tool_name,
+)
 from .tools import build_report_missing_descriptor
 from .types import (
+    CollectFeedbackOptions,
+    FeedbackReport,
     JsonRecord,
     MCPAnalyticsContextOptions,
     MCPAnalyticsModelOptions,
@@ -51,9 +62,9 @@ _GET_MORE_TOOLS_NAME = "get_more_tools"
 
 class PostHogMCP(Client):
     """A drop-in posthog ``Client`` with ``capture_tool_call`` / ``capture_initialize``
-    / ``capture_tools_list`` / ``capture_missing_capability`` plus ``prepare_tool_list``
-    and ``prepare_tool_call`` helpers. ``capture``, ``flush``, ``shutdown``, feature
-    flags, etc. all work unchanged."""
+    / ``capture_tools_list`` / ``capture_missing_capability`` / ``capture_feedback``
+    plus ``prepare_tool_list`` and ``prepare_tool_call`` helpers. ``capture``,
+    ``flush``, ``shutdown``, feature flags, etc. all work unchanged."""
 
     def __init__(
         self,
@@ -61,6 +72,7 @@ class PostHogMCP(Client):
         missing_capability_tool_name: Optional[str] = None,
         mcp_exception_autocapture: bool = True,
         capture_model: Union[bool, MCPAnalyticsModelOptions] = False,
+        collect_feedback: Union[bool, CollectFeedbackOptions] = False,
         **kwargs: Any,
     ) -> None:
         super().__init__(api_key, **kwargs)
@@ -69,6 +81,25 @@ class PostHogMCP(Client):
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME
         )
+        # `None` is the enable switch's off state: without it, prepare_tool_call
+        # must never claim a call named like the virtual tool — the host may have
+        # a real tool by that name, and flagging it would shadow the real handler.
+        # `on_feedback` is ignored on this path: the host dispatcher routes
+        # reports itself via PreparedToolCall.feedback_report.
+        self._collect_feedback = resolve_collect_feedback_options(collect_feedback)
+        self._feedback_tool_name = resolve_send_feedback_tool_name(
+            self._collect_feedback
+        )
+        # Fail fast on a config error (reserved extra key, undeclared
+        # extra_required) instead of first surfacing it when a tools/list is served.
+        if self._collect_feedback is not None:
+            get_feedback_tool_descriptor(self._collect_feedback)
+            if self._collect_feedback.on_feedback is not None:
+                log(
+                    "Warning: collect_feedback.on_feedback is ignored on the PostHogMCP "
+                    "path - route reports from your dispatcher via "
+                    "prepare_tool_call().feedback_report instead."
+                )
         # Whether a failed tool call fans out an `$exception` sibling event. Distinct
         # from the inherited Client.enable_exception_autocapture (global uncaught-error
         # hook); this mirrors instrument()'s enable_exception_autocapture, default on.
@@ -268,6 +299,52 @@ class PostHogMCP(Client):
         _apply_model(event, llm_model, llm_model_source)
         self._emit(event)
 
+    def capture_feedback(
+        self,
+        *,
+        report: FeedbackReport,
+        llm_model: Optional[str] = None,
+        llm_model_source: Optional[MCPAnalyticsModelSource] = None,
+        protocol_version: Optional[str] = None,
+        distinct_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
+        set_properties: Optional[JsonRecord] = None,
+        groups: Optional[Dict[str, str]] = None,
+        properties: Optional[JsonRecord] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Capture a ``send_feedback`` call as an agent-feedback report. Emits
+        ``$mcp_feedback`` with the report's ``$mcp_feedback_*`` properties and its
+        summary/details as ``$mcp_intent``. Reply to the agent with
+        ``send_feedback_result()`` (or a custom text) after routing the report to
+        your own feedback backend."""
+        event = self._base_event(
+            MCPAnalyticsEventType.MCP_FEEDBACK,
+            distinct_id,
+            session_id,
+            set_properties,
+            groups,
+            properties,
+            timestamp,
+            client_user_agent,
+            vendor_client,
+        )
+        event["resource_name"] = self._feedback_tool_name
+        event["protocol_version"] = protocol_version
+        # Deliberately no `parameters`: the arguments are agent-narrated free
+        # text, and the PII-redacted `$mcp_feedback_*` properties are the captured
+        # surface. Raw arguments would bypass that redaction. Feedback properties
+        # win over the caller's, matching the instrument() path's merge order.
+        event["properties"] = {
+            **(properties or {}),
+            **build_feedback_event_properties(report),
+        }
+        _apply_intent(event, build_feedback_intent(report), "context_parameter")
+        _apply_model(event, llm_model, llm_model_source)
+        self._emit(event)
+
     # --- prepare helpers -----------------------------------------------------
 
     def prepare_tool_list(
@@ -275,12 +352,16 @@ class PostHogMCP(Client):
         tools: List[Any],
         context: Union[bool, MCPAnalyticsContextOptions] = True,
         report_missing: bool = False,
+        collect_feedback: bool = False,
     ) -> List[Any]:
         """Inject the ``context`` argument into every tool so agents state their
         intent (captured as ``$mcp_intent``), and optionally append the
-        ``get_more_tools`` virtual tool (``report_missing=True``). Returns a new
-        list; dict tools are copied, context injection mutates tool objects in
-        place, and model injection copies them to preserve field ownership."""
+        ``get_more_tools`` virtual tool (``report_missing=True``) and the
+        ``send_feedback`` virtual tool (``collect_feedback=True``, which also
+        requires the constructor's ``collect_feedback`` option — the enable switch
+        that gates detection in :meth:`prepare_tool_call`). Returns a new list;
+        dict tools are copied, context injection mutates tool objects in place,
+        and model injection copies them to preserve field ownership."""
         prepared = []
         context_description = get_context_description(context)
         for tool in tools:
@@ -297,6 +378,12 @@ class PostHogMCP(Client):
             prepared.append(
                 build_report_missing_descriptor(self._missing_capability_tool_name)
             )
+        if (
+            collect_feedback
+            and self._collect_feedback is not None
+            and not any(_tool_name(t) == self._feedback_tool_name for t in prepared)
+        ):
+            prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
         prepared = self._inject_models(prepared)
         return prepared
 
@@ -309,9 +396,16 @@ class PostHogMCP(Client):
         original_tool: Any = None,
     ) -> PreparedToolCall:
         """Pull the agent's intent off the injected ``context`` argument, strip
-        ``context`` from the arguments, and flag the ``get_more_tools`` virtual tool.
-        When model capture is enabled, resolve its value and source and strip
-        the SDK-owned ``llm_model`` argument before dispatch."""
+        ``context`` from the arguments, and flag the ``get_more_tools`` and
+        ``send_feedback`` virtual tools (the latter only with the constructor's
+        ``collect_feedback`` opt-in, so a real tool by that name is never
+        shadowed). When model capture is enabled, resolve its value and source and
+        strip the SDK-owned ``llm_model`` argument before dispatch.
+
+        ``original_tool`` is the application's own tool for ``name``, from the
+        host's un-prepared list (the virtual tools never exist there). Passing it
+        also disambiguates a name collision: a real tool by the feedback tool's
+        name is dispatched normally instead of being flagged as feedback."""
         raw_context = (args or {}).get("context")
         intent = (
             raw_context.strip()
@@ -334,6 +428,16 @@ class PostHogMCP(Client):
         prepared_args = _strip_context(args)
         if analytics_owns_model:
             prepared_args = _strip_model(prepared_args)
+        # A supplied `original_tool` is a real application tool by this name (it
+        # comes from the host's own list, which never holds the virtual tool), so
+        # the real tool wins — the stateless twin of instrument()'s listing-derived
+        # shadow flag. Without it the name match stands, and the documented remedy
+        # for a collision is configuring a non-colliding `tool_name`.
+        is_feedback = (
+            self._collect_feedback is not None
+            and name == self._feedback_tool_name
+            and original_tool is None
+        )
         return PreparedToolCall(
             args=prepared_args,
             intent=intent,
@@ -341,6 +445,12 @@ class PostHogMCP(Client):
             llm_model=llm_model,
             llm_model_source=llm_model_source,
             is_missing_capability=name == self._missing_capability_tool_name,
+            is_feedback=is_feedback,
+            feedback_report=(
+                parse_feedback_report(args, self._collect_feedback)
+                if is_feedback
+                else None
+            ),
         )
 
     # --- internals -----------------------------------------------------------
@@ -385,10 +495,19 @@ class PostHogMCP(Client):
         # flush()/shutdown() able to drain without blocking their own event loop's tasks.
         fire_and_forget(self._mcp_sink.capture(event, options), self, background=True)
 
+    def _is_virtual_tool_name(self, name: Any) -> bool:
+        """The SDK's own virtual tools carry their intent in their own arguments,
+        so they never get the ``context`` parameter injected. The feedback name
+        only counts with the constructor opt-in — without it a real tool by that
+        name is an ordinary tool."""
+        if name == self._missing_capability_tool_name:
+            return True
+        return self._collect_feedback is not None and name == self._feedback_tool_name
+
     def _inject_context(self, tool: Any, description: Optional[str]) -> Any:
         if isinstance(tool, dict):
             name = tool.get("name", "unknown")
-            if name == self._missing_capability_tool_name:
+            if self._is_virtual_tool_name(name):
                 return tool
             new_schema = add_context_parameter_to_schema(
                 tool.get("inputSchema"), name, description
@@ -396,7 +515,7 @@ class PostHogMCP(Client):
             return {**tool, "inputSchema": new_schema}
 
         name = getattr(tool, "name", "unknown")
-        if name == self._missing_capability_tool_name:
+        if self._is_virtual_tool_name(name):
             return tool
         new_schema = add_context_parameter_to_schema(
             getattr(tool, "inputSchema", None), name, description
