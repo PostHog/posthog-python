@@ -670,7 +670,6 @@ def mutate_tool_schema(
     """
     schema = getattr(tool, schema_attribute, None)
     original_schema = schema
-    injected = set()
     if (
         tool.name != GET_MORE_TOOLS_NAME
         and is_context_enabled(data.options.context)
@@ -682,7 +681,6 @@ def mutate_tool_schema(
             get_context_description(data.options.context),
             required=context_required,
         )
-        injected.add("context")
     if is_capture_model_enabled(data.options.capture_model):
         model_was_injected = data.tool_model_parameter_injected.get(tool.name, False)
         app_owns_model = (
@@ -698,16 +696,12 @@ def mutate_tool_schema(
         data.tool_model_parameter_injected[tool.name] = (
             not app_owns_model and schema_has_param(schema, "llm_model")
         )
-        if data.tool_model_parameter_injected[tool.name]:
-            injected.add("llm_model")
     if (
         tool.name != GET_MORE_TOOLS_NAME
         and data.options.enable_conversation_id
         and not schema_has_param(schema, "conversation_id")
     ):
         schema = add_conversation_id_to_schema(schema, tool.name)
-        injected.add("conversation_id")
-    data.tool_injected_parameters[tool.name] = frozenset(injected)
     if schema is not original_schema:
         try:
             setattr(tool, schema_attribute, schema)

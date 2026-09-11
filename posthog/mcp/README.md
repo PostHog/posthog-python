@@ -168,6 +168,8 @@ including the stateless protocol. Mounted tools retain their own arguments; anal
 parameters are removed before dispatch only when the tool does not declare them.
 Instrumenting both the wrapper and its underlying server works in either order.
 For versioned tools, argument ownership follows the version requested by the client.
+Each tool call resolves the schema through FastMCP's tool listing in the current request context, including middleware and session transforms.
+This adds a schema lookup per call so clients with different tool schemas cannot change how another client's arguments are handled.
 The same installation code continues to support standalone FastMCP 2.x/3.x on MCP SDK v1.
 
 Two gaps worth knowing: jlowin's `fastmcp` 2.x/3.x doesn't expose the attribute the

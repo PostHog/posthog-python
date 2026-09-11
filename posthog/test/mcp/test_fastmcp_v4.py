@@ -8,7 +8,10 @@ import pytest
 pytest.importorskip("fastmcp", minversion="4")
 
 from fastmcp import FastMCP  # noqa: E402
+from fastmcp.server.dependencies import get_http_headers  # noqa: E402
+from fastmcp.server.middleware import Middleware  # noqa: E402
 from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware  # noqa: E402
+from fastmcp.server.providers import Provider  # noqa: E402
 from fastmcp.tools import Tool  # noqa: E402
 
 from posthog.mcp import MCPAnalyticsOptions, instrument  # noqa: E402
@@ -265,3 +268,80 @@ async def test_strip_analytics_parameters_from_middleware_tools():
     assert all(not call["properties"]["$mcp_is_error"] for call in calls)
     assert calls[1]["properties"]["$mcp_intent"] == "example intent"
     assert calls[1]["properties"]["$mcp_llm_model"] == "example-model"
+
+
+@pytest.mark.parametrize("source", ["provider", "middleware", "middleware_shadow"])
+@pytest.mark.parametrize(
+    "listing_order", [("application", "analytics"), ("analytics", "application")]
+)
+async def test_tool_argument_ownership_isolated_between_clients(source, listing_order):
+    def application(context: str, conversation_id: str, llm_model: str) -> str:
+        return f"{context}|{conversation_id}|{llm_model}"
+
+    def analytics() -> str:
+        return "analytics"
+
+    tools = {
+        "application": Tool.from_function(application, name="echo"),
+        "analytics": Tool.from_function(analytics, name="echo"),
+    }
+
+    def current_tool() -> Tool:
+        return tools[get_http_headers()["x-example-client"]]
+
+    class ClientTools(Provider):
+        async def _list_tools(self):
+            return [current_tool()]
+
+        async def _get_tool(self, name, version=None):
+            return current_tool() if name == "echo" else None
+
+    class ClientMiddleware(Middleware):
+        async def on_list_tools(self, context, call_next):
+            return [current_tool()]
+
+        async def on_call_tool(self, context, call_next):
+            return await current_tool().run(context.message.arguments or {})
+
+    server = FastMCP("example-client-tools")
+    if source == "provider":
+        server.add_provider(ClientTools())
+    else:
+        if source == "middleware_shadow":
+            server.add_tool(tools["analytics"])
+        server.add_middleware(ClientMiddleware())
+    sink = FakeClient()
+    instrument(
+        server,
+        sink,
+        MCPAnalyticsOptions(enable_conversation_id=True, capture_model=True),
+    )
+    async with wire(server) as http:
+        for client in listing_order:
+            http.headers["x-example-client"] = client
+            await rpc(http, MODERN_PROTOCOL_VERSION, "tools/list", {})
+        for client, expected in (
+            ("application", "own-context|own-id|own-model"),
+            ("analytics", "analytics"),
+        ):
+            http.headers["x-example-client"] = client
+            result = await rpc(
+                http,
+                MODERN_PROTOCOL_VERSION,
+                "tools/call",
+                {
+                    "name": "echo",
+                    "arguments": {
+                        "context": "own-context",
+                        "conversation_id": "own-id",
+                        "llm_model": "own-model",
+                    },
+                },
+            )
+            assert not result.get("isError", False), result
+            assert result["content"][0]["text"] == expected
+        await flush_background()
+    calls = events_named(sink, "$mcp_tool_call")
+    assert len(calls) == 2
+    assert "$mcp_llm_model" not in calls[0]["properties"]
+    assert calls[1]["properties"]["$mcp_llm_model"] == "own-model"

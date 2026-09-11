@@ -17,7 +17,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, Optional
+from typing import Any, Dict, Optional
 
 from .logger import log
 from ._sink import McpEventSink
@@ -73,11 +73,6 @@ class MCPAnalyticsData:
     # True only when PostHog added llm_model to this tool's advertised schema.
     # Missing/False fails closed so an application-owned field is never read or stripped.
     tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
-    # Every analytics parameter PostHog added to a tool's advertised schema at
-    # tools/list. Standalone FastMCP validates arguments against the tool's own
-    # schema, so exactly these keys are stripped before dispatch. Absent means
-    # "never served a listing for this tool" and falls back to a live lookup.
-    tool_injected_parameters: Dict[str, FrozenSet[str]] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under

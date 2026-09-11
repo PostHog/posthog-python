@@ -36,7 +36,7 @@ from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import schema_has_param
+from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._instrumentation import (
     _to_jsonable,
@@ -412,24 +412,34 @@ def _requested_tool_version(ctx: Any) -> Optional[str]:
 async def _standalone_injected_parameters(
     server: Any, data: MCPAnalyticsData, name: str, version: Optional[str]
 ) -> Optional[FrozenSet[str]]:
-    """Which analytics parameters to strip, derived from the tool's own schema, for
-    a tool this process never listed or a client-pinned version. ``None`` when the
-    tool cannot be resolved. Without a schema, stripping could delete application
-    arguments. Middleware tools normally use the recorded tools/list ownership
-    instead, since they can dispatch without resolving through get_tool()."""
-    try:
-        from fastmcp.utilities.versions import VersionSpec
+    """Resolve ownership in the current request, including middleware and versions.
 
-        tool = await server.get_tool(
-            name, version=VersionSpec(eq=version) if version else None
-        )
+    Listings from other requests can have different application-owned parameters.
+    Without a schema, stripping could delete application arguments.
+    """
+    try:
+        from fastmcp.utilities.versions import VersionSpec, version_sort_key
+
+        version_spec = VersionSpec(eq=version) if version else None
+        # Middleware can shadow registered tools, so resolve the effective listing.
+        candidates = [
+            tool
+            for tool in await server.list_tools()
+            if tool.name == name
+            and (version_spec is None or version_spec.matches(tool.version))
+        ]
+        tool = max(candidates, key=version_sort_key, default=None)
+        if tool is None:
+            tool = await server.get_tool(name, version=version_spec)
         schema = getattr(tool, "parameters", None)
     except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
         log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
         return None
     if not isinstance(schema, dict):
         return None
-    injected = {"context"}
+    injected = set()
+    if is_context_enabled(data.options.context):
+        injected.add("context")
     if data.options.enable_conversation_id:
         injected.add("conversation_id")
     if is_capture_model_enabled(data.options.capture_model) and (
@@ -451,17 +461,12 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
         standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
         if standalone is not None:
-            # The listing this process served is the source of truth for what was
-            # advertised. A client-pinned version may differ from the listed one,
-            # so only then is the tool's own schema consulted.
             version = _requested_tool_version(ctx)
-            injected = data.tool_injected_parameters.get(name)
-            if injected is None or version is not None:
-                injected = await _standalone_injected_parameters(
-                    standalone, data, name, version
-                )
+            injected = await _standalone_injected_parameters(
+                standalone, data, name, version
+            )
+            analytics_owns_model = injected is not None and "llm_model" in injected
             if injected is not None:
-                analytics_owns_model = "llm_model" in injected
                 call_arguments = {
                     key: value
                     for key, value in arguments.items()
