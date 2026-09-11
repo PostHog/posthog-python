@@ -55,6 +55,8 @@ from posthog.request import (
 )
 from posthog.utils import _normalize_timestamp, remove_trailing_slash
 
+from ._event_properties import _clean_event_properties
+
 if TYPE_CHECKING:
     import requests
 
@@ -211,7 +213,7 @@ def _to_v1_event(msg: dict) -> dict:
         "properties": properties,
     }
     event.update(top_level)
-    return event
+    return _clean_event_properties(event)
 
 
 def _build_v1_batch_body(
