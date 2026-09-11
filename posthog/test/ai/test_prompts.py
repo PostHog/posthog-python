@@ -1428,18 +1428,19 @@ class TestPromptsGetAll(TestPrompts):
 
     @patch("posthog.ai.prompts._get_session")
     def test_raises_when_the_server_ignores_the_label(self, mock_get_session):
-        # An old server ignores ?label= and returns latest versions; none of the
-        # rows resolve the label, and caching them would serve wrong versions.
+        # An old server ignores ?label= and returns latest versions of every
+        # prompt, including prompts without the label. Even when some labels
+        # happen to point at latest, a partial result would hide the rest.
         mock_get = mock_get_session.return_value.get
-        row = self.labeled_row("prompt-a")
-        row["all_labels"] = []
-        mock_get.return_value = self.list_response([row])
+        looks_resolved = self.labeled_row("prompt-a")
+        unlabeled = {**self.labeled_row("prompt-b"), "all_labels": []}
+        mock_get.return_value = self.list_response([looks_resolved, unlabeled])
 
         prompts = Prompts(self.create_mock_posthog())
 
         with self.assertRaises(Exception) as ctx:
             prompts.get_all(label="production")
-        self.assertIn("none resolve label", str(ctx.exception))
+        self.assertIn("does not carry label", str(ctx.exception))
         self.assertEqual(prompts._cache, {})
 
     @patch("posthog.ai.prompts._get_session")
@@ -1465,7 +1466,7 @@ class TestPromptsGetAll(TestPrompts):
         mock_get = mock_get_session.return_value.get
         malformed = {**self.labeled_row("prompt-a"), "prompt": 42}
         mock_get.return_value = self.list_response(
-            [malformed, self.labeled_row("prompt-b")]
+            [self.labeled_row("prompt-b"), malformed]
         )
 
         prompts = Prompts(self.create_mock_posthog())
