@@ -1,5 +1,11 @@
 # posthog
 
+## 7.51.2 — 2026-09-11
+
+### Patch changes
+
+- [56a4959](https://github.com/posthog/posthog-python/commit/56a495908772c9a68eac3c6f6f7b157513aa6d8f) `Prompts.get_all` now fails loudly in two cases it previously papered over: a server that ignores the label filter but happens to have some labels on latest versions no longer produces a silently incomplete result, and a malformed row in the list response now raises the invalid-response error instead of being skipped. A rejected batch also no longer leaves partially cached prompts. — Thanks @jurajmajerik!
+
 ## 7.51.1 — 2026-09-11
 
 ### Patch changes
