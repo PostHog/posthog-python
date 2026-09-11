@@ -796,6 +796,26 @@ async def test_posthogmcp_prepare_tool_call_without_opt_in_never_flags():
     assert call.is_feedback is False and call.feedback_report is None
 
 
+async def test_posthogmcp_original_tool_wins_name_collision():
+    # A host whose own list holds a real `send_feedback` tool passes it as
+    # `original_tool`; the call then dispatches as a real tool call instead of
+    # being swallowed as feedback — the stateless twin of instrument()'s
+    # listing-derived shadow flag.
+    client, _ = make_client(collect_feedback=True)
+    real_tool = {
+        "name": "send_feedback",
+        "inputSchema": {"type": "object", "properties": {"note": {"type": "string"}}},
+    }
+    call = client.prepare_tool_call(
+        "send_feedback", {"note": "hi"}, original_tool=real_tool
+    )
+    assert call.is_feedback is False and call.feedback_report is None
+
+    # Without `original_tool` the name match stands (TS parity).
+    virtual = client.prepare_tool_call("send_feedback", dict(_REPORT_ARGS))
+    assert virtual.is_feedback is True and virtual.feedback_report is not None
+
+
 async def test_posthogmcp_capture_feedback_event_shape():
     client, captured = make_client(collect_feedback=True)
     call = client.prepare_tool_call("send_feedback", dict(_REPORT_ARGS))

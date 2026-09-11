@@ -400,7 +400,12 @@ class PostHogMCP(Client):
         ``send_feedback`` virtual tools (the latter only with the constructor's
         ``collect_feedback`` opt-in, so a real tool by that name is never
         shadowed). When model capture is enabled, resolve its value and source and
-        strip the SDK-owned ``llm_model`` argument before dispatch."""
+        strip the SDK-owned ``llm_model`` argument before dispatch.
+
+        ``original_tool`` is the application's own tool for ``name``, from the
+        host's un-prepared list (the virtual tools never exist there). Passing it
+        also disambiguates a name collision: a real tool by the feedback tool's
+        name is dispatched normally instead of being flagged as feedback."""
         raw_context = (args or {}).get("context")
         intent = (
             raw_context.strip()
@@ -423,8 +428,15 @@ class PostHogMCP(Client):
         prepared_args = _strip_context(args)
         if analytics_owns_model:
             prepared_args = _strip_model(prepared_args)
+        # A supplied `original_tool` is a real application tool by this name (it
+        # comes from the host's own list, which never holds the virtual tool), so
+        # the real tool wins — the stateless twin of instrument()'s listing-derived
+        # shadow flag. Without it the name match stands, and the documented remedy
+        # for a collision is configuring a non-colliding `tool_name`.
         is_feedback = (
-            self._collect_feedback is not None and name == self._feedback_tool_name
+            self._collect_feedback is not None
+            and name == self._feedback_tool_name
+            and original_tool is None
         )
         return PreparedToolCall(
             args=prepared_args,
