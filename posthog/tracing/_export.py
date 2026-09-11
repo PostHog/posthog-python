@@ -14,6 +14,7 @@ from typing import Any, Callable, List, Optional, Tuple
 
 from ._config import ResolvedTracesConfig
 from ._drops import DropLog
+from ._limits import truncate_attributes
 from ._otlp import (
     SpanRecord,
     build_otlp_span,
@@ -99,11 +100,14 @@ class SpanExporter:
         self._config = config
         self._drops = drops
         self._send = send
-        self._resource_attributes = build_resource_attributes(
-            config.service_name,
-            config.service_version,
-            config.environment,
-            config.resource_attributes,
+        self._resource_attributes = truncate_attributes(
+            build_resource_attributes(
+                config.service_name,
+                config.service_version,
+                config.environment,
+                config.resource_attributes,
+            ),
+            config.max_attribute_value_length,
         )
 
         self._lock = threading.Lock()

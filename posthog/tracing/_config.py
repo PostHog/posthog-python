@@ -18,6 +18,13 @@ DEFAULT_FLUSH_INTERVAL_SECONDS = 5.0
 DEFAULT_MAX_EXPORT_BATCH_SIZE = 512
 DEFAULT_MAX_QUEUE_SIZE = 2048
 
+DEFAULT_MAX_ATTRIBUTES_PER_SPAN = 128
+DEFAULT_MAX_EVENTS_PER_SPAN = 128
+MAX_ATTRIBUTES_PER_EVENT = 128
+# OpenTelemetry leaves this unlimited, but one huge value gets the whole span
+# dropped as too large. 8192 fits a deep stack trace.
+DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH = 8192
+
 # Well above realistic concurrency; production traces routinely exceed ten minutes.
 DEFAULT_MAX_LIVE_SPANS = 10_000
 DEFAULT_MAX_SPAN_AGE_SECONDS = 3600.0
@@ -37,6 +44,9 @@ class ResolvedTracesConfig:
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
     max_live_spans: int = DEFAULT_MAX_LIVE_SPANS
     max_span_age: float = DEFAULT_MAX_SPAN_AGE_SECONDS
+    max_attributes_per_span: int = DEFAULT_MAX_ATTRIBUTES_PER_SPAN
+    max_events_per_span: int = DEFAULT_MAX_EVENTS_PER_SPAN
+    max_attribute_value_length: int = DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
 
 
 def _positive_number(config: Mapping, key: str, default: float) -> float:
@@ -153,5 +163,14 @@ def resolve_traces_config(
         max_live_spans=_positive_int(config, "max_live_spans", DEFAULT_MAX_LIVE_SPANS),
         max_span_age=_positive_number(
             config, "max_span_age", DEFAULT_MAX_SPAN_AGE_SECONDS
+        ),
+        max_attributes_per_span=_positive_int(
+            config, "max_attributes_per_span", DEFAULT_MAX_ATTRIBUTES_PER_SPAN
+        ),
+        max_events_per_span=_positive_int(
+            config, "max_events_per_span", DEFAULT_MAX_EVENTS_PER_SPAN
+        ),
+        max_attribute_value_length=_positive_int(
+            config, "max_attribute_value_length", DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
         ),
     )
