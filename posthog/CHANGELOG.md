@@ -1,5 +1,13 @@
 # posthog
 
+## 7.52.0 — 2026-09-11
+
+### Minor changes
+
+- [c3d3c96](https://github.com/posthog/posthog-python/commit/c3d3c9616f1871ac5d09dd26859c090c91c0df01) Capture Gemini thought summaries as `thinking` content blocks. When a request enables `thinking_config.include_thoughts`, parts marked `thought=True` in responses, inputs, and streaming chunks are now formatted as `{"type": "thinking", "thinking": ...}` (matching the Anthropic thinking-block shape PostHog renders as reasoning) instead of plain text blocks. — Thanks @fivestarspicy!
+- [8f5e8ef](https://github.com/posthog/posthog-python/commit/8f5e8eff190f0d95f728f3830a07b15d257a9c1b) Add an opt-in `collect_feedback` option to MCP analytics. It injects a `send_feedback` virtual tool and captures every call as a `$mcp_feedback` event, so agents can report a missing capability, a tool problem, or praise.
+  The option supports a custom tool name and description, host-declared extra schema fields, and an `on_feedback` handler that routes reports to a real backend. `PostHogMCP` gains the same option plus `capture_feedback` for custom dispatchers. — Thanks @gesh!
+
 ## 7.51.2 — 2026-09-11
 
 ### Patch changes
