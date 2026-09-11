@@ -150,6 +150,7 @@ def evaluate_flag_dependency(
     properties,
     cohort_properties,
     device_id=None,
+    property_matching_version: int = 1,
 ):
     """
     Evaluate a flag dependency condition under local evaluation.
@@ -260,6 +261,7 @@ def evaluate_flag_dependency(
                 flags_by_key=flags_by_key,
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
+                property_matching_version=property_matching_version,
                 bucketing_value=dep_bucketing_value,
             )
             evaluation_cache[dep_flag_key] = dep_result
@@ -350,6 +352,7 @@ def match_feature_flag_properties(
     group_type_mapping=None,
     groups=None,
     group_properties=None,
+    property_matching_version: int = 1,
 ) -> FlagValue:
     if bucketing_value is None:
         warnings.warn(
@@ -416,6 +419,7 @@ def match_feature_flag_properties(
                 evaluation_cache,
                 bucketing_value=effective_bucketing,
                 device_id=device_id,
+                property_matching_version=property_matching_version,
             )
             if match_result == ConditionMatch.MATCH:
                 variant_override = condition.get("variant")
@@ -463,6 +467,7 @@ def is_condition_match(
     *,
     bucketing_value,
     device_id=None,
+    property_matching_version: int = 1,
 ) -> ConditionMatch:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
@@ -477,6 +482,7 @@ def is_condition_match(
                     evaluation_cache,
                     distinct_id,
                     device_id=device_id,
+                    property_matching_version=property_matching_version,
                 )
             elif property_type == "flag":
                 matches = evaluate_flag_dependency(
@@ -487,9 +493,10 @@ def is_condition_match(
                     properties,
                     cohort_properties,
                     device_id=device_id,
+                    property_matching_version=property_matching_version,
                 )
             else:
-                matches = match_property(prop, properties)
+                matches = match_property(prop, properties, property_matching_version)
             if not matches:
                 return ConditionMatch.NO_MATCH
 
@@ -593,7 +600,9 @@ def _is_truthy_property_value(value) -> bool:
     return False
 
 
-def match_property(property, property_values) -> bool:
+def match_property(
+    property, property_values, property_matching_version: int = 1
+) -> bool:
     # only looks for matches where key exists in override_property_values
     key = property.get("key")
     operator = property.get("operator") or "exact"
@@ -623,7 +632,12 @@ def match_property(property, property_values) -> bool:
 
         def compute_exact_match(value, override_value):
             override_string = _value_to_string(override_value).lower()
-            if _is_truthy_or_falsy_property_value(value):
+            # Empty filters retain recursive truthiness in both matching modes.
+            if value == []:
+                return _is_truthy_property_value(override_value)
+            if property_matching_version != 2 and _is_truthy_or_falsy_property_value(
+                value
+            ):
                 return _is_truthy_property_value(value) == _is_truthy_property_value(
                     override_value
                 )
@@ -814,6 +828,7 @@ def match_cohort(
     evaluation_cache=None,
     distinct_id=None,
     device_id=None,
+    property_matching_version: int = 1,
 ) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
@@ -839,6 +854,7 @@ def match_cohort(
         evaluation_cache,
         distinct_id,
         device_id=device_id,
+        property_matching_version=property_matching_version,
     )
 
     operator = property.get("operator") or "exact"
@@ -857,6 +873,7 @@ def match_property_group(
     evaluation_cache=None,
     distinct_id=None,
     device_id=None,
+    property_matching_version: int = 1,
 ) -> bool:
     # The backend serializes its canonical empty PropertyGroup as {}.
     if property_group == {}:
@@ -893,6 +910,7 @@ def match_property_group(
                     evaluation_cache,
                     distinct_id,
                     device_id=device_id,
+                    property_matching_version=property_matching_version,
                 )
                 negation = False
             elif prop.get("type") == "cohort":
@@ -904,6 +922,7 @@ def match_property_group(
                     evaluation_cache,
                     distinct_id,
                     device_id=device_id,
+                    property_matching_version=property_matching_version,
                 )
                 negation = prop.get("negation", False)
             elif prop.get("type") == "flag":
@@ -915,10 +934,13 @@ def match_property_group(
                     property_values,
                     cohort_properties,
                     device_id=device_id,
+                    property_matching_version=property_matching_version,
                 )
                 negation = prop.get("negation", False)
             else:
-                matches = match_property(prop, property_values)
+                matches = match_property(
+                    prop, property_values, property_matching_version
+                )
                 negation = prop.get("negation", False)
 
             effective_match = matches != bool(negation)
