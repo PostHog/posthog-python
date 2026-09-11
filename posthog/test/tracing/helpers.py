@@ -1,4 +1,4 @@
-"""Shared fakes for the tracing pipeline tests."""
+"""Shared fakes for the tracing pipeline and export tests."""
 
 import threading
 import time
@@ -8,12 +8,17 @@ from unittest import mock
 
 import pytest
 
+from posthog.tracing import _export as export_module
 from posthog.tracing._config import resolve_traces_config
 from posthog.tracing._drops import DropLog
+from posthog.tracing._export import SpanExporter
 from posthog.tracing._pipeline import PostHogTraces
+from posthog.tracing._transport import SendOutcome
 
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
+
+RealTimer = threading.Timer
 
 
 class FakeTimer:
@@ -37,6 +42,21 @@ class FakeTimer:
 
     def fire(self):
         self.fn()
+
+
+class FakeSender:
+    def __init__(self, *outcomes):
+        self.outcomes = list(outcomes)
+        self.payloads: list = []
+
+    def __call__(self, client, payload):
+        self.payloads.append(payload)
+        if len(self.outcomes) > 1:
+            return self.outcomes.pop(0)
+        return self.outcomes[0] if self.outcomes else SendOutcome("ok")
+
+    def batches(self):
+        return [p["resourceSpans"][0]["scopeSpans"][0]["spans"] for p in self.payloads]
 
 
 class RecordingExporter:
@@ -70,6 +90,13 @@ def fake_timers():
         yield FakeTimer
 
 
+@pytest.fixture(autouse=True)
+def no_jitter():
+    # Backoff delays are asserted exactly; TestJitter covers the spread.
+    with mock.patch.object(export_module, "_draw_jitter", return_value=1.0):
+        yield
+
+
 @pytest.fixture
 def clock():
     state = {"now": 1000.0}
@@ -90,5 +117,27 @@ def make(client=None, context=None, **config):
     return pipeline, exporter, active
 
 
+def make_traces(sender=None, client=None, context=None, **config):
+    """A pipeline over a real exporter whose sender is ``sender``."""
+    config.setdefault("flush_interval", 5)
+    client = client or SimpleNamespace(disabled=False, send=True)
+    sender = sender or FakeSender(SendOutcome("ok"))
+    active: ContextVar = ContextVar("active", default=None)
+    resolved = resolve_traces_config(config)
+    drops = DropLog(resolved.flush_interval)
+    pipeline = PostHogTraces(
+        client,
+        resolved,
+        lambda: context or {},
+        active,
+        SpanExporter(client, resolved, drops, send=sender),
+        drops,
+    )
+    return pipeline, sender, active
+
+
 def queued(pipeline):
-    return pipeline._exporter.records
+    exporter = pipeline._exporter
+    if isinstance(exporter, RecordingExporter):
+        return exporter.records
+    return exporter._queue
