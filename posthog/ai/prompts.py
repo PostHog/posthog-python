@@ -385,8 +385,16 @@ class Prompts:
         results: Dict[str, PromptResult] = {}
         skipped: List[str] = []
         for row in rows:
-            if not _is_prompt_api_response(row) or not _row_resolves_label(row, label):
-                skipped.append(str(row.get("name")) if isinstance(row, dict) else "?")
+            if not _is_prompt_api_response(row):
+                invalid_error = Exception(
+                    f'[PostHog Prompts] Invalid response format for prompts with label "{label}"'
+                )
+                self._maybe_capture_error(
+                    invalid_error, name="*", version=None, label=label
+                )
+                raise invalid_error
+            if not _row_resolves_label(row, label):
+                skipped.append(row["name"])
                 continue
 
             config = _extract_config(row)

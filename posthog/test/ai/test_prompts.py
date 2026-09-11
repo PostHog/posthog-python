@@ -1459,6 +1459,23 @@ class TestPromptsGetAll(TestPrompts):
         self.assertEqual(list(results), ["prompt-b"])
 
     @patch("posthog.ai.prompts._get_session")
+    def test_raises_on_a_malformed_row_and_caches_nothing(self, mock_get_session):
+        # A row failing response validation is a server error, not a moved
+        # label; returning the valid subset would hide it.
+        mock_get = mock_get_session.return_value.get
+        malformed = {**self.labeled_row("prompt-a"), "prompt": 42}
+        mock_get.return_value = self.list_response(
+            [malformed, self.labeled_row("prompt-b")]
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("Invalid response format", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
     def test_refuses_a_pagination_link_off_the_configured_host(self, mock_get_session):
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = self.list_response(
