@@ -2,6 +2,7 @@ import gc
 import logging
 import threading
 import time
+import warnings
 import weakref
 from types import SimpleNamespace
 from unittest import mock
@@ -12,6 +13,7 @@ from posthog.test.tracing.helpers import (
     SPAN_ID,
     TRACE_ID,
     FakeSender,
+    FakeTimer,
     clock,
     fake_timers,
     make,
@@ -20,9 +22,10 @@ from posthog.test.tracing.helpers import (
 )
 from posthog.tracing import _pipeline as pipeline_module
 from posthog.tracing import _span as span_module
+from posthog.tracing._config import resolve_traces_config
 from posthog.tracing._drops import DropLog
-from posthog.tracing._transport import SendOutcome
 from posthog.tracing._span import NOOP_SPAN, PassThroughSpan, RecordingSpan
+from posthog.tracing._transport import SendOutcome
 
 __all__ = ["clock", "fake_timers"]
 
@@ -581,3 +584,357 @@ class TestLimitsReachTheExport:
             'Span limits discarded data from "capped": 1 attributes, 1 events, '
             "0 event attributes"
         )
+
+
+class TestBeforeSpanSend:
+    def test_a_hook_returning_none_drops_the_span_quietly(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+        pipeline, _, _ = make(before_span_send=lambda span: None)
+        pipeline.start_span("a").end()
+        assert queued(pipeline) == []
+        assert any(
+            "Dropping 1 span(s): before_span_send dropped it" in r.getMessage()
+            for r in caplog.records
+        )
+
+    def test_a_raising_hook_drops_the_span_rather_than_exporting_it(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+
+        def broken(span):
+            raise RuntimeError("scrubber bug")
+
+        pipeline, _, _ = make(before_span_send=broken)
+        pipeline.start_span("a", attributes={"password": "hunter2"}).end()
+        assert queued(pipeline) == []
+        assert any("before_span_send failed" in r.getMessage() for r in caplog.records)
+
+    def test_the_hook_sees_plain_values_not_the_wire_encoding(self):
+        seen = {}
+
+        def hook(span):
+            seen.update(span)
+            return span
+
+        pipeline, _, _ = make(before_span_send=hook, context={"distinct_id": "u1"})
+        pipeline.start_span("checkout", kind="server", attributes={"userId": 42}).end()
+        assert seen["attributes"] == {"posthogDistinctId": "u1", "userId": 42}
+        assert seen["name"] == "checkout"
+        assert seen["kind"] == "server"
+        assert seen["status"] is None
+        assert len(seen["trace_id"]) == 32 and len(seen["span_id"]) == 16
+        assert seen["parent_span_id"] is None
+        assert isinstance(seen["start_time_ns"], int)
+        assert seen["end_time_ns"] >= seen["start_time_ns"]
+
+    def test_redacts_in_place(self):
+        def scrub(span):
+            span["attributes"].pop("http.request.header.authorization", None)
+            return span
+
+        pipeline, _, _ = make(before_span_send=scrub)
+        pipeline.start_span(
+            "a", attributes={"http.request.header.authorization": "Bearer x", "ok": 1}
+        ).end()
+        assert queued(pipeline)[0].attributes == {"ok": 1}
+
+    def test_identity_fields_are_readable_but_not_writable(self, caplog):
+        caplog.set_level("DEBUG", logger="posthog")
+
+        def forge(span):
+            span["trace_id"] = "f" * 32
+            span["span_id"] = "e" * 16
+            return span
+
+        pipeline, _, _ = make(before_span_send=forge)
+        span = pipeline.start_span("a", parent=f"00-{TRACE_ID}-{SPAN_ID}-00")
+        span_id = span._span_id
+        span.end()
+        record = queued(pipeline)[0]
+        assert (record.trace_id, record.span_id) == (TRACE_ID, span_id)
+        assert record.parent_span_id == SPAN_ID
+        assert any("identity field" in r.getMessage() for r in caplog.records)
+
+    def test_propagation_state_survives_a_hook_that_rebuilds_the_dict(self):
+        def rebuild(span):
+            return {k: v for k, v in span.items() if k != "trace_id"}
+
+        pipeline, _, _ = make(before_span_send=rebuild)
+        pipeline.start_span(
+            "a", parent=f"00-{TRACE_ID}-{SPAN_ID}-00", tracestate="vendor=abc"
+        ).end()
+        record = queued(pipeline)[0]
+        assert record.trace_id == TRACE_ID
+        assert record.trace_flags == "00"
+        assert record.parent_is_remote is True
+        assert record.trace_state == "vendor=abc"
+
+    def test_runs_a_list_left_to_right_and_the_first_none_stops_it(self):
+        calls = []
+
+        def first(span):
+            calls.append("first")
+            span["attributes"]["step"] = 1
+            return span
+
+        def second(span):
+            calls.append("second")
+            return None
+
+        def third(span):
+            calls.append("third")
+            return span
+
+        pipeline, _, _ = make(before_span_send=[first, second, third])
+        pipeline.start_span("a").end()
+        assert calls == ["first", "second"]
+        assert queued(pipeline) == []
+
+    def test_ignores_non_callable_entries_and_exports_unhooked(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+        pipeline, _, _ = make(before_span_send=["not a hook", None])
+        pipeline.start_span("a").end()
+        assert len(queued(pipeline)) == 1
+        assert any("not callable" in r.getMessage() for r in caplog.records)
+
+    def test_a_hook_can_remove_the_stacktrace(self):
+        def strip_stacks(span):
+            for event in span["events"]:
+                event["attributes"].pop("exception.stacktrace", None)
+            return span
+
+        pipeline, _, _ = make(before_span_send=strip_stacks)
+        with pytest.raises(ValueError):
+            with pipeline.start_span("job"):
+                raise ValueError("boom")
+        (event,) = queued(pipeline)[0].events
+        assert event.attributes == {
+            "exception.type": "ValueError",
+            "exception.message": "boom",
+        }
+
+    def test_reapplies_the_caps_to_what_the_hook_added(self):
+        def enrich(span):
+            for i in range(10):
+                span["attributes"][f"extra{i}"] = "x" * 50
+            span["events"].extend({"name": f"e{i}"} for i in range(5))
+            return span
+
+        pipeline, _, _ = make(
+            before_span_send=enrich,
+            context={"distinct_id": "u1"},
+            max_attributes_per_span=3,
+            max_events_per_span=2,
+            max_attribute_value_length=10,
+        )
+        pipeline.start_span("a", attributes={"first": 1}).end()
+        record = queued(pipeline)[0]
+        assert list(record.attributes) == [
+            "posthogDistinctId",
+            "first",
+            "extra0",
+            "extra1",
+        ]
+        assert record.attributes["extra0"] == "x" * 10
+        assert record.dropped_attributes_count == 8
+        assert [e.name for e in record.events] == ["e0", "e1"]
+        assert record.dropped_events_count == 3
+
+    def test_keeps_the_counts_the_span_already_dropped(self):
+        pipeline, _, _ = make(
+            before_span_send=lambda span: span, max_attributes_per_span=1
+        )
+        span = pipeline.start_span("a", attributes={"a": 1, "b": 2})
+        span.add_event("e", {"k1": 1})
+        span.end()
+        assert queued(pipeline)[0].dropped_attributes_count == 1
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            "not a dict",
+            42,
+            {"name": "a"},
+            {"attributes": {}, "events": "no"},
+        ],
+    )
+    def test_drops_a_value_that_is_not_a_span_dict(self, result):
+        pipeline, _, _ = make(before_span_send=lambda span: result)
+        pipeline.start_span("a").end()
+        assert queued(pipeline) == []
+
+    def test_drops_the_span_from_an_async_hook_without_a_never_awaited_warning(self):
+        async def hook(span):
+            return span
+
+        pipeline, _, _ = make(before_span_send=hook)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            pipeline.start_span("a").end()
+            gc.collect()
+        assert queued(pipeline) == []
+        assert not [w for w in caught if "never awaited" in str(w.message)]
+
+    def test_resanitizes_names_times_status_and_events(self, caplog):
+        caplog.set_level("DEBUG", logger="posthog")
+
+        def mangle(span):
+            span["name"] = ""
+            span["start_time_ns"] = -5
+            span["end_time_ns"] = "later"
+            span["status"] = {"code": "maybe"}
+            span["events"].append({"name": None, "timestamp_ns": 2**70})
+            span["events"].append(None)
+            return span
+
+        pipeline, _, _ = make(before_span_send=mangle)
+        span = pipeline.start_span("a", start_time=1_700_000_000)
+        span.set_status("error", "real failure")
+        span.end(end_time=1_700_000_005)
+        record = queued(pipeline)[0]
+        assert record.name == "unknown"
+        assert record.start_ns == 1_700_000_000 * 10**9
+        assert record.end_ns == 1_700_000_005 * 10**9
+        assert record.status.code == "error"
+        assert record.status.message == "real failure"
+        (event,) = record.events
+        assert event.name == "unknown"
+        assert event.timestamp_ns == record.start_ns
+        assert any(
+            "not an epoch-nanosecond int" in r.getMessage() for r in caplog.records
+        )
+
+    def test_clears_the_status_when_the_hook_sets_none(self):
+        def clear(span):
+            span["status"] = None
+            return span
+
+        pipeline, _, _ = make(before_span_send=clear)
+        span = pipeline.start_span("a")
+        span.set_status("error", "x")
+        span.end()
+        assert queued(pipeline)[0].status is None
+
+    def test_a_hook_that_ends_a_span_of_its_own_does_not_deadlock(self):
+        pipeline, _, _ = make()
+        seen = []
+
+        def nested(span):
+            if span["name"] == "outer":
+                pipeline.start_span("from-hook").end()
+            seen.append(span["name"])
+            return span
+
+        pipeline._config = resolve_traces_config({"before_span_send": nested})
+        pipeline.start_span("outer").end()
+        assert sorted(seen) == ["from-hook", "outer"]
+        assert sorted(r.name for r in queued(pipeline)) == ["from-hook", "outer"]
+
+    def test_is_not_called_for_a_span_whose_client_was_disabled(self):
+        client = SimpleNamespace(disabled=False, send=True)
+        hook = mock.Mock(side_effect=lambda span: span)
+        pipeline, _, _ = make(client=client, before_span_send=hook)
+        span = pipeline.start_span("a")
+        client.disabled = True
+        span.end()
+        assert not hook.called
+
+    def test_a_span_whose_hook_outlives_close_is_not_queued(self):
+        # shutdown() closes tracing while another thread's hook is running:
+        # that span must not reach a queue nothing will flush.
+        pipeline, _, _ = make_traces()
+
+        def close_mid_hook(span):
+            pipeline.close()
+            return span
+
+        pipeline._config = resolve_traces_config({"before_span_send": close_mid_hook})
+        timers_before = len(FakeTimer.instances)
+        pipeline.start_span("a").end()
+        assert queued(pipeline) == []
+        assert len(FakeTimer.instances) == timers_before
+
+    def test_the_limit_report_is_logged_with_no_tracing_lock_held(self):
+        pipeline, _, _ = make_traces(max_attributes_per_span=1)
+        held = []
+        original = pipeline_module._report_limit_drops
+
+        def spy(record):
+            held.append((pipeline._lock.locked(), pipeline._exporter._lock.locked()))
+            original(record)
+
+        with mock.patch.object(pipeline_module, "_report_limit_drops", spy):
+            pipeline.start_span("a", attributes={"x": 1, "y": 2}).end()
+        assert held == [(False, False)]
+
+
+class TestBeforeSpanSendBounds:
+    def test_bounds_a_status_message_the_hook_sets(self):
+        def long_message(span):
+            span["status"] = {"code": "error", "message": "m" * 100}
+            return span
+
+        pipeline, _, _ = make(
+            before_span_send=long_message, max_attribute_value_length=5
+        )
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].status.message == "mmmmm"
+
+    def test_a_status_message_whose_str_raises_keeps_the_span(self):
+        class Hostile:
+            def __str__(self):
+                raise RuntimeError("no")
+
+        def hostile_message(span):
+            span["status"] = {"code": "error", "message": Hostile()}
+            return span
+
+        pipeline, _, _ = make(before_span_send=hostile_message)
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].status.message == "[Unserializable]"
+
+    def test_a_hook_can_scrub_the_auto_context_keys(self):
+        def scrub(span):
+            span["attributes"].pop("posthogDistinctId")
+            span["attributes"].pop("sessionId")
+            return span
+
+        pipeline, _, _ = make(
+            before_span_send=scrub, context={"distinct_id": "u", "session_id": "s"}
+        )
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].attributes == {}
+
+    def test_recaps_event_attributes_the_hook_widens(self):
+        def widen(span):
+            span["events"][0]["attributes"].update({f"k{i}": i for i in range(200)})
+            return span
+
+        pipeline, _, _ = make(before_span_send=widen)
+        span = pipeline.start_span("a")
+        span.add_event("e", {"first": 1})
+        span.end()
+        (event,) = queued(pipeline)[0].events
+        assert len(event.attributes) == 128
+        assert event.dropped_attributes_count == 73
+
+    def test_keeps_an_events_dropped_count_when_the_hook_rebuilds_the_events(self):
+        def rebuild(span):
+            span["events"] = [dict(event) for event in span["events"]]
+            return span
+
+        pipeline, _, _ = make(before_span_send=rebuild)
+        span = pipeline.start_span("a")
+        span.add_event("wide", {f"k{i}": i for i in range(130)})
+        span.end()
+        assert queued(pipeline)[0].events[0].dropped_attributes_count == 2
+
+    def test_drops_a_dict_missing_a_required_key(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+
+        def incomplete(span):
+            return {"attributes": {}, "events": []}
+
+        pipeline, _, _ = make(before_span_send=incomplete)
+        pipeline.start_span("a").end()
+        assert queued(pipeline) == []
+        assert any("unusable record" in r.getMessage() for r in caplog.records)
