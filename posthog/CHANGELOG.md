@@ -1,5 +1,12 @@
 # posthog
 
+## 7.51.1 — 2026-09-11
+
+### Patch changes
+
+- [1cc513f](https://github.com/posthog/posthog-python/commit/1cc513f7e45b9d0fe3d5a32e1c733210268ad33c) Follow async capture redirects without duplicating or incorrectly retaining a configured host path prefix. — Thanks @nickita-khylkouski!
+- [dadd278](https://github.com/posthog/posthog-python/commit/dadd278b6dbf1dd5d4b4f023ffe62aab9bcf8c18) Clean up queue and flush waiters when the async capture consumer is cancelled. — Thanks @nickita-khylkouski!
+
 ## 7.51.0 — 2026-09-10
 
 ### Minor changes
