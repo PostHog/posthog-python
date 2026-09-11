@@ -34,6 +34,7 @@ from ._instrumentation import (
     append_send_feedback,
     collect_listed_tools,
     extract_tools,
+    listing_has_next_page,
     mutate_tool_schema,
     refresh_feedback_shadow,
     request_to_dict,
@@ -281,7 +282,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
                 append_get_more_tools(result, missing_name, data)
                 names.append(missing_name)
 
-        if feedback_name is not None:
+        if feedback_name is not None and not listing_has_next_page(result):
             append_send_feedback(result, data)
             names.append(feedback_name)
 

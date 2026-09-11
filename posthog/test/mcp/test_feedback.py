@@ -704,6 +704,86 @@ async def test_lowlevel_collision_fails_open_after_listing():
     assert _events(client, "$mcp_tool_call")
 
 
+def _make_paged_lowlevel(pages):
+    """A raw low-level server whose tools/list handler serves ``pages`` (a list of
+    tool lists) one page per request, chained by ``nextCursor``. The paged handler
+    is registered directly into ``request_handlers`` so the wire pagination shape
+    is exact; the real ``send_feedback`` handler answers ``real tool ran``."""
+    server = Server("feedback-lowlevel-paged")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    async def paged_list(req):
+        cursor = getattr(getattr(req, "params", None), "cursor", None) if req else None
+        index = int(cursor) if cursor else 0
+        next_cursor = str(index + 1) if index + 1 < len(pages) else None
+        return mcp_types.ServerResult(
+            mcp_types.ListToolsResult(tools=list(pages[index]), nextCursor=next_cursor)
+        )
+
+    server.request_handlers[mcp_types.ListToolsRequest] = paged_list
+    return server
+
+
+def _list_page(server, cursor=None):
+    handler = server.request_handlers[mcp_types.ListToolsRequest]
+    params = mcp_types.PaginatedRequestParams(cursor=cursor) if cursor else None
+    return handler(mcp_types.ListToolsRequest(method="tools/list", params=params))
+
+
+_REAL_SEND_FEEDBACK = mcp_types.Tool(
+    name="send_feedback",
+    description="A real application tool",
+    inputSchema={"type": "object", "properties": {"note": {"type": "string"}}},
+)
+_ECHO_TOOL = mcp_types.Tool(
+    name="echo",
+    description="Echo",
+    inputSchema={"type": "object", "properties": {"msg": {"type": "string"}}},
+)
+
+
+@pytest.mark.parametrize("real_tool_page", [0, 1])
+async def test_paginated_listing_keeps_collision_across_pages(real_tool_page):
+    # A collision seen on any page must survive the other pages: recomputing the
+    # flag from one page alone would re-arm interception and swallow the real
+    # tool's calls (and an early page must not advertise the virtual tool before
+    # a later page reveals the real one).
+    pages = [[_ECHO_TOOL], [_ECHO_TOOL]]
+    pages[real_tool_page] = [_REAL_SEND_FEEDBACK]
+    server = _make_paged_lowlevel(pages)
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    page_one = await _list_page(server)
+    page_two = await _list_page(server, cursor="1")
+    listed = [t.name for t in page_one.root.tools] + [
+        t.name for t in page_two.root.tools
+    ]
+    assert listed.count("send_feedback") == 1  # the real tool only, never appended
+
+    call_handler = server.request_handlers[mcp_types.CallToolRequest]
+    out = await call_handler(_call_request("send_feedback", {"note": "hi"}))
+    await _flush()
+
+    assert out.root.content[0].text == "real tool ran"
+    assert _events(client, "$mcp_feedback") == []
+    assert _events(client, "$mcp_tool_call")
+
+
+async def test_paginated_listing_appends_virtual_tool_once_on_final_page():
+    server = _make_paged_lowlevel([[_ECHO_TOOL], [_ECHO_TOOL]])
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    page_one = await _list_page(server)
+    page_two = await _list_page(server, cursor="1")
+    assert [t.name for t in page_one.root.tools] == ["echo"]  # non-final: no append
+    assert [t.name for t in page_two.root.tools] == ["echo", "send_feedback"]
+
+
 async def test_feedback_never_mints_conversation_id():
     server = make_lowlevel()
     client = FakeClient()

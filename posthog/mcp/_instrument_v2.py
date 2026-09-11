@@ -41,6 +41,7 @@ from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
     collect_listed_tools,
+    listing_has_next_page,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
@@ -633,7 +634,7 @@ def _wrap_v2_list_tools(
                 _append_get_more_tools_v2(result, missing_name, data)
                 names.append(missing_name)
 
-        if feedback_name is not None:
+        if feedback_name is not None and not listing_has_next_page(result):
             _append_send_feedback_v2(result, data)
             names.append(feedback_name)
 

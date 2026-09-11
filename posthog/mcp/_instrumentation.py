@@ -690,22 +690,39 @@ def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> Non
 
 def refresh_feedback_shadow(data: MCPAnalyticsData, tools: list) -> Optional[str]:
     """Refresh the collision flag from this listing's tools. Returns the resolved
-    feedback tool name when the virtual tool should be appended, ``None`` when the
+    feedback tool name when the virtual tool may be appended, ``None`` when the
     feature is off or a real application tool owns the name (fail-open: the real
     tool is advertised and dispatched untouched). Run before the schema-injection
-    pass so it reads the fresh flag."""
+    pass so it reads the fresh flag.
+
+    Sticky for the instrumentation instance's lifetime: a paginated ``tools/list``
+    delivers one page per request, so a collision seen on an earlier page must
+    survive a later page that doesn't list the real tool — otherwise that page
+    would re-arm interception and swallow the real tool's calls. The trade-off is
+    deliberate: un-shadowing after the host removes the real tool requires
+    re-instrumentation."""
     options = resolve_collect_feedback_options(data.options.collect_feedback)
     if options is None:
         return None
     name = resolve_send_feedback_tool_name(options)
-    shadowed = any(getattr(tool, "name", None) == name for tool in tools)
-    if shadowed:
-        log(
-            f'Warning: Cannot inject agent-feedback tool "{name}" because a real tool '
-            "already uses that name. The real tool will not be intercepted."
-        )
-    data.feedback_tool_shadowed = shadowed
-    return None if shadowed else name
+    if any(getattr(tool, "name", None) == name for tool in tools):
+        if not data.feedback_tool_shadowed:
+            log(
+                f'Warning: Cannot inject agent-feedback tool "{name}" because a real tool '
+                "already uses that name. The real tool will not be intercepted."
+            )
+        data.feedback_tool_shadowed = True
+    return None if data.feedback_tool_shadowed else name
+
+
+def listing_has_next_page(result: Any) -> bool:
+    """Whether this ``tools/list`` result is a non-final page of a paginated
+    listing. The virtual feedback tool is only appended to the final page: an
+    earlier page could advertise it before a later page reveals a real tool by
+    the same name. Reads both SDK majors' cursor spelling (1.x models expose
+    ``nextCursor``, 2.x ``next_cursor``)."""
+    root = getattr(result, "root", result)
+    return bool(getattr(root, "nextCursor", None) or getattr(root, "next_cursor", None))
 
 
 def append_send_feedback(result: Any, data: MCPAnalyticsData) -> None:
