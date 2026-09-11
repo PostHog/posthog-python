@@ -645,7 +645,7 @@ def test_runtime_warns_when_app_was_built_before_instrument():
     app = srv.streamable_http_app()  # BEFORE instrument() -- the trap
 
     with _captured_logs() as logs:
-        instrument(srv, _Sink())
+        instrument(srv, _Sink(), MCPAnalyticsOptions(enable_conversation_id=False))
         with TestClient(app) as client:
             resp = _call_ping(client)
             assert resp.status_code == 200, resp.text
@@ -716,7 +716,7 @@ def test_warnings_are_visible_without_configuring_a_logger(caplog):
 
     set_logger(None)  # explicitly no `logger` option anywhere
     with caplog.at_level("WARNING", logger="posthog.mcp"):
-        instrument(srv, _Sink())
+        instrument(srv, _Sink(), MCPAnalyticsOptions(enable_conversation_id=False))
         with TestClient(app) as client:
             _call_ping(client)
 

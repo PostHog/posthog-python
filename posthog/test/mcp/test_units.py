@@ -109,7 +109,7 @@ def test_schema_pipeline_does_not_warn_for_owned_conversation_id(monkeypatch):
     tool = SimpleNamespace(name="t", input_schema=schema)
 
     mutate_tool_schema(
-        _data(context=False, enable_conversation_id=True),
+        _data(context=False, capture_model=False, enable_conversation_id=True),
         tool,
         schema_attribute="input_schema",
         owns_context=False,

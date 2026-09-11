@@ -71,7 +71,7 @@ class PostHogMCP(Client):
         api_key: str,
         missing_capability_tool_name: Optional[str] = None,
         mcp_exception_autocapture: bool = True,
-        capture_model: Union[bool, MCPAnalyticsModelOptions] = False,
+        capture_model: Union[bool, MCPAnalyticsModelOptions] = True,
         collect_feedback: Union[bool, CollectFeedbackOptions] = False,
         **kwargs: Any,
     ) -> None:

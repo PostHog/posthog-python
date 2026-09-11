@@ -42,6 +42,7 @@ from ._instrumentation import (
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
+from ._tool_schema import resolve_model_ownership
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
@@ -171,6 +172,31 @@ def _wrap_resource_request(
     handlers[request_type] = handler
 
 
+async def _prepare_model_arguments(
+    server: Any, data: MCPAnalyticsData, req: Any, strip_injected: bool
+) -> Tuple[Any, bool]:
+    async def list_page(cursor: Optional[str]) -> Any:
+        listing = server.request_handlers.get(mcp_types.ListToolsRequest)
+        raw = getattr(listing, "__posthog_mcp_original__", listing)
+        return await raw(
+            mcp_types.ListToolsRequest(
+                method="tools/list",
+                params=mcp_types.PaginatedRequestParams(
+                    cursor=cursor, _meta=req.params.meta
+                ),
+            )
+        )
+
+    owns_model = await resolve_model_ownership(data, req.params.name, list_page)
+    if strip_injected or not owns_model:
+        return req, owns_model
+    arguments = dict(req.params.arguments or {})
+    arguments.pop("llm_model", None)
+    return req.model_copy(
+        update={"params": req.params.model_copy(update={"arguments": arguments})}
+    ), owns_model
+
+
 def _wrap_call_tool(
     server: Any, data: MCPAnalyticsData, *, strip_injected: bool, high_level: Any = None
 ) -> None:
@@ -182,6 +208,10 @@ def _wrap_call_tool(
     async def handler(req: Any) -> Any:
         name = req.params.name
         arguments = dict(req.params.arguments or {})
+
+        req, analytics_owns_model = await _prepare_model_arguments(
+            server, data, req, strip_injected
+        )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
@@ -195,9 +225,7 @@ def _wrap_call_tool(
             name=name,
             arguments=arguments,
             request_meta=request_meta_from_context(_request_context(server)),
-            allow_self_reported_model=data.tool_model_parameter_injected.get(
-                name, False
-            ),
+            allow_self_reported_model=analytics_owns_model,
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -240,7 +268,7 @@ def _wrap_call_tool(
         if strip_injected and req.params.arguments:
             owned = await _tool_owned_injected_keys(high_level, name)
             injected_keys = ["context", "conversation_id"]
-            if data.tool_model_parameter_injected.get(name, False):
+            if analytics_owns_model:
                 injected_keys.append("llm_model")
             for key in injected_keys:
                 if key not in owned:
@@ -424,6 +452,7 @@ def _wrap_list_tools(
 
         return result
 
+    setattr(handler, "__posthog_mcp_original__", original)
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
 

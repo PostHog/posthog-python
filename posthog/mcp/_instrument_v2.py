@@ -61,6 +61,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._tool_schema import resolve_model_ownership
 from .logger import log
 from .request_headers import get_request_headers
 from .session_token import read_mcp_session_header
@@ -477,6 +478,40 @@ async def _standalone_injected_parameters(
     return frozenset(key for key in injected if not schema_has_param(schema, key))
 
 
+async def _prepare_raw_v2_arguments(
+    server: Any, data: MCPAnalyticsData, ctx: Any, params: Any
+) -> Tuple[Any, bool]:
+    async def list_page(cursor: Optional[str]) -> Any:
+        listing = server.get_request_handler(_LIST_METHOD)
+        raw = getattr(listing.handler, "__posthog_mcp_original__", listing.handler)
+        return await raw(ctx, mcp_types.PaginatedRequestParams(cursor=cursor))
+
+    owns_model = await resolve_model_ownership(data, params.name, list_page)
+    if not owns_model:
+        return params, False
+    arguments = dict(params.arguments or {})
+    arguments.pop("llm_model", None)
+    return params.model_copy(update={"arguments": arguments}), True
+
+
+async def _prepare_v2_arguments(
+    server: Any, data: MCPAnalyticsData, ctx: Any, params: Any
+) -> Tuple[Any, bool]:
+    standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
+    if standalone is None:
+        return await _prepare_raw_v2_arguments(server, data, ctx, params)
+    version = _requested_tool_version(ctx)
+    injected = await _standalone_injected_parameters(
+        standalone, data, params.name, version
+    )
+    if injected is None:
+        return params, False
+    arguments = dict(params.arguments or {})
+    for key in injected:
+        arguments.pop(key, None)
+    return params.model_copy(update={"arguments": arguments}), "llm_model" in injected
+
+
 def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     entry = server.get_request_handler(_CALL_METHOD)
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
@@ -486,21 +521,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     async def handler(ctx: Any, params: Any) -> Any:
         name = params.name
         arguments = dict(params.arguments or {})
-        analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
-        standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
-        if standalone is not None:
-            version = _requested_tool_version(ctx)
-            injected = await _standalone_injected_parameters(
-                standalone, data, name, version
-            )
-            analytics_owns_model = injected is not None and "llm_model" in injected
-            if injected is not None:
-                call_arguments = {
-                    key: value
-                    for key, value in arguments.items()
-                    if key not in injected
-                }
-                params = params.model_copy(update={"arguments": call_arguments})
+
+        params, analytics_owns_model = await _prepare_v2_arguments(
+            server, data, ctx, params
+        )
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -715,6 +739,7 @@ def _wrap_v2_list_tools(
 
         return result
 
+    setattr(handler, "__posthog_mcp_original__", original)
     setattr(handler, _WRAPPED_FLAG, True)
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
 
