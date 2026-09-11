@@ -823,10 +823,10 @@ attribute posthog.mcp.types.MCPAnalyticsContextOptions.description: Optional[str
 attribute posthog.mcp.types.MCPAnalyticsModelOptions.description: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsModelSource = Literal['client_metadata', 'self_reported']
 attribute posthog.mcp.types.MCPAnalyticsOptions.before_send: Optional[BeforeSendFn] = None
-attribute posthog.mcp.types.MCPAnalyticsOptions.capture_model: Union[bool, MCPAnalyticsModelOptions] = False
+attribute posthog.mcp.types.MCPAnalyticsOptions.capture_model: Union[bool, MCPAnalyticsModelOptions] = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.collect_feedback: Union[bool, CollectFeedbackOptions] = False
 attribute posthog.mcp.types.MCPAnalyticsOptions.context: Union[bool, MCPAnalyticsContextOptions] = True
-attribute posthog.mcp.types.MCPAnalyticsOptions.enable_conversation_id: bool = False
+attribute posthog.mcp.types.MCPAnalyticsOptions.enable_conversation_id: bool = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.enable_exception_autocapture: bool = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.event_properties: Optional[EventPropertiesFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.identify: Optional[Union[IdentifyFn, UserIdentity]] = None
@@ -1026,14 +1026,14 @@ class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
 class posthog.mcp.constants.PostHogMCPAnalyticsProperty 
-class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, mcp_exception_autocapture: bool = True, capture_model: Union[bool, MCPAnalyticsModelOptions] = False, collect_feedback: Union[bool, CollectFeedbackOptions] = False, **kwargs: Any)
+class posthog.mcp.posthog_mcp.PostHogMCP(api_key: str, missing_capability_tool_name: Optional[str] = None, mcp_exception_autocapture: bool = True, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, **kwargs: Any)
 class posthog.mcp.session_token.SessionTokenPayload(session_id: str, client_name: Optional[str] = None, client_version: Optional[str] = None, protocol_version: Optional[str] = None)
 class posthog.mcp.types.CaptureEventData(event: str, properties: Optional[JsonRecord] = None)
 class posthog.mcp.types.CollectFeedbackOptions(tool_name: Optional[str] = None, description: Optional[str] = None, extra_properties: Optional[Dict[str, Dict[str, Any]]] = None, extra_required: Optional[List[str]] = None, on_feedback: Optional[OnFeedbackFn] = None)
 class posthog.mcp.types.FeedbackReport(feedback_type: str = 'other', summary: str = '', sentiment: Optional[str] = None, friction_points: Optional[str] = None, suggested_improvement: Optional[str] = None, details: Optional[str] = None, tool_name: Optional[str] = None, task_completed: Optional[bool] = None, extras: JsonRecord = dict(), raw: JsonRecord = dict())
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = None)
-class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = False, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = False, collect_feedback: Union[bool, CollectFeedbackOptions] = False)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
 class posthog.metrics_capture.PostHogMetrics(client, config: Optional[dict] = None)

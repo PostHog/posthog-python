@@ -175,7 +175,7 @@ async def test_tool_call_error_is_captured_and_converted():
 async def test_initialize_emitted_once_per_session():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
     await _call_tool(
         server, "add", {"a": 1, "b": 1, "context": "first call to warm up"}

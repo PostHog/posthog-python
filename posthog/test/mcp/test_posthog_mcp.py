@@ -222,7 +222,7 @@ def test_prepare_tool_list_can_be_disabled():
 )
 async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
     client, captured = make_client(**options)
-    enabled = options.get("capture_model", False)
+    enabled = options.get("capture_model", True)
     tools = [
         {
             "name": "search",

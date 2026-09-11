@@ -227,7 +227,9 @@ async def test_modern_result_shape_survives_instrumentation():
         bare_response = await modern_call(http, "add", {"a": 4, "b": 5})
 
     instrumented = make_server()
-    instrument(instrumented, FakeClient())
+    instrument(
+        instrumented, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=False)
+    )
     async with wire(instrumented) as http:
         response = await modern_call(http, "add", {"a": 4, "b": 5, "context": "alive"})
     await _flush()
@@ -295,7 +297,7 @@ async def test_legacy_stateless_token_survives_across_instances():
 
     # Pod A mints the token on initialize.
     server_a = make_server()
-    instrument(server_a, client)
+    instrument(server_a, client, MCPAnalyticsOptions(enable_conversation_id=False))
     async with wire(server_a) as http:
         init = rpc(
             "initialize",
@@ -316,7 +318,7 @@ async def test_legacy_stateless_token_survives_across_instances():
     # A compliant legacy client replays both the session header and the
     # negotiated MCP-Protocol-Version on every subsequent request.
     server_b = make_server()
-    instrument(server_b, client)
+    instrument(server_b, client, MCPAnalyticsOptions(enable_conversation_id=False))
     async with wire(server_b) as http:
         headers = {
             **legacy_headers(),
