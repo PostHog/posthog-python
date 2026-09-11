@@ -1333,6 +1333,7 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
 method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
+method posthog.ai.prompts.Prompts.get_all(*, label: str) -> Dict[str, PromptResult]
 method posthog.ai.stream.AsyncStreamWrapper.aclose() -> None
 method posthog.ai.stream.AsyncStreamWrapper.close() -> None
 method posthog.async_client.AsyncClient.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]

@@ -162,22 +162,33 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties["$set"] = {**identify_actor_data}
 
 
-_TOOL_DISPATCH_WRAPPERS = ("ToolError", "UnexpectedToolError")
+# The dispatch wrappers that say nothing the event does not already say: the
+# exception names each one surfaces as, and the message it stamps. The message is
+# what makes a match specific — `MCPError` is the shared base class mcp 2.x
+# re-raises a failed read as, and the resource path stacks two wrappers. mcp 1.x's
+# own `ResourceError` is deliberately absent: it keeps the handler's message in
+# its text, so reporting it loses nothing.
+_DISPATCH_WRAPPERS = (
+    (("ToolError", "UnexpectedToolError"), "Error executing tool"),
+    (("MCPError", "UnexpectedResourceError"), "Error reading resource"),
+)
 
 # Where the SDKs define their dispatch wrappers: mcp.server.fastmcp.exceptions
-# (mcp 1.x), mcp.server.mcpserver.exceptions (mcp 2.x), fastmcp.exceptions
-# (standalone fastmcp). An application's own exception carries its own module,
-# so a matching name alone must not unwrap it.
+# (mcp 1.x), mcp.server.mcpserver.exceptions and mcp.shared.exceptions (mcp 2.x),
+# fastmcp.exceptions (standalone fastmcp). An application's own exception carries
+# its own module, so a matching name alone must not unwrap it.
 _SDK_MODULE_PREFIXES = ("mcp.", "fastmcp.")
 
 
 def _is_dispatch_wrapper(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
-    return (
-        entry.get("type") in _TOOL_DISPATCH_WRAPPERS
-        and str(entry.get("module") or "").startswith(_SDK_MODULE_PREFIXES)
-        and str(entry.get("value", "")).startswith("Error executing tool")
+    if not str(entry.get("module") or "").startswith(_SDK_MODULE_PREFIXES):
+        return False
+    value = str(entry.get("value", ""))
+    return any(
+        entry.get("type") in names and value.startswith(message)
+        for names, message in _DISPATCH_WRAPPERS
     )
 
 
@@ -187,10 +198,12 @@ def _primary_exception(error: Any) -> Dict[str, Any]:
     The MCP SDK's tool dispatch re-raises whatever a tool raised as a
     ``ToolError`` whose message starts ``Error executing tool <name>``, and
     mcp >= 2.1 masks the original text out of that message entirely, keeping
-    it only on ``__cause__`` — the next entry of the chain here. The wrapper
-    says nothing the event's tool name does not already say, so the scalars
-    step past every consecutive wrapper (a tool invoking a failing tool is
-    wrapped once per dispatch) to the first real exception.
+    it only on ``__cause__`` — the next entry of the chain here. Resource
+    dispatch does the same on mcp 2.x, with two stacked wrappers and the uri in
+    place of the tool name. The wrapper says nothing the event's tool or resource
+    name does not already say, so the scalars step past every consecutive wrapper
+    (a tool invoking a failing tool is wrapped once per dispatch) to the first
+    real exception.
     """
     if not isinstance(error, dict):
         return {}

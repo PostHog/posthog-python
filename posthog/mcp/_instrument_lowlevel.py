@@ -22,6 +22,7 @@ import mcp.types as mcp_types
 
 from ._context_parameters import schema_has_param
 from ._conversation_id import build_prompt_back
+from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
     append_get_more_tools,
@@ -29,8 +30,11 @@ from ._instrumentation import (
     collect_listed_tools,
     extract_tools,
     mutate_tool_schema,
+    prepare_request,
+    record_resource_request,
     refresh_feedback_shadow,
     request_to_dict,
+    resource_listing_response,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
@@ -52,6 +56,7 @@ def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(server, "version", None)
     _wrap_call_tool(server, data, strip_injected=False)
     _wrap_list_tools(server, data, context_required=False)
+    _wrap_resource_requests(server, data)
 
 
 def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
@@ -75,6 +80,94 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
     # sees: under `FastMCP(strict_input_validation=True)` every call fails with
     # "'context' is a required property".
     _wrap_list_tools(low_level, data, context_required=False)
+    _wrap_resource_requests(low_level, data)
+
+
+def _wrap_resource_requests(server: Any, data: MCPAnalyticsData) -> None:
+    for request_type, event_type in (
+        (mcp_types.ListResourcesRequest, MCPAnalyticsEventType.MCP_RESOURCES_LIST),
+        # Templates are listings too: the captured request method separates
+        # `resources/templates/list` from `resources/list` on the same event.
+        (
+            mcp_types.ListResourceTemplatesRequest,
+            MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+        ),
+        (mcp_types.ReadResourceRequest, MCPAnalyticsEventType.MCP_RESOURCES_READ),
+    ):
+        _wrap_resource_request(server, data, request_type, event_type)
+
+
+def _wrap_resource_request(
+    server: Any,
+    data: MCPAnalyticsData,
+    request_type: Any,
+    event_type: str,
+) -> None:
+    handlers = server.request_handlers
+    original = handlers.get(request_type)
+    if original is None or getattr(original, _WRAPPED_FLAG, False):
+        return
+
+    async def handler(req: Any) -> Any:
+        client_name, client_version = _client_info(server)
+        protocol_version = _protocol_version(server)
+        mcp_session_id = _mcp_session_id(server)
+        token, client_name, client_version, protocol_version = (
+            resolve_session_and_client(
+                mcp_session_id, client_name, client_version, protocol_version
+            )
+        )
+        request = request_to_dict(req)
+        extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
+        try:
+            session_id = await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+            )
+        except Exception as error:  # noqa: BLE001 - analytics must not break resources
+            log(f"Warning: could not prepare resource analytics: {error}")
+            return await original(req)
+
+        start = time.monotonic()
+        try:
+            result = await original(req)
+        except Exception as error:
+            await record_resource_request(
+                data,
+                session_id,
+                event_type=event_type,
+                request=request,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            raise
+
+        await record_resource_request(
+            data,
+            session_id,
+            event_type=event_type,
+            request=request,
+            response=resource_listing_response(event_type, result),
+            duration_ms=(time.monotonic() - start) * 1000,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra=extra,
+        )
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    handlers[request_type] = handler
 
 
 def _wrap_call_tool(

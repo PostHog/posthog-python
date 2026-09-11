@@ -1,5 +1,17 @@
 # posthog
 
+## 7.51.0 — 2026-09-10
+
+### Minor changes
+
+- [97ea5fd](https://github.com/posthog/posthog-python/commit/97ea5fd0d22a0fd693c43f7da3db01a9a9aafdf4) Capture MCP resource discovery and reads from instrumented servers. URL credential redaction (userinfo, credential-named query and fragment parameters) now applies to every captured string, including existing `$mcp_tool_call` parameters, responses and error messages, so URLs in existing tool-call data will show `%5Bredacted%5D` values after upgrading. — Thanks @lucasheriques!
+
+## 7.50.0 — 2026-09-10
+
+### Minor changes
+
+- [7db5105](https://github.com/posthog/posthog-python/commit/7db51053d3c4006cf21dd118d3947c6b9e77322c) `Prompts.get_all(label="production")` fetches every prompt that carries a label in one request and stores them in the prompt cache, so later `get(name, label=...)` calls are cache hits. Apps with many prompts no longer need one request per prompt per cache cycle. Against a PostHog server that does not support labels on the prompt list endpoint yet, the call fails with a clear error instead of caching wrong versions. — Thanks @jurajmajerik!
+
 ## 7.49.0 — 2026-09-10
 
 ### Minor changes

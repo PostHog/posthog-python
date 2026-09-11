@@ -4,10 +4,10 @@
 
 """PostHog MCP analytics SDK — product analytics for Model Context Protocol servers.
 
-Wrap a Python MCP server so every tool call, agent intent, and failure is
-captured to PostHog as a ``$mcp_*`` event. Works with the MCP Python SDK 1.x
-*and* 2.x (the 2026-07-28 spec revision) — the high-level server class moved
-between majors, but ``instrument()`` is the same::
+Wrap a Python MCP server so tool calls, agent intent, resource discovery and
+reads, and failures are captured to PostHog as ``$mcp_*`` events. Works with
+the MCP Python SDK 1.x *and* 2.x (the 2026-07-28 spec revision) — the high-level
+server class moved between majors, but ``instrument()`` is the same::
 
     from posthog import Posthog
     from posthog.mcp import instrument
@@ -231,9 +231,9 @@ def instrument(
     posthog_client: Optional[Client] = None,
     options: Optional[MCPAnalyticsOptions] = None,
 ) -> McpAnalytics:
-    """Instrument an MCP server so PostHog auto-captures tool calls, tool listings,
-    initialize, identity, and exceptions. Returns a handle whose ``capture()``
-    records custom events.
+    """Instrument an MCP server so PostHog auto-captures tool calls, tool and
+    resource listings, resource reads, initialize, identity, and exceptions.
+    Returns a handle whose ``capture()`` records custom events.
 
     Idempotent per server instance — a second call reuses the existing tracking
     state instead of double-wrapping. Degrades to a no-op handle on any failure so
