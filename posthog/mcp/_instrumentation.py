@@ -26,6 +26,15 @@ from ._context_parameters import (
 from ._conversation_id import add_conversation_id_to_schema, resolve_conversation_id
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
+from .feedback import (
+    build_feedback_event_properties,
+    build_feedback_intent,
+    get_feedback_tool_descriptor,
+    handle_feedback,
+    parse_feedback_report,
+    resolve_collect_feedback_options,
+    resolve_send_feedback_tool_name,
+)
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
 from ._model_parameters import (
@@ -42,6 +51,7 @@ from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import GET_MORE_TOOLS_NAME, resolve_missing_capability_tool_name
+from .types import CollectFeedbackOptions, FeedbackReport
 
 # Keep strong refs to in-flight capture tasks/futures and their lifecycle owners so
 # they aren't GC'd mid-flight and lifecycle drains can select only their own work.
@@ -406,12 +416,24 @@ class ToolCallLifecycle:
     client_version: Optional[str]
     protocol_version: Optional[str]
     missing_name: str
+    feedback_options: Optional[CollectFeedbackOptions]
+    feedback_name: Optional[str]
     conversation_id: Optional[str]
     minted_conversation_id: bool
 
     @property
     def is_missing_capability(self) -> bool:
         return self.data.options.report_missing and self.name == self.missing_name
+
+    @property
+    def is_feedback(self) -> bool:
+        # Never intercept a name a real application tool owns (fail-open): the
+        # listing pass records the collision on `feedback_tool_shadowed`.
+        return (
+            self.feedback_name is not None
+            and self.name == self.feedback_name
+            and not self.data.feedback_tool_shadowed
+        )
 
     async def prepare_session(self, conversation_id: Optional[str]) -> str:
         return await prepare_request(
@@ -446,6 +468,26 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             extra=self.extra,
         )
+
+    async def record_feedback(self) -> str:
+        """Capture the ``$mcp_feedback`` event, then run the host's ``on_feedback``
+        handler and return the reply text for the agent. The event is captured
+        whether or not the handler raises."""
+        report = parse_feedback_report(self.arguments, self.feedback_options)
+        session_id = await self.prepare_session(None)
+        await record_feedback(
+            self.data,
+            session_id,
+            report=report,
+            tool_name=self.feedback_name or self.name,
+            arguments=self.arguments,
+            request_meta=self.request_meta,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+        return await handle_feedback(report, self.feedback_options)
 
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
@@ -508,8 +550,22 @@ def start_tool_call_lifecycle(
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
     missing_name = resolve_missing_capability_tool_name(data.options)
+    feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
+    feedback_name = (
+        resolve_send_feedback_tool_name(feedback_options)
+        # Mirrors `ToolCallLifecycle.is_feedback`'s fail-open guard below: once a
+        # real application tool is known to own this name, conversation-id
+        # resolution must treat calls to it like any other tool too, not skip
+        # them as if they were the (shadowed) virtual feedback tool.
+        if feedback_options is not None and not data.feedback_tool_shadowed
+        else None
+    )
     conversation_id, minted = resolve_conversation_id(
-        data.options.enable_conversation_id, arguments, name, missing_name
+        data.options.enable_conversation_id,
+        arguments,
+        name,
+        missing_name,
+        feedback_name,
     )
     return ToolCallLifecycle(
         data=data,
@@ -525,6 +581,8 @@ def start_tool_call_lifecycle(
         client_version=client_version,
         protocol_version=protocol_version,
         missing_name=missing_name,
+        feedback_options=feedback_options,
+        feedback_name=feedback_name,
         conversation_id=conversation_id,
         minted_conversation_id=minted,
     )
@@ -630,6 +688,74 @@ def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> Non
         tools_list.append(tool)
 
 
+def refresh_feedback_shadow(data: MCPAnalyticsData, tools: list) -> Optional[str]:
+    """Refresh the collision flag from this listing's tools. Returns the resolved
+    feedback tool name when the virtual tool may be appended, ``None`` when the
+    feature is off or a real application tool owns the name (fail-open: the real
+    tool is advertised and dispatched untouched). Run before the schema-injection
+    pass so it reads the fresh flag.
+
+    Sticky for the instrumentation instance's lifetime: a paginated ``tools/list``
+    delivers one page per request, so a collision seen on an earlier page must
+    survive a later page that doesn't list the real tool — otherwise that page
+    would re-arm interception and swallow the real tool's calls. The trade-off is
+    deliberate: un-shadowing after the host removes the real tool requires
+    re-instrumentation."""
+    options = resolve_collect_feedback_options(data.options.collect_feedback)
+    if options is None:
+        return None
+    name = resolve_send_feedback_tool_name(options)
+    if any(getattr(tool, "name", None) == name for tool in tools):
+        if not data.feedback_tool_shadowed:
+            log(
+                f'Warning: Cannot inject agent-feedback tool "{name}" because a real tool '
+                "already uses that name. The real tool will not be intercepted."
+            )
+        data.feedback_tool_shadowed = True
+    return None if data.feedback_tool_shadowed else name
+
+
+def listing_has_next_page(result: Any) -> bool:
+    """Whether this ``tools/list`` result is a non-final page of a paginated
+    listing. The virtual feedback tool is only appended to the final page: an
+    earlier page could advertise it before a later page reveals a real tool by
+    the same name. Reads both SDK majors' cursor spelling (1.x models expose
+    ``nextCursor``, 2.x ``next_cursor``)."""
+    root = getattr(result, "root", result)
+    return bool(getattr(root, "nextCursor", None) or getattr(root, "next_cursor", None))
+
+
+def append_send_feedback(result: Any, data: MCPAnalyticsData) -> None:
+    """Append the send_feedback virtual tool to the real ListToolsResult.tools
+    list. Callers gate on :func:`refresh_feedback_shadow` returning a name."""
+    import mcp.types as mcp_types
+
+    options = resolve_collect_feedback_options(data.options.collect_feedback)
+    if options is None:
+        return
+    descriptor = get_feedback_tool_descriptor(options)
+    tool = mcp_types.Tool(
+        name=descriptor["name"],
+        description=descriptor["description"],
+        inputSchema=descriptor["inputSchema"],
+        annotations=descriptor["annotations"],
+    )
+    root = getattr(result, "root", result)
+    tools_list = getattr(root, "tools", None)
+    if isinstance(tools_list, list):
+        # `owns_context=True`: the tool carries its intent in its own summary /
+        # details arguments, so no `context` parameter is injected — but the
+        # capture_model pass still runs, so it advertises `llm_model` too.
+        mutate_tool_schema(
+            data,
+            tool,
+            schema_attribute="inputSchema",
+            owns_context=True,
+            context_required=True,
+        )
+        tools_list.append(tool)
+
+
 def read_tool_category(tool: Any) -> Optional[str]:
     """Read a tool's product category from its ``_meta.category``."""
     meta = getattr(tool, "meta", None)
@@ -653,6 +779,19 @@ def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str]
     return names, not tools
 
 
+def _is_sdk_virtual_tool(data: MCPAnalyticsData, tool_name: Any) -> bool:
+    """Whether this name is one of the SDK's own virtual tools (``get_more_tools``,
+    ``send_feedback``) — those carry their intent in their own arguments, so they
+    never get ``context``/``conversation_id`` injected. A shadowed feedback name
+    belongs to a real application tool and keeps normal injection."""
+    if tool_name == GET_MORE_TOOLS_NAME:
+        return True
+    options = resolve_collect_feedback_options(data.options.collect_feedback)
+    if options is None or data.feedback_tool_shadowed:
+        return False
+    return tool_name == resolve_send_feedback_tool_name(options)
+
+
 def mutate_tool_schema(
     data: MCPAnalyticsData,
     tool: Any,
@@ -669,8 +808,9 @@ def mutate_tool_schema(
     """
     schema = getattr(tool, schema_attribute, None)
     original_schema = schema
+    is_sdk_virtual_tool = _is_sdk_virtual_tool(data, tool.name)
     if (
-        tool.name != GET_MORE_TOOLS_NAME
+        not is_sdk_virtual_tool
         and is_context_enabled(data.options.context)
         and not owns_context
     ):
@@ -696,7 +836,7 @@ def mutate_tool_schema(
             not app_owns_model and schema_has_param(schema, "llm_model")
         )
     if (
-        tool.name != GET_MORE_TOOLS_NAME
+        not is_sdk_virtual_tool
         and data.options.enable_conversation_id
         and not schema_has_param(schema, "conversation_id")
     ):
@@ -865,6 +1005,59 @@ async def record_missing_capability(
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
+
+
+async def record_feedback(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    report: FeedbackReport,
+    tool_name: str,
+    arguments: Optional[Dict[str, Any]],
+    request_meta: Optional[Dict[str, Any]] = None,
+    client_name: Optional[str] = None,
+    client_version: Optional[str] = None,
+    protocol_version: Optional[str] = None,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Record a ``send_feedback`` call as ``$mcp_feedback``, with the report's
+    summary and details as ``$mcp_intent``.
+
+    Deliberately no ``parameters``: the arguments are agent-narrated free text,
+    and the PII-redacted ``$mcp_feedback_*`` properties are the captured surface —
+    the raw arguments would bypass that redaction and record undeclared fields."""
+    try:
+        request = build_tool_call_request(tool_name, arguments)
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_FEEDBACK,
+            "session_id": session_id,
+            "resource_name": tool_name,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+        }
+        intent = build_feedback_intent(report)
+        if intent:
+            event["user_intent"] = intent
+            event["user_intent_source"] = "context_parameter"
+        if is_capture_model_enabled(data.options.capture_model):
+            model, source = resolve_model(
+                request_meta, arguments, allow_self_reported=True
+            )
+            if model:
+                event["llm_model"] = model
+                event["llm_model_source"] = source
+        # Merged by hand (not `_apply_event_properties`, which assigns) so the
+        # customer's event_properties callback can't clobber the feedback fields.
+        props = await resolve_event_properties(data, request, extra)
+        event["properties"] = {
+            **(props or {}),
+            **build_feedback_event_properties(report),
+        }
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_feedback failed (event dropped): {err}")
 
 
 async def record_tools_list(

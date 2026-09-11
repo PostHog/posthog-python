@@ -443,9 +443,9 @@ def _redact_credentials(value: str) -> str:
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
-def sanitize_intent(value: Any) -> Any:
-    """Sanitize the agent-narrated intent: the binary gate, the credential passes,
-    structured PII, then URLs.
+def sanitize_free_text(value: Any) -> Any:
+    """Sanitize agent-narrated free text (the intent, the send_feedback fields):
+    the binary gate, the credential passes, structured PII, then URLs.
 
     Every step sits where it does for a reason. The binary gate runs first
     because splicing a redaction into a base64 blob stops it looking like base64,
@@ -586,12 +586,23 @@ def redact_pii(value: Any) -> Any:
 
 
 def sanitize_captured_value(value: Any) -> Any:
+    return _sanitize_value_with(value, _sanitize_string)
+
+
+def sanitize_free_text_value(value: Any) -> Any:
+    """:func:`sanitize_captured_value` with the free-text string pass
+    (:func:`sanitize_free_text`) on every string leaf, so nested agent-narrated
+    values get structured-PII redaction in the load-bearing order too."""
+    return _sanitize_value_with(value, sanitize_free_text)
+
+
+def _sanitize_value_with(value: Any, sanitize_string_fn: Any) -> Any:
     if value is None:
         return value
     if isinstance(value, str):
-        return _sanitize_string(value)
+        return sanitize_string_fn(value)
     if isinstance(value, list):
-        return [sanitize_captured_value(item) for item in value]
+        return [_sanitize_value_with(item, sanitize_string_fn) for item in value]
     # bool is an int subclass; both pass through unchanged.
     if not isinstance(value, dict):
         return value
@@ -601,7 +612,7 @@ def sanitize_captured_value(value: Any) -> Any:
         result[key] = (
             _REDACTED_VALUE
             if _should_redact_key(str(key))
-            else sanitize_captured_value(nested)
+            else _sanitize_value_with(nested, sanitize_string_fn)
         )
     return result
 
@@ -622,12 +633,13 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about
-    # the user. `sanitize_intent` redacts it like any other captured value and
+    # the user. `sanitize_free_text` redacts it like any other captured value and
     # additionally strips structured PII (emails, phone numbers, IPs, cards,
-    # SSNs). PII redaction is scoped to the intent only — structured tool
-    # parameters and responses often hold the same shapes as legitimate data.
+    # SSNs). PII redaction is scoped to agent-narrated free text only —
+    # structured tool parameters and responses often hold the same shapes as
+    # legitimate data.
     if result.get("user_intent") is not None:
-        result["user_intent"] = sanitize_intent(result["user_intent"])
+        result["user_intent"] = sanitize_free_text(result["user_intent"])
 
     if result.get("llm_model") is not None:
         result["llm_model"] = sanitize_captured_value(result["llm_model"])

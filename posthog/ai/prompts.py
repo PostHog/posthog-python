@@ -112,22 +112,32 @@ def _is_prompt_api_response(data: Any) -> bool:
     )
 
 
-def _row_resolves_label(row: Dict[str, Any], label: str) -> bool:
-    """Check that the server resolved this list row through the requested label.
+def _row_label_state(
+    row: Dict[str, Any], label: str
+) -> Literal["resolved", "moved", "absent"]:
+    """Classify how a list row relates to the requested label, via all_labels.
 
-    An older server ignores the label param on the list endpoint and returns the
-    latest version of every prompt. A row that was resolved through a label
-    carries a matching name and version entry in its all_labels field.
+    'resolved': the row is the version the label points to.
+    'moved': the prompt carries the label, but on another version. Happens when
+    the label moves between the query and the response.
+    'absent': the prompt does not carry the label at any version. A server that
+    filters by label never returns such a row, so this means the server ignored
+    the label param (an older PostHog release) and served latest versions.
     """
     all_labels = row.get("all_labels")
     if not isinstance(all_labels, list):
-        return False
-    return any(
-        isinstance(entry, dict)
-        and entry.get("name") == label
-        and entry.get("version") == row.get("version")
-        for entry in all_labels
+        return "absent"
+    entry = next(
+        (
+            candidate
+            for candidate in all_labels
+            if isinstance(candidate, dict) and candidate.get("name") == label
+        ),
+        None,
     )
+    if entry is None:
+        return "absent"
+    return "resolved" if entry.get("version") == row.get("version") else "moved"
 
 
 def _is_same_origin(url: str, host: str) -> bool:
@@ -381,14 +391,55 @@ class Prompts:
             self._maybe_capture_error(error, name="*", version=None, label=label)
             raise
 
-        now = time.time()
-        results: Dict[str, PromptResult] = {}
+        # Validate every row before caching any, so a rejected batch leaves
+        # the cache untouched.
+        resolved_rows: List[Dict[str, Any]] = []
         skipped: List[str] = []
         for row in rows:
-            if not _is_prompt_api_response(row) or not _row_resolves_label(row, label):
-                skipped.append(str(row.get("name")) if isinstance(row, dict) else "?")
-                continue
+            if not _is_prompt_api_response(row):
+                invalid_error = Exception(
+                    f'[PostHog Prompts] Invalid response format for prompts with label "{label}"'
+                )
+                self._maybe_capture_error(
+                    invalid_error, name="*", version=None, label=label
+                )
+                raise invalid_error
 
+            label_state = _row_label_state(row, label)
+            if label_state == "absent":
+                # Even one unlabeled row proves the server did not filter, and
+                # then rows that look resolved are only labels that happen to
+                # point at the latest version. A partial result here would hide
+                # the rest, so fail loudly instead.
+                compat_error = Exception(
+                    f'[PostHog Prompts] The server returned a prompt that does not carry label "{label}". '
+                    "It may not support fetching prompts by label on the list endpoint yet. "
+                    "Upgrade PostHog, or fetch prompts one by one with get()."
+                )
+                self._maybe_capture_error(
+                    compat_error, name="*", version=None, label=label
+                )
+                raise compat_error
+            if label_state == "moved":
+                skipped.append(row["name"])
+                continue
+            resolved_rows.append(row)
+
+        if rows and not resolved_rows:
+            # Every returned row was skipped as moved. One moved label is a
+            # mid-request race, but all of them means the server most likely
+            # ignored the label param and served latest versions.
+            compat_error = Exception(
+                f'[PostHog Prompts] The server returned prompts, but none resolve label "{label}". '
+                "It may not support fetching prompts by label on the list endpoint yet. "
+                "Upgrade PostHog, or fetch prompts one by one with get()."
+            )
+            self._maybe_capture_error(compat_error, name="*", version=None, label=label)
+            raise compat_error
+
+        now = time.time()
+        results: Dict[str, PromptResult] = {}
+        for row in resolved_rows:
             config = _extract_config(row)
             self._cache[_cache_key(row["name"], None, label)] = CachedPrompt(
                 prompt=row["prompt"],
@@ -406,19 +457,6 @@ class Prompts:
                 label=label,
                 config=copy.deepcopy(config),
             )
-
-        if rows and not results:
-            # Nothing resolved the label, so the server most likely ignored the
-            # label param and served latest versions. Caching those under the
-            # label would be the silent wrong-version failure labels exist to
-            # prevent, so fail loudly instead.
-            compat_error = Exception(
-                f'[PostHog Prompts] The server returned prompts, but none resolve label "{label}". '
-                "It may not support fetching prompts by label on the list endpoint yet. "
-                "Upgrade PostHog, or fetch prompts one by one with get()."
-            )
-            self._maybe_capture_error(compat_error, name="*", version=None, label=label)
-            raise compat_error
 
         if skipped:
             log.warning(
