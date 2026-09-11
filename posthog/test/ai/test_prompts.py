@@ -1460,6 +1460,29 @@ class TestPromptsGetAll(TestPrompts):
         self.assertEqual(list(results), ["prompt-b"])
 
     @patch("posthog.ai.prompts._get_session")
+    def test_raises_when_every_row_was_skipped_as_moved(self, mock_get_session):
+        # An old server can serve latest versions while every prompt's label
+        # points at an earlier version. Each row then looks like a moved label;
+        # returning {} would report no labeled prompts despite them existing.
+        mock_get = mock_get_session.return_value.get
+        row_a = {
+            **self.labeled_row("prompt-a", version=2),
+            "all_labels": [{"name": "production", "version": 1}],
+        }
+        row_b = {
+            **self.labeled_row("prompt-b", version=3),
+            "all_labels": [{"name": "production", "version": 2}],
+        }
+        mock_get.return_value = self.list_response([row_a, row_b])
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("none resolve label", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
     def test_raises_on_a_malformed_row_and_caches_nothing(self, mock_get_session):
         # A row failing response validation is a server error, not a moved
         # label; returning the valid subset would hide it.

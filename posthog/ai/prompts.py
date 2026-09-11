@@ -425,6 +425,18 @@ class Prompts:
                 continue
             resolved_rows.append(row)
 
+        if rows and not resolved_rows:
+            # Every returned row was skipped as moved. One moved label is a
+            # mid-request race, but all of them means the server most likely
+            # ignored the label param and served latest versions.
+            compat_error = Exception(
+                f'[PostHog Prompts] The server returned prompts, but none resolve label "{label}". '
+                "It may not support fetching prompts by label on the list endpoint yet. "
+                "Upgrade PostHog, or fetch prompts one by one with get()."
+            )
+            self._maybe_capture_error(compat_error, name="*", version=None, label=label)
+            raise compat_error
+
         now = time.time()
         results: Dict[str, PromptResult] = {}
         for row in resolved_rows:
