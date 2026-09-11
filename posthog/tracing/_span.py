@@ -452,6 +452,7 @@ class RecordingSpan(_Activatable, Span):
             end_ns=clamp_end_ns(resolved, self._start_ns),
             dropped_attributes_count=dropped_attributes,
             dropped_events_count=dropped_events,
+            auto_attribute_keys=self._auto_keys,
         )
         try:
             self._on_end(record)

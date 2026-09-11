@@ -6,7 +6,7 @@ An unusable value falls back to its documented default with a warning.
 import logging
 import math
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from ._sanitize import attribute_key
 
@@ -47,6 +47,7 @@ class ResolvedTracesConfig:
     max_attributes_per_span: int = DEFAULT_MAX_ATTRIBUTES_PER_SPAN
     max_events_per_span: int = DEFAULT_MAX_EVENTS_PER_SPAN
     max_attribute_value_length: int = DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
+    before_span_send: Tuple[Callable[[dict], Optional[dict]], ...] = ()
 
 
 _KNOWN_KEYS = frozenset(field.name for field in fields(ResolvedTracesConfig))
@@ -120,6 +121,29 @@ def _usable_resource_attributes(value: Any) -> Dict[str, Any]:
     return attributes
 
 
+def _resolve_before_span_send(value: Any) -> Tuple[Callable, ...]:
+    """Keep only the callable hooks, in order.
+
+    Anything else is dropped rather than called: a hook that raises drops every
+    span, which would leave tracing silently off.
+    """
+    if value is None:
+        return ()
+    supplied = list(value) if isinstance(value, (list, tuple)) else [value]
+    # `[enabled and scrub]` yields None or False: no hook, rather than a broken one.
+    supplied = [hook for hook in supplied if hook is not None and hook is not False]
+    hooks = tuple(hook for hook in supplied if callable(hook))
+    if len(hooks) != len(supplied):
+        log.warning(
+            "Ignoring %s of %s traces before_span_send entries that are not callable. "
+            "Spans export without them, so whatever they were redacting is not "
+            "redacted.",
+            len(supplied) - len(hooks),
+            len(supplied),
+        )
+    return hooks
+
+
 def resolve_traces_config(
     config: Any, host_resource_attributes: Optional[Mapping[str, str]] = None
 ) -> ResolvedTracesConfig:
@@ -182,4 +206,5 @@ def resolve_traces_config(
         max_attribute_value_length=_positive_int(
             config, "max_attribute_value_length", DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
         ),
+        before_span_send=_resolve_before_span_send(config.get("before_span_send")),
     )
