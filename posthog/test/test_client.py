@@ -2902,7 +2902,7 @@ class TestClient(unittest.TestCase):
         client.shutdown()
 
         metrics.flush.assert_called_once()
-        metrics.reset.assert_called_once()
+        metrics._close.assert_called_once()
         exception_capture.close.assert_called_once()
         self.assertTrue(client._shutdown_complete)
 
@@ -3261,7 +3261,7 @@ class TestClient(unittest.TestCase):
     def test_shutdown_failure_is_raised_after_later_cleanup_in_debug_mode(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01, debug=True)
         metrics = mock.Mock()
-        metrics.reset.side_effect = Exception("reset failed")
+        metrics._close.side_effect = Exception("close failed")
         dedupe_cache = mock.Mock()
         dedupe_cache.clear.side_effect = Exception("clear failed")
         exception_capture = mock.Mock()
@@ -3269,13 +3269,13 @@ class TestClient(unittest.TestCase):
         client.distinct_ids_feature_flags_reported = dedupe_cache
         client.exception_capture = exception_capture
 
-        with self.assertRaisesRegex(Exception, "reset failed"):
+        with self.assertRaisesRegex(Exception, "close failed"):
             client.shutdown()
         with self.assertRaisesRegex(RuntimeError, "client lifecycle cleanup failed"):
             client.shutdown()
 
         metrics.flush.assert_called_once_with()
-        metrics.reset.assert_called_once_with()
+        metrics._close.assert_called_once_with()
         dedupe_cache.clear.assert_called_once_with()
         exception_capture.close.assert_called_once_with()
         self.assertTrue(client._workers_joined)

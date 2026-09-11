@@ -419,6 +419,54 @@ class TestClientForkEndToEnd(unittest.TestCase):
         )
         self.assertEqual(result, "ok")
 
+    def test_register_at_fork_restarts_metrics_autocapture_in_child_process(self):
+        # The sampler thread does not survive fork(); each preforked worker must
+        # get its own live sampler and a fresh per-process service.instance.id.
+        client = Client(
+            FAKE_TEST_API_KEY,
+            host="https://fork-autocapture.example.com",
+            sync_mode=True,
+            send=False,
+            metrics_autocapture=True,
+        )
+        try:
+            self.assertIsNotNone(client._metrics_autocapture)
+            parent_instance_id = client.metrics._resource_attributes[
+                "service.instance.id"
+            ]
+            parent_thread = client._metrics_autocapture._thread
+
+            def child_probe():
+                signal.alarm(5)
+                try:
+                    autocapture = client._metrics_autocapture
+                    thread = autocapture._thread
+                    child_instance_id = client.metrics._resource_attributes[
+                        "service.instance.id"
+                    ]
+                    if thread is None or not thread.is_alive():
+                        return "child sampler thread is not running"
+                    if thread is parent_thread:
+                        return "child inherited the parent's dead thread"
+                    if child_instance_id == parent_instance_id:
+                        return "child kept the parent's service.instance.id"
+                    if not child_instance_id.endswith(f"-{os.getpid()}"):
+                        return f"instance id not repinned to child pid: {child_instance_id}"
+                    autocapture.stop(final_sample=False)
+                finally:
+                    signal.alarm(0)
+                return "ok"
+
+            status, result = self._run_fork_probe(child_probe)
+        finally:
+            client._metrics_autocapture.stop(final_sample=False)
+            client.metrics.reset()
+
+        self.assertTrue(
+            os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0, msg=result
+        )
+        self.assertEqual(result, "ok")
+
     def test_register_at_fork_reinitializes_poller_and_sessions_in_child_process(self):
         client = Client(
             FAKE_TEST_API_KEY,

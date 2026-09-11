@@ -277,6 +277,11 @@ class PostHogMetrics:
         self._pid = os.getpid()
         self._consecutive_send_failures = 0
         self._capture_error_warned = False
+        # Terminal flag set by _close() at client shutdown. Once set, captures are
+        # dropped so a straggler (e.g. a runtime-metrics sample whose collector or
+        # before_send hook outran the autocapture join timeout) can't repopulate
+        # the cleared window or arm a post-shutdown flush timer.
+        self._closed = False
         # Serializes flushes so a manual flush() can't race a timer flush for the same window.
         self._flush_lock = threading.Lock()
         self._series: dict = {}
@@ -323,6 +328,19 @@ class PostHogMetrics:
     def reset(self) -> None:
         """Clears the flush timer and drops the current window."""
         with self._lock:
+            self._clear_flush_timer()
+            self._series = {}
+            self._series_cap_warned = False
+            self._type_by_name = {}
+            self._type_collision_warned = set()
+
+    def _close(self) -> None:
+        """Terminal shutdown: cancel the timer, drop the window, and refuse
+        further captures. Unlike reset() the instance does not accept new samples
+        afterwards, so a sampler thread that outran the shutdown join can't
+        schedule a post-shutdown flush by folding a late sample back in."""
+        with self._lock:
+            self._closed = True
             self._clear_flush_timer()
             self._series = {}
             self._series_cap_warned = False
@@ -416,6 +434,12 @@ class PostHogMetrics:
         with self._lock:
             self._reset_after_fork_locked()
 
+            if self._closed:
+                # Shutdown already flushed and cleared the window. A late sample
+                # must not re-seed the window or arm a new flush timer, or it
+                # would fire a network request after the client shut down.
+                return
+
             state = self._series.get(key)
             if state is None:
                 if len(self._series) >= self._max_series_per_flush:
@@ -475,6 +499,9 @@ class PostHogMetrics:
         self._type_by_name = {}
         self._type_collision_warned = set()
         self._consecutive_send_failures = 0
+        # A forked child is a fresh process: even if the parent had shut its
+        # metrics client down, the child's captures must be live again.
+        self._closed = False
 
     def _fold(self, state: _SeriesState, value: float) -> None:
         if state.type == "count":

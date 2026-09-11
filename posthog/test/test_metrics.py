@@ -1,6 +1,7 @@
 import gzip
 import json
 import math
+import threading
 from unittest import mock
 
 import pytest
@@ -602,6 +603,82 @@ class TestMetricsFailureHandling:
         assert (
             dp["asDouble"] == 5.0
         )  # inherited window dropped, only the child's sample remains
+
+    def test_close_drops_late_captures_and_arms_no_timer(self, client):
+        # After _close(), a straggler sample (e.g. an autocapture collector that
+        # outran the shutdown join) must not re-seed the window or arm a flush
+        # timer that would fire a network request post-shutdown.
+        client.metrics._close()
+
+        client.metrics.count("late.count", 1)
+        client.metrics.gauge("late.gauge", 5)
+
+        assert client.metrics._series == {}
+        assert client.metrics._flush_timer is None
+
+    def test_close_prevents_post_shutdown_flush_from_straggler(self):
+        # End-to-end: a sample that lands after the client shut its metrics down
+        # must not post to the network.
+        c = Client(FAKE_API_KEY, host="https://us.example.com", sync_mode=True)
+        c.metrics.count("m", 1)
+
+        session = mock_session()
+        with mock.patch("posthog.metrics_capture._get_session", return_value=session):
+            c.shutdown()
+            post_calls_after_shutdown = session.post.call_count
+
+            # Straggler sample after shutdown completed.
+            c.metrics.count("straggler", 1)
+            c.metrics.flush()
+
+        assert session.post.call_count == post_calls_after_shutdown
+        assert c.metrics._flush_timer is None
+
+    def test_blocked_sample_after_shutdown_does_not_emit(self):
+        # The shutdown race the reviewer flagged: a sample already in flight and
+        # blocked in a before_send hook (a stand-in for a runtime-metrics
+        # collector that outran the sampler's join timeout) must not emit or arm
+        # a flush timer once shutdown has flushed and closed the window.
+        entered = threading.Event()
+        release = threading.Event()
+
+        def blocking_hook(sample):
+            entered.set()
+            release.wait(5)
+            return sample
+
+        c = Client(
+            FAKE_API_KEY,
+            host="https://us.example.com",
+            sync_mode=True,
+            metrics={"before_send": blocking_hook},
+        )
+        # before_send runs before the capture lock, so this thread blocks there
+        # while shutdown flushes and closes the metrics client.
+        sampler = threading.Thread(target=lambda: c.metrics.gauge("late", 1))
+        sampler.start()
+        assert entered.wait(5)
+
+        session = mock_session()
+        with mock.patch("posthog.metrics_capture._get_session", return_value=session):
+            c.shutdown()
+            posts_after_shutdown = session.post.call_count
+            release.set()
+            sampler.join(5)
+
+        assert session.post.call_count == posts_after_shutdown
+        assert c.metrics._flush_timer is None
+
+    def test_fork_reopens_closed_metrics(self, client):
+        # A forked child is a fresh process: even if the parent's metrics were
+        # closed at shutdown, the child must record again.
+        client.metrics._close()
+        client.metrics._pid -= 1  # simulate being in a fork child
+
+        client.metrics.count("m", 2)
+
+        assert client.metrics._series != {}
+        client.metrics.reset()
 
     def test_merge_back_respects_series_cap(self):
         c = Client(

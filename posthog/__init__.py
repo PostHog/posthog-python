@@ -337,9 +337,12 @@ Attributes:
         Set to 0 to disable retries.
     super_properties: Properties merged into every captured event.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
-        ``service_version``, ``environment``, ``flush_interval``, ...). Applied
-        when ``setup()`` builds the global client, or on a later ``setup()``
-        call if the metrics API hasn't been used yet.
+        ``service_version``, ``environment``, ``flush_interval``,
+        ``autocapture_interval``, ...). Applied when ``setup()`` builds the
+        global client, or on a later ``setup()`` call if the metrics API hasn't
+        been used yet.
+    metrics_autocapture: When True, periodically sample process/host runtime
+        metrics and report them through the ``metrics`` client. Off by default.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     project_root: Root path used to determine in-app exception stack frames.
@@ -396,6 +399,7 @@ feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
 metrics = None  # type: Optional[Dict]
+metrics_autocapture = False  # type: bool
 enable_exception_autocapture = False  # type: bool
 log_captured_exceptions = False  # type: bool
 # Used to determine in app paths for exception autocapture. Defaults to the current working directory
@@ -1259,6 +1263,7 @@ def setup() -> Client:
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
             metrics=metrics,
+            metrics_autocapture=metrics_autocapture,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
             # This kind of initialisation is very annoying for exception capture. We need to figure out a way around this,
             # or deprecate this proxy option fully (it's already in the process of deprecation, no new clients should be using this method since like 5-6 months)
