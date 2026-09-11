@@ -787,8 +787,9 @@ def mutate_tool_schema(
     """
     schema = getattr(tool, schema_attribute, None)
     original_schema = schema
+    is_sdk_virtual_tool = _is_sdk_virtual_tool(data, tool.name)
     if (
-        not _is_sdk_virtual_tool(data, tool.name)
+        not is_sdk_virtual_tool
         and is_context_enabled(data.options.context)
         and not owns_context
     ):
@@ -814,7 +815,7 @@ def mutate_tool_schema(
             not app_owns_model and schema_has_param(schema, "llm_model")
         )
     if (
-        not _is_sdk_virtual_tool(data, tool.name)
+        not is_sdk_virtual_tool
         and data.options.enable_conversation_id
         and not schema_has_param(schema, "conversation_id")
     ):
