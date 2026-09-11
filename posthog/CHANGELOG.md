@@ -1,5 +1,11 @@
 # posthog
 
+## 7.52.1 — 2026-09-11
+
+### Patch changes
+
+- [9d965dd](https://github.com/posthog/posthog-python/commit/9d965ddf05de2127f0758542e2443afbadd240e2) Fix missing MCP analytics events with standalone FastMCP 4 while preserving tool arguments and compatibility with MCP SDK v1. — Thanks @lucasheriques!
+
 ## 7.52.0 — 2026-09-11
 
 ### Minor changes
