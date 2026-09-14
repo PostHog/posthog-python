@@ -146,6 +146,9 @@ class PostHogTraces:
         parent_context = self._resolve_parent(parent, tracestate)
 
         with self._lock:
+            if self._is_closed():
+                # close() may have run since the check above.
+                return inert_span(parent, tracestate, self._active_var)
             # Swept first, so a process that leaked its way to the bound
             # recovers once the leaks age out.
             aged = self._evict_aged_spans_locked()
@@ -167,6 +170,25 @@ class PostHogTraces:
             )
             return inert_span(parent, tracestate, self._active_var)
 
+        try:
+            return self._build_span(
+                span_id, name, kind, attributes, parent_context, start_time
+            )
+        except Exception:
+            # The reservation would otherwise hold its slot until age eviction.
+            with self._lock:
+                self._live_spans.pop(span_id, None)
+            raise
+
+    def _build_span(
+        self,
+        span_id: str,
+        name: str,
+        kind: Optional[str],
+        attributes: Optional[Mapping[str, Any]],
+        parent_context: Optional[ParentContext],
+        start_time: Any,
+    ) -> RecordingSpan:
         now_ns = time.time_ns()
         start_ns = resolve_start_ns(start_time, now_ns)
         auto_attributes = self._auto_context_attributes()
@@ -191,6 +213,10 @@ class PostHogTraces:
             if parent_context and to_epoch_ns(start_time) is None
             else None,
         )
+
+    def _is_closed(self) -> bool:
+        # A method, so the re-check under the lock is not narrowed away.
+        return self._closed
 
     def _resolve_parent(self, parent: Any, tracestate: Any) -> Optional[ParentContext]:
         """An explicit parent, else the active span, else a fresh root."""

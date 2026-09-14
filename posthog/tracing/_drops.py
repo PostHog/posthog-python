@@ -41,9 +41,14 @@ class DropLog:
             self._count = 0
             self._reasons.clear()
             self._last_warning_at = now
-        log.warning(message)
+        try:
+            log.warning(message)
+        except Exception:
+            # A raising logging handler must not surface through span creation.
+            pass
 
     def reinit_after_fork(self) -> None:
         self._lock = threading.Lock()
         self._count = 0
         self._reasons.clear()
+        self._last_warning_at = 0.0
