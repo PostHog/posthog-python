@@ -255,16 +255,22 @@ class SpanExporter:
                     and not self._retry_after.is_open()
                 )
 
-            spans = self._encode(batch)
-            if not spans:
+            spans, failed = self._encode(batch)
+            if failed:
+                # Out of the queue before the send is settled, so a failed
+                # send does not count them a second time.
                 with self._lock:
                     if self._is_closed():
                         return removed, True
-                    del self._queue[:size]
-                    self._reset_head_batch_budget_locked()
-                remaining -= size
-                removed += size
-                continue
+                    for index in reversed(failed):
+                        del self._queue[index]
+                    if not spans:
+                        self._reset_head_batch_budget_locked()
+                size -= len(failed)
+                remaining -= len(failed)
+                removed += len(failed)
+                if not spans:
+                    continue
 
             # The first request is exempt, so a flush called with no budget left
             # (a serverless handler, say) still ships a batch.
@@ -361,15 +367,18 @@ class SpanExporter:
         # A method, so the check after each send is not narrowed away.
         return self._closed
 
-    def _encode(self, batch: List[SpanRecord]) -> List[dict]:
+    def _encode(self, batch: List[SpanRecord]) -> Tuple[List[dict], List[int]]:
+        """The batch as OTLP spans, and the indexes of records that could not be encoded."""
         encoded: List[dict] = []
-        for record in batch:
+        failed: List[int] = []
+        for index, record in enumerate(batch):
             try:
                 encoded.append(build_otlp_span(record))
             except Exception:
                 log.debug("Failed to encode a span; dropping it", exc_info=True)
                 self._drops.record(1, "its attributes could not be encoded")
-        return encoded
+                failed.append(index)
+        return encoded, failed
 
     def _discard_if_disabled_locked(self) -> bool:
         if not getattr(self._client, "disabled", False):
@@ -431,16 +440,15 @@ class SpanExporter:
         self._arm_timer_locked(delay, replace=True)
 
     def _arm_timer_locked(self, delay: float, replace: bool = False) -> None:
-        if self._flush_timer is not None:
-            if not replace:
-                return
-            self._flush_timer.cancel()
-            self._flush_timer = None
+        if self._flush_timer is not None and not replace:
+            return
         timer = threading.Timer(delay, lambda: self._timer_flush(timer))
         timer.daemon = True
-        # Registered only once started, so a failed start leaves nothing
-        # behind and the next span end arms again.
+        # Started before the old timer is cancelled, so a failed start keeps
+        # whatever flush was already scheduled.
         timer.start()
+        if self._flush_timer is not None:
+            self._flush_timer.cancel()
         self._flush_timer = timer
         self._flush_timer_fires_at = time.monotonic() + delay
 
