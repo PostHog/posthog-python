@@ -1,4 +1,5 @@
 import gc
+import logging
 import threading
 import time
 import weakref
@@ -15,6 +16,7 @@ from posthog.test.tracing.helpers import (
     make,
     queued,
 )
+from posthog.tracing import _pipeline as pipeline_module
 from posthog.tracing import _span as span_module
 from posthog.tracing._drops import DropLog
 from posthog.tracing._span import NOOP_SPAN, PassThroughSpan, RecordingSpan
@@ -392,8 +394,30 @@ class TestGating:
         assert queued(pipeline) == []
         assert pipeline._live_spans == {}
 
+    def test_a_close_that_lands_mid_start_makes_the_span_inert(self):
+        pipeline, _, _ = make()
+        resolve = pipeline._resolve_parent
+
+        def close_then_resolve(parent, tracestate):
+            pipeline.close()
+            return resolve(parent, tracestate)
+
+        with mock.patch.object(pipeline, "_resolve_parent", close_then_resolve):
+            span = pipeline.start_span("late")
+        assert span is NOOP_SPAN
+        assert pipeline._live_spans == {}
+
 
 class TestLiveSpanBounds:
+    def test_returns_the_slot_when_building_the_span_fails(self):
+        pipeline, _, _ = make(max_live_spans=1)
+        with mock.patch.object(
+            pipeline_module, "copy_user_attributes", side_effect=RuntimeError("no")
+        ):
+            assert pipeline.start_span("a") is NOOP_SPAN
+        assert pipeline._live_spans == {}
+        assert isinstance(pipeline.start_span("b"), RecordingSpan)
+
     def test_returns_an_inert_handle_once_max_live_spans_are_live(self):
         pipeline, _, _ = make(max_live_spans=2)
         a, b = pipeline.start_span("a"), pipeline.start_span("b")
@@ -455,6 +479,32 @@ class TestDropLog:
         assert record.getMessage().endswith(
             "Dropping 4 span(s): the queue is full; before_span_send dropped it"
         )
+
+    def test_a_raising_log_handler_does_not_escape(self):
+        class Raising(logging.Handler):
+            def emit(self, record):
+                raise RuntimeError("handler broke")
+
+        handler = Raising()
+        logging.getLogger("posthog").addHandler(handler)
+        try:
+            drops = DropLog(5)
+            drops.record(1, "the queue is full")
+            drops.warn_if_due(force=True)
+        finally:
+            logging.getLogger("posthog").removeHandler(handler)
+
+    def test_a_forked_child_does_not_wait_out_the_parents_warning_interval(
+        self, caplog
+    ):
+        caplog.set_level("WARNING", logger="posthog")
+        drops = DropLog(5)
+        drops.record(1, "the queue is full")
+        drops.warn_if_due()
+        drops.reinit_after_fork()
+        drops.record(1, "the queue is full")
+        drops.warn_if_due()
+        assert len(caplog.records) == 2
 
 
 class TestCloseAndFork:
