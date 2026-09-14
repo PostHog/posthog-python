@@ -2276,9 +2276,11 @@ class Client(object):
         if self._metrics is not None:
             self._metrics._reinit_after_fork()
         self._traces_lock = threading.Lock()
+        # A fresh variable: an inherited handle resets the old one on exit,
+        # which would restore the parent process's outer span.
+        self._active_span_var = ContextVar("posthog_active_span", default=None)
         if self._traces is not None:
-            self._traces.reinit_after_fork()
-        self._active_span_var.set(None)
+            self._traces.reinit_after_fork(self._active_span_var)
 
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
@@ -2513,7 +2515,9 @@ class Client(object):
             return self._traces
         if self._traces is None:
             with self._traces_lock:
-                if self._traces is None:
+                # Re-checked under the lock, which shutdown takes before it
+                # reads the pipeline, so neither can miss the other.
+                if self._traces is None and not self._shutdown_requested:
                     try:
                         config = resolve_traces_config(
                             self._traces_config, host_resource_attributes()
@@ -2878,15 +2882,16 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
-        if self._traces is not None:
+        with self._traces_lock:
             traces = self._traces
+        if traces is not None:
             self._run_lifecycle_cleanup(
                 "Failed to flush spans on shutdown",
                 lambda: traces.flush(_TRACES_SHUTDOWN_FLUSH_SECONDS),
                 errors,
             )
             self._run_lifecycle_cleanup(
-                "Failed to close traces on shutdown", self._traces.close, errors
+                "Failed to close traces on shutdown", traces.close, errors
             )
         self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(

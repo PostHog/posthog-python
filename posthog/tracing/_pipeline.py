@@ -114,10 +114,12 @@ class PostHogTraces:
         self._exporter.warn_if_queued()
         self._drops.warn_if_due(force=True)
 
-    def reinit_after_fork(self) -> None:
+    def reinit_after_fork(self, active_var: Optional[ContextVar] = None) -> None:
         # Runs in the forked child before user code; the parent's spans stay
         # with the parent.
         self._lock = threading.Lock()
+        if active_var is not None:
+            self._active_var = active_var
         self._live_spans.clear()
         self._drops.reinit_after_fork()
         self._exporter.reinit_after_fork()
