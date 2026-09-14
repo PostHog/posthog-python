@@ -50,6 +50,7 @@ class TestToEpochNs:
             "1700000000",
             float("nan"),
             float("inf"),
+            1e308,
             -1,
             MAX_TIMESTAMP_NS // 10**9 + 1,
             datetime(1960, 1, 1, tzinfo=timezone.utc),
