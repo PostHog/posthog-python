@@ -460,6 +460,24 @@ class TestLifecycle:
         assert client.start_span("late") is NOOP_SPAN
         assert client._traces._exporter._flush_timer is None
 
+    def test_shutdown_closes_a_pipeline_still_initializing(self, no_timers):
+        client = make_client(traces={})
+        shutdown = threading.Thread(target=client.shutdown)
+        resolve = posthog.client.resolve_traces_config
+
+        def resolve_while_shutting_down(*args):
+            shutdown.start()
+            time.sleep(0.05)
+            return resolve(*args)
+
+        with mock.patch(
+            "posthog.client.resolve_traces_config", resolve_while_shutting_down
+        ):
+            client.start_span("racing").end()
+        shutdown.join()
+        assert client._traces._closed
+        assert client._traces._exporter._flush_timer is None
+
     def test_tracing_never_starts_after_shutdown(self, no_timers):
         client = make_client(traces={})
         client.shutdown()
@@ -647,6 +665,22 @@ class TestLifecycle:
         with client.start_span("parent-span"):
             client._reinit_after_fork()
             assert client.get_active_span() is None
+        client.shutdown()
+
+    def test_an_inherited_span_exiting_in_the_child_does_not_restore_its_parent(
+        self,
+    ):
+        client = make_client(traces={})
+        with client.start_span("outer") as outer:
+            with client.start_span("inner"):
+                client._reinit_after_fork()
+            assert client.get_active_span() is None
+            child = client.start_span("child")
+            child.end()
+        (record,) = client._traces._exporter._queue
+        assert record.name == "child"
+        assert record.parent_span_id is None
+        assert record.trace_id != outer.traceparent().split("-")[1]
         client.shutdown()
 
 
