@@ -180,10 +180,12 @@ class TestExport:
             pipeline, sender, _ = make_traces(max_export_batch_size=3)
             for _ in range(3):
                 pipeline.start_span("a").end()
-            assert pipeline._exporter._flush_timer is None
+            interval_timer = pipeline._exporter._flush_timer
+            assert interval_timer.delay == 5 and not interval_timer.cancelled
             pipeline.start_span("b").end()
             timer = pipeline._exporter._flush_timer
-            assert timer is not None and timer.started and timer.delay == 0
+            assert timer is not interval_timer and timer.started and timer.delay == 0
+            assert interval_timer.cancelled
             timer.fire()
         assert queued(pipeline) == []
         assert [len(b) for b in sender.batches()] == [3, 1]
@@ -357,6 +359,26 @@ class TestExportFailures:
             pipeline.flush()
         assert sender.payloads == []
         assert queued(pipeline) == []
+
+    def test_counts_a_span_it_failed_to_encode_once(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+        sender = FakeSender(SendOutcome("fatal"))
+        pipeline, _, _ = make_traces(sender=sender, max_export_batch_size=2)
+        pipeline.start_span("bad").end()
+        pipeline.start_span("fine").end()
+        encode = export_module.build_otlp_span
+
+        def encode_unless_bad(record):
+            if record.name == "bad":
+                raise RuntimeError("bad")
+            return encode(record)
+
+        with mock.patch.object(export_module, "build_otlp_span", encode_unless_bad):
+            pipeline.flush()
+        assert [[s["name"] for s in b] for b in sender.batches()] == [["fine"]]
+        assert queued(pipeline) == []
+        (record,) = [r for r in caplog.records if "Dropping" in r.getMessage()]
+        assert "Dropping 2 span(s)" in record.getMessage()
 
 
 class TestDroppedBatchesEndTheFailureSequence:
