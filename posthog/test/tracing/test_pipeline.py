@@ -924,6 +924,15 @@ class TestBeforeSpanSendBounds:
         pipeline.start_span("a").end()
         assert queued(pipeline)[0].status.message == "mmmmm"
 
+    def test_keeps_a_falsy_status_message_the_hook_sets(self):
+        def zero_message(span):
+            span["status"] = {"code": "error", "message": 0}
+            return span
+
+        pipeline, _, _ = make(before_span_send=zero_message)
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].status.message == "0"
+
     def test_a_status_message_whose_str_raises_keeps_the_span(self):
         class Hostile:
             def __str__(self):
