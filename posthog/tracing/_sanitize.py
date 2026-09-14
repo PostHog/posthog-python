@@ -76,9 +76,10 @@ def to_epoch_ns(value: Any) -> Optional[int]:
     elif isinstance(value, int):
         ns = value * 10**9
     elif isinstance(value, float):
-        if not math.isfinite(value):
+        scaled = value * 1e9
+        if not math.isfinite(scaled):
             return None
-        ns = int(round(value * 1e9))
+        ns = int(round(scaled))
     else:
         return None
     if ns < MIN_TIMESTAMP_NS or ns > MAX_TIMESTAMP_NS:
