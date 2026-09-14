@@ -21,7 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.tools import BaseTool, tool
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 
 import posthog.ai.langchain.middleware as middleware_module
 from posthog.ai.langchain import CallbackHandler
@@ -103,6 +103,13 @@ class CustomAgentState(AgentState):
 def weather(city: str) -> str:
     """Get the weather for a city."""
     return f"Sunny in {city}"
+
+
+@tool
+def request_approval() -> str:
+    """Request approval before continuing."""
+    approved = interrupt("Approve?")
+    return "approved" if approved else "rejected"
 
 
 def _client() -> MagicMock:
@@ -237,6 +244,66 @@ def test_instruments_sync_agent_model_and_tool_loop() -> None:
     assert generations[-1]["properties"]["$ai_input_tokens"] == 10
     assert generations[-1]["properties"]["$ai_output_tokens"] == 4
     assert generations[-1]["properties"]["$ai_stop_reason"] == "stop"
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.asyncio
+async def test_interrupt_resume_does_not_capture_tool_error(
+    asynchronous: bool,
+) -> None:
+    client = _client()
+    client.enable_exception_autocapture = True
+    middleware = PostHogMiddleware(client)
+    agent = create_agent(
+        model=StubAgentModel(
+            responses=[
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {
+                            "id": "approval-call",
+                            "name": "request_approval",
+                            "args": {},
+                        }
+                    ],
+                ),
+                AIMessage(content="Done"),
+            ]
+        ),
+        tools=[request_approval],
+        middleware=[middleware],
+        checkpointer=InMemorySaver(),
+    )
+    config = {"configurable": {"thread_id": f"interrupt-{asynchronous}"}}
+    agent_input = {"messages": [HumanMessage(content="Continue the task")]}
+
+    if asynchronous:
+        paused = await agent.ainvoke(agent_input, config=config)
+    else:
+        paused = agent.invoke(agent_input, config=config)
+
+    assert paused["__interrupt__"][0].value == "Approve?"
+    assert [event["event"] for event in _events(client)] == ["$ai_generation"]
+    client.capture_exception.assert_not_called()
+    assert middleware._callback._runs == {}
+
+    if asynchronous:
+        completed = await agent.ainvoke(Command(resume=True), config=config)
+    else:
+        completed = agent.invoke(Command(resume=True), config=config)
+
+    assert completed["messages"][-1].content == "Done"
+    events = _events(client)
+    assert [event["event"] for event in events] == [
+        "$ai_generation",
+        "$ai_span",
+        "$ai_generation",
+        "$ai_trace",
+    ]
+    assert all("$ai_is_error" not in event["properties"] for event in events)
+    assert all("$ai_error" not in event["properties"] for event in events)
+    client.capture_exception.assert_not_called()
+    assert middleware._callback._runs == {}
 
 
 @pytest.mark.asyncio

@@ -18,6 +18,7 @@ from langchain.agents.middleware.types import (
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, LLMResult
 from langchain_core.utils.function_calling import convert_to_openai_tool
+from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 from ...client import Client
 from .callbacks import (
@@ -129,6 +130,10 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         run_id = self._start_tool(request)
         try:
             response = handler(request)
+        except GraphBubbleUp:
+            if run_id is not None:
+                self._callback._runs.pop(run_id, None)
+            raise
         except BaseException as error:
             self._safely_call(self._finish_tool, request.state, run_id, error, False)
             raise
@@ -146,6 +151,10 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         run_id = self._start_tool(request)
         try:
             response = await handler(request)
+        except GraphBubbleUp:
+            if run_id is not None:
+                self._callback._runs.pop(run_id, None)
+            raise
         except BaseException as error:
             await self._asafely_call(
                 self._finish_tool, request.state, run_id, error, False
