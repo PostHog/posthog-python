@@ -14,7 +14,7 @@ def data():
 
 
 @pytest.mark.parametrize("owned", [True, False])
-async def test_paginated_catalog_preserves_application_model(owned):
+async def test_paginated_catalog_caches_confirmed_model_ownership(owned):
     schema = {
         "type": "object",
         "properties": {"llm_model": {"type": "string"}} if owned else {},
@@ -26,8 +26,22 @@ async def test_paginated_catalog_preserves_application_model(owned):
             SimpleNamespace(tools=[tool]),
         ]
     )
-    assert await resolve_model_ownership(data(), "echo", listing) is not owned
+    state = data()
+    for _ in range(2):
+        assert await resolve_model_ownership(state, "echo", listing) is not owned
     assert [call.args for call in listing.call_args_list] == [(None,), ("next",)]
+
+
+async def test_missing_tool_is_retried_when_it_appears():
+    tool = SimpleNamespace(name="echo", input_schema={"type": "object"})
+    listing = AsyncMock(
+        side_effect=[SimpleNamespace(tools=[]), SimpleNamespace(tools=[tool])]
+    )
+    state = data()
+    assert await resolve_model_ownership(state, "echo", listing) is False
+    assert "echo" not in state.tool_model_parameter_injected
+    assert await resolve_model_ownership(state, "echo", listing) is True
+    assert listing.call_count == 2
 
 
 @pytest.mark.parametrize(
@@ -47,7 +61,9 @@ async def test_bounded_catalog_failures(mode, expected_calls):
             tools=[], next_cursor="same" if mode == "cycle" else str(len(calls))
         )
 
-    assert await resolve_model_ownership(data(), "echo", listing) is False
+    state = data()
+    assert await resolve_model_ownership(state, "echo", listing) is False
+    assert "echo" not in state.tool_model_parameter_injected
     assert len(calls) == expected_calls
 
 
@@ -60,7 +76,9 @@ async def test_slow_listing_does_not_block_dispatch():
         finally:
             cancelled.set()
 
-    assert await resolve_model_ownership(data(), "echo", listing) is False
+    state = data()
+    assert await resolve_model_ownership(state, "echo", listing) is False
+    assert "echo" not in state.tool_model_parameter_injected
     assert cancelled.is_set()
 
 

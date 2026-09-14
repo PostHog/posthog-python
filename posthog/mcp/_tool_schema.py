@@ -20,9 +20,12 @@ async def resolve_model_ownership(
     if name in data.tool_model_parameter_injected:
         return data.tool_model_parameter_injected[name]
     try:
-        return await asyncio.wait_for(
+        ownership = await asyncio.wait_for(
             _find_model_ownership(name, list_page), timeout=0.25
         )
+        if ownership is not None:
+            data.tool_model_parameter_injected[name] = ownership
+        return ownership if ownership is not None else False
     except Exception:  # noqa: BLE001 - discovery must not prevent tool dispatch
         log(
             "Warning: Could not resolve model argument ownership; leaving tool arguments unchanged."
@@ -32,7 +35,7 @@ async def resolve_model_ownership(
 
 async def _find_model_ownership(
     name: str, list_page: Callable[[Optional[str]], Awaitable[Any]]
-) -> bool:
+) -> Optional[bool]:
     cursor = None
     seen = set()
     for _ in range(16):
@@ -43,9 +46,9 @@ async def _find_model_ownership(
             return ownership
         cursor = _next_cursor(result)
         if cursor is None or cursor in seen:
-            return False
+            return None
         seen.add(cursor)
-    return False
+    return None
 
 
 def _model_ownership(result: Any, name: str) -> Optional[bool]:
