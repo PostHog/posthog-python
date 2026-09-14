@@ -1,6 +1,5 @@
 import atexit
 import inspect
-import json
 import logging
 import os
 import sys
@@ -93,7 +92,8 @@ from posthog.request import (
     remote_config,
     reset_sessions,
 )
-from posthog.types import (
+from .types import (
+    _parse_flag_payload,
     FeatureFlag,
     FeatureFlagError,
     FeatureFlagResult,
@@ -324,20 +324,6 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
 def _parse_has_experiment(value: Any) -> Optional[bool]:
     """Server-reported experiment linkage; anything but an explicit bool means unknown."""
     return value if isinstance(value, bool) else None
-
-
-def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
-    """Flag payloads are stored as JSON strings, both in the ``/flags`` response
-    metadata and in the local-evaluation flag definitions, so decode them before
-    handing them to callers. A string that isn't valid JSON is passed through as-is."""
-    if isinstance(raw_payload, str):
-        if not raw_payload:
-            return None
-        try:
-            return json.loads(raw_payload)
-        except (json.JSONDecodeError, TypeError):
-            return raw_payload
-    return raw_payload
 
 
 def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
