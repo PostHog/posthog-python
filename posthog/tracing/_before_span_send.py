@@ -190,7 +190,8 @@ def _hook_status(value: Any, original: Optional[SpanStatus]) -> Optional[SpanSta
         return None
     if isinstance(value, Mapping) and value.get("code") in ("ok", "error"):
         message = value.get("message")
-        return SpanStatus(value["code"], safe_str(message) if message else None)
+        text = None if message is None else safe_str(message)
+        return SpanStatus(value["code"], text or None)
     # An unknown code would lose an error the span really had.
     log.debug("before_span_send set an unknown span status; keeping the original")
     return original
