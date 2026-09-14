@@ -404,10 +404,10 @@ class TestEvaluateFlagsLocalPayloads(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
-    def test_non_json_local_payload_is_passed_through(self, patch_flags):
+    def test_non_json_local_payload_returns_none(self, patch_flags):
         flags = self.client.evaluate_flags("user-1")
 
-        self.assertEqual(flags.get_flag_payload("plain-payload"), "not json")
+        self.assertIsNone(flags.get_flag_payload("plain-payload"))
         self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
