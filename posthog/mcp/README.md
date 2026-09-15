@@ -88,7 +88,8 @@ served one has no answer, so it records `llm_model` as the self-reported model a
 nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that declares its own
 `llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
 otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
-standalone `fastmcp.FastMCP` read ownership from their live registry, so they are unaffected.
+standalone `fastmcp.FastMCP` read ownership from the registered tool schema, so they are
+unaffected and need no prior listing.
 
 For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
 metadata through explicitly:
