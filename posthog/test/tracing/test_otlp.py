@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -27,6 +28,7 @@ from posthog.version import VERSION
 TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
 SPAN_ID = "00f067aa0ba902b7"
 START_NS = 1_700_000_000_000_000_000
+SNAPSHOT_DIRECTORY = Path(__file__).parents[1] / "snapshots"
 END_NS = START_NS + 80_000_000
 
 
@@ -455,79 +457,10 @@ class TestBuildTracesPayload:
             {"service.name": "checkout-api", "telemetry.sdk.name": "posthog-python"},
         )
 
-        assert payload == {
-            "resourceSpans": [
-                {
-                    "resource": {
-                        "attributes": [
-                            {
-                                "key": "service.name",
-                                "value": {"stringValue": "checkout-api"},
-                            },
-                            {
-                                "key": "telemetry.sdk.name",
-                                "value": {"stringValue": "posthog-python"},
-                            },
-                        ]
-                    },
-                    "scopeSpans": [
-                        {
-                            "scope": {"name": "posthog-python", "version": VERSION},
-                            "spans": [
-                                {
-                                    "traceId": TRACE_ID,
-                                    "spanId": SPAN_ID,
-                                    "parentSpanId": "b7ad6b7169203331",
-                                    "name": "GET /users/:id",
-                                    "kind": 2,
-                                    "startTimeUnixNano": "1700000000000000000",
-                                    "endTimeUnixNano": "1700000000080000000",
-                                    "flags": 0x101,
-                                    "attributes": [
-                                        {
-                                            "key": "posthogDistinctId",
-                                            "value": {"stringValue": "user-123"},
-                                        },
-                                        {
-                                            "key": "sessionId",
-                                            "value": {"stringValue": "session-123"},
-                                        },
-                                        {
-                                            "key": "http.status_code",
-                                            "value": {"intValue": "500"},
-                                        },
-                                        {
-                                            "key": "http.duration_ratio",
-                                            "value": {"doubleValue": 0.25},
-                                        },
-                                        {
-                                            "key": "cached",
-                                            "value": {"boolValue": False},
-                                        },
-                                    ],
-                                    "events": [
-                                        {
-                                            "name": "exception",
-                                            "timeUnixNano": "1700000000040000000",
-                                            "attributes": [
-                                                {
-                                                    "key": "exception.type",
-                                                    "value": {
-                                                        "stringValue": "TypeError"
-                                                    },
-                                                },
-                                                {
-                                                    "key": "exception.message",
-                                                    "value": {"stringValue": "boom"},
-                                                },
-                                            ],
-                                        }
-                                    ],
-                                    "status": {"code": 2, "message": "boom"},
-                                }
-                            ],
-                        }
-                    ],
-                }
-            ]
-        }
+        scope = payload["resourceSpans"][0]["scopeSpans"][0]["scope"]
+        assert scope["version"] == VERSION
+        scope["version"] = "<SDK_VERSION>"
+        actual = (
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        )
+        assert actual == (SNAPSHOT_DIRECTORY / "otlp_traces_payload.json").read_text()
