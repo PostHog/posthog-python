@@ -108,11 +108,21 @@ def send_traces_batch(client: Any, payload: dict) -> SendOutcome:
                 "User-Agent": USER_AGENT,
             },
             timeout=timeout,
+            stream=True,
         )
     except requests.exceptions.RequestException as e:
         log.debug("Span batch request failed: %s", e)
         return SendOutcome("retry-later")
+    # Status and headers alone classify the response, so the body is never
+    # read: the timeout bounds read inactivity, and a body that keeps dripping
+    # would otherwise hold the exporter's single flight open indefinitely.
+    try:
+        return _classify(response)
+    finally:
+        response.close()
 
+
+def _classify(response: requests.Response) -> SendOutcome:
     status = response.status_code
     if status < 300:
         return OK
