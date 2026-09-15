@@ -14,13 +14,14 @@ server's ``request_context`` contextvar (the handler receives only the request).
 
 from __future__ import annotations
 
+import functools
 import inspect
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import schema_has_param
+from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
@@ -42,6 +43,7 @@ from ._instrumentation import (
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
+from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
@@ -182,6 +184,11 @@ def _wrap_call_tool(
     async def handler(req: Any) -> Any:
         name = req.params.name
         arguments = dict(req.params.arguments or {})
+        strip, model_ours = (
+            await _standalone_ownership(data, high_level, name, req.params.meta)
+            if strip_injected
+            else (set(), data.tool_model_parameter_injected.get(name))
+        )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
@@ -195,9 +202,8 @@ def _wrap_call_tool(
             name=name,
             arguments=arguments,
             request_meta=request_meta_from_context(_request_context(server)),
-            allow_self_reported_model=data.tool_model_parameter_injected.get(
-                name, False
-            ),
+            # Reads fail open on unknown ownership (posthog-js ADR-0011).
+            allow_self_reported_model=model_ours is not False,
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -237,14 +243,9 @@ def _wrap_call_tool(
         # but NOT a key the tool declares itself (that's a real argument). Ownership
         # is read from the tool's own signature, so it holds with or without a prior
         # tools/list and across stateless per-request server instances.
-        if strip_injected and req.params.arguments:
-            owned = await _tool_owned_injected_keys(high_level, name)
-            injected_keys = ["context", "conversation_id"]
-            if data.tool_model_parameter_injected.get(name, False):
-                injected_keys.append("llm_model")
-            for key in injected_keys:
-                if key not in owned:
-                    req.params.arguments.pop(key, None)
+        if strip and req.params.arguments:
+            for key in strip:
+                req.params.arguments.pop(key, None)
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
@@ -325,6 +326,7 @@ def _inject_tool_schemas(
     population pass, so the schema the SDK validates against always matches the
     one we advertised — see the note in ``handler``.
     """
+    verdicts: Dict[str, bool] = {}
     for tool in tools:
         schema = getattr(tool, "inputSchema", None)
         mutate_tool_schema(
@@ -334,6 +336,14 @@ def _inject_tool_schemas(
             owns_context=schema_has_param(schema, "context"),
             context_required=context_required,
         )
+        verdict = data.tool_model_parameter_injected.get(tool.name)
+        if verdict is None:
+            continue
+        if verdicts.setdefault(tool.name, verdict) != verdict:
+            # Two advertised tools share this name and disagree (FastMCP 2.x
+            # lists a middleware tool beside the registered one it shadows).
+            # Which one dispatches is unknown, so the strip fails closed.
+            data.tool_model_parameter_injected[tool.name] = False
 
 
 def _wrap_list_tools(
@@ -441,20 +451,198 @@ async def _feedback_name_owned_by_real_tool(high_level: Any, name: str) -> bool:
         return False
 
 
-async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:
-    """Which of (``context``, ``conversation_id``) the jlowin FastMCP tool declares
-    itself, read from its function signature. These are real tool arguments we must
-    not strip. On any lookup failure, return empty (strip both) — same as the prior
-    unconditional behaviour, so a flaky introspection never leaks an injected key."""
-    if high_level is None:
-        return set()
+_INJECTED_KEYS = ("context", "conversation_id", "llm_model")
+
+
+async def _standalone_ownership(
+    data: MCPAnalyticsData, high_level: Any, name: str, meta: Any
+) -> Tuple[set, Optional[bool]]:
+    """Ownership of the injected arguments on jlowin's standalone FastMCP: the
+    keys to strip before it validates the call, and whether ``llm_model`` is
+    ours (``None`` when nothing can say).
+
+    Only keys injected under the current options are candidates. ``context``
+    and ``conversation_id`` are stripped unless the registered schema (or,
+    without one, the function signature) declares them; a failed lookup strips
+    both — the prior behaviour, so a flaky introspection never leaks an injected
+    key into validation. ``llm_model`` is judged by the effective listing first,
+    because middleware can provide or shadow the tool the registry knows, then
+    by the registry; with neither witness it stays and is still read — strips
+    fail closed, reads fail open (posthog-js ADR-0011).
+    """
     try:
-        tool = await high_level.get_tool(name)
-        fn = getattr(tool, "fn", None)
-        params = set(inspect.signature(fn).parameters) if fn is not None else set()
-        return {k for k in ("context", "conversation_id") if k in params}
+        declared, model_injectable = await _registry_view(high_level, name, meta)
+        registry_trusted = model_injectable is not None and not _dispatch_can_differ(
+            high_level
+        )
+    except Exception:  # noqa: BLE001 - ownership inference must never prevent dispatch
+        declared, model_injectable, registry_trusted = None, None, False
+    listed = data.tool_model_parameter_injected.get(name)
+    if listed is not None:
+        model_ours: Optional[bool] = listed
+    elif registry_trusted:
+        model_ours = model_injectable
+    else:
+        model_ours = None
+    candidates = _injected_keys(data)
+    strip = {k for k in candidates - {"llm_model"} if k not in (declared or set())}
+    if "llm_model" in candidates and model_ours:
+        strip.add("llm_model")
+    return strip, model_ours
+
+
+def _injected_keys(data: MCPAnalyticsData) -> set:
+    """The analytics arguments the SDK injects under the current options — the
+    only ones it may strip. A disabled feature injects nothing, so its key is
+    the application's even when the schema does not declare it."""
+    keys = set()
+    if is_context_enabled(data.options.context):
+        keys.add("context")
+    if data.options.enable_conversation_id:
+        keys.add("conversation_id")
+    if is_capture_model_enabled(data.options.capture_model):
+        keys.add("llm_model")
+    return keys
+
+
+async def _registry_view(
+    high_level: Any, name: str, meta: Any
+) -> Tuple[Optional[set], Optional[bool]]:
+    """What the registered tool says about the injected keys: which of
+    ``_INJECTED_KEYS`` it declares itself, and whether a listing would have
+    injected ``llm_model`` into its schema (the same test the listing applies,
+    on the schema as the client would see it). Read from the schema (a ``Tool``
+    subclass may have no function) else the signature. The registry is read
+    directly, never through middleware, so a cold instance answers without a
+    listing and rate limiters are not charged. ``(None, None)`` when the
+    registry has no such tool or cannot be read."""
+    try:
+        tool = await _registered_tool(high_level, name, meta)
     except Exception:  # noqa: BLE001 - introspection is best-effort
-        return set()
+        return None, None
+    if tool is None:
+        return None, None
+    schema = getattr(tool, "parameters", None)
+    if isinstance(schema, dict):
+        return _schema_view(schema, dereferenced=_server_dereferences(high_level))
+    fn = getattr(tool, "fn", None)
+    if fn is None:
+        return set(), True
+    try:
+        declared = {k for k in _INJECTED_KEYS if k in inspect.signature(fn).parameters}
+    except Exception:  # noqa: BLE001 - introspection is best-effort
+        return set(), True
+    return declared, "llm_model" not in declared
+
+
+async def _registered_tool(high_level: Any, name: str, meta: Any) -> Any:
+    """The tool version the request pinned in ``_meta.fastmcp.version``, else
+    the highest one — the same choice FastMCP makes when dispatching."""
+    version = _requested_tool_version(meta)
+    if version is None:
+        return await high_level.get_tool(name)
+    from fastmcp.utilities.versions import VersionSpec
+
+    return await high_level.get_tool(name, version=VersionSpec(eq=version))
+
+
+def _requested_tool_version(meta: Any) -> Optional[str]:
+    """Ownership must follow dispatch. Only a FastMCP that exposes the
+    ``_meta`` version extractor its own dispatch uses honours a pinned
+    version; every earlier release calls the highest version regardless."""
+    try:
+        from fastmcp.server.dependencies import extract_version_spec
+    except ImportError:
+        return None
+    dump = getattr(meta, "model_dump", None)
+    if callable(dump):
+        meta = dump(by_alias=True)
+    return extract_version_spec(meta) if isinstance(meta, dict) else None
+
+
+def _schema_view(schema: Dict[str, Any], *, dereferenced: bool) -> Tuple[set, bool]:
+    """The injected keys a schema declares as its own, and whether a listing
+    would inject ``llm_model`` into it. With dereferencing on, every node along
+    a root ``$ref`` chain counts, as the client sees the merged schema; with it
+    off the client sees the reference itself, which the listing never injects
+    into. Nothing is injected into a composed or unresolvable schema either, so
+    all keys count as declared there and nothing is stripped."""
+    nodes = _reference_chain(schema) if dereferenced else [schema]
+    if nodes is None or any(
+        node.get(key) for node in nodes for key in ("oneOf", "allOf", "anyOf")
+    ):
+        return set(_INJECTED_KEYS), False
+    declared = {
+        key
+        for node in nodes
+        if isinstance(node.get("properties"), dict)
+        for key in node["properties"]
+        if key in _INJECTED_KEYS
+    }
+    injectable = can_inject_model_parameter(nodes[-1]) and "llm_model" not in declared
+    return declared, injectable
+
+
+def _server_dereferences(server: Any) -> bool:
+    """Whether this FastMCP dereferences schemas before advertising them (its
+    built-in middleware, on by default from 3.x; absent on 2.x)."""
+    return any(
+        type(middleware).__module__.endswith(".dereference")
+        for middleware in getattr(server, "middleware", ())
+    )
+
+
+_DISPATCH_HOOKS = ("on_message", "on_request", "on_list_tools", "on_call_tool")
+
+
+def _dispatch_can_differ(server: Any) -> bool:
+    """Whether application middleware can provide, shadow, or reroute a tool,
+    making the registry an unreliable witness for what actually runs. Any
+    override of a listing or dispatch hook can; FastMCP's own built-ins are
+    excluded. Without a trustworthy registry a cold instance keeps ``llm_model``
+    (strips fail closed), which is exactly what it did before this path."""
+    try:
+        from fastmcp.server.middleware import Middleware
+    except ImportError:  # FastMCP before middleware existed: nothing can differ
+        return False
+
+    return any(
+        type(middleware) not in _builtin_middleware_types()  # subclasses are the app's
+        and any(
+            getattr(type(middleware), hook) is not getattr(Middleware, hook)
+            for hook in _DISPATCH_HOOKS
+        )
+        for middleware in getattr(server, "middleware", ())
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _builtin_middleware_types() -> tuple:
+    """The middleware a bare ``FastMCP()`` installs on its own, probed rather
+    than named so a new built-in in a later release is still recognised."""
+    from fastmcp import FastMCP
+
+    return tuple(type(middleware) for middleware in FastMCP("posthog-probe").middleware)
+
+
+def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    """The schema and each local root ``$ref`` target in turn; ``None`` for a
+    reference that is external, dangling, or cyclic."""
+    nodes = [schema]
+    while len(nodes) <= 8:
+        ref = nodes[-1].get("$ref")
+        if ref is None:
+            return nodes
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            return None
+        target: Any = schema
+        for part in ref[2:].split("/"):
+            key = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escapes
+            target = target.get(key) if isinstance(target, dict) else None
+        if not isinstance(target, dict) or any(target is node for node in nodes):
+            return None
+        nodes.append(target)
+    return None
 
 
 def _request_context(server: Any) -> Any:

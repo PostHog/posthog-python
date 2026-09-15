@@ -377,7 +377,7 @@ async def test_tool_call_error_captured_from_is_error_result():
 async def test_initialize_emitted_once():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
     handler = server.request_handlers[mcp_types.CallToolRequest]
     await handler(_call_request("echo", {"msg": "a", "context": "first call"}))

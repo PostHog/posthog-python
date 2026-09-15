@@ -183,7 +183,7 @@ class MCPAnalyticsOptions:
     logger: Optional[LoggerFn] = None
     report_missing: bool = False
     missing_capability_tool_name: Optional[str] = None
-    enable_conversation_id: bool = False
+    enable_conversation_id: bool = True
     enable_exception_autocapture: bool = True
     # Inject a required `context` parameter on every tool to capture user intent.
     context: Union[bool, MCPAnalyticsContextOptions] = True
@@ -197,8 +197,8 @@ class MCPAnalyticsOptions:
     # Extra properties merged onto every auto-captured event.
     event_properties: Optional[EventPropertiesFn] = None
     # Capture the model from recognized client metadata, falling back to an
-    # SDK-injected llm_model argument. Off by default.
-    capture_model: Union[bool, MCPAnalyticsModelOptions] = False
+    # SDK-injected llm_model argument. On by default; False disables capture.
+    capture_model: Union[bool, MCPAnalyticsModelOptions] = True
     # Inject the `send_feedback` virtual tool so agents can send feedback about
     # this server to its developers — a missing capability (the priority
     # category), a tool that failed or confused them, or praise. Calls to it emit

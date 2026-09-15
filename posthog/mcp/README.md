@@ -36,21 +36,29 @@ Request headers use the same identity and package version, so SDK Health can com
 Because `$lib` is a client-level identity, `instrument()` relabels every event sent by the client passed to it.
 Use a client dedicated to MCP analytics if the application also captures unrelated events.
 
-## Capture the calling model
+## Defaults and opt-outs
 
-Model capture is off by default. Enable it for an instrumented MCP Python SDK 1.x or
-2.x server:
+Intent, model capture, conversation correlation, and MCP exception capture are on by default.
+Missing-capability reporting and feedback collection remain off.
 
 ```python
 from posthog.mcp import MCPAnalyticsOptions, instrument
 
-analytics = instrument(
-    server,
-    posthog,
-    MCPAnalyticsOptions(capture_model=True),
-)
+instrument(server, posthog, MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False))
 ```
 
+Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
+high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
+strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.
+Conversation correlation adds an optional `conversation_id` argument and returns a handle in
+eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
+Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
+response content. Custom `PostHogMCP` dispatchers enable model capture by default but still
+supply their own session IDs. The reasoning is recorded in posthog-js `docs/adr/0013`.
+
+## Capture the calling model
+
+Model capture is on by default for instrumented MCP Python SDK 1.x and 2.x servers.
 The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
@@ -75,13 +83,21 @@ If a tool already declares `llm_model`, or uses a root `$ref`, `oneOf`, `allOf`,
 `anyOf` schema, PostHog leaves the schema and argument untouched. Client metadata
 can still be captured in those cases.
 
-For a custom dispatcher, use the same option on `PostHogMCP` and pass request
+A raw low-level server learns ownership while serving `tools/list`. A fresh instance that never
+served one has no answer, so it records `llm_model` as the self-reported model and strips
+nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that declares its own
+`llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
+otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
+standalone `fastmcp.FastMCP` read ownership from the registered tool schema, so they are
+unaffected and need no prior listing.
+
+For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
 metadata through explicitly:
 
 ```python
 from posthog.mcp import PostHogMCP
 
-posthog = PostHogMCP("phc_...", capture_model=True)
+posthog = PostHogMCP("phc_...")
 tools = posthog.prepare_tool_list(server_tools)
 original_tool = next(tool for tool in server_tools if tool["name"] == tool_name)
 call = posthog.prepare_tool_call(
@@ -229,7 +245,7 @@ sess = get_mcp_session(request)   # sess.session_id, sess.client_name, ...
 
 ### Or skip the middleware entirely: conversation ids
 
-`MCPAnalyticsOptions(enable_conversation_id=True)` derives `$session_id` from the
+`enable_conversation_id` is on by default and derives `$session_id` from the
 agent's conversation handle, deterministically and identically on every pod. That
 needs no middleware and no ordering discipline, and it is the only thing that
 correlates a session under the 2026-07-28 revision's per-request server instances.

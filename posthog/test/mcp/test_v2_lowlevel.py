@@ -453,7 +453,7 @@ async def test_late_registration_is_wrapped():
 async def test_initialize_and_session_reuse_across_calls():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
     await _call_tool(server, "add", {"a": 1, "b": 1, "context": "first"})
     await _call_tool(server, "add", {"a": 2, "b": 2, "context": "second"})
