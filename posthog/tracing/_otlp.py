@@ -9,7 +9,7 @@ import math
 import platform
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional
 
 from ..version import VERSION
 from ._sanitize import FUNCTION_VALUE, UNSERIALIZABLE_VALUE, attribute_key, safe_str
@@ -78,6 +78,9 @@ class SpanRecord:
     # User attributes and events the per-span caps refused.
     dropped_attributes_count: int = 0
     dropped_events_count: int = 0
+    # Keys the SDK attached itself, exempt from the attribute cap when it is
+    # re-applied after before_span_send.
+    auto_attribute_keys: FrozenSet[str] = frozenset()
 
 
 MAX_UINT32 = 0xFFFFFFFF

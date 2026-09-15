@@ -7,7 +7,7 @@ keys) so it bounds exactly what the encoder will emit.
 """
 
 from datetime import date
-from typing import Any, Dict, Mapping, Tuple
+from typing import AbstractSet, Any, Dict, List, Mapping, Sequence, Tuple
 
 from ._otlp import (
     CIRCULAR_VALUE,
@@ -15,6 +15,9 @@ from ._otlp import (
     MAX_VALUE_ITEMS,
     MAX_VALUE_NODES,
     TRUNCATED_VALUE,
+    SpanRecord,
+    SpanStatus,
+    non_negative_count,
 )
 from ._sanitize import UNSERIALIZABLE_VALUE, attribute_key
 
@@ -148,3 +151,69 @@ def truncate_attributes(attributes: Mapping, max_length: int) -> Dict[str, Any]:
         key: truncate_attribute_value(value, max_length)
         for key, value in attributes.items()
     }
+
+
+def _ordered_keys(attributes: Mapping, keys_before_hook: Sequence[str]) -> List[Any]:
+    """The keys the span set first, in its order, so the earliest-set entries win."""
+    keys = list(attributes.keys())
+    present = set(keys)
+    before = [key for key in keys_before_hook if key in present]
+    seen = set(before)
+    return before + [key for key in keys if key not in seen]
+
+
+def apply_span_limits(
+    record: SpanRecord,
+    auto_keys: AbstractSet[str],
+    max_attributes: int,
+    max_events: int,
+    max_attributes_per_event: int,
+    max_length: int,
+    keys_before_hook: Sequence[str] = (),
+) -> None:
+    """Re-apply the per-span caps after a ``before_span_send`` hook, which
+    bypasses the span's own writer. Counts add to what the span already dropped."""
+    attributes: Dict[str, Any] = {}
+    kept = 0
+    dropped_attributes = 0
+    for key in _ordered_keys(record.attributes, keys_before_hook):
+        value = record.attributes[key]
+        if value is None:
+            continue
+        if key not in auto_keys:
+            if kept >= max_attributes:
+                dropped_attributes += 1
+                continue
+            kept += 1
+        attributes[key] = truncate_attribute_value(value, max_length)
+    record.attributes = attributes
+    if dropped_attributes:
+        record.dropped_attributes_count = (
+            non_negative_count(record.dropped_attributes_count) + dropped_attributes
+        )
+
+    kept_events: list = []
+    dropped_events = 0
+    for event in record.events:
+        if len(kept_events) >= max_events:
+            dropped_events += 1
+            continue
+        if event.attributes:
+            event.attributes, dropped = bound_attributes(
+                event.attributes, max_attributes_per_event, max_length
+            )
+            if dropped:
+                event.dropped_attributes_count = (
+                    non_negative_count(event.dropped_attributes_count) + dropped
+                )
+        kept_events.append(event)
+    record.events = kept_events
+    if dropped_events:
+        record.dropped_events_count = (
+            non_negative_count(record.dropped_events_count) + dropped_events
+        )
+
+    if record.status is not None and record.status.message:
+        record.status = SpanStatus(
+            record.status.code, truncate_string(record.status.message, max_length)
+        )
