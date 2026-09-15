@@ -39,7 +39,7 @@ def _is_valid_hex_id(value: object, length: int, invalid: str) -> bool:
         isinstance(value, str)
         and len(value) == length
         and value != invalid
-        and _HEX_RE.match(value) is not None
+        and _HEX_RE.fullmatch(value) is not None
     )
 
 

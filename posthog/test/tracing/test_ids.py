@@ -55,6 +55,7 @@ class TestValidation:
             ("abc", False),
             ("4BF92F3577B34DA6A3CE929D0E0E4736", False),
             ("zz" * 16, False),
+            ("a" * 31 + "\n", False),
             (12345, False),
             (None, False),
         ],
@@ -68,6 +69,7 @@ class TestValidation:
             ("00f067aa0ba902b7", True),
             ("0" * 16, False),
             ("4bf92f3577b34da6a3ce929d0e0e4736", False),
+            ("a" * 15 + "\n", False),
         ],
     )
     def test_is_valid_span_id(self, value, expected):
