@@ -80,10 +80,6 @@ class MCPAnalyticsData:
     # a later page is already shadowed by the page-one injection, and is warned
     # about instead.
     virtual_tool_collisions: Set[str] = field(default_factory=set)
-    # Whether this server has served a tools/list we could read a catalogue
-    # from. While false, the call path has no listing-derived signal and falls
-    # back to asking the host's own handler.
-    observed_listing: bool = False
     # ``(kind, name, variant)`` collision warnings already emitted, so a client
     # that re-lists tools on every turn logs each misconfiguration once.
     warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(

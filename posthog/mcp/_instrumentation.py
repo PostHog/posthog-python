@@ -878,14 +878,20 @@ async def raw_listing_owns_tool_name(
     (the ordinary multi-pod case) has no collision signal at all, so the SDK
     would intercept a real tool by that name and silently swallow it.
 
-    Only reached when an incoming call name matches a virtual tool's name, and
-    only while this process has served no listing of its own -- once it has,
-    ``virtual_tool_collisions`` already carries the answer and the host's handler
-    is left alone. Like ``@posthog/mcp``'s equivalent, this reads the first page
-    only: a real tool that appears solely on a later page is already shadowed by
-    the page-one injection and cannot be recovered here."""
+    Runs on every call whose name matches a virtual tool's, which is both rarer
+    and more reliable than it sounds. Rarer: only a name collision or an agent
+    actually invoking ``get_more_tools`` / ``send_feedback`` reaches it, never
+    ordinary tool traffic. More reliable: ``virtual_tool_collisions`` is
+    per-server state rewritten by whichever listing was served last, so a raw
+    server that serves different catalogues to different callers would answer
+    one caller from another's listing. Asking per call cannot go stale that way.
+    ``@posthog/mcp`` probes per call for the same reason.
+
+    Like ``@posthog/mcp``'s equivalent, this reads the first page only: a real
+    tool that appears solely on a later page is already shadowed by the page-one
+    injection and cannot be recovered here."""
     probe = data.raw_tool_names_probe
-    if probe is None or data.observed_listing:
+    if probe is None:
         return False
     try:
         names = await probe(ctx)

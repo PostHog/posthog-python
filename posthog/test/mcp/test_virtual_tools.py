@@ -387,21 +387,41 @@ async def test_cached_result_object_is_not_appended_to_twice():
     assert second == first
 
 
-async def test_listing_stops_the_call_path_reprobing_the_host():
-    # Once a listing has been served, its collision state is the answer, so the
-    # host's own tools/list handler is left alone on the call path.
-    server = _make_paged_lowlevel([[_ECHO_TOOL]])
+async def test_the_probe_asks_the_host_once_per_virtual_tool_call():
+    # The raw-server probe deliberately asks per call rather than trusting the
+    # last listing: `virtual_tool_collisions` is per-server state rewritten by
+    # whichever listing ran last, so a server serving different catalogues to
+    # different callers would answer one caller from another's listing.
+    # @posthog/mcp probes per call for the same reason. Pinning the count keeps
+    # that cost visible if the probe ever widens to ordinary tool traffic.
+    #
+    # Counted inside the host's own handler: the probe closes over the original
+    # handler at wrap time, so replacing the `request_handlers` entry would
+    # observe nothing.
+    calls = []
+    server = Server("virtual-tools-counted")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    async def counted_list(req):
+        # `req is None` is the MCP SDK repopulating its own validation cache,
+        # which it does on a call to an unlisted name. Not ours, so not counted.
+        if req is not None:
+            calls.append(req)
+        return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=[_ECHO_TOOL]))
+
+    server.request_handlers[mcp_types.ListToolsRequest] = counted_list
     instrument(server, FakeClient(), MCPAnalyticsOptions(report_missing=True))
 
-    original = server.request_handlers[mcp_types.ListToolsRequest]
     await _list_page(server)
+    assert len(calls) == 1
 
-    calls = []
-
-    async def counting_list(req):
-        calls.append(req)
-        return await original(req)
-
-    server.request_handlers[mcp_types.ListToolsRequest] = counting_list
     await _call(server, "get_more_tools", {"context": "need csv"})
-    assert calls == []
+    await _call(server, "get_more_tools", {"context": "need csv"})
+    assert len(calls) == 3  # one probe per virtual-tool call
+
+    # Ordinary tool traffic never reaches the probe.
+    await _call(server, "echo", {"msg": "hi"})
+    assert len(calls) == 3

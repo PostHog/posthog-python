@@ -234,9 +234,10 @@ MCPAnalyticsOptions(
 At call time the SDK also checks ownership directly, which covers the window
 before any `tools/list` has run — the ordinary multi-pod case, where the process
 serving the call never served a listing. FastMCP and v2 `MCPServer` are asked via
-their tool registry; a raw low-level server has none, so the SDK asks your own
-`tools/list` handler instead, and only when an incoming call name matches a
-virtual tool's name.
+their tool registry; a raw low-level server has none, so the SDK calls your own
+`tools/list` handler instead. That happens once per call to a virtual tool's
+name, never for ordinary tool traffic. If your listing handler is expensive,
+renaming the SDK's tools away from any name of yours avoids the check entirely.
 
 Two limits worth knowing. Configuring **both** virtual tools with the same name
 advertises only `get_more_tools` (every call path checks it first) and warns.
