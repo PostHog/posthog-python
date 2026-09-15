@@ -1,5 +1,11 @@
 # posthog
 
+## 7.54.0 — 2026-09-15
+
+### Minor changes
+
+- [f07d67c](https://github.com/posthog/posthog-python/commit/f07d67c1fb18066432864bc7bbe8f8869a7b114a) Add LangChain v1 agent middleware for AI observability. — Thanks @gouveags for your first contribution 🎉!
+
 ## 7.53.0 — 2026-09-11
 
 ### Minor changes
