@@ -296,6 +296,14 @@ needs no middleware and no ordering discipline, and it is the only thing that
 correlates a session under the 2026-07-28 revision's per-request server instances.
 Prefer it if you're on a recent client.
 
+The SDK's own virtual tools take part like any other tool, whatever you rename
+them to: `get_more_tools` and `send_feedback` advertise `conversation_id`, echo a
+minted handle back, and stamp `$mcp_conversation_id`. That is what keeps a report
+in the session it is about — an agent's complaint about a tool should be reachable
+from the calls that prompted it, not filed under a session of its own. They still
+never get the injected `context` argument, since they state their intent through
+their own.
+
 ### How the SDK tells you it's misconfigured
 
 The failure used to be silent. It now surfaces two ways:

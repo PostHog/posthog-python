@@ -260,9 +260,10 @@ async def test_both_virtual_tools_configured_with_the_same_name():
 @pytest.mark.parametrize("enable_conversation_id", [False, True])
 async def test_renamed_tool_carries_its_own_intent(enable_conversation_id):
     # The virtual tool states its intent in its own `context` argument, so it
-    # gets neither an injected `context` nor a `conversation_id` -- and that has
-    # to hold for a renamed tool too. The name used to be hardcoded here, so a
-    # renamed tool picked up a `conversation_id` the default-named one never got.
+    # never gets an injected one -- and that has to hold for a renamed tool too,
+    # since the name used to be matched literally here. `conversation_id` is a
+    # different matter: it tracks the option, for the default and renamed tool
+    # alike, because the tool belongs to the same conversation as its neighbours.
     server = _make_paged_lowlevel([[_ECHO_TOOL]])
     instrument(
         server,
@@ -276,8 +277,39 @@ async def test_renamed_tool_carries_its_own_intent(enable_conversation_id):
 
     page = await _list_page(server)
     virtual = [tool for tool in page.root.tools if tool.name == "find_tools"][0]
-    assert list(virtual.inputSchema["properties"]) == ["context"]
+    expected = ["context", "conversation_id"] if enable_conversation_id else ["context"]
+    assert sorted(virtual.inputSchema["properties"]) == sorted(expected)
     assert virtual.inputSchema["required"] == ["context"]
+
+
+async def test_renamed_tool_anchors_to_the_conversation():
+    # Whatever it is called, the report joins the session it is about.
+    server = _make_paged_lowlevel([[_ECHO_TOOL]])
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True,
+            missing_capability_tool_name="find_tools",
+            enable_conversation_id=True,
+        ),
+    )
+    await _list_page(server)
+
+    handle = "0198d3a7-1111-7222-8333-444455556666"
+    await _call(server, "echo", {"msg": "hi", "conversation_id": handle})
+    await _call(
+        server, "find_tools", {"context": "need csv", "conversation_id": handle}
+    )
+    await _flush()
+
+    tool_call = _events(client, "$mcp_tool_call")[0]
+    missing = _events(client, "$mcp_missing_capability")[0]
+    assert missing["properties"]["$mcp_conversation_id"] == handle
+    assert (
+        tool_call["properties"]["$session_id"] == missing["properties"]["$session_id"]
+    )
 
 
 async def test_renamed_tool_is_intercepted_and_the_default_name_is_not():
