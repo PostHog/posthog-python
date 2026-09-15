@@ -62,7 +62,7 @@ def test_derivation_is_deterministic_and_distinct():
 
 def test_echo_of_a_mintable_handle_is_accepted():
     cid, minted = resolve_conversation_id(
-        True, {"conversation_id": MINTED_SHAPE_HANDLE}, "t", "get_more_tools"
+        True, {"conversation_id": MINTED_SHAPE_HANDLE}
     )
     assert minted is False
     assert cid == MINTED_SHAPE_HANDLE
@@ -73,7 +73,7 @@ def test_uppercased_echo_is_lowercased_before_hashing():
     # case-sensitive, so the echo must be folded back or it lands in a
     # different session than the call that minted it.
     cid, minted = resolve_conversation_id(
-        True, {"conversation_id": MINTED_SHAPE_HANDLE.upper()}, "t", "get_more_tools"
+        True, {"conversation_id": MINTED_SHAPE_HANDLE.upper()}
     )
     assert minted is False
     assert cid == MINTED_SHAPE_HANDLE
@@ -82,9 +82,7 @@ def test_uppercased_echo_is_lowercased_before_hashing():
 def test_invented_handle_is_not_anchored():
     # Two unrelated users both sending "conv-1" must NOT share a session, so a
     # value we could not have minted is replaced with a fresh handle.
-    cid, minted = resolve_conversation_id(
-        True, {"conversation_id": "conv-1"}, "t", "get_more_tools"
-    )
+    cid, minted = resolve_conversation_id(True, {"conversation_id": "conv-1"})
     assert minted is True
     assert cid != "conv-1"
 

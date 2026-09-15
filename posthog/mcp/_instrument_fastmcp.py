@@ -121,14 +121,16 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and not _name_owned_by_real_tool(
             server, name
         ):
-            await lifecycle.record_missing_capability()
-            return [
-                mcp_types.TextContent(type="text", text=get_more_tools_result_text())
-            ]
+            prompt_back, delivered = _conversation_prompt_back(lifecycle)
+            await lifecycle.record_missing_capability(
+                conversation_id_delivered=delivered
+            )
+            return _with_prompt_back(get_more_tools_result_text(), prompt_back)
 
         if lifecycle.is_feedback and not _name_owned_by_real_tool(server, name):
-            reply = await lifecycle.record_feedback()
-            return [mcp_types.TextContent(type="text", text=reply)]
+            prompt_back, delivered = _conversation_prompt_back(lifecycle)
+            reply = await lifecycle.record_feedback(conversation_id_delivered=delivered)
+            return _with_prompt_back(reply, prompt_back)
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -330,6 +332,28 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     if isinstance(result, dict) and isinstance(result.get("content"), list):
         return {**result, "content": [*result["content"], block]}
     return result
+
+
+def _conversation_prompt_back(lifecycle: Any) -> Tuple[Any, bool]:
+    """``(prompt_back_block_or_None, delivered)`` for a virtual tool's reply.
+
+    A minted handle rides a prompt-back block so the agent can echo it on its
+    next call and keep the whole exchange in one session; an echoed one needs no
+    delivery. ``delivered`` gates stamping the handle on the event, so a handle
+    the agent never received is never recorded."""
+    if lifecycle.conversation_id and lifecycle.minted_conversation_id:
+        block = mcp_types.TextContent(
+            type="text", text=build_prompt_back(lifecycle.conversation_id)["text"]
+        )
+        return block, True
+    return None, bool(lifecycle.conversation_id)
+
+
+def _with_prompt_back(text: str, prompt_back: Any) -> list:
+    blocks = [mcp_types.TextContent(type="text", text=text)]
+    if prompt_back is not None:
+        blocks.append(prompt_back)
+    return blocks
 
 
 def _name_owned_by_real_tool(server: Any, name: str) -> bool:

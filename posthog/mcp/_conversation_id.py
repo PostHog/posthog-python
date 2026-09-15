@@ -74,33 +74,21 @@ def extract_conversation_id(args: Any) -> Optional[str]:
     return trimmed or None
 
 
-def resolve_conversation_id(
-    enabled: bool,
-    args: Any,
-    tool_name: Optional[str],
-    missing_capability_tool_name: Optional[str],
-    feedback_tool_name: Optional[str] = None,
-) -> Tuple[Optional[str], bool]:
-    """Return ``(conversation_id, minted)``. Disabled, get_more_tools, or
-    send_feedback → ``(None, False)``; agent echoed a handle we could have minted
-    → ``(value, False)``; anything else (omitted, or a value the agent made up)
-    → ``(new uuid, True)``.
+def resolve_conversation_id(enabled: bool, args: Any) -> Tuple[Optional[str], bool]:
+    """Return ``(conversation_id, minted)``. Disabled → ``(None, False)``; agent
+    echoed a handle we could have minted → ``(value, False)``; anything else
+    (omitted, or a value the agent made up) → ``(new uuid, True)``.
 
-    Either virtual tool's name arrives as ``None`` when it is disabled or when a
-    real application tool owns it. A shadowed name belongs to that real tool, so
-    it mints and echoes a handle like any other tool's.
+    Applies to every tool, the SDK's own virtual tools included. They used to be
+    exempt, which filed a ``$mcp_feedback`` or ``$mcp_missing_capability`` event
+    under its own ``$session_id`` — so an agent's complaint about a tool landed
+    in a different session than the call it was complaining about. Anchoring them
+    is the whole point of the report.
 
     Lowercased on the way in: the shape test is case-insensitive but the hash
     behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
     uuids) would land in a different session than the call that minted it."""
-    if (
-        not enabled
-        or (
-            missing_capability_tool_name is not None
-            and tool_name == missing_capability_tool_name
-        )
-        or (feedback_tool_name is not None and tool_name == feedback_tool_name)
-    ):
+    if not enabled:
         return None, False
     supplied = extract_conversation_id(args)
     if supplied and _MINTED_CONVERSATION_ID.match(supplied):

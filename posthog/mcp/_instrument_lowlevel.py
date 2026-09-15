@@ -211,28 +211,18 @@ def _wrap_call_tool(
         if lifecycle.is_missing_capability and not await _name_owned_by_real_tool(
             high_level, data, name, server
         ):
-            await lifecycle.record_missing_capability()
-            return mcp_types.ServerResult(
-                mcp_types.CallToolResult(
-                    content=[
-                        mcp_types.TextContent(
-                            type="text", text=get_more_tools_result_text()
-                        )
-                    ],
-                    isError=False,
-                )
+            prompt_back, delivered = _conversation_prompt_back(lifecycle)
+            await lifecycle.record_missing_capability(
+                conversation_id_delivered=delivered
             )
+            return _virtual_tool_result(get_more_tools_result_text(), prompt_back)
 
         if lifecycle.is_feedback and not await _name_owned_by_real_tool(
             high_level, data, name, server
         ):
-            reply = await lifecycle.record_feedback()
-            return mcp_types.ServerResult(
-                mcp_types.CallToolResult(
-                    content=[mcp_types.TextContent(type="text", text=reply)],
-                    isError=False,
-                )
-            )
+            prompt_back, delivered = _conversation_prompt_back(lifecycle)
+            reply = await lifecycle.record_feedback(conversation_id_delivered=delivered)
+            return _virtual_tool_result(reply, prompt_back)
 
         # On raw low-level servers `context`/`conversation_id` are injected as
         # *optional* schema properties and left in place (a (name, arguments)
@@ -452,6 +442,30 @@ def _wrap_list_tools(
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.ListToolsRequest] = handler
+
+
+def _conversation_prompt_back(lifecycle: Any) -> Tuple[Any, bool]:
+    """``(prompt_back_block_or_None, delivered)`` for a virtual tool's reply.
+
+    A minted handle rides a prompt-back block so the agent can echo it on its
+    next call and keep the whole exchange in one session; an echoed one needs no
+    delivery. ``delivered`` gates stamping the handle on the event, so a handle
+    the agent never received is never recorded."""
+    if lifecycle.conversation_id and lifecycle.minted_conversation_id:
+        block = mcp_types.TextContent(
+            type="text", text=build_prompt_back(lifecycle.conversation_id)["text"]
+        )
+        return block, True
+    return None, bool(lifecycle.conversation_id)
+
+
+def _virtual_tool_result(text: str, prompt_back: Any) -> Any:
+    content = [mcp_types.TextContent(type="text", text=text)]
+    if prompt_back is not None:
+        content.append(prompt_back)
+    return mcp_types.ServerResult(
+        mcp_types.CallToolResult(content=content, isError=False)
+    )
 
 
 async def _name_owned_by_real_tool(

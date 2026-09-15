@@ -304,20 +304,16 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and not _name_owned_by_real_tool_v2(
             server, name
         ):
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
+            prompt_back, delivered = _conversation_prompt_back_v2(lifecycle)
+            await lifecycle.record_missing_capability(
+                conversation_id_delivered=delivered
             )
+            return _virtual_tool_result_v2(get_more_tools_result_text(), prompt_back)
 
         if lifecycle.is_feedback and not _name_owned_by_real_tool_v2(server, name):
-            reply = await lifecycle.record_feedback()
-            return mcp_types.CallToolResult(
-                content=[mcp_types.TextContent(type="text", text=reply)]
-            )
+            prompt_back, delivered = _conversation_prompt_back_v2(lifecycle)
+            reply = await lifecycle.record_feedback(conversation_id_delivered=delivered)
+            return _virtual_tool_result_v2(reply, prompt_back)
 
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never
@@ -403,6 +399,28 @@ def _append_prompt_back(result: Any, conversation_id: str) -> Tuple[Any, bool]:
             return result, False
     content.append(block)
     return result, True
+
+
+def _conversation_prompt_back_v2(lifecycle: Any) -> Tuple[Any, bool]:
+    """``(prompt_back_block_or_None, delivered)`` for a virtual tool's reply.
+
+    A minted handle rides a prompt-back block so the agent can echo it on its
+    next call and keep the whole exchange in one session; an echoed one needs no
+    delivery. ``delivered`` gates stamping the handle on the event, so a handle
+    the agent never received is never recorded."""
+    if lifecycle.conversation_id and lifecycle.minted_conversation_id:
+        block = mcp_types.TextContent(
+            type="text", text=build_prompt_back(lifecycle.conversation_id)["text"]
+        )
+        return block, True
+    return None, bool(lifecycle.conversation_id)
+
+
+def _virtual_tool_result_v2(text: str, prompt_back: Any) -> Any:
+    content = [mcp_types.TextContent(type="text", text=text)]
+    if prompt_back is not None:
+        content.append(prompt_back)
+    return mcp_types.CallToolResult(content=content)
 
 
 def _deliver_conversation_id(
@@ -526,22 +544,18 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and not await raw_listing_owns_tool_name(
             data, name, ctx
         ):
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
+            prompt_back, delivered = _conversation_prompt_back_v2(lifecycle)
+            await lifecycle.record_missing_capability(
+                conversation_id_delivered=delivered
             )
+            return _virtual_tool_result_v2(get_more_tools_result_text(), prompt_back)
 
         if lifecycle.is_feedback and not await raw_listing_owns_tool_name(
             data, name, ctx
         ):
-            reply = await lifecycle.record_feedback()
-            return mcp_types.CallToolResult(
-                content=[mcp_types.TextContent(type="text", text=reply)]
-            )
+            prompt_back, delivered = _conversation_prompt_back_v2(lifecycle)
+            reply = await lifecycle.record_feedback(conversation_id_delivered=delivered)
+            return _virtual_tool_result_v2(reply, prompt_back)
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
