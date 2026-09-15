@@ -416,6 +416,7 @@ attribute posthog.ai.langchain.callbacks.SpanMetadata.latency: float
 attribute posthog.ai.langchain.callbacks.SpanMetadata.name: str
 attribute posthog.ai.langchain.callbacks.SpanMetadata.start_time: float
 attribute posthog.ai.langchain.callbacks.log = logging.getLogger('posthog')
+attribute posthog.ai.langchain.middleware.PostHogMiddleware.state_schema = _PostHogMiddlewareState
 attribute posthog.ai.openai.openai.OpenAI.beta: WrappedBeta
 attribute posthog.ai.openai.openai.OpenAI.chat: WrappedChat
 attribute posthog.ai.openai.openai.OpenAI.embeddings: WrappedEmbeddings
@@ -966,6 +967,7 @@ class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = 
 class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int], cache_write_5m_tokens: Optional[int] = None, cache_write_1h_tokens: Optional[int] = None)
 class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any])
+class posthog.ai.langchain.middleware.PostHogMiddleware(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[dict[str, Any]] = None)
 class posthog.ai.openai.openai.OpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai.WrappedBeta 
 class posthog.ai.openai.openai.WrappedBetaChat 
@@ -1310,6 +1312,14 @@ method posthog.ai.langchain.callbacks.CallbackHandler.on_retriever_start(seriali
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_end(output: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_error(error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[list[str]] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_start(serialized: Optional[Dict[str, Any]], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any
+method posthog.ai.langchain.middleware.PostHogMiddleware.aafter_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.abefore_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.after_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.awrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]]) -> ModelResponse[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.awrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]) -> ToolMessage | Command[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.before_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], ModelResponse[Any]]) -> ModelResponse[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]) -> ToolMessage | Command[Any]
 method posthog.ai.openai.openai.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
 method posthog.ai.openai.openai.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
 method posthog.ai.openai.openai.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
@@ -1497,6 +1507,7 @@ module posthog.ai.gemini.gemini_async
 module posthog.ai.gemini.gemini_converter
 module posthog.ai.langchain
 module posthog.ai.langchain.callbacks
+module posthog.ai.langchain.middleware
 module posthog.ai.media
 module posthog.ai.openai
 module posthog.ai.openai.openai
