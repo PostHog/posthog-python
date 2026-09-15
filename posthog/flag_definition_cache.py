@@ -40,6 +40,8 @@ class FlagDefinitionCacheData(TypedDict):
         flags: List of feature flag definition dictionaries from the API.
         group_type_mapping: Mapping of group type indices to group names.
         cohorts: Dictionary of cohort definitions for local evaluation.
+        property_matching_version: Exact/is_not matching selector. Missing means
+            legacy; only version 2 enables explicit matching.
         minimal_flag_called_events: Server-controlled gate for minimal
             ``$feature_flag_called`` events. Treated as False when absent.
     """
@@ -48,6 +50,7 @@ class FlagDefinitionCacheData(TypedDict):
     group_type_mapping: Required[Dict[str, str]]
     cohorts: Required[Dict[str, Any]]
     minimal_flag_called_events: NotRequired[bool]
+    property_matching_version: NotRequired[int]
 
 
 @runtime_checkable
