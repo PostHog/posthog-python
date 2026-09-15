@@ -151,3 +151,21 @@ async def test_strict_input_validation_still_accepts_calls():
     assert _events(client, "$mcp_tool_call")[0]["properties"]["$mcp_intent"] == (
         "strict validation"
     )
+
+
+async def test_jlowin_cold_call_strips_llm_model_and_records_it():
+    # No prior tools/list: ownership comes from the tool signature, so the
+    # injected llm_model is stripped before jlowin validates and still recorded.
+    server = make_server()
+    client = FakeClient()
+    instrument(server, client)
+
+    out = await _call(
+        server, "add", {"a": 2, "b": 3, "context": "sum", "llm_model": "model-a"}
+    )
+    await _flush()
+
+    assert out.root.isError is False
+    calls = _events(client, "$mcp_tool_call")
+    assert calls[0]["properties"]["$mcp_llm_model"] == "model-a"
+    assert not _events(client, "$mcp_tools_list")

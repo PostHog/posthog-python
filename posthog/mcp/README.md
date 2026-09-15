@@ -42,28 +42,23 @@ Intent, model capture, conversation correlation, and MCP exception capture are o
 Missing-capability reporting and feedback collection remain off.
 
 ```python
+from posthog.mcp import MCPAnalyticsOptions, instrument
+
 instrument(server, posthog, MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False))
 ```
 
+Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
+high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
+strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.
 Conversation correlation adds an optional `conversation_id` argument and returns a handle in
 eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
 Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
 response content. Custom `PostHogMCP` dispatchers enable model capture by default but still
-supply their own session IDs.
+supply their own session IDs. The reasoning is recorded in posthog-js `docs/adr/0013`.
 
 ## Capture the calling model
 
-Model capture is on by default for instrumented MCP Python SDK 1.x and 2.x servers:
-
-```python
-from posthog.mcp import MCPAnalyticsOptions, instrument
-
-analytics = instrument(
-    server,
-    posthog,
-)
-```
-
+Model capture is on by default for instrumented MCP Python SDK 1.x and 2.x servers.
 The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
@@ -88,19 +83,20 @@ If a tool already declares `llm_model`, or uses a root `$ref`, `oneOf`, `allOf`,
 `anyOf` schema, PostHog leaves the schema and argument untouched. Client metadata
 can still be captured in those cases.
 
-On fresh low-level instances, model argument ownership is resolved from the original tool
-listing before dispatch. This internal lookup emits no discovery event and stops after 16 pages
-or 250 ms. If the listing fails or omits the tool, its arguments remain unchanged and self-reported
-model capture stays empty; recognized client metadata can still supply the model. Existing
-listings and high-level registries continue to supply ownership directly.
+A raw low-level server learns ownership while serving `tools/list`. A fresh instance that never
+served one has no answer, so it records `llm_model` as the self-reported model and strips
+nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that declares its own
+`llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
+otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
+standalone `fastmcp.FastMCP` read ownership from their live registry, so they are unaffected.
 
-For a custom dispatcher, use the same option on `PostHogMCP` and pass request
+For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
 metadata through explicitly:
 
 ```python
 from posthog.mcp import PostHogMCP
 
-posthog = PostHogMCP("phc_...", capture_model=True)
+posthog = PostHogMCP("phc_...")
 tools = posthog.prepare_tool_list(server_tools)
 original_tool = next(tool for tool in server_tools if tool["name"] == tool_name)
 call = posthog.prepare_tool_call(

@@ -64,6 +64,14 @@ async def test_v1_cold_capture_and_opt_out(enabled):
         if enabled
         else MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False)
     )
+    received = []
+    original = server.request_handlers[types.CallToolRequest]
+
+    async def spy(req):
+        received.append(dict(req.params.arguments or {}))
+        return await original(req)
+
+    server.request_handlers[types.CallToolRequest] = spy
     instrument(server, client, options)
     request = _call_request("echo", {"msg": "ok", "llm_model": "model-a"})
     result = await server.request_handlers[types.CallToolRequest](request)
@@ -76,4 +84,6 @@ async def test_v1_cold_capture_and_opt_out(enabled):
     )
     assert len(result.root.content) == (2 if enabled else 1)
     assert len(events_named(client, "$mcp_tools_list")) == 0
-    assert request.params.arguments == {"msg": "ok", "llm_model": "model-a"}
+    # A cold raw instance reads the self-reported model but strips nothing: it
+    # cannot prove it owns the argument, and raw handlers ignore extra keys.
+    assert received == [{"msg": "ok", "llm_model": "model-a"}]
