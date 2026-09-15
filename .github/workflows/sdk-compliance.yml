@@ -12,20 +12,39 @@ on:
       - main
 
 jobs:
-  compliance:
-    name: PostHog SDK compliance tests (capture v0)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
-    with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
-      adapter-context: "."
-      test-harness-version: "0.10.0"
-      report-name: "sdk-compliance-report-v0"
+  adapter-tests:
+    name: Adapter regression tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install SDK and adapter test dependencies
+        run: python -m pip install ".[zstd]" -r sdk_compliance_adapter/requirements.txt pytest
+      - name: Test adapter
+        run: python -m pytest -q sdk_compliance_adapter/test_adapter.py
 
-  compliance-v1:
-    name: PostHog SDK compliance tests (capture v1)
+  compliance:
+    name: PostHog SDK compliance (${{ matrix.profile }}, async)
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: v0-gzip
+            dockerfile: sdk_compliance_adapter/Dockerfile
+          - profile: v1-gzip
+            dockerfile: sdk_compliance_adapter/Dockerfile.v1
+          - profile: v1-deflate
+            dockerfile: sdk_compliance_adapter/Dockerfile.v1-deflate
+          - profile: v1-zstd
+            dockerfile: sdk_compliance_adapter/Dockerfile.v1-zstd
     uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
     with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
+      adapter-dockerfile: ${{ matrix.dockerfile }}
       adapter-context: "."
-      test-harness-version: "0.10.0"
-      report-name: "sdk-compliance-report-v1"
+      test-harness-version: "1.0.0"
+      sdk-type: server
+      concurrency: 1
+      continue-on-error: true
+      report-name: sdk-compliance-report-python-${{ matrix.profile }}-async

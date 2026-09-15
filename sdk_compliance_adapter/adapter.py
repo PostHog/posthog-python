@@ -33,6 +33,15 @@ app = Flask(__name__)
 # v0), mirroring the v0/v1 Dockerfile split. One process speaks one mode and
 # advertises it via /health capabilities.
 CAPTURE_MODE = os.environ.get("CAPTURE_MODE", "")
+# Compression-enabled init calls use this process's codec. Explicit NONE on
+# disabled calls also overrides inherited POSTHOG_CAPTURE_COMPRESSION settings.
+CAPTURE_COMPRESSION = CaptureCompression(os.environ.get("CAPTURE_COMPRESSION", "gzip"))
+if CAPTURE_COMPRESSION not in (
+    CaptureCompression.GZIP,
+    CaptureCompression.DEFLATE,
+    CaptureCompression.ZSTD,
+):
+    raise ValueError("CAPTURE_COMPRESSION must be gzip, deflate, or zstd")
 
 
 def is_v1() -> bool:
@@ -305,7 +314,7 @@ posthog.capture_v1._post_v1 = patched_post_v1
 def health():
     """Health check endpoint"""
     capabilities = (
-        ["capture_v1", "capture_ai_v0", "encoding_gzip"]
+        ["capture_v1", "capture_ai_v0", f"encoding_{CAPTURE_COMPRESSION.value}"]
         if is_v1()
         else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
     )
@@ -335,10 +344,9 @@ def init():
         flush_interval_ms = data.get("flush_interval_ms", 500)
         max_retries = data.get("max_retries", 3)
         enable_compression = data.get("enable_compression", False)
-        # Compliance tests assert the request-level default when callers omit
-        # disable_geoip, so the adapter default keeps geoip-enabled /flags
-        # requests while still allowing per-call overrides.
-        disable_geoip = data.get("disable_geoip", False)
+        client_options = {}
+        if "disable_geoip" in data:
+            client_options["disable_geoip"] = data["disable_geoip"]
         historical_migration = data.get("historical_migration", False)
 
         if not api_key:
@@ -361,18 +369,21 @@ def init():
             gzip=enable_compression,
             max_retries=max_retries,
             debug=False,
-            disable_geoip=disable_geoip,
             historical_migration=historical_migration,
             capture_mode=capture_mode,
+            capture_compression=(
+                CAPTURE_COMPRESSION if enable_compression else CaptureCompression.NONE
+            ),
+            **client_options,
         )
 
         state.client = client
 
         logger.info(
-            f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
+            f"Initialized SDK with host={host}, "
             f"flush_at={flush_at}, flush_interval={flush_interval}, "
             f"max_retries={max_retries}, gzip={enable_compression}, "
-            f"capture_mode={capture_mode}, disable_geoip={disable_geoip}, "
+            f"capture_mode={capture_mode}, disable_geoip={client.disable_geoip}, "
             f"historical_migration={historical_migration}"
         )
 
@@ -536,12 +547,9 @@ def flush():
         if not state.client:
             return jsonify({"error": "SDK not initialized"}), 400
 
-        # Flush and wait
-        state.client.flush()
-
-        # Wait a bit for flush to complete
-        # The flush() method triggers queue.join() which blocks until all items are processed
-        time.sleep(0.5)
+        # The adapter contract requires a drain, not the SDK's default 10s budget.
+        # The harness owns the timeout for this blocking operation.
+        state.client.flush(timeout_seconds=None)
 
         logger.info("Flushed pending events")
 
@@ -598,7 +606,7 @@ def get_feature_flag():
         # the adapter action returns. Otherwise the harness may reset mock-server
         # state for the next test while the background consumer is still flushing,
         # leaking the previous test's event into the next test.
-        state.client.flush()
+        state.client.flush(timeout_seconds=None)
 
         logger.info(f"Feature flag {key} for {distinct_id}: {value}")
 
