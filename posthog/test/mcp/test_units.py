@@ -12,7 +12,15 @@ from posthog.mcp._conversation_id import (
     inject_prompt_back,
     resolve_conversation_id,
 )
-from posthog.mcp._instrumentation import mutate_tool_schema
+from posthog.mcp._instrumentation import (
+    VIRTUAL_TOOL_FEEDBACK,
+    VIRTUAL_TOOL_MISSING_CAPABILITY,
+    enabled_virtual_tool_names,
+    injectable_virtual_tool_names,
+    is_first_listing_page,
+    mutate_tool_schema,
+    resolve_virtual_tool_injection,
+)
 from posthog.mcp._intent import _get_context_argument, resolve_tool_call_intent
 from posthog.mcp._internal import (
     IdentityCache,
@@ -25,7 +33,11 @@ from posthog.mcp.session import (
     new_session_id,
     resolve_session_id,
 )
-from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
+from posthog.mcp.types import (
+    CollectFeedbackOptions,
+    MCPAnalyticsOptions,
+    UserIdentity,
+)
 
 
 def _data(**opts):
@@ -47,11 +59,34 @@ async def test_intent_from_context_argument():
 
 
 async def test_intent_skips_context_for_missing_capability_tool():
-    # a get_more_tools call's context is a capability report, not a tool-call intent
+    # a get_more_tools call's context is a capability report, not a tool-call
+    # intent — but only while the SDK actually owns that name
+    out = await resolve_tool_call_intent(
+        _data(report_missing=True),
+        _call(name="get_more_tools", args={"context": "need csv export"}),
+    )
+    assert out is None
+
+
+async def test_intent_keeps_context_for_a_real_tool_named_get_more_tools():
+    # With report_missing off the SDK advertises no such tool, so one by that
+    # name is the host's own and its context is an ordinary intent. Interception
+    # has always been gated on report_missing, so dropping the intent here left
+    # a real tool dispatched but unattributed.
     out = await resolve_tool_call_intent(
         _data(), _call(name="get_more_tools", args={"context": "need csv export"})
     )
-    assert out is None
+    assert out == ("need csv export", "context_parameter")
+
+
+async def test_intent_keeps_context_when_a_real_tool_owns_the_name():
+    # Same, via the listing-derived collision state rather than the switch.
+    data = _data(report_missing=True)
+    data.virtual_tool_collisions.add(VIRTUAL_TOOL_MISSING_CAPABILITY)
+    out = await resolve_tool_call_intent(
+        data, _call(name="get_more_tools", args={"context": "need csv export"})
+    )
+    assert out == ("need csv export", "context_parameter")
 
 
 async def test_intent_fallback_sync():
@@ -87,6 +122,132 @@ def test_get_context_argument_ignores_non_string_and_blank():
     assert _get_context_argument({}) is None
 
 
+# --- virtual tools -----------------------------------------------------------
+# The kind-keyed resolver both virtual tools share. Duck-typed on `.name`, so it
+# drives from plain namespaces and these run under both MCP SDK majors.
+
+
+def _tool(name):
+    return SimpleNamespace(name=name)
+
+
+def test_first_page_is_an_absent_cursor():
+    assert is_first_listing_page(None) is True
+    assert is_first_listing_page(SimpleNamespace(cursor=None)) is True
+
+
+def test_a_present_cursor_is_a_continuation_page():
+    # `""` is a valid opaque cursor, not the absence of one. Reading it as
+    # falsy would re-append the virtual tools to that page.
+    assert is_first_listing_page(SimpleNamespace(cursor="")) is False
+    assert is_first_listing_page(SimpleNamespace(cursor="abc")) is False
+
+
+def test_enabled_names_follow_the_switches_and_renames():
+    assert enabled_virtual_tool_names(_data()) == {}
+    assert enabled_virtual_tool_names(_data(report_missing=True)) == {
+        VIRTUAL_TOOL_MISSING_CAPABILITY: "get_more_tools"
+    }
+    both = enabled_virtual_tool_names(
+        _data(
+            report_missing=True,
+            missing_capability_tool_name="find_tools",
+            collect_feedback=CollectFeedbackOptions(tool_name="tell_posthog"),
+        )
+    )
+    assert both == {
+        VIRTUAL_TOOL_MISSING_CAPABILITY: "find_tools",
+        VIRTUAL_TOOL_FEEDBACK: "tell_posthog",
+    }
+
+
+def test_injectable_names_drop_collided_kinds():
+    data = _data(report_missing=True, collect_feedback=True)
+    data.virtual_tool_collisions.add(VIRTUAL_TOOL_FEEDBACK)
+    assert injectable_virtual_tool_names(data) == {
+        VIRTUAL_TOOL_MISSING_CAPABILITY: "get_more_tools"
+    }
+
+
+def test_resolver_injects_on_a_first_page():
+    data = _data(report_missing=True, collect_feedback=True)
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("echo")], is_first_page=True
+    )
+    assert injection.missing_capability_name == "get_more_tools"
+    assert injection.feedback_name == "send_feedback"
+
+
+def test_resolver_injects_nothing_on_a_continuation_page():
+    data = _data(report_missing=True, collect_feedback=True)
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("echo")], is_first_page=False
+    )
+    assert injection.names == {}
+
+
+def test_resolver_records_a_first_page_collision():
+    data = _data(report_missing=True)
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("get_more_tools")], is_first_page=True
+    )
+    assert injection.missing_capability_name is None
+    assert VIRTUAL_TOOL_MISSING_CAPABILITY in data.virtual_tool_collisions
+
+
+def test_resolver_rewrites_rather_than_accumulates_collisions():
+    # Page-local: dropping the colliding tool un-shadows the virtual one on the
+    # next first page, with no re-instrumentation.
+    data = _data(report_missing=True)
+    resolve_virtual_tool_injection(data, [_tool("get_more_tools")], is_first_page=True)
+    assert data.virtual_tool_collisions
+
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("echo")], is_first_page=True
+    )
+    assert injection.missing_capability_name == "get_more_tools"
+    assert not data.virtual_tool_collisions
+
+
+def test_resolver_never_records_a_collision_from_a_continuation_page():
+    # The virtual tool is already advertised from page one, so recording the
+    # collision here would only strand it. The host is warned instead.
+    data = _data(report_missing=True)
+    resolve_virtual_tool_injection(data, [_tool("get_more_tools")], is_first_page=False)
+    assert not data.virtual_tool_collisions
+
+
+def test_resolver_warns_once_per_kind_name_and_variant():
+    data = _data(report_missing=True)
+    for _ in range(3):
+        resolve_virtual_tool_injection(
+            data, [_tool("get_more_tools")], is_first_page=True
+        )
+    assert data.warned_virtual_tool_collisions == {
+        (VIRTUAL_TOOL_MISSING_CAPABILITY, "get_more_tools", "blocked")
+    }
+
+
+def test_resolver_keeps_missing_capability_when_both_share_a_name():
+    # Every call path checks missing-capability first, so advertising both under
+    # one name would dead-letter the feedback path.
+    data = _data(
+        report_missing=True,
+        missing_capability_tool_name="ask_posthog",
+        collect_feedback=CollectFeedbackOptions(tool_name="ask_posthog"),
+    )
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("echo")], is_first_page=True
+    )
+    assert injection.missing_capability_name == "ask_posthog"
+    assert injection.feedback_name is None
+    assert (
+        VIRTUAL_TOOL_FEEDBACK,
+        "ask_posthog",
+        "duplicate",
+    ) in data.warned_virtual_tool_collisions
+
+
 # --- conversation_id ---------------------------------------------------------
 
 
@@ -114,6 +275,7 @@ def test_schema_pipeline_does_not_warn_for_owned_conversation_id(monkeypatch):
         schema_attribute="input_schema",
         owns_context=False,
         context_required=False,
+        is_sdk_virtual_tool=False,
     )
 
     assert tool.input_schema is schema
@@ -154,6 +316,14 @@ def test_resolve_conversation_id_skips_missing_capability_tool():
         None,
         False,
     )
+
+
+def test_resolve_conversation_id_mints_for_a_shadowed_virtual_tool_name():
+    # `None` means the virtual tool is disabled or a real application tool owns
+    # the name. Either way the call belongs to that real tool, so it mints and
+    # echoes a handle like any other tool's.
+    cid, minted = resolve_conversation_id(True, {}, "get_more_tools", None)
+    assert minted is True and cid
 
 
 def test_resolve_conversation_id_uses_supplied_when_mintable_shape():

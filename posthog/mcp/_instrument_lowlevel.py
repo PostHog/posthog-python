@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
@@ -29,14 +29,16 @@ from ._instrumentation import (
     append_send_feedback,
     collect_listed_tools,
     extract_tools,
-    listing_has_next_page,
+    is_first_listing_page,
     mutate_tool_schema,
     prepare_request,
+    raw_listing_owns_tool_name,
     record_resource_request,
-    refresh_feedback_shadow,
+    refresh_virtual_tool_collisions,
     request_to_dict,
     resource_listing_response,
     resolve_session_and_client,
+    resolve_virtual_tool_injection,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
 )
@@ -44,7 +46,7 @@ from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
+from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -206,7 +208,9 @@ def _wrap_call_tool(
             extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
         )
 
-        if lifecycle.is_missing_capability:
+        if lifecycle.is_missing_capability and not await _name_owned_by_real_tool(
+            high_level, data, name, server
+        ):
             await lifecycle.record_missing_capability()
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
@@ -219,8 +223,8 @@ def _wrap_call_tool(
                 )
             )
 
-        if lifecycle.is_feedback and not await _feedback_name_owned_by_real_tool(
-            high_level, name
+        if lifecycle.is_feedback and not await _name_owned_by_real_tool(
+            high_level, data, name, server
         ):
             reply = await lifecycle.record_feedback()
             return mcp_types.ServerResult(
@@ -333,6 +337,7 @@ def _inject_tool_schemas(
             schema_attribute="inputSchema",
             owns_context=schema_has_param(schema, "context"),
             context_required=context_required,
+            is_sdk_virtual_tool=False,
         )
 
 
@@ -343,6 +348,21 @@ def _wrap_list_tools(
     original = handlers.get(mcp_types.ListToolsRequest)
     if original is None or getattr(original, _WRAPPED_FLAG, False):
         return
+
+    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[Set[str]]:
+        """The names the host's own handler advertises on its first page. Calls
+        ``original``, not the wrapper, so the probe never recurses into
+        instrumentation or appends a virtual tool. Read by
+        ``_name_owned_by_real_tool`` on raw low-level servers, which have no
+        tool registry to ask instead."""
+        result = await original(mcp_types.ListToolsRequest(method="tools/list"))
+        return {
+            name
+            for tool in extract_tools(result)
+            if isinstance(name := getattr(tool, "name", None), str)
+        }
+
+    data.raw_tool_names_probe = probe_raw_tool_names
 
     async def handler(req: Any) -> Any:
         # The server calls the handler with None to populate its tool cache.
@@ -355,10 +375,12 @@ def _wrap_list_tools(
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision flag here too: this pass sees the real tool
-            # registry, so a real tool named like the feedback tool is detected
-            # before any client-facing listing.
-            refresh_feedback_shadow(data, tools)
+            # Refresh the collision state here too: this pass sees the real
+            # tool registry, so a real tool named like one of the virtual tools
+            # is detected before any client-facing listing. Nothing is appended
+            # — this result is the SDK's own validation cache, never sent to a
+            # client.
+            refresh_virtual_tool_collisions(data, tools)
             _inject_tool_schemas(data, tools, context_required=context_required)
             return result
 
@@ -401,19 +423,23 @@ def _wrap_list_tools(
         # Zero advertised tools is treated as an errored tools/list before the
         # virtual missing-capability tool is appended.
         names, empty = collect_listed_tools(data, tools)
-        feedback_name = refresh_feedback_shadow(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data,
+            tools,
+            is_first_page=is_first_listing_page(getattr(req, "params", None)),
+        )
 
         _inject_tool_schemas(data, tools, context_required=context_required)
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name, data)
-                names.append(missing_name)
+        if injection.missing_capability_name is not None:
+            result = append_get_more_tools(
+                result, injection.missing_capability_name, data
+            )
+            names.append(injection.missing_capability_name)
 
-        if feedback_name is not None and not listing_has_next_page(result):
-            append_send_feedback(result, data)
-            names.append(feedback_name)
+        if injection.feedback_name is not None:
+            result = append_send_feedback(result, injection.feedback_name, data)
+            names.append(injection.feedback_name)
 
         await lifecycle.record_result(
             names=names,
@@ -428,17 +454,22 @@ def _wrap_list_tools(
     handlers[mcp_types.ListToolsRequest] = handler
 
 
-async def _feedback_name_owned_by_real_tool(high_level: Any, name: str) -> bool:
-    """Live registry probe on the standalone-fastmcp path, so a real tool by the
-    feedback tool's name is never shadowed even before the first listing refreshes
-    the collision flag. Raw low-level servers have no registry to probe; they rely
-    on the listing-derived flag alone."""
-    if high_level is None:
-        return False
-    try:
-        return await high_level.get_tool(name) is not None
-    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
-        return False
+async def _name_owned_by_real_tool(
+    high_level: Any, data: MCPAnalyticsData, name: str, server: Any
+) -> bool:
+    """Whether a real application tool owns ``name``, so a virtual tool never
+    shadows it even before the first listing refreshes the collision state.
+
+    Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
+    rather than twin helpers that can drift. On the standalone-fastmcp path the
+    tool registry answers authoritatively. A raw low-level server has no
+    registry, so it falls back to asking the host's own tools/list handler."""
+    if high_level is not None:
+        try:
+            return await high_level.get_tool(name) is not None
+        except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+            return False
+    return await raw_listing_owns_tool_name(data, name, server)
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:
