@@ -14,9 +14,8 @@ server's ``request_context`` contextvar (the handler receives only the request).
 
 from __future__ import annotations
 
-import inspect
 import time
-from typing import Any, Optional, Tuple
+from typing import Any, FrozenSet, Optional, Tuple
 
 import mcp.types as mcp_types
 
@@ -43,6 +42,7 @@ from ._instrumentation import (
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._standalone import standalone_injected_parameters
 from .logger import log
 from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
 
@@ -182,7 +182,11 @@ def _wrap_call_tool(
     async def handler(req: Any) -> Any:
         name = req.params.name
         arguments = dict(req.params.arguments or {})
-        owned = await _tool_owned_injected_keys(high_level, name)
+        injected = (
+            await standalone_injected_parameters(high_level, data, name, None)
+            if high_level is not None
+            else None
+        )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
@@ -196,7 +200,7 @@ def _wrap_call_tool(
             name=name,
             arguments=arguments,
             request_meta=request_meta_from_context(_request_context(server)),
-            allow_self_reported_model=_analytics_reads_model(data, name, owned),
+            allow_self_reported_model=_analytics_reads_model(data, name, injected),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -236,10 +240,9 @@ def _wrap_call_tool(
         # but NOT a key the tool declares itself (that's a real argument). Ownership
         # is read from the tool's own signature, so it holds with or without a prior
         # tools/list and across stateless per-request server instances.
-        if strip_injected and req.params.arguments:
-            for key in _INJECTED_KEYS:
-                if key not in (owned or set()):
-                    req.params.arguments.pop(key, None)
+        if strip_injected and injected and req.params.arguments:
+            for key in injected:
+                req.params.arguments.pop(key, None)
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
@@ -436,40 +439,15 @@ async def _feedback_name_owned_by_real_tool(high_level: Any, name: str) -> bool:
         return False
 
 
-_INJECTED_KEYS = ("context", "conversation_id", "llm_model")
-
-
-async def _tool_owned_injected_keys(high_level: Any, name: str) -> Optional[set]:
-    """Which of ``_INJECTED_KEYS`` the jlowin FastMCP tool declares itself, read
-    from its advertised ``parameters`` schema (a ``Tool`` subclass may have no
-    function), else from its function signature. These are real tool arguments
-    we must not strip. On any lookup failure, return empty (strip all) — same as
-    the prior unconditional behaviour, so a flaky introspection never leaks an
-    injected key. ``None`` means there is no registry to ask: raw low-level
-    servers."""
-    if high_level is None:
-        return None
-    try:
-        tool = await high_level.get_tool(name)
-        schema = getattr(tool, "parameters", None)
-        if isinstance(schema, dict):
-            return {k for k in _INJECTED_KEYS if schema_has_param(schema, k)}
-        fn = getattr(tool, "fn", None)
-        params = set(inspect.signature(fn).parameters) if fn is not None else set()
-        return {k for k in _INJECTED_KEYS if k in params}
-    except Exception:  # noqa: BLE001 - introspection is best-effort
-        return set()
-
-
 def _analytics_reads_model(
-    data: MCPAnalyticsData, name: str, owned: Optional[set]
+    data: MCPAnalyticsData, name: str, injected: Optional[FrozenSet[str]]
 ) -> bool:
     """Whether ``llm_model`` in the arguments is read as the self-reported model.
     The registry answers for standalone FastMCP. Raw servers only learn ownership
     while serving ``tools/list``; a cold per-request instance has no answer and
     reads anyway. Reading fails open, stripping fails closed (posthog-js ADR-0011)."""
-    if owned is not None:
-        return "llm_model" not in owned
+    if injected is not None:
+        return "llm_model" in injected
     return data.tool_model_parameter_injected.get(name) is not False
 
 

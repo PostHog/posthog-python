@@ -171,12 +171,28 @@ async def test_jlowin_cold_call_strips_llm_model_and_records_it():
     assert not _events(client, "$mcp_tools_list")
 
 
+_OWN_MODEL = {"llm_model": {"type": "string"}}
+
+
 @pytest.mark.parametrize("capture_model", [True, False])
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"type": "object", "properties": _OWN_MODEL, "required": ["llm_model"]},
+        {
+            "allOf": [
+                {"type": "object", "properties": _OWN_MODEL, "required": ["llm_model"]}
+            ]
+        },
+    ],
+    ids=["properties", "allOf"],
+)
 async def test_jlowin_schema_declared_llm_model_is_kept_and_not_misreported(
-    capture_model,
+    capture_model, parameters
 ):
     # A Tool subclass declares its arguments in `parameters` and has no `fn`.
-    # Its own llm_model must reach the tool and must not be read as the model.
+    # Its own llm_model must reach the tool and must not be read as the model,
+    # whether it sits in top-level properties or inside a composed schema.
     from fastmcp.tools import Tool
     from fastmcp.tools.tool import ToolResult
 
@@ -189,16 +205,7 @@ async def test_jlowin_schema_declared_llm_model_is_kept_and_not_misreported(
             )
 
     server = FastMCP("jlowin-schema-owner")
-    server.add_tool(
-        Router(
-            name="route",
-            parameters={
-                "type": "object",
-                "properties": {"llm_model": {"type": "string"}},
-                "required": ["llm_model"],
-            },
-        )
-    )
+    server.add_tool(Router(name="route", parameters=parameters))
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(capture_model=capture_model))
 
