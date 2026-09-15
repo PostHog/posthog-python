@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
@@ -42,14 +42,15 @@ from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
     collect_listed_tools,
-    listing_has_next_page,
+    is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
+    raw_listing_owns_tool_name,
     record_resource_request,
-    refresh_feedback_shadow,
     resource_listing_response,
     resolve_session_and_client,
+    resolve_virtual_tool_injection,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
 )
@@ -67,7 +68,6 @@ from .session_token import read_mcp_session_header
 from .tools import (
     build_report_missing_descriptor,
     get_more_tools_result_text,
-    resolve_missing_capability_tool_name,
 )
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
@@ -298,7 +298,11 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             extra={"session_id": mcp_session_id, "ctx": ctx},
         )
 
-        if lifecycle.is_missing_capability:
+        # The registry probe covers the window before any tools/list has run,
+        # when the listing-derived collision state is still empty.
+        if lifecycle.is_missing_capability and not _name_owned_by_real_tool_v2(
+            server, name
+        ):
             await lifecycle.record_missing_capability()
             return mcp_types.CallToolResult(
                 content=[
@@ -308,9 +312,7 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
-        if lifecycle.is_feedback and not _feedback_name_owned_by_real_tool_v2(
-            server, name
-        ):
+        if lifecycle.is_feedback and not _name_owned_by_real_tool_v2(server, name):
             reply = await lifecycle.record_feedback()
             return mcp_types.CallToolResult(
                 content=[mcp_types.TextContent(type="text", text=reply)]
@@ -518,7 +520,11 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             extra={"session_id": mcp_session_id, "ctx": ctx},
         )
 
-        if lifecycle.is_missing_capability:
+        # No tool registry on a raw low-level server, so ownership is settled
+        # by asking the host's own tools/list handler.
+        if lifecycle.is_missing_capability and not await raw_listing_owns_tool_name(
+            data, name, ctx
+        ):
             await lifecycle.record_missing_capability()
             return mcp_types.CallToolResult(
                 content=[
@@ -528,9 +534,9 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
-        # No registry to probe on a raw low-level server; interception relies on
-        # the listing-derived collision flag alone.
-        if lifecycle.is_feedback:
+        if lifecycle.is_feedback and not await raw_listing_owns_tool_name(
+            data, name, ctx
+        ):
             reply = await lifecycle.record_feedback()
             return mcp_types.CallToolResult(
                 content=[mcp_types.TextContent(type="text", text=reply)]
@@ -649,6 +655,21 @@ def _wrap_v2_list_tools(
         return
     original = entry.handler
 
+    async def probe_raw_tool_names(ctx: Any = None) -> Optional[Set[str]]:
+        """The names the host's own handler advertises on its first page. Calls
+        ``original``, not the wrapper, so the probe never recurses into
+        instrumentation or appends a virtual tool. Read by the raw v2 low-level
+        call path, which has no tool registry to ask instead."""
+        result = await original(ctx, None)
+        tools = getattr(result, "tools", []) or []
+        return {
+            name
+            for tool in tools
+            if isinstance(name := getattr(tool, "name", None), str)
+        }
+
+    data.raw_tool_names_probe = probe_raw_tool_names
+
     async def handler(ctx: Any, params: Any) -> Any:
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
@@ -679,7 +700,9 @@ def _wrap_v2_list_tools(
         tools = list(getattr(result, "tools", []) or [])
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
-        feedback_name = refresh_feedback_shadow(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data, tools, is_first_page=is_first_listing_page(params)
+        )
 
         for tool in tools:
             schema = getattr(tool, "input_schema", None)
@@ -694,17 +717,16 @@ def _wrap_v2_list_tools(
                 schema_attribute="input_schema",
                 owns_context=owns_context,
                 context_required=context_required,
+                is_sdk_virtual_tool=False,
             )
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                _append_get_more_tools_v2(result, missing_name, data)
-                names.append(missing_name)
+        if injection.missing_capability_name is not None:
+            _append_get_more_tools_v2(result, injection.missing_capability_name, data)
+            names.append(injection.missing_capability_name)
 
-        if feedback_name is not None and not listing_has_next_page(result):
-            _append_send_feedback_v2(result, data)
-            names.append(feedback_name)
+        if injection.feedback_name is not None:
+            _append_send_feedback_v2(result, injection.feedback_name, data)
+            names.append(injection.feedback_name)
 
         await lifecycle.record_result(
             names=names,
@@ -719,24 +741,28 @@ def _wrap_v2_list_tools(
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
 
 
-def _feedback_name_owned_by_real_tool_v2(high_level: Any, name: str) -> bool:
-    """Live registry probe so a real tool by the feedback tool's name is never
-    shadowed even before the first listing refreshes the collision flag."""
+def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> bool:
+    """Live registry probe so a real tool by a virtual tool's name is never
+    shadowed, even before the first listing refreshes the collision state.
+    Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
+    rather than twin helpers that can drift."""
     try:
         return high_level._tool_manager.get_tool(name) is not None
     except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
         return False
 
 
-def _append_send_feedback_v2(result: Any, data: MCPAnalyticsData) -> None:
+def _append_send_feedback_v2(result: Any, name: str, data: MCPAnalyticsData) -> None:
     """Append the send_feedback virtual tool to a v2 ListToolsResult. Callers gate
-    on :func:`refresh_feedback_shadow` returning a name."""
+    on :func:`resolve_virtual_tool_injection`, which resolves the name passed
+    here -- built into the Tool rather than re-resolved, so a rename can't drift
+    between the decision and the append."""
     options = resolve_collect_feedback_options(data.options.collect_feedback)
     if options is None:
         return
     descriptor = get_feedback_tool_descriptor(options)
     tool = mcp_types.Tool(
-        name=descriptor["name"],
+        name=name,
         description=descriptor["description"],
         input_schema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
@@ -750,6 +776,7 @@ def _append_send_feedback_v2(result: Any, data: MCPAnalyticsData) -> None:
         schema_attribute="input_schema",
         owns_context=True,
         context_required=True,
+        is_sdk_virtual_tool=True,
     )
     tools_list = getattr(result, "tools", None)
     if isinstance(tools_list, list):
@@ -770,6 +797,7 @@ def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) ->
         schema_attribute="input_schema",
         owns_context=True,
         context_required=True,
+        is_sdk_virtual_tool=True,
     )
     tools_list = getattr(result, "tools", None)
     if isinstance(tools_list, list):

@@ -134,8 +134,8 @@ and adds no tools.
 The tool covers what `report_missing` covers (as feedback_type
 `missing_capability`), so new integrations should enable only one of the two.
 
-If a real tool already uses the name, the SDK logs a warning, does not inject
-the virtual tool, and never intercepts the real tool.
+See [Virtual tools on a paginated `tools/list`](#virtual-tools-on-a-paginated-toolslist)
+for name collisions and the page rule.
 
 Use the object form to rename the tool, declare host-specific fields, or route
 reports to a real backend:
@@ -183,6 +183,66 @@ if call.is_feedback:
 
 `on_feedback` is ignored on this path — the dispatcher routes reports itself via
 `call.feedback_report`.
+
+On this path you own the page rule, because you pass the switches per call. Pass
+them for the first page only, and pass your own tool as `original_tool` so a real
+tool by a virtual tool's name wins:
+
+```python
+first_page = request.params.get("cursor") is None
+tools = posthog.prepare_tool_list(
+    page_tools, report_missing=first_page, collect_feedback=first_page
+)
+
+call = posthog.prepare_tool_call(
+    tool_name, raw_args, original_tool=my_tools.get(tool_name)
+)
+```
+
+## Virtual tools on a paginated `tools/list`
+
+`instrument()` advertises up to two tools of its own: `get_more_tools`
+(`report_missing=True`) and `send_feedback` (`collect_feedback=True`).
+
+A client concatenates every `tools/list` page into one list, so each virtual tool
+is appended to the **first page only** — the page every client reads, including
+clients that never follow `nextCursor`. "First page" means a `tools/list` request
+with no cursor; an empty string is a valid opaque cursor, so `cursor: ""` is a
+continuation page.
+
+### Tool name collisions
+
+Your tools win when the SDK can see them. Rename the SDK's tool to keep both:
+
+```python
+MCPAnalyticsOptions(
+    report_missing=True,
+    missing_capability_tool_name="find_posthog_tools",
+    collect_feedback=CollectFeedbackOptions(tool_name="tell_posthog"),
+)
+```
+
+- A real tool using the name **on the first page** wins: the SDK warns, does not
+  inject its own, and never intercepts yours.
+- A real tool that appears **only on a later page** is shadowed. Page one cannot
+  see page two, so the SDK's tool is already advertised by then; calls to the
+  name reach the SDK and your tool never runs. The SDK warns when that page is
+  served. `@posthog/mcp` behaves the same way.
+- Warnings go to the `logger` option *and* the `posthog.mcp` standard-library
+  logger, so a default-configured host sees them on stderr.
+
+At call time the SDK also checks ownership directly, which covers the window
+before any `tools/list` has run — the ordinary multi-pod case, where the process
+serving the call never served a listing. FastMCP and v2 `MCPServer` are asked via
+their tool registry; a raw low-level server has none, so the SDK asks your own
+`tools/list` handler instead, and only when an incoming call name matches a
+virtual tool's name.
+
+Two limits worth knowing. Configuring **both** virtual tools with the same name
+advertises only `get_more_tools` (every call path checks it first) and warns.
+And a server that serves **different tool sets to different callers** from one
+instrumented instance can flip the listing-derived collision state between
+requests; the call-time ownership checks above are the reliable signal there.
 
 ## Stateless / multi-pod servers
 

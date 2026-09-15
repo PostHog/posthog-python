@@ -56,14 +56,23 @@ async def resolve_tool_call_intent(
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]] = None,
 ) -> Optional[ResolvedIntent]:
-    from .tools import resolve_missing_capability_tool_name
+    from ._instrumentation import (
+        VIRTUAL_TOOL_MISSING_CAPABILITY,
+        injectable_virtual_tool_names,
+    )
 
     context_argument = _get_context_argument(request)
     name = (request.get("params") or {}).get("name")
-    missing_name = resolve_missing_capability_tool_name(data.options)
+    # The virtual tool carries its intent in its own `context` argument, which
+    # is captured as the event's own field rather than as `$mcp_intent`. Resolved
+    # through the injectable map, so a *real* application tool that owns the name
+    # keeps its `context` captured as intent like any other tool's.
+    missing_name = injectable_virtual_tool_names(data).get(
+        VIRTUAL_TOOL_MISSING_CAPABILITY
+    )
     if (
         is_context_enabled(data.options.context)
-        and name != missing_name
+        and (missing_name is None or name != missing_name)
         and context_argument
     ):
         return (context_argument, "context_parameter")

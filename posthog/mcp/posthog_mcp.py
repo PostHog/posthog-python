@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import copy
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from posthog.client import Client
 
@@ -24,9 +24,15 @@ from ._context_parameters import (
 )
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
-from ._instrumentation import drain_pending_sync, fire_and_forget
+from ._instrumentation import (
+    VIRTUAL_TOOL_FEEDBACK,
+    VIRTUAL_TOOL_MISSING_CAPABILITY,
+    drain_pending_sync,
+    fire_and_forget,
+    virtual_tool_collision_message,
+)
 from ._lib_identity import apply_mcp_lib_identity
-from .logger import log
+from .logger import log, warn
 from ._model_parameters import (
     add_model_parameter_to_schema,
     can_inject_model_parameter,
@@ -106,6 +112,9 @@ class PostHogMCP(Client):
         self._mcp_exception_autocapture = mcp_exception_autocapture
         self._capture_model = capture_model
         self._model_parameter_injected: Dict[str, bool] = {}
+        # (kind, name) collision warnings already emitted from prepare_tool_list,
+        # so a host that prepares a listing per request logs each once.
+        self._warned_virtual_tool_collisions: Set[Tuple[str, str]] = set()
 
     # --- lifecycle -----------------------------------------------------------
 
@@ -361,7 +370,21 @@ class PostHogMCP(Client):
         requires the constructor's ``collect_feedback`` option — the enable switch
         that gates detection in :meth:`prepare_tool_call`). Returns a new list;
         dict tools are copied, context injection mutates tool objects in place,
-        and model injection copies them to preserve field ownership."""
+        and model injection copies them to preserve field ownership.
+
+        **On a paginated listing, pass the two switches for the first page only.**
+        A client concatenates every page into one list, so a virtual tool
+        appended to each page appears once per page. The first page is the one
+        every client reads, including clients that never follow ``nextCursor``::
+
+            first_page = request.params.get("cursor") is None
+            tools = posthog.prepare_tool_list(
+                page_tools, report_missing=first_page, collect_feedback=first_page
+            )
+
+        A real tool already using a virtual tool's name wins: it is left alone,
+        nothing is appended, and a warning names the option that renames
+        PostHog's tool."""
         prepared = []
         context_description = get_context_description(context)
         for tool in tools:
@@ -372,20 +395,43 @@ class PostHogMCP(Client):
             )
             prepared.append(current)
 
-        if report_missing and not any(
-            _tool_name(t) == self._missing_capability_tool_name for t in prepared
-        ):
-            prepared.append(
-                build_report_missing_descriptor(self._missing_capability_tool_name)
-            )
-        if (
-            collect_feedback
-            and self._collect_feedback is not None
-            and not any(_tool_name(t) == self._feedback_tool_name for t in prepared)
-        ):
-            prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
+        if report_missing:
+            name = self._missing_capability_tool_name
+            if any(_tool_name(t) == name for t in prepared):
+                self._warn_virtual_tool_collision(
+                    VIRTUAL_TOOL_MISSING_CAPABILITY,
+                    name,
+                    'PostHogMCP(missing_capability_tool_name="...")',
+                )
+            else:
+                prepared.append(build_report_missing_descriptor(name))
+        if collect_feedback and self._collect_feedback is not None:
+            name = self._feedback_tool_name
+            if any(_tool_name(t) == name for t in prepared):
+                self._warn_virtual_tool_collision(
+                    VIRTUAL_TOOL_FEEDBACK,
+                    name,
+                    'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
+                )
+            else:
+                prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
         prepared = self._inject_models(prepared)
         return prepared
+
+    def _warn_virtual_tool_collision(
+        self, kind: str, name: str, rename_option: str
+    ) -> None:
+        """Warn once per ``(kind, name)`` for this client's lifetime, so a host
+        that prepares a listing on every request doesn't flood the log."""
+        key = (kind, name)
+        if key in self._warned_virtual_tool_collisions:
+            return
+        self._warned_virtual_tool_collisions.add(key)
+        warn(
+            virtual_tool_collision_message(
+                kind, name, "blocked", rename_option=rename_option
+            )
+        )
 
     def prepare_tool_call(
         self,
@@ -429,14 +475,20 @@ class PostHogMCP(Client):
         if analytics_owns_model:
             prepared_args = _strip_model(prepared_args)
         # A supplied `original_tool` is a real application tool by this name (it
-        # comes from the host's own list, which never holds the virtual tool), so
-        # the real tool wins — the stateless twin of instrument()'s listing-derived
-        # shadow flag. Without it the name match stands, and the documented remedy
-        # for a collision is configuring a non-colliding `tool_name`.
+        # comes from the host's own list, which never holds a virtual tool), so
+        # the real tool wins — the stateless twin of instrument()'s
+        # listing-derived collision state. Without it the name match stands, and
+        # the documented remedy for a collision is renaming PostHog's tool.
         is_feedback = (
             self._collect_feedback is not None
             and name == self._feedback_tool_name
             and original_tool is None
+        )
+        # Same guard for the missing-capability tool. Unlike feedback it has no
+        # constructor enable switch on this path (the name is always populated),
+        # so `original_tool` is the only ownership signal available here.
+        is_missing_capability = (
+            name == self._missing_capability_tool_name and original_tool is None
         )
         return PreparedToolCall(
             args=prepared_args,
@@ -444,7 +496,7 @@ class PostHogMCP(Client):
             intent_source="context_parameter" if intent else None,
             llm_model=llm_model,
             llm_model_source=llm_model_source,
-            is_missing_capability=name == self._missing_capability_tool_name,
+            is_missing_capability=is_missing_capability,
             is_feedback=is_feedback,
             feedback_report=(
                 parse_feedback_report(args, self._collect_feedback)

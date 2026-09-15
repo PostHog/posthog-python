@@ -34,10 +34,11 @@ from ._instrumentation import (
     append_send_feedback,
     collect_listed_tools,
     extract_tools,
-    listing_has_next_page,
+    is_first_listing_page,
     mutate_tool_schema,
-    refresh_feedback_shadow,
+    refresh_virtual_tool_collisions,
     request_to_dict,
+    resolve_virtual_tool_injection,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
@@ -50,7 +51,7 @@ from ._model_parameters import (
 )
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
+from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -115,15 +116,17 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             },
         )
 
-        if lifecycle.is_missing_capability:
+        # The registry probe covers the window before any tools/list has run,
+        # when the listing-derived collision state is still empty.
+        if lifecycle.is_missing_capability and not _name_owned_by_real_tool(
+            server, name
+        ):
             await lifecycle.record_missing_capability()
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
 
-        if lifecycle.is_feedback and not _feedback_name_owned_by_real_tool(
-            server, name
-        ):
+        if lifecycle.is_feedback and not _name_owned_by_real_tool(server, name):
             reply = await lifecycle.record_feedback()
             return [mcp_types.TextContent(type="text", text=reply)]
 
@@ -206,6 +209,7 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
             schema_attribute="inputSchema",
             owns_context=_tool_owns_context(server, tool.name),
             context_required=True,
+            is_sdk_virtual_tool=False,
         )
 
 
@@ -229,10 +233,12 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision flag here too: this pass sees the real tool
-            # registry, so a real tool named like the feedback tool is detected
-            # before any client-facing listing.
-            refresh_feedback_shadow(data, tools)
+            # Refresh the collision state here too: this pass sees the real
+            # tool registry, so a real tool named like one of the virtual tools
+            # is detected before any client-facing listing. Nothing is appended
+            # — this result is the SDK's own validation cache, never sent to a
+            # client.
+            refresh_virtual_tool_collisions(data, tools)
             _inject_tool_schemas(server, data, tools)
             return result
 
@@ -272,19 +278,21 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         tools = extract_tools(result)
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
-        feedback_name = refresh_feedback_shadow(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data,
+            tools,
+            is_first_page=is_first_listing_page(getattr(req, "params", None)),
+        )
 
         _inject_tool_schemas(server, data, tools)
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name, data)
-                names.append(missing_name)
+        if injection.missing_capability_name is not None:
+            append_get_more_tools(result, injection.missing_capability_name, data)
+            names.append(injection.missing_capability_name)
 
-        if feedback_name is not None and not listing_has_next_page(result):
-            append_send_feedback(result, data)
-            names.append(feedback_name)
+        if injection.feedback_name is not None:
+            append_send_feedback(result, injection.feedback_name, data)
+            names.append(injection.feedback_name)
 
         await lifecycle.record_result(
             names=names,
@@ -322,9 +330,11 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result
 
 
-def _feedback_name_owned_by_real_tool(server: Any, name: str) -> bool:
-    """Live registry probe so a real tool by the feedback tool's name is never
-    shadowed even before the first listing refreshes the collision flag."""
+def _name_owned_by_real_tool(server: Any, name: str) -> bool:
+    """Live registry probe so a real tool by a virtual tool's name is never
+    shadowed, even before the first listing refreshes the collision state.
+    Kind-agnostic on purpose: it is a lookup by name, so both virtual tools
+    share it rather than growing twin helpers that can drift."""
     try:
         tool_manager = getattr(server, "_tool_manager", None)
         return tool_manager is not None and tool_manager.get_tool(name) is not None

@@ -379,6 +379,28 @@ async def test_report_missing_accepts_omitted_arguments():
     assert "$mcp_intent" not in missing[0]["properties"]
 
 
+async def test_real_get_more_tools_is_not_intercepted():
+    # The registry probe is the only ownership signal before any tools/list has
+    # run -- the multi-pod case. Without it the SDK swallows the host's tool and
+    # answers with its own canned reply.
+    server = MCPServer("test-server-v2")
+
+    @server.tool()
+    def get_more_tools(context: str) -> str:
+        """A real application tool that owns the name."""
+        return "real tool ran"
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+
+    result = await _call_tool(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+
+    assert "real tool ran" in str(result.content)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert _events(client, "$mcp_tool_call")
+
+
 async def test_collect_feedback_advertises_and_captures():
     server = make_server()
     client = FakeClient()
