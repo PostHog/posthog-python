@@ -1,6 +1,9 @@
 import gzip
 import json
+import threading
+import time
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest import mock
 
@@ -199,3 +202,64 @@ class TestParseRetryAfter:
         session.post.return_value = response
         outcome, _ = send(session=session)
         assert outcome == SendOutcome("retry-later", None)
+
+
+class _ChunkedHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        self.send_response(self.server.status)
+        self.send_header("Transfer-Encoding", "chunked")
+        self.end_headers()
+        if self.server.status < 300:
+            self.wfile.write(b"0\r\n\r\n")
+            return
+        # An error body that drips a chunk every 10 ms and never finishes.
+        while not self.server.stop.is_set():
+            try:
+                self.wfile.write(b"1\r\nx\r\n")
+                self.wfile.flush()
+            except OSError:
+                return
+            time.sleep(0.01)
+
+    def log_message(self, *args):
+        pass
+
+
+@pytest.fixture
+def local_server():
+    servers = []
+
+    def start(status):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), _ChunkedHandler)
+        server.status = status
+        server.stop = threading.Event()
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        servers.append((server, thread))
+        return "http://127.0.0.1:{}".format(server.server_port)
+
+    yield start
+    for server, thread in servers:
+        server.stop.set()
+        server.shutdown()
+        server.server_close()
+        thread.join(2)
+
+
+class TestResponseBody:
+    def test_closes_the_response_without_reading_the_body(self):
+        _, session = send()
+        assert session.post.call_args[1]["stream"] is True
+        assert session.post.return_value.close.called
+
+    def test_does_not_wait_for_a_dripping_error_body(self, local_server):
+        client = fake_client(host=local_server(503), timeout=0.5)
+        started = time.monotonic()
+        outcome = send_traces_batch(client, PAYLOAD)
+        assert outcome == SendOutcome("retry-later", None)
+        assert time.monotonic() - started < 2
+
+    def test_a_completed_response_is_still_ok(self, local_server):
+        client = fake_client(host=local_server(200), timeout=0.5)
+        assert send_traces_batch(client, PAYLOAD) == SendOutcome("ok")

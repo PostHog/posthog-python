@@ -8,6 +8,7 @@ class Response:
     text: str
     headers: dict[str, str]
     def json(self) -> Any: ...
+    def close(self) -> None: ...
 
 class Session:
     def mount(self, prefix: str, adapter: adapters.HTTPAdapter) -> None: ...
@@ -19,6 +20,7 @@ class Session:
         data: str | bytes,
         headers: dict[str, str],
         timeout: int,
+        stream: bool = ...,
     ) -> Response: ...
     def get(
         self,
