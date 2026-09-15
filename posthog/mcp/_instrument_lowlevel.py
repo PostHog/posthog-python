@@ -441,14 +441,19 @@ _INJECTED_KEYS = ("context", "conversation_id", "llm_model")
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> Optional[set]:
     """Which of ``_INJECTED_KEYS`` the jlowin FastMCP tool declares itself, read
-    from its function signature. These are real tool arguments we must not strip.
-    On any lookup failure, return empty (strip all) — same as the prior
-    unconditional behaviour, so a flaky introspection never leaks an injected key.
-    ``None`` means there is no registry to ask: raw low-level servers."""
+    from its advertised ``parameters`` schema (a ``Tool`` subclass may have no
+    function), else from its function signature. These are real tool arguments
+    we must not strip. On any lookup failure, return empty (strip all) — same as
+    the prior unconditional behaviour, so a flaky introspection never leaks an
+    injected key. ``None`` means there is no registry to ask: raw low-level
+    servers."""
     if high_level is None:
         return None
     try:
         tool = await high_level.get_tool(name)
+        schema = getattr(tool, "parameters", None)
+        if isinstance(schema, dict):
+            return {k for k in _INJECTED_KEYS if schema_has_param(schema, k)}
         fn = getattr(tool, "fn", None)
         params = set(inspect.signature(fn).parameters) if fn is not None else set()
         return {k for k in _INJECTED_KEYS if k in params}

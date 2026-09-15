@@ -169,3 +169,42 @@ async def test_jlowin_cold_call_strips_llm_model_and_records_it():
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["properties"]["$mcp_llm_model"] == "model-a"
     assert not _events(client, "$mcp_tools_list")
+
+
+@pytest.mark.parametrize("capture_model", [True, False])
+async def test_jlowin_schema_declared_llm_model_is_kept_and_not_misreported(
+    capture_model,
+):
+    # A Tool subclass declares its arguments in `parameters` and has no `fn`.
+    # Its own llm_model must reach the tool and must not be read as the model.
+    from fastmcp.tools import Tool
+    from fastmcp.tools.tool import ToolResult
+
+    class Router(Tool):
+        async def run(self, arguments):
+            return ToolResult(
+                content=[
+                    mcp_types.TextContent(type="text", text=arguments["llm_model"])
+                ]
+            )
+
+    server = FastMCP("jlowin-schema-owner")
+    server.add_tool(
+        Router(
+            name="route",
+            parameters={
+                "type": "object",
+                "properties": {"llm_model": {"type": "string"}},
+                "required": ["llm_model"],
+            },
+        )
+    )
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(capture_model=capture_model))
+
+    out = await _call(server, "route", {"llm_model": "gpt-5", "context": "routing"})
+    await _flush()
+
+    assert out.root.isError is False
+    assert out.root.content[0].text == "gpt-5"
+    assert "$mcp_llm_model" not in _events(client, "$mcp_tool_call")[0]["properties"]
