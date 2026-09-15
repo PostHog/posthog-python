@@ -10,6 +10,7 @@ from io import BytesIO
 from typing import Any, Optional
 from urllib.parse import quote, urljoin, urlsplit
 
+from ._event_properties import _clean_event_properties
 from .capture_compression import CaptureCompression
 from .capture_v1 import _parse_retry_after, _send_v1_batch
 from .request import (
@@ -49,6 +50,10 @@ def _serialize_v0_body(
         "sent_at": datetime.now(tz=timezone.utc).isoformat(),
         "api_key": api_key,
     }
+    if "batch" in payload:
+        payload["batch"] = [
+            _clean_event_properties(event) for event in payload["batch"]
+        ]
     serialized = json.dumps(payload, cls=DatetimeSerializer)
     data: str | bytes = serialized
     headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}

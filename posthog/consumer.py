@@ -18,6 +18,8 @@ from posthog.request import (
 
 from queue import Empty
 
+from ._event_properties import _clean_event_properties
+
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
 
@@ -244,7 +246,9 @@ class Consumer(Thread):
                     pending_items += 1
                     try:
                         item_size = len(
-                            json.dumps(item, cls=DatetimeSerializer).encode()
+                            json.dumps(
+                                _clean_event_properties(item), cls=DatetimeSerializer
+                            ).encode()
                         )
                     except Exception:
                         # Callback-modified events can still contain invalid mapping

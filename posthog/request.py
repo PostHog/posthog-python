@@ -19,6 +19,8 @@ from posthog._logging import _configure_posthog_logging
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
+from ._event_properties import _clean_event_properties
+
 SocketOptions = List[Tuple[int, int, Union[int, bytes]]]
 
 KEEPALIVE_IDLE_SECONDS = 60
@@ -395,6 +397,8 @@ def batch_post(
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the batch API endpoint for events"""
+    if "batch" in kwargs:
+        kwargs["batch"] = [_clean_event_properties(event) for event in kwargs["batch"]]
     res = post(api_key, host, path, gzip, timeout, **kwargs)
     return _process_response(
         res, success_message="data uploaded successfully", return_json=False
