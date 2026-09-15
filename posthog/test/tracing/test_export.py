@@ -896,3 +896,20 @@ class TestCloseAndFork:
         )
         pipeline.start_span("child-span").end()
         assert [r.name for r in queued(pipeline)] == ["child-span"]
+
+
+class TestResourceAttributes:
+    def test_bounds_resource_attributes_on_every_batch(self):
+        sender = FakeSender(SendOutcome("ok"))
+        pipeline, _, _ = make_traces(
+            sender=sender,
+            max_attribute_value_length=5,
+            resource_attributes={"team": "platform-infrastructure"},
+        )
+        pipeline.start_span("a").end()
+        pipeline.flush()
+        resource = {
+            kv["key"]: kv["value"]
+            for kv in sender.payloads[0]["resourceSpans"][0]["resource"]["attributes"]
+        }
+        assert resource["team"] == {"stringValue": "platf"}

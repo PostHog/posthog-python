@@ -29,10 +29,10 @@ SpanTimeInput = Union[datetime, int, float]
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
-def sanitize_name(name: Any, label: str) -> str:
-    """A non-empty name; an unusable one becomes ``unknown`` rather than dropping the span."""
+def sanitize_name(name: Any, label: str, max_length: Optional[int] = None) -> str:
+    """A non-empty name, truncated to ``max_length``; an unusable one becomes ``unknown``."""
     if isinstance(name, str) and name.strip():
-        return name
+        return name if max_length is None else name[:max_length]
     log.debug('%s must be a non-empty string; using "%s"', label, FALLBACK_SPAN_NAME)
     return FALLBACK_SPAN_NAME
 

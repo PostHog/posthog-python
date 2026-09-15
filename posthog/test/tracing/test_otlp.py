@@ -268,6 +268,39 @@ class TestBuildOtlpSpan:
     def test_marks_a_header_parent_as_remote(self):
         assert build_otlp_span(record(parent_is_remote=True))["flags"] == 0x301
 
+    def test_omits_dropped_counts_when_nothing_was_dropped(self):
+        span = build_otlp_span(record(events=[SpanEventRecord("e", START_NS)]))
+        assert "droppedAttributesCount" not in span
+        assert "droppedEventsCount" not in span
+        assert "droppedAttributesCount" not in span["events"][0]
+
+    def test_emits_dropped_counts_on_the_span_and_its_events(self):
+        span = build_otlp_span(
+            record(
+                dropped_attributes_count=2,
+                dropped_events_count=3,
+                events=[SpanEventRecord("e", START_NS, {"k": 1}, 4)],
+            )
+        )
+        assert span["droppedAttributesCount"] == 2
+        assert span["droppedEventsCount"] == 3
+        assert span["events"][0]["droppedAttributesCount"] == 4
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            (2**40, 0xFFFFFFFF),
+            (-1, 0),
+            (1.9, 1),
+            ("3", 0),
+            (True, 0),
+            (float("inf"), 0),
+        ],
+    )
+    def test_clamps_a_dropped_count_to_uint32(self, value, expected):
+        span = build_otlp_span(record(dropped_attributes_count=value))
+        assert span.get("droppedAttributesCount", 0) == expected
+
     def test_propagates_an_inbound_sampled_out_flag(self):
         assert build_otlp_span(record(trace_flags="00"))["flags"] == 0x100
 
