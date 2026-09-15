@@ -923,6 +923,49 @@ async def test_posthogmcp_prepare_tool_list_appends_descriptor():
         collect_feedback=True,
     )
     assert [t["name"] for t in collided] == ["send_feedback"]
+    # ...and that real tool still gets `context`, so its intent is captured. It
+    # is only PostHog's own descriptor — recognised by already declaring
+    # `context`, not by its name alone — that is left alone.
+    assert "context" in collided[0]["inputSchema"]["properties"]
+
+
+async def test_posthogmcp_real_tool_named_get_more_tools_keeps_context():
+    # A host tool named like a virtual tool used to be mistaken for PostHog's
+    # own descriptor and skipped, silently dropping its $mcp_intent.
+    client, _ = make_client()
+    prepared = client.prepare_tool_list(
+        [
+            {
+                "name": "get_more_tools",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+    )
+    assert "context" in prepared[0]["inputSchema"]["properties"]
+
+
+async def test_posthogmcp_repreparing_a_prepared_list_is_not_a_collision(caplog):
+    # Hosts may re-prepare an already-prepared list. PostHog's own descriptors
+    # come back in it, and mistaking them for host tools would both warn about
+    # ourselves and duplicate the tools.
+    client, _ = make_client(collect_feedback=True)
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    once = client.prepare_tool_list(tools, report_missing=True, collect_feedback=True)
+    assert [t["name"] for t in once] == ["search", "get_more_tools", "send_feedback"]
+
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        twice = client.prepare_tool_list(
+            once, report_missing=True, collect_feedback=True
+        )
+
+    assert [t["name"] for t in twice] == [t["name"] for t in once]
+    assert not [r for r in caplog.records if r.name == "posthog.mcp"]
+    # The descriptors' own schemas are unchanged: get_more_tools keeps just its
+    # own `context`, and send_feedback — which states intent through `summary`
+    # and `details` instead — gains none.
+    assert list(twice[1]["inputSchema"]["properties"]) == ["context"]
+    assert "context" not in twice[2]["inputSchema"]["properties"]
 
 
 async def test_posthogmcp_prepare_tool_list_requires_constructor_option():

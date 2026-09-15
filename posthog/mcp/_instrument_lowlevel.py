@@ -432,11 +432,13 @@ def _wrap_list_tools(
         _inject_tool_schemas(data, tools, context_required=context_required)
 
         if injection.missing_capability_name is not None:
-            append_get_more_tools(result, injection.missing_capability_name, data)
+            result = append_get_more_tools(
+                result, injection.missing_capability_name, data
+            )
             names.append(injection.missing_capability_name)
 
         if injection.feedback_name is not None:
-            append_send_feedback(result, injection.feedback_name, data)
+            result = append_send_feedback(result, injection.feedback_name, data)
             names.append(injection.feedback_name)
 
         await lifecycle.record_result(

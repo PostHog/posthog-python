@@ -14,7 +14,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -676,9 +676,32 @@ def extract_tools(result: Any) -> list:
     return list(getattr(root, "tools", []) or [])
 
 
-def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> None:
-    """Append the get_more_tools virtual tool to the real ListToolsResult.tools
-    list. Callers gate on :func:`resolve_virtual_tool_injection`."""
+def append_virtual_tool(result: Any, tool: Any) -> Any:
+    """Return a ``tools/list`` result with ``tool`` added, leaving the host's own
+    result object untouched.
+
+    A copy, not an in-place append, because a host may return the *same* result
+    object from every ``tools/list`` -- a module-level constant, or its own
+    cache. Mutating it would leave PostHog's virtual tool sitting in what later
+    reads back as the host's catalogue: the SDK would see a collision against
+    itself, stop intercepting, and hand the agent an unknown-tool error instead
+    of recording its feedback. Copying keeps every read of a listing a faithful
+    view of what the host served.
+
+    Handles both SDK majors' result shapes: 1.x wraps ``ListToolsResult`` in a
+    ``ServerResult`` root model, 2.x returns it directly. Other fields --
+    ``nextCursor`` above all -- are carried over by the copy."""
+    root = getattr(result, "root", result)
+    tools_list = getattr(root, "tools", None)
+    if not isinstance(tools_list, list):
+        return result
+    updated = root.model_copy(update={"tools": [*tools_list, tool]})
+    return type(result)(updated) if hasattr(result, "root") else updated
+
+
+def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> Any:
+    """Add the get_more_tools virtual tool to a ``tools/list`` result and return
+    the result to serve. Callers gate on :func:`resolve_virtual_tool_injection`."""
     import mcp.types as mcp_types
 
     from .tools import build_report_missing_descriptor
@@ -690,18 +713,15 @@ def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> Non
         inputSchema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
     )
-    root = getattr(result, "root", result)
-    tools_list = getattr(root, "tools", None)
-    if isinstance(tools_list, list):
-        mutate_tool_schema(
-            data,
-            tool,
-            schema_attribute="inputSchema",
-            owns_context=True,
-            context_required=True,
-            is_sdk_virtual_tool=True,
-        )
-        tools_list.append(tool)
+    mutate_tool_schema(
+        data,
+        tool,
+        schema_attribute="inputSchema",
+        owns_context=True,
+        context_required=True,
+        is_sdk_virtual_tool=True,
+    )
+    return append_virtual_tool(result, tool)
 
 
 def enabled_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
@@ -764,6 +784,15 @@ class VirtualToolInjection:
         return self.names.get(VIRTUAL_TOOL_FEEDBACK)
 
 
+def listed_tool_names(tools: list) -> Set[str]:
+    """The names a listing page advertises. The virtual tools are appended to a
+    *copy* of the host's result, so a page always reads back as the host wrote
+    it -- see :func:`append_get_more_tools`."""
+    return {
+        name for tool in tools if isinstance(name := getattr(tool, "name", None), str)
+    }
+
+
 def refresh_virtual_tool_collisions(data: MCPAnalyticsData, tools: list) -> None:
     """Rewrite ``data.virtual_tool_collisions`` from an authoritative view of the
     real tool set, warning once per newly-seen collision. Appends nothing.
@@ -813,7 +842,7 @@ def resolve_virtual_tool_injection(
         return VirtualToolInjection({})
 
     if not is_first_page:
-        listed = {getattr(tool, "name", None) for tool in tools}
+        listed = listed_tool_names(tools)
         for kind, name in enabled.items():
             if name in listed and kind not in data.virtual_tool_collisions:
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
@@ -849,13 +878,14 @@ async def raw_listing_owns_tool_name(
     (the ordinary multi-pod case) has no collision signal at all, so the SDK
     would intercept a real tool by that name and silently swallow it.
 
-    Only reached when an incoming call name matches a virtual tool's name, so
-    ordinary traffic never pays for the extra handler invocation. Like
-    ``@posthog/mcp``'s equivalent, this reads the first page only: a real tool
-    that appears solely on a later page is already shadowed by the page-one
-    injection and cannot be recovered here."""
+    Only reached when an incoming call name matches a virtual tool's name, and
+    only while this process has served no listing of its own -- once it has,
+    ``virtual_tool_collisions`` already carries the answer and the host's handler
+    is left alone. Like ``@posthog/mcp``'s equivalent, this reads the first page
+    only: a real tool that appears solely on a later page is already shadowed by
+    the page-one injection and cannot be recovered here."""
     probe = data.raw_tool_names_probe
-    if probe is None:
+    if probe is None or data.observed_listing:
         return False
     try:
         names = await probe(ctx)
@@ -908,16 +938,16 @@ def virtual_tool_collision_message(
     )
 
 
-def append_send_feedback(result: Any, name: str, data: MCPAnalyticsData) -> None:
-    """Append the send_feedback virtual tool to the real ListToolsResult.tools
-    list. Callers gate on :func:`resolve_virtual_tool_injection`, which resolves
-    the name passed here -- built into the Tool rather than re-resolved, so a
-    rename can't drift between the decision and the append."""
+def append_send_feedback(result: Any, name: str, data: MCPAnalyticsData) -> Any:
+    """Add the send_feedback virtual tool to a ``tools/list`` result and return
+    the result to serve. Callers gate on :func:`resolve_virtual_tool_injection`,
+    which resolves the name passed here -- built into the Tool rather than
+    re-resolved, so a rename can't drift between the decision and the append."""
     import mcp.types as mcp_types
 
     options = resolve_collect_feedback_options(data.options.collect_feedback)
     if options is None:
-        return
+        return result
     descriptor = get_feedback_tool_descriptor(options)
     tool = mcp_types.Tool(
         name=name,
@@ -925,21 +955,18 @@ def append_send_feedback(result: Any, name: str, data: MCPAnalyticsData) -> None
         inputSchema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
     )
-    root = getattr(result, "root", result)
-    tools_list = getattr(root, "tools", None)
-    if isinstance(tools_list, list):
-        # `owns_context=True`: the tool carries its intent in its own summary /
-        # details arguments, so no `context` parameter is injected — but the
-        # capture_model pass still runs, so it advertises `llm_model` too.
-        mutate_tool_schema(
-            data,
-            tool,
-            schema_attribute="inputSchema",
-            owns_context=True,
-            context_required=True,
-            is_sdk_virtual_tool=True,
-        )
-        tools_list.append(tool)
+    # `owns_context=True`: the tool carries its intent in its own summary /
+    # details arguments, so no `context` parameter is injected — but the
+    # capture_model pass still runs, so it advertises `llm_model` too.
+    mutate_tool_schema(
+        data,
+        tool,
+        schema_attribute="inputSchema",
+        owns_context=True,
+        context_required=True,
+        is_sdk_virtual_tool=True,
+    )
+    return append_virtual_tool(result, tool)
 
 
 def read_tool_category(tool: Any) -> Optional[str]:

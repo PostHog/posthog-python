@@ -317,3 +317,91 @@ async def test_real_tool_named_get_more_tools_keeps_normal_injection():
     calls = _events(client, "$mcp_tool_call")
     assert calls
     assert calls[0]["properties"]["$mcp_intent"] == "delete a cohort"
+
+
+# --- a host that reuses one result object --------------------------------------
+
+
+def _make_cached_lowlevel(tools):
+    """A raw low-level server that returns the SAME ``ServerResult`` object from
+    every tools/list -- a module-level constant or the host's own cache. The
+    appends mutate that object in place, so the SDK must not later read its own
+    injected tool back out of it as if the host owned the name."""
+    cached = mcp_types.ServerResult(mcp_types.ListToolsResult(tools=list(tools)))
+    server = Server("virtual-tools-cached")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        if name != "echo":
+            raise ValueError(f"Unknown tool: {name}")
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    async def list_tools(req):
+        return cached
+
+    server.request_handlers[mcp_types.ListToolsRequest] = list_tools
+    return server
+
+
+async def test_cached_result_object_does_not_collide_with_itself():
+    # Regression: the SDK saw its own injected tool in the host's reused result
+    # object, reported a collision against itself, stopped intercepting, and the
+    # agent got an unknown-tool error instead of its feedback being recorded.
+    server = _make_cached_lowlevel([_ECHO_TOOL])
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True, collect_feedback=True, logger=messages.append
+        ),
+    )
+
+    await _list_page(server)
+    feedback = await _call(server, "send_feedback", {"summary": "hi"})
+    missing = await _call(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+
+    assert feedback.root.isError is not True
+    assert missing.root.isError is not True
+    assert _events(client, "$mcp_feedback")
+    assert _events(client, "$mcp_missing_capability")
+    assert not [m for m in messages if "Cannot inject PostHog's" in m]
+
+
+async def test_cached_result_object_is_not_appended_to_twice():
+    # The same contamination would also read as a collision on the second
+    # listing, so the virtual tools would silently stop being advertised.
+    server = _make_cached_lowlevel([_ECHO_TOOL])
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(report_missing=True, collect_feedback=True),
+    )
+
+    first = _names(await _list_page(server))
+    second = _names(await _list_page(server))
+    assert first.count("get_more_tools") == 1
+    assert first.count("send_feedback") == 1
+    assert second == first
+
+
+async def test_listing_stops_the_call_path_reprobing_the_host():
+    # Once a listing has been served, its collision state is the answer, so the
+    # host's own tools/list handler is left alone on the call path.
+    server = _make_paged_lowlevel([[_ECHO_TOOL]])
+    instrument(server, FakeClient(), MCPAnalyticsOptions(report_missing=True))
+
+    original = server.request_handlers[mcp_types.ListToolsRequest]
+    await _list_page(server)
+
+    calls = []
+
+    async def counting_list(req):
+        calls.append(req)
+        return await original(req)
+
+    server.request_handlers[mcp_types.ListToolsRequest] = counting_list
+    await _call(server, "get_more_tools", {"context": "need csv"})
+    assert calls == []

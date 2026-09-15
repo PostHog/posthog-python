@@ -15,6 +15,7 @@ import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
 
 from posthog.mcp import instrument
+from posthog.mcp.tools import get_more_tools_result_text
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     FakeClient,
@@ -677,3 +678,40 @@ async def test_v2_first_page_collision_lets_the_real_tool_win():
     assert listed.count("get_more_tools") == 1  # the real tool, never appended
     assert any("Cannot inject PostHog's" in m for m in messages)
     assert any("missing_capability_tool_name" in m for m in messages)
+
+
+async def test_v2_cached_result_object_does_not_collide_with_itself():
+    # v2 returns ListToolsResult directly rather than wrapped in a root model,
+    # so it exercises the other branch of the non-mutating append. A host is
+    # free to hand back the same object every time; PostHog must not read its
+    # own injected tool back out of it as a real one.
+    cached = mcp_types.ListToolsResult(tools=[_ECHO_TOOL_V2])
+
+    async def on_call_tool(ctx, params):
+        raise ValueError(f"Unknown tool: {params.name}")
+
+    async def on_list_tools(ctx, params):
+        return cached
+
+    server = Server(
+        "test-cached-v2", on_call_tool=on_call_tool, on_list_tools=on_list_tools
+    )
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    first = [t.name for t in (await _list_page_v2(server)).tools]
+    second = [t.name for t in (await _list_page_v2(server)).tools]
+    assert first == ["echo", "get_more_tools"]
+    assert second == first
+    assert [t.name for t in cached.tools] == ["echo"]  # the host's object is untouched
+
+    result = await _call_tool(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+    assert result.content[0].text == get_more_tools_result_text()
+    assert _events(client, "$mcp_missing_capability")
+    assert not [m for m in messages if "Cannot inject PostHog's" in m]

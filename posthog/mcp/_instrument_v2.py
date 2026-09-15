@@ -41,6 +41,7 @@ from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
+    append_virtual_tool,
     collect_listed_tools,
     is_first_listing_page,
     mutate_tool_schema,
@@ -721,11 +722,13 @@ def _wrap_v2_list_tools(
             )
 
         if injection.missing_capability_name is not None:
-            _append_get_more_tools_v2(result, injection.missing_capability_name, data)
+            result = _append_get_more_tools_v2(
+                result, injection.missing_capability_name, data
+            )
             names.append(injection.missing_capability_name)
 
         if injection.feedback_name is not None:
-            _append_send_feedback_v2(result, injection.feedback_name, data)
+            result = _append_send_feedback_v2(result, injection.feedback_name, data)
             names.append(injection.feedback_name)
 
         await lifecycle.record_result(
@@ -752,14 +755,14 @@ def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> bool:
         return False
 
 
-def _append_send_feedback_v2(result: Any, name: str, data: MCPAnalyticsData) -> None:
+def _append_send_feedback_v2(result: Any, name: str, data: MCPAnalyticsData) -> Any:
     """Append the send_feedback virtual tool to a v2 ListToolsResult. Callers gate
     on :func:`resolve_virtual_tool_injection`, which resolves the name passed
     here -- built into the Tool rather than re-resolved, so a rename can't drift
     between the decision and the append."""
     options = resolve_collect_feedback_options(data.options.collect_feedback)
     if options is None:
-        return
+        return result
     descriptor = get_feedback_tool_descriptor(options)
     tool = mcp_types.Tool(
         name=name,
@@ -778,12 +781,10 @@ def _append_send_feedback_v2(result: Any, name: str, data: MCPAnalyticsData) -> 
         context_required=True,
         is_sdk_virtual_tool=True,
     )
-    tools_list = getattr(result, "tools", None)
-    if isinstance(tools_list, list):
-        tools_list.append(tool)
+    return append_virtual_tool(result, tool)
 
 
-def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) -> None:
+def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) -> Any:
     descriptor = build_report_missing_descriptor(name)
     tool = mcp_types.Tool(
         name=descriptor["name"],
@@ -799,6 +800,4 @@ def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) ->
         context_required=True,
         is_sdk_virtual_tool=True,
     )
-    tools_list = getattr(result, "tools", None)
-    if isinstance(tools_list, list):
-        tools_list.append(tool)
+    return append_virtual_tool(result, tool)

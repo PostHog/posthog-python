@@ -395,28 +395,40 @@ class PostHogMCP(Client):
             )
             prepared.append(current)
 
+        # A tool already using the name blocks injection — unless it is our own
+        # descriptor, which a host re-preparing an already-prepared list hands
+        # straight back. Warning about that would be warning about ourselves.
         if report_missing:
             name = self._missing_capability_tool_name
-            if any(_tool_name(t) == name for t in prepared):
+            if self._real_tool_owns_name(prepared, name):
                 self._warn_virtual_tool_collision(
                     VIRTUAL_TOOL_MISSING_CAPABILITY,
                     name,
                     'PostHogMCP(missing_capability_tool_name="...")',
                 )
-            else:
+            elif not any(_tool_name(t) == name for t in prepared):
                 prepared.append(build_report_missing_descriptor(name))
         if collect_feedback and self._collect_feedback is not None:
             name = self._feedback_tool_name
-            if any(_tool_name(t) == name for t in prepared):
+            if self._real_tool_owns_name(prepared, name):
                 self._warn_virtual_tool_collision(
                     VIRTUAL_TOOL_FEEDBACK,
                     name,
                     'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
                 )
-            else:
+            elif not any(_tool_name(t) == name for t in prepared):
                 prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
         prepared = self._inject_models(prepared)
         return prepared
+
+    def _real_tool_owns_name(self, prepared: List[Any], name: str) -> bool:
+        """Whether a *host* tool in this listing owns ``name``. Our own
+        descriptor doesn't count: a host may re-prepare an already-prepared
+        list, and that is not a collision to warn about."""
+        return any(
+            _tool_name(tool) == name and not self._is_sdk_virtual_tool(tool)
+            for tool in prepared
+        )
 
     def _warn_virtual_tool_collision(
         self, kind: str, name: str, rename_option: str
@@ -547,19 +559,31 @@ class PostHogMCP(Client):
         # flush()/shutdown() able to drain without blocking their own event loop's tasks.
         fire_and_forget(self._mcp_sink.capture(event, options), self, background=True)
 
-    def _is_virtual_tool_name(self, name: Any) -> bool:
-        """The SDK's own virtual tools carry their intent in their own arguments,
-        so they never get the ``context`` parameter injected. The feedback name
-        only counts with the constructor opt-in — without it a real tool by that
-        name is an ordinary tool."""
+    def _is_sdk_virtual_tool(self, tool: Any) -> bool:
+        """Whether this tool is one of the SDK's own descriptors, which carry
+        their intent in their own arguments and so never get ``context``
+        injected.
+
+        The name alone is not enough, in both directions. A host is free to own
+        a tool called ``get_more_tools`` — skipping it would silently drop its
+        intent — and a host re-preparing an already-prepared list hands our
+        descriptor straight back, so both arrive under the same name. So compare
+        against the descriptor we would build for that name: the description is
+        ours, and unlike the schema it survives the model-injection pass. The
+        feedback name only counts with the constructor opt-in."""
+        name = _tool_name(tool)
         if name == self._missing_capability_tool_name:
-            return True
-        return self._collect_feedback is not None and name == self._feedback_tool_name
+            expected = build_report_missing_descriptor(name)
+        elif self._collect_feedback is not None and name == self._feedback_tool_name:
+            expected = get_feedback_tool_descriptor(self._collect_feedback)
+        else:
+            return False
+        return _tool_description(tool) == expected["description"]
 
     def _inject_context(self, tool: Any, description: Optional[str]) -> Any:
         if isinstance(tool, dict):
             name = tool.get("name", "unknown")
-            if self._is_virtual_tool_name(name):
+            if self._is_sdk_virtual_tool(tool):
                 return tool
             new_schema = add_context_parameter_to_schema(
                 tool.get("inputSchema"), name, description
@@ -567,7 +591,7 @@ class PostHogMCP(Client):
             return {**tool, "inputSchema": new_schema}
 
         name = getattr(tool, "name", "unknown")
-        if self._is_virtual_tool_name(name):
+        if self._is_sdk_virtual_tool(tool):
             return tool
         new_schema = add_context_parameter_to_schema(
             getattr(tool, "inputSchema", None), name, description
@@ -655,6 +679,13 @@ def _strip_model(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
     if not args or "llm_model" not in args:
         return args
     return {k: v for k, v in args.items() if k != "llm_model"}
+
+
+def _tool_description(tool: Any) -> Any:
+    """A tool's description, whether it is a dict or an SDK model."""
+    if isinstance(tool, dict):
+        return tool.get("description")
+    return getattr(tool, "description", None)
 
 
 def _tool_name(tool: Any) -> Optional[str]:
