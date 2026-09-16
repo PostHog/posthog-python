@@ -869,7 +869,7 @@ def resolve_virtual_tool_injection(
 
 async def raw_listing_owns_tool_name(
     data: MCPAnalyticsData, name: str, ctx: Any = None
-) -> bool:
+) -> Optional[bool]:
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
     first page, asked at call time.
 
@@ -889,16 +889,27 @@ async def raw_listing_owns_tool_name(
 
     Like ``@posthog/mcp``'s equivalent, this reads the first page only: a real
     tool that appears solely on a later page is already shadowed by the page-one
-    injection and cannot be recovered here."""
+    injection and cannot be recovered here.
+
+    Tri-state on purpose. ``True``/``False`` are answers; ``None`` means the
+    question could not be asked, and callers must not intercept on it. Guessing
+    "not owned" there would swallow a real tool of the host's -- silently, and
+    for as long as their listing handler stays unwell -- to protect an analytics
+    affordance. An analytics SDK does not get to break the product it measures.
+    ``@posthog/mcp`` delegates to the server on the same reasoning.
+    """
     probe = data.raw_tool_names_probe
     if probe is None:
-        return False
+        return None
     try:
         names = await probe(ctx)
-    except Exception as err:  # noqa: BLE001 - undetermined is not owned
-        log(f"tools/list ownership probe for {name!r} failed: {err}")
-        return False
-    return names is not None and name in names
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(
+            f'Warning: could not determine whether "{name}" is a real tool of '
+            f"yours; delegating the call to your server - {err}"
+        )
+        return None
+    return None if names is None else name in names
 
 
 def _warn_virtual_tool_collision(

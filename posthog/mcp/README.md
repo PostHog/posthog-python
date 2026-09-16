@@ -239,6 +239,11 @@ their tool registry; a raw low-level server has none, so the SDK calls your own
 name, never for ordinary tool traffic. If your listing handler is expensive,
 renaming the SDK's tools away from any name of yours avoids the check entirely.
 
+If that check cannot answer — your listing handler is failing, say — the SDK
+delegates the call to your server rather than intercepting it, and logs why.
+Guessing the other way would swallow a real tool of yours silently; this way the
+cost is one failed call to a tool of PostHog's.
+
 Two limits worth knowing. Configuring **both** virtual tools with the same name
 advertises only `get_more_tools` (every call path checks it first) and warns.
 And a server that serves **different tool sets to different callers** from one

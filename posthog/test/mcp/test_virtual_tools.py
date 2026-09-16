@@ -425,3 +425,47 @@ async def test_the_probe_asks_the_host_once_per_virtual_tool_call():
     # Ordinary tool traffic never reaches the probe.
     await _call(server, "echo", {"msg": "hi"})
     assert len(calls) == 3
+
+
+async def test_unanswerable_ownership_check_delegates_to_the_host():
+    # When the SDK cannot tell whose tool a name is -- here the host's tools/list
+    # handler is failing -- it must hand the call to the host rather than
+    # intercept it. Guessing the other way swallows a real tool of theirs
+    # silently, for as long as the handler stays unwell; guessing this way costs
+    # one failed call to a tool of PostHog's, which the agent can see and retry.
+    # @posthog/mcp delegates on the same reasoning.
+    server = Server("virtual-tools-unanswerable")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text=f"host dispatched {name}")]
+
+    async def failing_list(req):
+        # Fails only for real listing requests, so the MCP SDK's own `req is
+        # None` validation-cache pass still works and only the SDK's ownership
+        # check is affected.
+        if req is not None:
+            raise RuntimeError("catalogue backend unavailable")
+        return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=[_ECHO_TOOL]))
+
+    server.request_handlers[mcp_types.ListToolsRequest] = failing_list
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True, collect_feedback=True, logger=messages.append
+        ),
+    )
+
+    missing = await _call(server, "get_more_tools", {"context": "need csv"})
+    feedback = await _call(server, "send_feedback", {"summary": "s"})
+    await _flush()
+
+    assert missing.root.content[0].text == "host dispatched get_more_tools"
+    assert feedback.root.content[0].text == "host dispatched send_feedback"
+    assert _events(client, "$mcp_missing_capability") == []
+    assert _events(client, "$mcp_feedback") == []
+    # The host is told why their call was not instrumented.
+    assert any("delegating the call to your server" in m for m in messages)

@@ -523,8 +523,8 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
         # No tool registry on a raw low-level server, so ownership is settled
         # by asking the host's own tools/list handler.
-        if lifecycle.is_missing_capability and not await raw_listing_owns_tool_name(
-            data, name, ctx
+        if lifecycle.is_missing_capability and (
+            await raw_listing_owns_tool_name(data, name, ctx) is False
         ):
             await lifecycle.record_missing_capability()
             return mcp_types.CallToolResult(
@@ -535,8 +535,8 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
-        if lifecycle.is_feedback and not await raw_listing_owns_tool_name(
-            data, name, ctx
+        if lifecycle.is_feedback and (
+            await raw_listing_owns_tool_name(data, name, ctx) is False
         ):
             reply = await lifecycle.record_feedback()
             return mcp_types.CallToolResult(

@@ -8,5 +8,6 @@ Fix MCP analytics virtual tool injection on a paginated `tools/list`. `get_more_
 - Custom tool names are honoured consistently: a renamed `get_more_tools` no longer gets a stray `conversation_id` argument, and a real `get_more_tools` of yours keeps its `context` injection.
 - A server that returns the same `tools/list` result object on every request no longer reads PostHog's own injected tool back as a name collision.
 - Collision warnings now reach the `posthog.mcp` logger too, so they are visible without setting the `logger` option.
+- If PostHog cannot tell whether a tool name is yours or its own, the call is delegated to your server instead of intercepted, so a tool of yours is never silently swallowed.
 
 On a paginated listing, the first page's `$mcp_tools_list.listed_tool_names` now carries the virtual tools even when a next page follows.

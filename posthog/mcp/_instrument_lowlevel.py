@@ -208,8 +208,8 @@ def _wrap_call_tool(
             extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
         )
 
-        if lifecycle.is_missing_capability and not await _name_owned_by_real_tool(
-            high_level, data, name, server
+        if lifecycle.is_missing_capability and (
+            await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
             await lifecycle.record_missing_capability()
             return mcp_types.ServerResult(
@@ -223,8 +223,8 @@ def _wrap_call_tool(
                 )
             )
 
-        if lifecycle.is_feedback and not await _name_owned_by_real_tool(
-            high_level, data, name, server
+        if lifecycle.is_feedback and (
+            await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
             reply = await lifecycle.record_feedback()
             return mcp_types.ServerResult(
@@ -456,7 +456,7 @@ def _wrap_list_tools(
 
 async def _name_owned_by_real_tool(
     high_level: Any, data: MCPAnalyticsData, name: str, server: Any
-) -> bool:
+) -> Optional[bool]:
     """Whether a real application tool owns ``name``, so a virtual tool never
     shadows it even before the first listing refreshes the collision state.
 
@@ -469,6 +469,8 @@ async def _name_owned_by_real_tool(
             return await high_level.get_tool(name) is not None
         except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
             return False
+    # May be None: see `raw_listing_owns_tool_name`. Callers intercept only on a
+    # definite False.
     return await raw_listing_owns_tool_name(data, name, server)
 
 
