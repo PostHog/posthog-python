@@ -33,6 +33,16 @@ _ECHO_TOOL = mcp_types.Tool(
 )
 
 
+def _static_list(tools):
+    """A ``tools/list`` handler serving one unpaginated page, registered directly
+    into ``request_handlers`` the way a raw low-level host does."""
+
+    async def handler(req):
+        return mcp_types.ServerResult(mcp_types.ListToolsResult(tools=list(tools)))
+
+    return handler
+
+
 def _make_paged_lowlevel(pages):
     """A raw low-level server whose tools/list handler serves ``pages`` (a list of
     tool lists) one page per request, chained by ``nextCursor``. The paged handler
@@ -469,3 +479,80 @@ async def test_unanswerable_ownership_check_delegates_to_the_host():
     assert _events(client, "$mcp_feedback") == []
     # The host is told why their call was not instrumented.
     assert any("delegating the call to your server" in m for m in messages)
+
+
+# --- the probe must not corrupt the SDK's validation cache ---------------------
+
+
+def _make_decorated_lowlevel():
+    """A raw low-level server that registers ``tools/list`` through the SDK's own
+    decorator and rebuilds its ``Tool`` objects on every call, the way a host
+    reading from a database would. The decorator refreshes ``Server._tool_cache``
+    from whatever it returns, and that cache is the schema real tool calls are
+    validated against -- so anything that runs this handler must re-inject."""
+    server = Server("virtual-tools-decorated")
+
+    @server.list_tools()
+    async def list_tools():
+        return [
+            mcp_types.Tool(
+                name="echo",
+                description="Echo",
+                inputSchema={
+                    "type": "object",
+                    "properties": {"msg": {"type": "string"}},
+                    "additionalProperties": False,
+                },
+            )
+        ]
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    return server
+
+
+async def test_a_virtual_tool_call_leaves_real_tools_callable():
+    # Regression: the ownership check ran the host's own list_tools, which made
+    # the SDK decorator rebuild `_tool_cache` from un-injected schemas. The next
+    # real call carrying the `context` we advertised was then rejected with
+    # "Additional properties are not allowed".
+    server = _make_decorated_lowlevel()
+    instrument(
+        server, FakeClient(), MCPAnalyticsOptions(report_missing=True, context=True)
+    )
+
+    await _list_page(server)
+    before = await _call(server, "echo", {"msg": "hi", "context": "say hi"})
+    assert before.root.isError is not True
+
+    await _call(server, "get_more_tools", {"context": "need csv export"})
+
+    after = await _call(server, "echo", {"msg": "hi", "context": "say hi again"})
+    await _flush()
+    assert after.root.isError is not True, after.root.content[0].text
+
+
+async def test_a_listing_handler_registered_after_instrument_is_not_swallowed():
+    # Regression: the probe closed over the handler captured at instrument time,
+    # so a host registering `tools/list` afterwards had ownership answered from a
+    # catalogue no client ever saw -- a confident wrong answer that swallowed
+    # their real tool. Unknown must delegate instead.
+    server = Server("virtual-tools-late")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    server.request_handlers[mcp_types.ListToolsRequest] = _static_list([_ECHO_TOOL])
+    instrument(server, FakeClient(), MCPAnalyticsOptions(report_missing=True))
+
+    # The host replaces its listing after instrumentation, now owning the name.
+    server.request_handlers[mcp_types.ListToolsRequest] = _static_list(
+        [_REAL_GET_MORE_TOOLS]
+    )
+
+    out = await _call(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+    assert out.root.content[0].text == "real tool ran"

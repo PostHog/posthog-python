@@ -355,10 +355,26 @@ def _wrap_list_tools(
         instrumentation or appends a virtual tool. Read by
         ``_name_owned_by_real_tool`` on raw low-level servers, which have no
         tool registry to ask instead."""
+        # Late-bound on purpose: a host that registers tools/list *after*
+        # instrument() leaves `original` holding a catalogue the client never
+        # sees, and a confident answer from it would swallow a real tool. Report
+        # the question as unanswerable instead, so the call is delegated.
+        # `@posthog/mcp` re-captures the handler for the same reason.
+        current = handlers.get(mcp_types.ListToolsRequest)
+        if current is not None and not getattr(current, _WRAPPED_FLAG, False):
+            return None
         result = await original(mcp_types.ListToolsRequest(method="tools/list"))
+        tools = extract_tools(result)
+        # `original` is usually the SDK's own list_tools decorator, which rebuilds
+        # `Server._tool_cache` from these un-injected schemas every time it runs.
+        # That cache is what the SDK validates real tool arguments against, so
+        # without re-injecting here the next real call is rejected for sending the
+        # `context` we advertised. Same reason the `req is None` branch below
+        # injects.
+        _inject_tool_schemas(data, tools, context_required=context_required)
         return {
             name
-            for tool in extract_tools(result)
+            for tool in tools
             if isinstance(name := getattr(tool, "name", None), str)
         }
 
