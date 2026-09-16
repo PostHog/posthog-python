@@ -488,7 +488,25 @@ async def _name_owned_by_real_tool(
     Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
     rather than twin helpers that can drift. On the standalone-fastmcp path the
     tool registry answers authoritatively. A raw low-level server has no
-    registry, so it falls back to asking the host's own tools/list handler."""
+    registry, so it falls back to asking the host's own tools/list handler.
+
+    Known limit, and *not* one a fallback can close: a ``FastMCP`` is an
+    ``AggregateProvider``, which gathers its providers with
+    ``return_exceptions=True`` and drops the failures. A mounted or proxied
+    sub-server that is unreachable therefore reads back as a plain ``None``
+    here -- indistinguishable from "no such tool" -- and we treat the name as
+    free. If that sub-server owned a real tool by a virtual tool's name, this
+    call is intercepted and the host's tool does not run.
+
+    Do not "fix" this by consulting ``list_tools``: the same provider failure
+    is dropped from the listing too (``_collect_list_results``), so the
+    fallback returns the same blind answer, and fastmcp 3.x exposes no
+    error-strategy to opt out of. The distinction is destroyed upstream of
+    anything we can read. It is also narrower than it looks -- during the
+    outage the host's tool is absent from ``tools/list`` as well, so it could
+    not have been dispatched either way; only a provider that recovers between
+    this check and dispatch loses a call that would have worked. The remedy
+    stays the documented one: rename PostHog's tool."""
     if high_level is not None:
         try:
             return await high_level.get_tool(name) is not None
