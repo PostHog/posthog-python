@@ -34,7 +34,6 @@ from ._instrumentation import (
     prepare_request,
     raw_listing_owns_tool_name,
     record_resource_request,
-    refresh_virtual_tool_collisions,
     request_to_dict,
     resource_listing_response,
     resolve_session_and_client,
@@ -391,12 +390,6 @@ def _wrap_list_tools(
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision state here too: this pass sees the real
-            # tool registry, so a real tool named like one of the virtual tools
-            # is detected before any client-facing listing. Nothing is appended
-            # — this result is the SDK's own validation cache, never sent to a
-            # client.
-            refresh_virtual_tool_collisions(data, tools)
             _inject_tool_schemas(data, tools, context_required=context_required)
             return result
 

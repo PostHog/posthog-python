@@ -432,10 +432,8 @@ class ToolCallLifecycle:
     client_name: Optional[str]
     client_version: Optional[str]
     protocol_version: Optional[str]
-    # None when the virtual tool is disabled, or when a real application tool is
-    # known to own its name -- both resolved once in `start_tool_call_lifecycle`
-    # via `injectable_virtual_tool_names`, so the enable switch and the
-    # fail-open collision guard live in exactly one place.
+    # ``None`` when the virtual tool is disabled, so every downstream decision
+    # treats a real tool by that name like any other tool's.
     missing_name: Optional[str]
     feedback_options: Optional[CollectFeedbackOptions]
     feedback_name: Optional[str]
@@ -564,13 +562,9 @@ def start_tool_call_lifecycle(
     extra: Dict[str, Any],
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
-    # A name a real application tool is known to own resolves to None here, so
-    # every downstream decision treats calls to it like any other tool's:
-    # interception is skipped, and conversation-id resolution stops exempting it
-    # as if it were the (shadowed) virtual tool.
-    injectable = injectable_virtual_tool_names(data)
-    missing_name = injectable.get(VIRTUAL_TOOL_MISSING_CAPABILITY)
-    feedback_name = injectable.get(VIRTUAL_TOOL_FEEDBACK)
+    enabled = enabled_virtual_tool_names(data)
+    missing_name = enabled.get(VIRTUAL_TOOL_MISSING_CAPABILITY)
+    feedback_name = enabled.get(VIRTUAL_TOOL_FEEDBACK)
     # Still needed whatever the name resolution says: parsing the report and
     # running the host's `on_feedback` handler read the configured options.
     feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
@@ -739,18 +733,6 @@ def enabled_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
     return names
 
 
-def injectable_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
-    """:func:`enabled_virtual_tool_names` minus the kinds a real application tool
-    is currently known to own. A kind absent here must be neither advertised nor
-    intercepted (fail-open: the real tool wins), and must not steer intent or
-    conversation-id resolution either."""
-    return {
-        kind: name
-        for kind, name in enabled_virtual_tool_names(data).items()
-        if kind not in data.virtual_tool_collisions
-    }
-
-
 def is_first_listing_page(params: Any) -> bool:
     """Whether a ``tools/list`` *request* is the first page of the listing.
 
@@ -793,63 +775,45 @@ def advertised_tool_names(tools: list) -> Set[str]:
     }
 
 
-def refresh_virtual_tool_collisions(data: MCPAnalyticsData, tools: list) -> None:
-    """Rewrite ``data.virtual_tool_collisions`` from an authoritative view of the
-    real tool set, warning once per newly-seen collision. Appends nothing.
-
-    Called by :func:`resolve_virtual_tool_injection` for a first page, and
-    directly by the 1.x adapters' internal ``req is None`` cache pass -- that
-    pass sees the whole tool registry, so it is the earliest collision signal
-    available, and on a raw low-level server sometimes the only one before a
-    client-facing listing."""
-    listed = advertised_tool_names(tools)
-    for kind, name in enabled_virtual_tool_names(data).items():
-        if name in listed:
-            if kind not in data.virtual_tool_collisions:
-                data.virtual_tool_collisions.add(kind)
-            _warn_virtual_tool_collision(data, kind, name, "blocked")
-        else:
-            # Rewritten, not accumulated: dropping the colliding tool un-shadows
-            # the virtual tool on the next listing.
-            data.virtual_tool_collisions.discard(kind)
-
-
 def resolve_virtual_tool_injection(
     data: MCPAnalyticsData,
     tools: list,
     *,
     is_first_page: bool,
 ) -> VirtualToolInjection:
-    """Decide which virtual tools this listing page appends, and refresh the
-    collision state it implies. Run after ``collect_listed_tools`` so the virtual
-    tools don't count towards "this server advertises nothing".
+    """Decide which virtual tools this listing page appends. Run after
+    ``collect_listed_tools`` so the virtual tools don't count towards "this
+    server advertises nothing".
 
-    Page-local by construction. Only a first page injects, so only a first page's
-    view of the tool set can decide ownership:
+    Stateless: this page's own tools are the whole input, so there is nothing to
+    carry between requests. Injection happens on a first page only, so only a
+    first page's view of the tool set ever decides anything.
 
-    * name owned on the **first** page -> warn, don't inject, record the
-      collision; the call path then dispatches it normally and the real tool wins.
-    * name owned only on a **later** page -> the virtual tool is already
-      advertised from page one, so the SDK keeps intercepting and the real tool
-      is shadowed. Warn, naming the rename option, but leave the collision set
-      alone: un-recording nothing would only strand the already-injected virtual
-      tool.
-    * ``tools/list`` never served -> the set is empty, i.e. no known collision.
-      The call path's ownership probes cover that window.
+    * name free on the **first** page -> inject it.
+    * name taken on the **first** page -> warn, inject nothing. The call path
+      dispatches it normally and the host's tool wins.
+    * name taken on a **later** page -> the virtual tool is already advertised
+      from page one, so the host's tool is shadowed. Warn, naming the rename
+      option; page one cannot be taken back.
     """
     enabled = enabled_virtual_tool_names(data)
     if not enabled:
         return VirtualToolInjection({})
 
+    listed = advertised_tool_names(tools)
+
     if not is_first_page:
-        listed = advertised_tool_names(tools)
         for kind, name in enabled.items():
-            if name in listed and kind not in data.virtual_tool_collisions:
+            if name in listed:
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
         return VirtualToolInjection({})
 
-    refresh_virtual_tool_collisions(data, tools)
-    injectable = injectable_virtual_tool_names(data)
+    injectable: Dict[str, str] = {}
+    for kind, name in enabled.items():
+        if name in listed:
+            _warn_virtual_tool_collision(data, kind, name, "blocked")
+        else:
+            injectable[kind] = name
 
     # Both virtual tools configured with one name would advertise it twice and
     # dead-letter the feedback path, since every call path checks
@@ -873,19 +837,18 @@ async def raw_listing_owns_tool_name(
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
     first page, asked at call time.
 
-    The fallback for adapters with no tool registry to query -- raw low-level
-    servers. Without it, a call reaching a process that never served a listing
-    (the ordinary multi-pod case) has no collision signal at all, so the SDK
-    would intercept a real tool by that name and silently swallow it.
+    Used by the raw v2 low-level path, which has neither a tool registry nor a
+    validation tool cache to read instead. Without it, a call reaching a process
+    that never served a listing (the ordinary multi-pod case) has no ownership
+    signal at all, so the SDK would intercept a real tool by that name and
+    silently swallow it. The 1.x adapters read ``Server._tool_cache`` instead --
+    calling the original handler there rebuilds that cache from un-injected
+    schemas, so it must not be asked directly.
 
-    Runs on every call whose name matches a virtual tool's, which is both rarer
-    and more reliable than it sounds. Rarer: only a name collision or an agent
-    actually invoking ``get_more_tools`` / ``send_feedback`` reaches it, never
-    ordinary tool traffic. More reliable: ``virtual_tool_collisions`` is
-    per-server state rewritten by whichever listing was served last, so a raw
-    server that serves different catalogues to different callers would answer
-    one caller from another's listing. Asking per call cannot go stale that way.
-    ``@posthog/mcp`` probes per call for the same reason.
+    Runs on every call whose name matches a virtual tool's, which is rarer than
+    it sounds: only a name collision or an agent actually invoking
+    ``get_more_tools`` / ``send_feedback`` reaches it, never ordinary tool
+    traffic. ``@posthog/mcp`` probes per call for the same reason.
 
     Like ``@posthog/mcp``'s equivalent, this reads the first page only: a real
     tool that appears solely on a later page is already shadowed by the page-one

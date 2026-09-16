@@ -36,7 +36,6 @@ from ._instrumentation import (
     extract_tools,
     is_first_listing_page,
     mutate_tool_schema,
-    refresh_virtual_tool_collisions,
     request_to_dict,
     resolve_virtual_tool_injection,
     resolve_session_and_client,
@@ -233,12 +232,6 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision state here too: this pass sees the real
-            # tool registry, so a real tool named like one of the virtual tools
-            # is detected before any client-facing listing. Nothing is appended
-            # — this result is the SDK's own validation cache, never sent to a
-            # client.
-            refresh_virtual_tool_collisions(data, tools)
             _inject_tool_schemas(server, data, tools)
             return result
 

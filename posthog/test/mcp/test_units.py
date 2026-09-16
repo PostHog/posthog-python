@@ -16,7 +16,6 @@ from posthog.mcp._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
     enabled_virtual_tool_names,
-    injectable_virtual_tool_names,
     is_first_listing_page,
     mutate_tool_schema,
     resolve_virtual_tool_injection,
@@ -75,16 +74,6 @@ async def test_intent_keeps_context_for_a_real_tool_named_get_more_tools():
     # a real tool dispatched but unattributed.
     out = await resolve_tool_call_intent(
         _data(), _call(name="get_more_tools", args={"context": "need csv export"})
-    )
-    assert out == ("need csv export", "context_parameter")
-
-
-async def test_intent_keeps_context_when_a_real_tool_owns_the_name():
-    # Same, via the listing-derived collision state rather than the switch.
-    data = _data(report_missing=True)
-    data.virtual_tool_collisions.add(VIRTUAL_TOOL_MISSING_CAPABILITY)
-    out = await resolve_tool_call_intent(
-        data, _call(name="get_more_tools", args={"context": "need csv export"})
     )
     assert out == ("need csv export", "context_parameter")
 
@@ -161,14 +150,6 @@ def test_enabled_names_follow_the_switches_and_renames():
     }
 
 
-def test_injectable_names_drop_collided_kinds():
-    data = _data(report_missing=True, collect_feedback=True)
-    data.virtual_tool_collisions.add(VIRTUAL_TOOL_FEEDBACK)
-    assert injectable_virtual_tool_names(data) == {
-        VIRTUAL_TOOL_MISSING_CAPABILITY: "get_more_tools"
-    }
-
-
 def test_resolver_injects_on_a_first_page():
     data = _data(report_missing=True, collect_feedback=True)
     injection = resolve_virtual_tool_injection(
@@ -186,35 +167,38 @@ def test_resolver_injects_nothing_on_a_continuation_page():
     assert injection.names == {}
 
 
-def test_resolver_records_a_first_page_collision():
+def test_resolver_skips_injection_on_a_first_page_collision():
     data = _data(report_missing=True)
     injection = resolve_virtual_tool_injection(
         data, [_tool("get_more_tools")], is_first_page=True
     )
     assert injection.missing_capability_name is None
-    assert VIRTUAL_TOOL_MISSING_CAPABILITY in data.virtual_tool_collisions
 
 
-def test_resolver_rewrites_rather_than_accumulates_collisions():
-    # Page-local: dropping the colliding tool un-shadows the virtual one on the
-    # next first page, with no re-instrumentation.
+def test_resolver_decides_each_page_on_its_own_tools():
+    # Stateless: a collision on one first page does not shadow the virtual tool
+    # on the next, so dropping the colliding tool needs no re-instrumentation.
     data = _data(report_missing=True)
-    resolve_virtual_tool_injection(data, [_tool("get_more_tools")], is_first_page=True)
-    assert data.virtual_tool_collisions
+    blocked = resolve_virtual_tool_injection(
+        data, [_tool("get_more_tools")], is_first_page=True
+    )
+    assert blocked.missing_capability_name is None
 
     injection = resolve_virtual_tool_injection(
         data, [_tool("echo")], is_first_page=True
     )
     assert injection.missing_capability_name == "get_more_tools"
-    assert not data.virtual_tool_collisions
 
 
-def test_resolver_never_records_a_collision_from_a_continuation_page():
-    # The virtual tool is already advertised from page one, so recording the
-    # collision here would only strand it. The host is warned instead.
+def test_resolver_never_injects_from_a_continuation_page():
+    # The virtual tool is already advertised from page one, so a later page
+    # neither injects nor takes that back. The host is warned instead.
     data = _data(report_missing=True)
-    resolve_virtual_tool_injection(data, [_tool("get_more_tools")], is_first_page=False)
-    assert not data.virtual_tool_collisions
+    injection = resolve_virtual_tool_injection(
+        data, [_tool("get_more_tools")], is_first_page=False
+    )
+    assert injection.missing_capability_name is None
+    assert injection.feedback_name is None
 
 
 def test_resolver_warns_once_per_kind_name_and_variant():

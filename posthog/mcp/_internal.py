@@ -66,20 +66,6 @@ class MCPAnalyticsData:
     # signature of a stateless server whose mint middleware never attached. Warned
     # a single time per server so the log isn't flooded on every request.
     warned_no_stateless_session: bool = False
-    # Virtual-tool kinds (the ``VIRTUAL_TOOL_*`` constants in ``_instrumentation``)
-    # whose configured name a real application tool owned on the most recent
-    # *first* page of tools/list, or on a low-level server's internal registry
-    # pass. Calls to such a name dispatch normally instead of being intercepted
-    # (fail-open), and the tool keeps its normal analytics schema injection,
-    # intent resolution, and conversation-id handling.
-    #
-    # Page-local, not sticky: injection happens on the first page only, so only a
-    # first page's view of the tool set can decide ownership. Rewritten on every
-    # first page, so dropping the colliding tool un-shadows on the next listing,
-    # and never written by a continuation page — a real tool that only appears on
-    # a later page is already shadowed by the page-one injection, and is warned
-    # about instead.
-    virtual_tool_collisions: Set[str] = field(default_factory=set)
     # ``(kind, name, variant)`` collision warnings already emitted, so a client
     # that re-lists tools on every turn logs each misconfiguration once.
     warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(

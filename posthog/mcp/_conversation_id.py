@@ -86,9 +86,9 @@ def resolve_conversation_id(
     → ``(value, False)``; anything else (omitted, or a value the agent made up)
     → ``(new uuid, True)``.
 
-    Either virtual tool's name arrives as ``None`` when it is disabled or when a
-    real application tool owns it. A shadowed name belongs to that real tool, so
-    it mints and echoes a handle like any other tool's.
+    Either virtual tool's name arrives as ``None`` when that tool is disabled,
+    so a real application tool by the same name mints and echoes a handle like
+    any other tool's.
 
     Lowercased on the way in: the shape test is case-insensitive but the hash
     behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
