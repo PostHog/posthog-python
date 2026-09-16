@@ -53,7 +53,7 @@ def _truncate(value: Any, max_length: int, state: _WalkState, depth: int) -> Any
         state.remaining_nodes -= 1
         if isinstance(value, str):
             return truncate_string(value, max_length)
-        if isinstance(value, (bool, int, float, date)):
+        if isinstance(value, (bool, int, float, date)) or callable(value):
             return value
         # The encoder stringifies anything else, so bound that text.
         try:
@@ -129,16 +129,16 @@ def bound_attributes(
         key_str = attribute_key(key)
         if key_str is None:
             continue
-        if len(attributes) >= max_count and key_str not in attributes:
-            dropped += 1
-            continue
         try:
-            value = truncate_attribute_value(source[key], max_length)
+            value = source[key]
         except Exception:
             value = UNSERIALIZABLE_VALUE
         if value is None:
             continue
-        attributes[key_str] = value
+        if len(attributes) >= max_count and key_str not in attributes:
+            dropped += 1
+            continue
+        attributes[key_str] = truncate_attribute_value(value, max_length)
     return attributes, dropped
 
 

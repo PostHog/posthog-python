@@ -12,8 +12,12 @@ import pytest
 
 from posthog.tracing import _span as span_module
 from posthog.tracing._config import MAX_ATTRIBUTES_PER_EVENT
-from posthog.tracing._otlp import SpanRecord
-from posthog.tracing._sanitize import FALLBACK_SPAN_NAME, UNSERIALIZABLE_VALUE
+from posthog.tracing._otlp import SpanRecord, build_otlp_span
+from posthog.tracing._sanitize import (
+    FALLBACK_SPAN_NAME,
+    FUNCTION_VALUE,
+    UNSERIALIZABLE_VALUE,
+)
 from posthog.tracing._span import (
     NOOP_SPAN,
     ClockAnchor,
@@ -737,6 +741,44 @@ class TestSpanLimits:
         assert records[0].attributes["payload"] == "x" * 8192
         assert records[0].attributes["nested"] == {"body": "y" * 8192}
         assert records[0].dropped_attributes_count == 0
+
+    def test_a_callable_reaches_the_encoder_as_its_marker(self):
+        def handler():
+            pass
+
+        records: list = []
+        span = make_span(records)
+        span.set_attribute("fn", handler)
+        span.add_event("e", {"fn": handler, "nested": {"fn": handler}})
+        span.end()
+        encoded = build_otlp_span(records[0])
+        assert encoded["attributes"] == [
+            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}}
+        ]
+        assert encoded["events"][0]["attributes"] == [
+            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}},
+            {
+                "key": "nested",
+                "value": {
+                    "kvlistValue": {
+                        "values": [
+                            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}}
+                        ]
+                    }
+                },
+            },
+        ]
+
+    def test_a_none_event_attribute_past_the_cap_counts_no_drop(self):
+        records: list = []
+        span = make_span(records)
+        attributes = {f"k{i}": i for i in range(MAX_ATTRIBUTES_PER_EVENT)}
+        attributes["late"] = None
+        span.add_event("batch", attributes)
+        span.end()
+        event = records[0].events[0]
+        assert len(event.attributes) == MAX_ATTRIBUTES_PER_EVENT
+        assert event.dropped_attributes_count == 0
 
     def test_truncates_event_attributes_names_and_status_messages(self):
         records: list = []

@@ -12,7 +12,7 @@ from posthog.tracing._otlp import (
     TRUNCATED_VALUE,
     to_any_value,
 )
-from posthog.tracing._sanitize import UNSERIALIZABLE_VALUE
+from posthog.tracing._sanitize import FUNCTION_VALUE, UNSERIALIZABLE_VALUE
 
 
 class TestTruncateAttributeValue:
@@ -79,6 +79,16 @@ class TestTruncateAttributeValue:
         x = next(kv for kv in encoded if kv["key"] == "x")
         assert len(x["value"]["stringValue"]) == 100
 
+    def test_leaves_a_callable_for_the_encoders_marker(self):
+        def handler():
+            pass
+
+        assert truncate_attribute_value(handler, 3) is handler
+        assert truncate_attribute_value({"fn": handler}, 3) == {"fn": handler}
+        assert to_any_value(truncate_attribute_value(handler, 3)) == {
+            "stringValue": FUNCTION_VALUE
+        }
+
     def test_a_raising_str_costs_only_that_value(self):
         class Hostile:
             def __str__(self):
@@ -109,10 +119,20 @@ class TestBoundAttributes:
         assert list(attributes) == [f"k{i}" for i in range(128)]
         assert dropped == 2
 
-    def test_a_none_value_spends_no_slot(self):
-        attributes, dropped = bound_attributes({"a": None, "b": 1, "c": 2}, 2, 8)
+    @pytest.mark.parametrize(
+        "source",
+        [{"a": None, "b": 1, "c": 2}, {"b": 1, "c": 2, "a": None}],
+        ids=["before-the-cap", "past-the-cap"],
+    )
+    def test_a_none_value_spends_no_slot_and_counts_no_drop(self, source):
+        attributes, dropped = bound_attributes(source, 2, 8)
         assert attributes == {"b": 1, "c": 2}
         assert dropped == 0
+
+    def test_a_real_value_past_the_cap_counts_a_drop(self):
+        attributes, dropped = bound_attributes({"b": 1, "c": 2, "a": 3}, 2, 8)
+        assert attributes == {"b": 1, "c": 2}
+        assert dropped == 1
 
     def test_bounds_each_value(self):
         attributes, _ = bound_attributes({"a": "x" * 20}, 2, 5)
