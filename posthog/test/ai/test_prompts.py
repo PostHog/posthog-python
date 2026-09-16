@@ -1427,6 +1427,62 @@ class TestPromptsGetAll(TestPrompts):
         self.assertEqual(cached.version, 3)
 
     @patch("posthog.ai.prompts._get_session")
+    def test_without_a_label_returns_latest_versions_and_seeds_the_cache(
+        self, mock_get_session
+    ):
+        # No label means no label to resolve: a prompt that carries no label,
+        # and one whose label points at an earlier version, both belong in the
+        # result at their latest version.
+        mock_get = mock_get_session.return_value.get
+        unlabeled = {**self.labeled_row("prompt-a", version=2), "all_labels": []}
+        labeled_elsewhere = {
+            **self.labeled_row("prompt-b", version=3),
+            "all_labels": [{"name": "production", "version": 1}],
+        }
+        mock_get.return_value = self.list_response([unlabeled, labeled_elsewhere])
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all()
+
+        self.assertNotIn("label", mock_get.call_args.args[0])
+        self.assertEqual(
+            results,
+            {
+                "prompt-a": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-a",
+                    name="prompt-a",
+                    version=2,
+                ),
+                "prompt-b": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-b",
+                    name="prompt-b",
+                    version=3,
+                ),
+            },
+        )
+
+        # Later unlabeled get() calls are cache hits, not new requests.
+        cached = prompts.get("prompt-a", with_metadata=True)
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(cached.source, "cache")
+        self.assertEqual(cached.version, 2)
+        self.assertIsNone(cached.label)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_without_a_label_names_all_prompts_in_an_error(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        malformed = {**self.labeled_row("prompt-a"), "version": "1"}
+        mock_get.return_value = self.list_response([malformed])
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all()
+        self.assertIn("Invalid response format for all prompts", str(ctx.exception))
+
+    @patch("posthog.ai.prompts._get_session")
     def test_raises_when_the_server_ignores_the_label(self, mock_get_session):
         # An old server ignores ?label= and returns latest versions of every
         # prompt, including prompts without the label. Even when some labels
