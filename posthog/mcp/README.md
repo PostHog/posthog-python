@@ -206,13 +206,13 @@ call = posthog.prepare_tool_call(
 
 A client concatenates every `tools/list` page into one list, so each virtual tool
 is appended to the **first page only** — the page every client reads, including
-clients that never follow `nextCursor`. "First page" means a `tools/list` request
-with no cursor; an empty string is a valid opaque cursor, so `cursor: ""` is a
+clients that never follow `nextCursor`. "First page" means a request with no
+cursor; an empty string is a valid opaque cursor, so `cursor: ""` is a
 continuation page.
 
 ### Tool name collisions
 
-Your tools win when the SDK can see them. Rename the SDK's tool to keep both:
+Your tools win when the SDK can see them. Rename the SDK's to keep both:
 
 ```python
 MCPAnalyticsOptions(
@@ -222,33 +222,30 @@ MCPAnalyticsOptions(
 )
 ```
 
-- A real tool using the name **on the first page** wins: the SDK warns, does not
-  inject its own, and never intercepts yours.
-- A real tool that appears **only on a later page** is shadowed. Page one cannot
-  see page two, so the SDK's tool is already advertised by then; calls to the
-  name reach the SDK and your tool never runs. The SDK warns when that page is
-  served. `@posthog/mcp` behaves the same way.
-- Warnings go to the `logger` option *and* the `posthog.mcp` standard-library
-  logger, so a default-configured host sees them on stderr.
+- A real tool using the name **on the first page** wins: the SDK warns, injects
+  nothing, and never intercepts yours.
+- A real tool that appears **only on a later page** is shadowed — page one cannot
+  see page two, so the SDK's tool is already advertised and calls to the name
+  reach it. The SDK warns when that page is served. `@posthog/mcp` is the same.
+- Configuring **both** virtual tools with one name advertises only
+  `get_more_tools`, and warns.
 
-At call time the SDK also checks ownership directly, which covers the window
-before any `tools/list` has run — the ordinary multi-pod case, where the process
-serving the call never served a listing. FastMCP and v2 `MCPServer` are asked via
-their tool registry; a raw low-level server has none, so the SDK calls your own
-`tools/list` handler instead. That happens once per call to a virtual tool's
-name, never for ordinary tool traffic. If your listing handler is expensive,
-renaming the SDK's tools away from any name of yours avoids the check entirely.
+Warnings go to the `logger` option *and* the `posthog.mcp` standard-library
+logger, so a default-configured host sees them on stderr.
 
-If that check cannot answer — your listing handler is failing, say — the SDK
-delegates the call to your server rather than intercepting it, and logs why.
-Guessing the other way would swallow a real tool of yours silently; this way the
-cost is one failed call to a tool of PostHog's.
+At call time the SDK checks ownership again, covering the process that serves a
+call without having served a listing — the ordinary multi-pod case. FastMCP and
+v2 `MCPServer` are asked via their tool registry; a raw low-level server has
+none, so the SDK calls your own `tools/list` handler, once per call to a virtual
+tool's name and never for ordinary traffic. If that check cannot answer — your
+listing handler is failing, say — the call is delegated to your server rather
+than intercepted, and the reason is logged: guessing the other way would swallow
+a real tool of yours silently.
 
-Two limits worth knowing. Configuring **both** virtual tools with the same name
-advertises only `get_more_tools` (every call path checks it first) and warns.
-And a server that serves **different tool sets to different callers** from one
-instrumented instance can flip the listing-derived collision state between
-requests; the call-time ownership checks above are the reliable signal there.
+One consequence worth knowing: a server that serves **different tool sets to
+different callers** from one instrumented instance can flip the listing-derived
+collision state between requests, so the call-time check is the reliable signal
+there.
 
 ## Stateless / multi-pod servers
 

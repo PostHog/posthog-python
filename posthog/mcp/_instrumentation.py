@@ -784,10 +784,10 @@ class VirtualToolInjection:
         return self.names.get(VIRTUAL_TOOL_FEEDBACK)
 
 
-def listed_tool_names(tools: list) -> Set[str]:
+def advertised_tool_names(tools: list) -> Set[str]:
     """The names a listing page advertises. The virtual tools are appended to a
     *copy* of the host's result, so a page always reads back as the host wrote
-    it -- see :func:`append_get_more_tools`."""
+    it -- see :func:`append_virtual_tool`."""
     return {
         name for tool in tools if isinstance(name := getattr(tool, "name", None), str)
     }
@@ -802,7 +802,7 @@ def refresh_virtual_tool_collisions(data: MCPAnalyticsData, tools: list) -> None
     pass sees the whole tool registry, so it is the earliest collision signal
     available, and on a raw low-level server sometimes the only one before a
     client-facing listing."""
-    listed = {getattr(tool, "name", None) for tool in tools}
+    listed = advertised_tool_names(tools)
     for kind, name in enabled_virtual_tool_names(data).items():
         if name in listed:
             if kind not in data.virtual_tool_collisions:
@@ -842,7 +842,7 @@ def resolve_virtual_tool_injection(
         return VirtualToolInjection({})
 
     if not is_first_page:
-        listed = listed_tool_names(tools)
+        listed = advertised_tool_names(tools)
         for kind, name in enabled.items():
             if name in listed and kind not in data.virtual_tool_collisions:
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
