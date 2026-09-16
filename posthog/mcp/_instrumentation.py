@@ -54,7 +54,7 @@ from .tools import resolve_missing_capability_tool_name
 from .types import CollectFeedbackOptions, FeedbackReport
 
 # The virtual tools this SDK advertises into tools/list. Every piece of per-tool
-# policy -- enable switch, configured name, collision state, warn-once
+# policy -- enable switch, configured name, warning text, warn-once
 # bookkeeping, warning text -- is keyed by kind so the two can't drift apart.
 VIRTUAL_TOOL_MISSING_CAPABILITY = "missing_capability"
 VIRTUAL_TOOL_FEEDBACK = "feedback"
@@ -804,7 +804,19 @@ def resolve_virtual_tool_injection(
 
     if not is_first_page:
         for kind, name in enabled.items():
-            if name in listed:
+            # Only warn about a tool we actually shadowed. If a first page
+            # already blocked injection for this name then nothing of ours is
+            # advertised and the host's tool runs untouched -- telling them
+            # otherwise sends them chasing a bug that isn't there.
+            if (
+                name in listed
+                and (
+                    kind,
+                    name,
+                    "blocked",
+                )
+                not in data.warned_virtual_tool_collisions
+            ):
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
         return VirtualToolInjection({})
 
@@ -837,13 +849,16 @@ async def raw_listing_owns_tool_name(
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
     first page, asked at call time.
 
-    Used by the raw v2 low-level path, which has neither a tool registry nor a
-    validation tool cache to read instead. Without it, a call reaching a process
-    that never served a listing (the ordinary multi-pod case) has no ownership
-    signal at all, so the SDK would intercept a real tool by that name and
-    silently swallow it. The 1.x adapters read ``Server._tool_cache`` instead --
-    calling the original handler there rebuilds that cache from un-injected
-    schemas, so it must not be asked directly.
+    Used by both raw low-level paths, 1.x and v2, which have no tool registry to
+    query instead. Without it, a call reaching a process that never served a
+    listing (the ordinary multi-pod case) has no ownership signal at all, so the
+    SDK would intercept a real tool by that name and silently swallow it.
+
+    On 1.x the probe must re-inject schemas after asking: the SDK's list_tools
+    decorator rebuilds ``Server._tool_cache`` from whatever its handler returns,
+    and that cache is what real tool arguments are validated against, so leaving
+    it holding un-injected schemas rejects the arguments we advertised. See
+    ``probe_raw_tool_names``.
 
     Runs on every call whose name matches a virtual tool's, which is rarer than
     it sounds: only a name collision or an agent actually invoking

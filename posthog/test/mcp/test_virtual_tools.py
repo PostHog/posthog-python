@@ -197,9 +197,8 @@ async def test_later_page_collision_shadows_the_real_tool():
 
 
 async def test_collision_un_shadows_once_the_real_tool_is_dropped():
-    # The collision state is rewritten on every first page, not accumulated, so
-    # a host that removes the colliding tool gets the virtual one back without
-    # re-instrumenting.
+    # Every first page is judged on its own tools, so a host that removes the
+    # colliding tool gets the virtual one back without re-instrumenting.
     pages = [[_REAL_GET_MORE_TOOLS]]
     server = _make_paged_lowlevel(pages)
     instrument(server, FakeClient(), MCPAnalyticsOptions(report_missing=True))
@@ -211,7 +210,7 @@ async def test_collision_un_shadows_once_the_real_tool_is_dropped():
 
 async def test_registry_probe_blocks_interception_before_any_listing():
     # The multi-pod case: a call reaching a process that never served a
-    # tools/list has empty collision state, so the registry is the only signal.
+    # tools/list has nothing to go on but the registry.
     server = FastMCP("virtual-tools-fastmcp")
 
     @server.tool()
@@ -398,16 +397,13 @@ async def test_cached_result_object_is_not_appended_to_twice():
 
 
 async def test_the_probe_asks_the_host_once_per_virtual_tool_call():
-    # The raw-server probe deliberately asks per call rather than trusting the
-    # last listing: `virtual_tool_collisions` is per-server state rewritten by
-    # whichever listing ran last, so a server serving different catalogues to
-    # different callers would answer one caller from another's listing.
-    # @posthog/mcp probes per call for the same reason. Pinning the count keeps
-    # that cost visible if the probe ever widens to ordinary tool traffic.
+    # The raw-server probe asks per call rather than trusting a listing: a
+    # server serving different catalogues to different callers would otherwise
+    # answer one caller from another's listing. @posthog/mcp probes per call for
+    # the same reason. Pinning the count keeps that cost visible if the probe
+    # ever widens to ordinary tool traffic.
     #
-    # Counted inside the host's own handler: the probe closes over the original
-    # handler at wrap time, so replacing the `request_handlers` entry would
-    # observe nothing.
+    # Counted inside the host's own handler, which the probe calls directly.
     calls = []
     server = Server("virtual-tools-counted")
 
@@ -552,6 +548,30 @@ async def test_a_listing_handler_registered_after_instrument_is_not_swallowed():
     server.request_handlers[mcp_types.ListToolsRequest] = _static_list(
         [_REAL_GET_MORE_TOOLS]
     )
+
+    out = await _call(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+    assert out.root.content[0].text == "real tool ran"
+
+
+async def test_a_blocked_name_is_not_also_reported_as_shadowed():
+    # The host owns the name on page one *and* a later page. Page one blocks
+    # injection, so nothing of PostHog's is advertised and the host's tool runs.
+    # Warning "the real tool will not run" on page two would send them chasing a
+    # bug that isn't there.
+    server = _make_paged_lowlevel([[_REAL_GET_MORE_TOOLS], [_REAL_GET_MORE_TOOLS]])
+    messages = []
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    await _list_page(server)
+    await _list_page(server, cursor="1")
+
+    assert any("Cannot inject" in m for m in messages)
+    assert not any("already injected" in m for m in messages)
 
     out = await _call(server, "get_more_tools", {"context": "need csv export"})
     await _flush()

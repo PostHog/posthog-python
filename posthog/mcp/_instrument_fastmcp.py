@@ -116,7 +116,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         )
 
         # The registry probe covers the window before any tools/list has run,
-        # when the listing-derived collision state is still empty.
+        # when no tools/list has been served in this process at all.
         if lifecycle.is_missing_capability and not _name_owned_by_real_tool(
             server, name
         ):
@@ -327,7 +327,7 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
 
 def _name_owned_by_real_tool(server: Any, name: str) -> bool:
     """Live registry probe so a real tool by a virtual tool's name is never
-    shadowed, even before the first listing refreshes the collision state.
+    shadowed.
     Kind-agnostic on purpose: it is a lookup by name, so both virtual tools
     share it rather than growing twin helpers that can drift."""
     try:

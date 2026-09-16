@@ -66,6 +66,11 @@ class MCPAnalyticsData:
     # signature of a stateless server whose mint middleware never attached. Warned
     # a single time per server so the log isn't flooded on every request.
     warned_no_stateless_session: bool = False
+    # True once the SDK has told the host that its tools/list handler was
+    # replaced after instrument(), so ownership can no longer be determined and
+    # the virtual tools are advertised but never intercepted. Warned a single
+    # time per server so the log isn't flooded on every call.
+    warned_foreign_list_handler: bool = False
     # ``(kind, name, variant)`` collision warnings already emitted, so a client
     # that re-lists tools on every turn logs each misconfiguration once.
     warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(

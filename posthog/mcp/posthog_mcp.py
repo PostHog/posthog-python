@@ -488,9 +488,9 @@ class PostHogMCP(Client):
             prepared_args = _strip_model(prepared_args)
         # A supplied `original_tool` is a real application tool by this name (it
         # comes from the host's own list, which never holds a virtual tool), so
-        # the real tool wins — the stateless twin of instrument()'s
-        # listing-derived collision state. Without it the name match stands, and
-        # the documented remedy for a collision is renaming PostHog's tool.
+        # the real tool wins — the stateless twin of the ownership check
+        # instrument() runs. Without it the name match stands, and the
+        # documented remedy for a collision is renaming PostHog's tool.
         is_feedback = (
             self._collect_feedback is not None
             and name == self._feedback_tool_name

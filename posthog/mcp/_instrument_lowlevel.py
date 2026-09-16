@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from functools import lru_cache
 from typing import Any, Optional, Set, Tuple
 
 import mcp.types as mcp_types
@@ -44,7 +45,7 @@ from ._instrumentation import (
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._output_instructions import mirror_instructions_into_structured_content
-from .logger import log
+from .logger import log, warn
 from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
@@ -354,13 +355,27 @@ def _wrap_list_tools(
         instrumentation or appends a virtual tool. Read by
         ``_name_owned_by_real_tool`` on raw low-level servers, which have no
         tool registry to ask instead."""
-        # Late-bound on purpose: a host that registers tools/list *after*
-        # instrument() leaves `original` holding a catalogue the client never
-        # sees, and a confident answer from it would swallow a real tool. Report
-        # the question as unanswerable instead, so the call is delegated.
+        # Late-bound on purpose: a host that replaces or removes tools/list
+        # *after* instrument() leaves `original` holding a catalogue the client
+        # never sees, and a confident answer from it would swallow a real tool.
+        # Report the question as unanswerable instead, so the call is delegated.
         # `@posthog/mcp` re-captures the handler for the same reason.
         current = handlers.get(mcp_types.ListToolsRequest)
-        if current is not None and not getattr(current, _WRAPPED_FLAG, False):
+        if current is None or not getattr(current, _WRAPPED_FLAG, False):
+            # Say so once. The virtual tools stay advertised -- a handler
+            # chained in front of ours still runs our injection -- but nothing
+            # is ever intercepted behind them, and a silent stop is invisible in
+            # the captured data.
+            if not data.warned_foreign_list_handler:
+                data.warned_foreign_list_handler = True
+                warn(
+                    "Warning: your tools/list handler was replaced after "
+                    "instrument(), so PostHog can no longer tell whether a tool "
+                    "name is yours. Calls to PostHog's virtual tools are "
+                    "delegated to your server, so no $mcp_missing_capability or "
+                    "$mcp_feedback events are captured. Call instrument() after "
+                    "registering your handlers."
+                )
             return None
         result = await original(mcp_types.ListToolsRequest(method="tools/list"))
         tools = extract_tools(result)
@@ -467,7 +482,7 @@ async def _name_owned_by_real_tool(
     high_level: Any, data: MCPAnalyticsData, name: str, server: Any
 ) -> Optional[bool]:
     """Whether a real application tool owns ``name``, so a virtual tool never
-    shadows it even before the first listing refreshes the collision state.
+    shadows it.
 
     Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
     rather than twin helpers that can drift. On the standalone-fastmcp path the
@@ -476,11 +491,42 @@ async def _name_owned_by_real_tool(
     if high_level is not None:
         try:
             return await high_level.get_tool(name) is not None
-        except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
-            return False
+        except Exception as err:  # noqa: BLE001 - see below
+            if isinstance(err, _tool_lookup_not_found_errors()):
+                return False
+            # The lookup failed rather than answered. fastmcp resolves a tool
+            # through a provider chain that can reach a mounted or proxied
+            # upstream over the network, so this is a transient blip, not "the
+            # name is free" -- guessing the latter would swallow a real tool of
+            # theirs. Delegate instead.
+            log(
+                f'Warning: could not determine whether "{name}" is a real tool of '
+                f"yours; delegating the call to your server - {err}"
+            )
+            return None
     # May be None: see `raw_listing_owns_tool_name`. Callers intercept only on a
     # definite False.
     return await raw_listing_owns_tool_name(data, name, server)
+
+
+@lru_cache(maxsize=1)
+def _tool_lookup_not_found_errors() -> Tuple[type, ...]:
+    """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
+    Anything else out of ``get_tool`` is the lookup itself failing. Empty when
+    fastmcp is absent or has moved them, which makes every failure delegate:
+    the safe direction."""
+    try:
+        from fastmcp import exceptions
+    except Exception:  # noqa: BLE001 - no fastmcp on this path
+        return ()
+    return tuple(
+        err
+        for err in (
+            getattr(exceptions, "NotFoundError", None),
+            getattr(exceptions, "DisabledError", None),
+        )
+        if isinstance(err, type) and issubclass(err, BaseException)
+    )
 
 
 async def _tool_owned_injected_keys(high_level: Any, name: str) -> set:
