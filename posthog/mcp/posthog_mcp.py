@@ -372,10 +372,8 @@ class PostHogMCP(Client):
         dict tools are copied, context injection mutates tool objects in place,
         and model injection copies them to preserve field ownership.
 
-        **On a paginated listing, pass the two switches for the first page only.**
-        A client concatenates every page into one list, so a virtual tool
-        appended to each page appears once per page. The first page is the one
-        every client reads, including clients that never follow ``nextCursor``::
+        **On a paginated listing, pass the two switches for the first page only** —
+        a client concatenates every page into one list::
 
             first_page = request.params.get("cursor") is None
             tools = posthog.prepare_tool_list(
@@ -564,13 +562,11 @@ class PostHogMCP(Client):
         their intent in their own arguments and so never get ``context``
         injected.
 
-        The name alone is not enough, in both directions. A host is free to own
-        a tool called ``get_more_tools`` — skipping it would silently drop its
-        intent — and a host re-preparing an already-prepared list hands our
-        descriptor straight back, so both arrive under the same name. So compare
-        against the descriptor we would build for that name: the description is
-        ours, and unlike the schema it survives the model-injection pass. The
-        feedback name only counts with the constructor opt-in."""
+        Matched on the description, not the name: a host may own a tool called
+        ``get_more_tools``, and a host re-preparing an already-prepared list
+        hands our descriptor straight back, so both arrive under the same name.
+        The description is ours and, unlike the schema, survives the
+        model-injection pass."""
         name = _tool_name(tool)
         if name == self._missing_capability_tool_name:
             expected = build_report_missing_descriptor(name)

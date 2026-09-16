@@ -25,6 +25,12 @@ from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
 )
+from posthog.test.mcp._helpers_lowlevel import (
+    ECHO_TOOL as _ECHO_TOOL,
+    call_request as _call_request,
+    list_page as _list_page,
+    make_paged_lowlevel,
+)
 
 _REPORT_ARGS = {
     "feedback_type": "missing_capability",
@@ -69,13 +75,6 @@ def make_lowlevel():
         return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
 
     return server
-
-
-def _call_request(name, arguments):
-    return mcp_types.CallToolRequest(
-        method="tools/call",
-        params=mcp_types.CallToolRequestParams(name=name, arguments=arguments),
-    )
 
 
 async def _list_tools_lowlevel(server):
@@ -704,58 +703,17 @@ async def test_lowlevel_collision_fails_open_after_listing():
     assert _events(client, "$mcp_tool_call")
 
 
-def _make_paged_lowlevel(pages):
-    """A raw low-level server whose tools/list handler serves ``pages`` (a list of
-    tool lists) one page per request, chained by ``nextCursor``. The paged handler
-    is registered directly into ``request_handlers`` so the wire pagination shape
-    is exact; the real ``send_feedback`` handler answers ``real tool ran``."""
-    server = Server("feedback-lowlevel-paged")
-
-    @server.call_tool()
-    async def call_tool(name, arguments):
-        return [mcp_types.TextContent(type="text", text="real tool ran")]
-
-    async def paged_list(req):
-        cursor = getattr(getattr(req, "params", None), "cursor", None) if req else None
-        index = int(cursor) if cursor else 0
-        next_cursor = str(index + 1) if index + 1 < len(pages) else None
-        return mcp_types.ServerResult(
-            mcp_types.ListToolsResult(tools=list(pages[index]), nextCursor=next_cursor)
-        )
-
-    server.request_handlers[mcp_types.ListToolsRequest] = paged_list
-    return server
-
-
-def _list_page(server, cursor=None):
-    """Request one page. ``cursor=None`` is a first page; any string -- including
-    ``""``, a valid opaque cursor -- is a continuation, so the empty case must
-    not collapse to ``params=None``."""
-    handler = server.request_handlers[mcp_types.ListToolsRequest]
-    params = (
-        mcp_types.PaginatedRequestParams(cursor=cursor) if cursor is not None else None
-    )
-    return handler(mcp_types.ListToolsRequest(method="tools/list", params=params))
-
-
 _REAL_SEND_FEEDBACK = mcp_types.Tool(
     name="send_feedback",
     description="A real application tool",
     inputSchema={"type": "object", "properties": {"note": {"type": "string"}}},
 )
-_ECHO_TOOL = mcp_types.Tool(
-    name="echo",
-    description="Echo",
-    inputSchema={"type": "object", "properties": {"msg": {"type": "string"}}},
-)
 
 
 async def test_paginated_listing_appends_virtual_tool_on_first_page_only():
     # A client concatenates every page into one list, so the virtual tool may
-    # appear on exactly one page. It goes on the FIRST -- the page every client
-    # reads, including clients that never follow nextCursor. (This inverts the
-    # SDK's earlier last-page rule, which hid the tool from those clients.)
-    server = _make_paged_lowlevel([[_ECHO_TOOL], [_ECHO_TOOL]])
+    # appear on exactly one page -- the first, which every client reads.
+    server = make_paged_lowlevel([[_ECHO_TOOL], [_ECHO_TOOL]])
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
 
@@ -768,7 +726,7 @@ async def test_paginated_listing_appends_virtual_tool_on_first_page_only():
 async def test_empty_string_cursor_is_a_continuation_page():
     # `""` is a valid opaque cursor a client got from a previous page, not the
     # absence of one, so it must not re-append the virtual tool.
-    server = _make_paged_lowlevel([[_ECHO_TOOL]])
+    server = make_paged_lowlevel([[_ECHO_TOOL]])
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
 
@@ -780,7 +738,7 @@ async def test_empty_string_cursor_is_a_continuation_page():
 async def test_first_page_collision_lets_the_real_tool_win():
     # A real tool owning the name on the first page blocks injection outright,
     # and its calls are dispatched, not intercepted.
-    server = _make_paged_lowlevel([[_REAL_SEND_FEEDBACK], [_ECHO_TOOL]])
+    server = make_paged_lowlevel([[_REAL_SEND_FEEDBACK], [_ECHO_TOOL]])
     client = FakeClient()
     messages = []
     instrument(
@@ -809,13 +767,11 @@ async def test_first_page_collision_lets_the_real_tool_win():
 
 
 async def test_later_page_collision_shadows_the_real_tool():
-    # Deliberate inversion of the SDK's earlier sticky-flag behaviour, matching
-    # @posthog/mcp: page one cannot see page two, so the virtual tool is already
-    # advertised by the time the real one shows up. PostHog keeps intercepting
-    # the name and the real tool is shadowed -- the host's remedy is the rename
-    # option, which the warning names. Do not restore the fail-open behaviour
-    # here without also changing the JS SDK.
-    server = _make_paged_lowlevel([[_ECHO_TOOL], [_REAL_SEND_FEEDBACK]])
+    # The get_more_tools twin in test_virtual_tools.py carries the reasoning:
+    # page one cannot see page two, so the real tool is shadowed and the remedy
+    # is the rename option. Do not make this fail-open without also changing the
+    # JS SDK.
+    server = make_paged_lowlevel([[_ECHO_TOOL], [_REAL_SEND_FEEDBACK]])
     client = FakeClient()
     messages = []
     instrument(
@@ -843,7 +799,7 @@ async def test_later_page_collision_shadows_the_real_tool():
 
 async def test_collision_warning_is_logged_once_across_repeated_listings():
     # A client that re-lists tools on every turn must not flood the log.
-    server = _make_paged_lowlevel([[_REAL_SEND_FEEDBACK]])
+    server = make_paged_lowlevel([[_REAL_SEND_FEEDBACK]])
     messages = []
     instrument(
         server,
@@ -995,8 +951,8 @@ async def test_posthogmcp_prepare_tool_call_without_opt_in_never_flags():
 async def test_posthogmcp_original_tool_wins_name_collision():
     # A host whose own list holds a real `send_feedback` tool passes it as
     # `original_tool`; the call then dispatches as a real tool call instead of
-    # being swallowed as feedback — the stateless twin of instrument()'s
-    # listing-derived shadow flag.
+    # being swallowed as feedback — the stateless twin of the ownership check
+    # instrument() runs.
     client, _ = make_client(collect_feedback=True)
     real_tool = {
         "name": "send_feedback",

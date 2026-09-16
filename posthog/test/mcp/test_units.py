@@ -155,8 +155,10 @@ def test_resolver_injects_on_a_first_page():
     injection = resolve_virtual_tool_injection(
         data, [_tool("echo")], is_first_page=True
     )
-    assert injection.missing_capability_name == "get_more_tools"
-    assert injection.feedback_name == "send_feedback"
+    assert injection == {
+        VIRTUAL_TOOL_MISSING_CAPABILITY: "get_more_tools",
+        VIRTUAL_TOOL_FEEDBACK: "send_feedback",
+    }
 
 
 def test_resolver_injects_nothing_on_a_continuation_page():
@@ -164,7 +166,7 @@ def test_resolver_injects_nothing_on_a_continuation_page():
     injection = resolve_virtual_tool_injection(
         data, [_tool("echo")], is_first_page=False
     )
-    assert injection.names == {}
+    assert injection == {}
 
 
 def test_resolver_skips_injection_on_a_first_page_collision():
@@ -172,7 +174,7 @@ def test_resolver_skips_injection_on_a_first_page_collision():
     injection = resolve_virtual_tool_injection(
         data, [_tool("get_more_tools")], is_first_page=True
     )
-    assert injection.missing_capability_name is None
+    assert injection == {}
 
 
 def test_resolver_decides_each_page_on_its_own_tools():
@@ -182,23 +184,12 @@ def test_resolver_decides_each_page_on_its_own_tools():
     blocked = resolve_virtual_tool_injection(
         data, [_tool("get_more_tools")], is_first_page=True
     )
-    assert blocked.missing_capability_name is None
+    assert blocked == {}
 
     injection = resolve_virtual_tool_injection(
         data, [_tool("echo")], is_first_page=True
     )
-    assert injection.missing_capability_name == "get_more_tools"
-
-
-def test_resolver_never_injects_from_a_continuation_page():
-    # The virtual tool is already advertised from page one, so a later page
-    # neither injects nor takes that back. The host is warned instead.
-    data = _data(report_missing=True)
-    injection = resolve_virtual_tool_injection(
-        data, [_tool("get_more_tools")], is_first_page=False
-    )
-    assert injection.missing_capability_name is None
-    assert injection.feedback_name is None
+    assert injection == {VIRTUAL_TOOL_MISSING_CAPABILITY: "get_more_tools"}
 
 
 def test_resolver_warns_once_per_kind_name_and_variant():
@@ -223,8 +214,7 @@ def test_resolver_keeps_missing_capability_when_both_share_a_name():
     injection = resolve_virtual_tool_injection(
         data, [_tool("echo")], is_first_page=True
     )
-    assert injection.missing_capability_name == "ask_posthog"
-    assert injection.feedback_name is None
+    assert injection == {VIRTUAL_TOOL_MISSING_CAPABILITY: "ask_posthog"}
     assert (
         VIRTUAL_TOOL_FEEDBACK,
         "ask_posthog",

@@ -30,8 +30,7 @@ from ._conversation_id import build_prompt_back
 from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
     _to_jsonable,
-    append_get_more_tools,
-    append_send_feedback,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
     is_first_listing_page,
@@ -115,17 +114,15 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             },
         )
 
-        # The registry probe covers the window before any tools/list has run,
-        # when no tools/list has been served in this process at all.
-        if lifecycle.is_missing_capability and not _name_owned_by_real_tool(
-            server, name
+        if lifecycle.is_missing_capability and (
+            _name_owned_by_real_tool(server, name) is False
         ):
             await lifecycle.record_missing_capability()
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
 
-        if lifecycle.is_feedback and not _name_owned_by_real_tool(server, name):
+        if lifecycle.is_feedback and (_name_owned_by_real_tool(server, name) is False):
             reply = await lifecycle.record_feedback()
             return [mcp_types.TextContent(type="text", text=reply)]
 
@@ -279,15 +276,9 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
         _inject_tool_schemas(server, data, tools)
 
-        if injection.missing_capability_name is not None:
-            result = append_get_more_tools(
-                result, injection.missing_capability_name, data
-            )
-            names.append(injection.missing_capability_name)
-
-        if injection.feedback_name is not None:
-            result = append_send_feedback(result, injection.feedback_name, data)
-            names.append(injection.feedback_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="inputSchema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -325,16 +316,21 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result
 
 
-def _name_owned_by_real_tool(server: Any, name: str) -> bool:
-    """Live registry probe so a real tool by a virtual tool's name is never
-    shadowed.
-    Kind-agnostic on purpose: it is a lookup by name, so both virtual tools
-    share it rather than growing twin helpers that can drift."""
-    try:
-        tool_manager = getattr(server, "_tool_manager", None)
-        return tool_manager is not None and tool_manager.get_tool(name) is not None
-    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
+    """Live registry probe, so a real tool by a virtual tool's name is never
+    shadowed. Tri-state like its low-level twin: ``None`` when the lookup failed
+    rather than answered, and callers must not intercept on it."""
+    tool_manager = getattr(server, "_tool_manager", None)
+    if tool_manager is None:
         return False
+    try:
+        return tool_manager.get_tool(name) is not None
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(
+            f'Warning: could not determine whether "{name}" is a real tool of '
+            f"yours; delegating the call to your server - {err}"
+        )
+        return None
 
 
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:

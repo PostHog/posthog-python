@@ -506,3 +506,40 @@ async def test_anonymous_events_do_not_create_person_profiles():
 
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["properties"]["$process_person_profile"] is False
+
+
+async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
+    # A lookup that raises means "could not answer", not "the name is free".
+    # Answering False there swallows the host's own tool and returns PostHog's
+    # canned reply as a success. Same contract as the low-level adapter.
+    server = MCPServer("flaky-registry-v2")
+
+    @server.tool()
+    def get_more_tools(context: str) -> str:
+        return "real tool ran"
+
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    original_get_tool = server._tool_manager.get_tool
+    failed = []
+
+    def flaky_get_tool(name, *args, **kwargs):
+        if name == "get_more_tools" and not failed:
+            failed.append(name)
+            raise ConnectionError("registry unreachable")
+        return original_get_tool(name, *args, **kwargs)
+
+    server._tool_manager.get_tool = flaky_get_tool
+
+    out = await _call_tool(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+
+    assert "real tool ran" in str(out.content[0].text)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert any("delegating the call to your server" in m for m in messages)

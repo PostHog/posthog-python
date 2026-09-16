@@ -664,27 +664,20 @@ async def record_tool_call(
 
 
 def extract_tools(result: Any) -> list:
-    """Pull the tool list out of a ListTools ServerResult (a copy — to MUTATE the
-    real list use ``append_get_more_tools``)."""
+    """Pull the tool list out of a ListTools ServerResult, as a copy."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
 
 
 def append_virtual_tool(result: Any, tool: Any) -> Any:
-    """Return a ``tools/list`` result with ``tool`` added, leaving the host's own
-    result object untouched.
+    """Return a copy of a ``tools/list`` result with ``tool`` added.
 
-    A copy, not an in-place append, because a host may return the *same* result
-    object from every ``tools/list`` -- a module-level constant, or its own
-    cache. Mutating it would leave PostHog's virtual tool sitting in what later
-    reads back as the host's catalogue: the SDK would see a collision against
-    itself, stop intercepting, and hand the agent an unknown-tool error instead
-    of recording its feedback. Copying keeps every read of a listing a faithful
-    view of what the host served.
+    A copy, not an in-place append: a host may return the *same* result object
+    from every ``tools/list``, and mutating it leaves PostHog's tool sitting in
+    what later reads back as the host's own catalogue.
 
-    Handles both SDK majors' result shapes: 1.x wraps ``ListToolsResult`` in a
-    ``ServerResult`` root model, 2.x returns it directly. Other fields --
-    ``nextCursor`` above all -- are carried over by the copy."""
+    1.x wraps ``ListToolsResult`` in a ``ServerResult`` root model, 2.x returns
+    it directly. The copy carries every other field, ``nextCursor`` included."""
     root = getattr(result, "root", result)
     tools_list = getattr(root, "tools", None)
     if not isinstance(tools_list, list):
@@ -693,29 +686,73 @@ def append_virtual_tool(result: Any, tool: Any) -> Any:
     return type(result)(updated) if hasattr(result, "root") else updated
 
 
-def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> Any:
-    """Add the get_more_tools virtual tool to a ``tools/list`` result and return
-    the result to serve. Callers gate on :func:`resolve_virtual_tool_injection`."""
-    import mcp.types as mcp_types
-
+def virtual_tool_descriptor(
+    data: MCPAnalyticsData, kind: str, name: str
+) -> Dict[str, Any]:
+    """The advertised descriptor for a virtual tool, under its configured name."""
     from .tools import build_report_missing_descriptor
 
-    descriptor = build_report_missing_descriptor(name)
+    if kind == VIRTUAL_TOOL_MISSING_CAPABILITY:
+        return build_report_missing_descriptor(name)
+    return get_feedback_tool_descriptor(
+        resolve_collect_feedback_options(data.options.collect_feedback)
+    )
+
+
+def append_virtual_tool_by_kind(
+    result: Any, kind: str, name: str, data: MCPAnalyticsData, *, schema_field: str
+) -> Any:
+    """Add a virtual tool to a ``tools/list`` result and return the result to
+    serve. ``schema_field`` is the SDK major's spelling of the input schema
+    field: ``inputSchema`` on 1.x, ``input_schema`` on 2.x.
+
+    ``name`` is passed in rather than re-resolved, so a rename can't drift
+    between :func:`resolve_virtual_tool_injection`'s decision and this append.
+
+    ``owns_context=True``: a virtual tool carries its intent in its own
+    arguments, so no ``context`` is injected — but the capture_model pass still
+    runs, so it advertises ``llm_model``."""
+    import mcp.types as mcp_types
+
+    descriptor = virtual_tool_descriptor(data, kind, name)
     tool = mcp_types.Tool(
-        name=descriptor["name"],
+        name=name,
         description=descriptor["description"],
-        inputSchema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
+        **{schema_field: descriptor["inputSchema"]},
     )
     mutate_tool_schema(
         data,
         tool,
-        schema_attribute="inputSchema",
+        schema_attribute=schema_field,
         owns_context=True,
         context_required=True,
         is_sdk_virtual_tool=True,
     )
     return append_virtual_tool(result, tool)
+
+
+def apply_virtual_tool_injection(
+    result: Any,
+    injection: Dict[str, str],
+    names: List[str],
+    data: MCPAnalyticsData,
+    *,
+    schema_field: str,
+) -> Any:
+    """Append every virtual tool this page won, recording each name for the
+    ``$mcp_tools_list`` event. Missing-capability first: every call path tests
+    that kind first, which is what makes the ``duplicate`` rule in
+    :func:`resolve_virtual_tool_injection` resolve in its favour."""
+    for kind in (VIRTUAL_TOOL_MISSING_CAPABILITY, VIRTUAL_TOOL_FEEDBACK):
+        name = injection.get(kind)
+        if name is None:
+            continue
+        result = append_virtual_tool_by_kind(
+            result, kind, name, data, schema_field=schema_field
+        )
+        names.append(name)
+    return result
 
 
 def enabled_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
@@ -736,34 +773,11 @@ def enabled_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
 def is_first_listing_page(params: Any) -> bool:
     """Whether a ``tools/list`` *request* is the first page of the listing.
 
-    Per the MCP spec an absent ``cursor`` means "start of the listing"; a present
-    one -- *including the empty string* -- is an opaque value the client got from
-    a previous page, so it is a continuation. Matching ``@posthog/mcp``, the
-    virtual tools are appended to the first page only: appending to every page
-    duplicates them in the list a client concatenates, and appending to the last
-    page hides them from every client that never follows ``nextCursor``.
-
-    Takes the request *params* so both handler shapes share one rule: the 1.x
-    adapters pass ``getattr(req, "params", None)`` (``None`` when the client sent
-    no params), the v2 adapter passes its ``params`` argument straight in."""
+    Per the MCP spec an absent ``cursor`` means "start of the listing". A present
+    one -- *including the empty string* -- is an opaque value from a previous
+    page, so it is a continuation. Takes the request params, so both handler
+    shapes share the rule."""
     return getattr(params, "cursor", None) is None
-
-
-@dataclass(frozen=True)
-class VirtualToolInjection:
-    """Which virtual tools a ``tools/list`` page may append, by kind. A kind is
-    absent when the feature is off, a real tool owns the name, this is a
-    continuation page, or the other virtual tool already claimed the name."""
-
-    names: Dict[str, str]
-
-    @property
-    def missing_capability_name(self) -> Optional[str]:
-        return self.names.get(VIRTUAL_TOOL_MISSING_CAPABILITY)
-
-    @property
-    def feedback_name(self) -> Optional[str]:
-        return self.names.get(VIRTUAL_TOOL_FEEDBACK)
 
 
 def advertised_tool_names(tools: list) -> Set[str]:
@@ -780,14 +794,17 @@ def resolve_virtual_tool_injection(
     tools: list,
     *,
     is_first_page: bool,
-) -> VirtualToolInjection:
-    """Decide which virtual tools this listing page appends. Run after
-    ``collect_listed_tools`` so the virtual tools don't count towards "this
-    server advertises nothing".
+) -> Dict[str, str]:
+    """``{kind: name}`` for each virtual tool this listing page appends. A kind
+    is absent when the feature is off, a real tool owns the name, this is a
+    continuation page, or the other virtual tool already claimed the name.
 
-    Stateless: this page's own tools are the whole input, so there is nothing to
-    carry between requests. Injection happens on a first page only, so only a
-    first page's view of the tool set ever decides anything.
+    Run after ``collect_listed_tools``, so the virtual tools don't count towards
+    "this server advertises nothing".
+
+    Stateless: this page's own tools are the whole input. Injection happens on a
+    first page only, so only a first page's view of the tool set decides
+    anything.
 
     * name free on the **first** page -> inject it.
     * name taken on the **first** page -> warn, inject nothing. The call path
@@ -798,7 +815,7 @@ def resolve_virtual_tool_injection(
     """
     enabled = enabled_virtual_tool_names(data)
     if not enabled:
-        return VirtualToolInjection({})
+        return {}
 
     listed = advertised_tool_names(tools)
 
@@ -815,7 +832,7 @@ def resolve_virtual_tool_injection(
                 for variant in ("blocked", "duplicate")
             ):
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
-        return VirtualToolInjection({})
+        return {}
 
     injectable: Dict[str, str] = {}
     for kind, name in enabled.items():
@@ -837,41 +854,20 @@ def resolve_virtual_tool_injection(
             data, VIRTUAL_TOOL_FEEDBACK, missing_name, "duplicate"
         )
 
-    return VirtualToolInjection(injectable)
+    return injectable
 
 
 async def raw_listing_owns_tool_name(
     data: MCPAnalyticsData, name: str, ctx: Any = None
 ) -> Optional[bool]:
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
-    first page, asked at call time.
+    first page, asked at call time. For the raw low-level paths, 1.x and v2,
+    which have no tool registry to query instead.
 
-    Used by both raw low-level paths, 1.x and v2, which have no tool registry to
-    query instead. Without it, a call reaching a process that never served a
-    listing (the ordinary multi-pod case) has no ownership signal at all, so the
-    SDK would intercept a real tool by that name and silently swallow it.
-
-    On 1.x the probe must re-inject schemas after asking: the SDK's list_tools
-    decorator rebuilds ``Server._tool_cache`` from whatever its handler returns,
-    and that cache is what real tool arguments are validated against, so leaving
-    it holding un-injected schemas rejects the arguments we advertised. See
-    ``probe_raw_tool_names``.
-
-    Runs on every call whose name matches a virtual tool's, which is rarer than
-    it sounds: only a name collision or an agent actually invoking
-    ``get_more_tools`` / ``send_feedback`` reaches it, never ordinary tool
-    traffic. ``@posthog/mcp`` probes per call for the same reason.
-
-    Like ``@posthog/mcp``'s equivalent, this reads the first page only: a real
-    tool that appears solely on a later page is already shadowed by the page-one
-    injection and cannot be recovered here.
-
-    Tri-state on purpose. ``True``/``False`` are answers; ``None`` means the
-    question could not be asked, and callers must not intercept on it. Guessing
-    "not owned" there would swallow a real tool of the host's -- silently, and
-    for as long as their listing handler stays unwell -- to protect an analytics
-    affordance. An analytics SDK does not get to break the product it measures.
-    ``@posthog/mcp`` delegates to the server on the same reasoning.
+    Tri-state. ``True``/``False`` are answers; ``None`` means the question could
+    not be asked, and callers must not intercept on it -- guessing "not owned"
+    would swallow a real tool of the host's. Runs once per call to a virtual
+    tool's name, never for ordinary traffic.
     """
     probe = data.raw_tool_names_probe
     if probe is None:
@@ -908,7 +904,6 @@ def virtual_tool_collision_message(
     ``rename_option`` overrides the ``instrument()`` spelling for hosts on the
     ``PostHogMCP`` dispatcher path."""
     remedy = rename_option or _VIRTUAL_TOOL_RENAME_OPTION[kind]
-    event = _VIRTUAL_TOOL_EVENT[kind]
     if variant == "shadowed":
         return (
             f'Warning: a later tools/list page advertises a real tool named "{name}", '
@@ -916,6 +911,7 @@ def virtual_tool_collision_message(
             f'Calls to "{name}" are intercepted by PostHog and the real tool will not '
             f"run. Rename one of them; {remedy} renames PostHog's."
         )
+    event = _VIRTUAL_TOOL_EVENT[kind]
     if variant == "duplicate":
         return (
             "Warning: PostHog's missing-capability and agent-feedback tools are both "
@@ -928,37 +924,6 @@ def virtual_tool_collision_message(
         f"uses that name. PostHog will not intercept it and no {event} events will be "
         f"captured. Rename PostHog's tool with {remedy}."
     )
-
-
-def append_send_feedback(result: Any, name: str, data: MCPAnalyticsData) -> Any:
-    """Add the send_feedback virtual tool to a ``tools/list`` result and return
-    the result to serve. Callers gate on :func:`resolve_virtual_tool_injection`,
-    which resolves the name passed here -- built into the Tool rather than
-    re-resolved, so a rename can't drift between the decision and the append."""
-    import mcp.types as mcp_types
-
-    options = resolve_collect_feedback_options(data.options.collect_feedback)
-    if options is None:
-        return result
-    descriptor = get_feedback_tool_descriptor(options)
-    tool = mcp_types.Tool(
-        name=name,
-        description=descriptor["description"],
-        inputSchema=descriptor["inputSchema"],
-        annotations=descriptor["annotations"],
-    )
-    # `owns_context=True`: the tool carries its intent in its own summary /
-    # details arguments, so no `context` parameter is injected — but the
-    # capture_model pass still runs, so it advertises `llm_model` too.
-    mutate_tool_schema(
-        data,
-        tool,
-        schema_attribute="inputSchema",
-        owns_context=True,
-        context_required=True,
-        is_sdk_virtual_tool=True,
-    )
-    return append_virtual_tool(result, tool)
 
 
 def read_tool_category(tool: Any) -> Optional[str]:

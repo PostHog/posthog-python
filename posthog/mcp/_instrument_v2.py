@@ -41,7 +41,8 @@ from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
-    append_virtual_tool,
+    advertised_tool_names,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     is_first_listing_page,
     mutate_tool_schema,
@@ -55,7 +56,6 @@ from ._instrumentation import (
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
 )
-from .feedback import get_feedback_tool_descriptor, resolve_collect_feedback_options
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
@@ -67,7 +67,6 @@ from .logger import log
 from .request_headers import get_request_headers
 from .session_token import read_mcp_session_header
 from .tools import (
-    build_report_missing_descriptor,
     get_more_tools_result_text,
 )
 
@@ -299,10 +298,8 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             extra={"session_id": mcp_session_id, "ctx": ctx},
         )
 
-        # The registry probe covers the window before any tools/list has run,
-        # when no tools/list has been served in this process at all.
-        if lifecycle.is_missing_capability and not _name_owned_by_real_tool_v2(
-            server, name
+        if lifecycle.is_missing_capability and (
+            _name_owned_by_real_tool_v2(server, name) is False
         ):
             await lifecycle.record_missing_capability()
             return mcp_types.CallToolResult(
@@ -313,7 +310,9 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 ]
             )
 
-        if lifecycle.is_feedback and not _name_owned_by_real_tool_v2(server, name):
+        if lifecycle.is_feedback and (
+            _name_owned_by_real_tool_v2(server, name) is False
+        ):
             reply = await lifecycle.record_feedback()
             return mcp_types.CallToolResult(
                 content=[mcp_types.TextContent(type="text", text=reply)]
@@ -657,17 +656,10 @@ def _wrap_v2_list_tools(
     original = entry.handler
 
     async def probe_raw_tool_names(ctx: Any = None) -> Optional[Set[str]]:
-        """The names the host's own handler advertises on its first page. Calls
-        ``original``, not the wrapper, so the probe never recurses into
-        instrumentation or appends a virtual tool. Read by the raw v2 low-level
-        call path, which has no tool registry to ask instead."""
+        """The host's own first-page tool names — ``original``, not the wrapper,
+        so the probe never recurses or appends a virtual tool."""
         result = await original(ctx, None)
-        tools = getattr(result, "tools", []) or []
-        return {
-            name
-            for tool in tools
-            if isinstance(name := getattr(tool, "name", None), str)
-        }
+        return advertised_tool_names(list(getattr(result, "tools", []) or []))
 
     data.raw_tool_names_probe = probe_raw_tool_names
 
@@ -721,15 +713,9 @@ def _wrap_v2_list_tools(
                 is_sdk_virtual_tool=False,
             )
 
-        if injection.missing_capability_name is not None:
-            result = _append_get_more_tools_v2(
-                result, injection.missing_capability_name, data
-            )
-            names.append(injection.missing_capability_name)
-
-        if injection.feedback_name is not None:
-            result = _append_send_feedback_v2(result, injection.feedback_name, data)
-            names.append(injection.feedback_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="input_schema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -744,60 +730,15 @@ def _wrap_v2_list_tools(
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
 
 
-def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> bool:
-    """Live registry probe so a real tool by a virtual tool's name is never
-    shadowed.
-    Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
-    rather than twin helpers that can drift."""
+def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> Optional[bool]:
+    """Live registry probe, so a real tool by a virtual tool's name is never
+    shadowed. Tri-state like its low-level twin: ``None`` when the lookup failed
+    rather than answered, and callers must not intercept on it."""
     try:
         return high_level._tool_manager.get_tool(name) is not None
-    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
-        return False
-
-
-def _append_send_feedback_v2(result: Any, name: str, data: MCPAnalyticsData) -> Any:
-    """Append the send_feedback virtual tool to a v2 ListToolsResult. Callers gate
-    on :func:`resolve_virtual_tool_injection`, which resolves the name passed
-    here -- built into the Tool rather than re-resolved, so a rename can't drift
-    between the decision and the append."""
-    options = resolve_collect_feedback_options(data.options.collect_feedback)
-    if options is None:
-        return result
-    descriptor = get_feedback_tool_descriptor(options)
-    tool = mcp_types.Tool(
-        name=name,
-        description=descriptor["description"],
-        input_schema=descriptor["inputSchema"],
-        annotations=descriptor["annotations"],
-    )
-    # `owns_context=True`: the tool carries its intent in its own summary /
-    # details arguments, so no `context` parameter is injected — but the
-    # capture_model pass still runs, so it advertises `llm_model` too.
-    mutate_tool_schema(
-        data,
-        tool,
-        schema_attribute="input_schema",
-        owns_context=True,
-        context_required=True,
-        is_sdk_virtual_tool=True,
-    )
-    return append_virtual_tool(result, tool)
-
-
-def _append_get_more_tools_v2(result: Any, name: str, data: MCPAnalyticsData) -> Any:
-    descriptor = build_report_missing_descriptor(name)
-    tool = mcp_types.Tool(
-        name=descriptor["name"],
-        description=descriptor["description"],
-        input_schema=descriptor["inputSchema"],
-        annotations=descriptor["annotations"],
-    )
-    mutate_tool_schema(
-        data,
-        tool,
-        schema_attribute="input_schema",
-        owns_context=True,
-        context_required=True,
-        is_sdk_virtual_tool=True,
-    )
-    return append_virtual_tool(result, tool)
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(
+            f'Warning: could not determine whether "{name}" is a real tool of '
+            f"yours; delegating the call to your server - {err}"
+        )
+        return None

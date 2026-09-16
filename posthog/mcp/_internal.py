@@ -76,13 +76,11 @@ class MCPAnalyticsData:
     warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(
         default_factory=set
     )
-    # Adapter-supplied probe returning the names the host's *own* (original,
+    # Adapter-supplied probe returning the names the host's own (original,
     # un-instrumented) tools/list handler advertises on its first page, or None
-    # when it can't be determined. Registered by the adapters that have no tool
-    # registry to query — raw low-level servers — so a call reaching a process
-    # that never served a listing can still tell whether a real tool owns a
-    # virtual tool's name. Takes the adapter's request context, which the 1.x
-    # handler shape ignores.
+    # when it can't be determined. Registered by the adapters with no tool
+    # registry to query — raw low-level servers. Takes the adapter's request
+    # context, which the 1.x handler shape ignores.
     raw_tool_names_probe: Optional[Callable[[Any], Awaitable[Optional[Set[str]]]]] = (
         None
     )

@@ -237,10 +237,11 @@ At call time the SDK checks ownership again, covering the process that serves a
 call without having served a listing — the ordinary multi-pod case. FastMCP and
 v2 `MCPServer` are asked via their tool registry; a raw low-level server has
 none, so the SDK calls your own `tools/list` handler, once per call to a virtual
-tool's name and never for ordinary traffic. If that check cannot answer — your
-listing handler is failing, or you registered `tools/list` after `instrument()`
-— the call is delegated to your server rather than intercepted, and the reason
-is logged: guessing the other way would swallow a real tool of yours silently.
+tool's name and never for ordinary traffic. If that check cannot answer — a
+registry lookup or a listing handler raised, or you registered `tools/list`
+after `instrument()` — the call is delegated to your server rather than
+intercepted, and the reason is logged: guessing the other way would swallow a
+real tool of yours silently.
 
 This check is the only ownership signal used at call time, so a server that
 serves **different tool sets to different callers** from one instrumented

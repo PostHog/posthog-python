@@ -26,8 +26,8 @@ from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
-    append_get_more_tools,
-    append_send_feedback,
+    advertised_tool_names,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
     is_first_listing_page,
@@ -362,10 +362,9 @@ def _wrap_list_tools(
         # `@posthog/mcp` re-captures the handler for the same reason.
         current = handlers.get(mcp_types.ListToolsRequest)
         if current is None or not getattr(current, _WRAPPED_FLAG, False):
-            # Say so once. The virtual tools stay advertised -- a handler
-            # chained in front of ours still runs our injection -- but nothing
-            # is ever intercepted behind them, and a silent stop is invisible in
-            # the captured data.
+            # The virtual tools stay advertised -- a handler chained in front
+            # of ours still runs our injection -- but nothing is intercepted
+            # behind them, and a silent stop is invisible in the captured data.
             if not data.warned_foreign_list_handler:
                 data.warned_foreign_list_handler = True
                 warn(
@@ -387,11 +386,7 @@ def _wrap_list_tools(
         # `context` we advertised. Same reason the `req is None` branch below
         # injects.
         _inject_tool_schemas(data, tools, context_required=context_required)
-        return {
-            name
-            for tool in tools
-            if isinstance(name := getattr(tool, "name", None), str)
-        }
+        return advertised_tool_names(tools)
 
     data.raw_tool_names_probe = probe_raw_tool_names
 
@@ -456,15 +451,9 @@ def _wrap_list_tools(
 
         _inject_tool_schemas(data, tools, context_required=context_required)
 
-        if injection.missing_capability_name is not None:
-            result = append_get_more_tools(
-                result, injection.missing_capability_name, data
-            )
-            names.append(injection.missing_capability_name)
-
-        if injection.feedback_name is not None:
-            result = append_send_feedback(result, injection.feedback_name, data)
-            names.append(injection.feedback_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="inputSchema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -483,47 +472,35 @@ async def _name_owned_by_real_tool(
     high_level: Any, data: MCPAnalyticsData, name: str, server: Any
 ) -> Optional[bool]:
     """Whether a real application tool owns ``name``, so a virtual tool never
-    shadows it.
+    shadows it. Kind-agnostic: a lookup by name, shared by both virtual tools
+    rather than twin helpers that can drift. The other two adapters keep the
+    same tri-state contract against their own registries.
 
-    Kind-agnostic on purpose: a lookup by name, shared by both virtual tools
-    rather than twin helpers that can drift. On the standalone-fastmcp path the
-    tool registry answers authoritatively. A raw low-level server has no
-    registry, so it falls back to asking the host's own tools/list handler.
+    On the standalone-fastmcp path the tool registry answers authoritatively. A
+    raw low-level server has no registry, so it asks the host's own tools/list
+    handler instead.
 
     Known limit, and *not* one a fallback can close: a ``FastMCP`` is an
     ``AggregateProvider``, which gathers its providers with
-    ``return_exceptions=True`` and drops the failures. A mounted or proxied
-    sub-server that is unreachable therefore reads back as a plain ``None``
-    here -- indistinguishable from "no such tool" -- and we treat the name as
-    free. If that sub-server owned a real tool by a virtual tool's name, this
-    call is intercepted and the host's tool does not run.
-
-    Do not "fix" this by consulting ``list_tools``: the same provider failure
-    is dropped from the listing too (``_collect_list_results``), so the
-    fallback returns the same blind answer, and fastmcp 3.x exposes no
-    error-strategy to opt out of. The distinction is destroyed upstream of
-    anything we can read. It is also narrower than it looks -- during the
-    outage the host's tool is absent from ``tools/list`` as well, so it could
-    not have been dispatched either way; only a provider that recovers between
-    this check and dispatch loses a call that would have worked. The remedy
-    stays the documented one: rename PostHog's tool."""
+    ``return_exceptions=True`` and drops the failures, so an unreachable
+    mounted or proxied sub-server reads back as a plain ``None`` --
+    indistinguishable from "no such tool" -- and we treat the name as free.
+    Consulting ``list_tools`` does not help: the same failure is dropped from
+    the listing too (``_collect_list_results``), and fastmcp 3.x exposes no
+    error strategy to opt out of. Narrower than it reads -- during the outage
+    the host's tool is absent from ``tools/list`` as well, so only a provider
+    that recovers between this check and dispatch loses a call that would have
+    worked. The remedy stays the documented one: rename PostHog's tool."""
     if high_level is not None:
         try:
             return await high_level.get_tool(name) is not None
-        except Exception as err:  # noqa: BLE001 - see below
+        except Exception as err:  # noqa: BLE001 - analytics must not break the call
             if isinstance(err, _tool_lookup_not_found_errors()):
                 return False
-            # The lookup failed rather than answered, so this is not "the name
-            # is free" -- guessing that would swallow a real tool of theirs.
-            # Delegate instead.
-            #
-            # Reaches the visibility, transform and auth work `get_tool` layers
-            # on top of its providers. A *provider* raising does not arrive here:
-            # fastmcp gathers its providers with `return_exceptions=True` and
-            # drops the failures, so a mounted or proxied upstream that blips
-            # reads back as a plain `None`, indistinguishable from "no such
-            # tool". That case still resolves to False above and is unchanged
-            # from before this SDK grew an ownership check.
+            # The lookup failed rather than answered, so not "the name is free"
+            # -- guessing that would swallow a real tool of theirs. What reaches
+            # here is the visibility, transform and auth work layered on top of
+            # the providers; a provider failure never does (see the docstring).
             log(
                 f'Warning: could not determine whether "{name}" is a real tool of '
                 f"yours; delegating the call to your server - {err}"
