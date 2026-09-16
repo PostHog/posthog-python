@@ -576,3 +576,57 @@ async def test_a_blocked_name_is_not_also_reported_as_shadowed():
     out = await _call(server, "get_more_tools", {"context": "need csv export"})
     await _flush()
     assert out.root.content[0].text == "real tool ran"
+
+
+async def test_a_duplicate_dropped_name_is_not_reported_as_shadowed():
+    # Both virtual tools configured to one name: missing-capability wins the
+    # first page and feedback is dropped. When the host's own tool by that name
+    # turns up on a later page, only the tool we actually injected shadows it --
+    # warning that the dropped one does too is a bug the host cannot act on.
+    server = _make_paged_lowlevel([[_ECHO_TOOL], [_REAL_GET_MORE_TOOLS]])
+    messages = []
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(
+            report_missing=True,
+            collect_feedback=CollectFeedbackOptions(tool_name="get_more_tools"),
+            logger=messages.append,
+        ),
+    )
+
+    await _list_page(server)
+    await _list_page(server, cursor="1")
+
+    shadowed = [m for m in messages if "already injected" in m]
+    assert len(shadowed) == 1
+    assert "missing_capability_tool_name" in shadowed[0]
+
+
+async def test_a_removed_listing_handler_is_not_swallowed():
+    # The sibling of a replaced handler: removed outright. Ownership is then
+    # unanswerable, so the call must be delegated rather than intercepted, and
+    # the host told why -- a silent stop is invisible in the captured data.
+    server = Server("virtual-tools-removed")
+
+    @server.call_tool()
+    async def call_tool(name, arguments):
+        return [mcp_types.TextContent(type="text", text="real tool ran")]
+
+    server.request_handlers[mcp_types.ListToolsRequest] = _static_list([_ECHO_TOOL])
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    del server.request_handlers[mcp_types.ListToolsRequest]
+
+    out = await _call(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+
+    assert out.root.content[0].text == "real tool ran"
+    assert _events(client, "$mcp_missing_capability") == []
+    assert any("replaced or removed" in m for m in messages)

@@ -369,8 +369,9 @@ def _wrap_list_tools(
             if not data.warned_foreign_list_handler:
                 data.warned_foreign_list_handler = True
                 warn(
-                    "Warning: your tools/list handler was replaced after "
-                    "instrument(), so PostHog can no longer tell whether a tool "
+                    "Warning: your tools/list handler was replaced or removed "
+                    "after instrument(), so PostHog can no longer tell whether a "
+                    "tool "
                     "name is yours. Calls to PostHog's virtual tools are "
                     "delegated to your server, so no $mcp_missing_capability or "
                     "$mcp_feedback events are captured. Call instrument() after "
@@ -494,11 +495,17 @@ async def _name_owned_by_real_tool(
         except Exception as err:  # noqa: BLE001 - see below
             if isinstance(err, _tool_lookup_not_found_errors()):
                 return False
-            # The lookup failed rather than answered. fastmcp resolves a tool
-            # through a provider chain that can reach a mounted or proxied
-            # upstream over the network, so this is a transient blip, not "the
-            # name is free" -- guessing the latter would swallow a real tool of
-            # theirs. Delegate instead.
+            # The lookup failed rather than answered, so this is not "the name
+            # is free" -- guessing that would swallow a real tool of theirs.
+            # Delegate instead.
+            #
+            # Reaches the visibility, transform and auth work `get_tool` layers
+            # on top of its providers. A *provider* raising does not arrive here:
+            # fastmcp gathers its providers with `return_exceptions=True` and
+            # drops the failures, so a mounted or proxied upstream that blips
+            # reads back as a plain `None`, indistinguishable from "no such
+            # tool". That case still resolves to False above and is unchanged
+            # from before this SDK grew an ownership check.
             log(
                 f'Warning: could not determine whether "{name}" is a real tool of '
                 f"yours; delegating the call to your server - {err}"

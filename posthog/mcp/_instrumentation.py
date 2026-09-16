@@ -804,18 +804,15 @@ def resolve_virtual_tool_injection(
 
     if not is_first_page:
         for kind, name in enabled.items():
-            # Only warn about a tool we actually shadowed. If a first page
-            # already blocked injection for this name then nothing of ours is
-            # advertised and the host's tool runs untouched -- telling them
-            # otherwise sends them chasing a bug that isn't there.
-            if (
-                name in listed
-                and (
-                    kind,
-                    name,
-                    "blocked",
-                )
-                not in data.warned_virtual_tool_collisions
+            # Only warn about a tool we actually shadowed. If this kind never
+            # made it onto the first page -- a real tool already held the name
+            # ("blocked"), or the other virtual tool won it ("duplicate") --
+            # then nothing of ours is advertised under it and the host's tool
+            # runs untouched. Telling them otherwise sends them chasing a bug
+            # that isn't there.
+            if name in listed and not any(
+                (kind, name, variant) in data.warned_virtual_tool_collisions
+                for variant in ("blocked", "duplicate")
             ):
                 _warn_virtual_tool_collision(data, kind, name, "shadowed")
         return VirtualToolInjection({})
