@@ -6,6 +6,7 @@ Fetch and compile LLM prompts from PostHog with caching and fallback support.
 
 import copy
 import logging
+import math
 import re
 import time
 import urllib.parse
@@ -24,6 +25,10 @@ DEFAULT_CACHE_TTL_SECONDS = 300  # 5 minutes
 # default page size covers 10,000 prompts; past that get_all raises rather than
 # returning a truncated result.
 _MAX_PROMPT_LIST_PAGES = 100
+# After a failed refetch the stale entry is served for this long before the next network attempt.
+# The server's tightest prompt limit is per-minute, so a minute lets the bucket refill.
+DEFAULT_REFETCH_COOLDOWN_SECONDS = 60
+MAX_REFETCH_COOLDOWN_SECONDS = 3600
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
@@ -70,6 +75,7 @@ class CachedPrompt:
         self.version = version
         self.label = label
         self.config = config
+        self.retry_not_before: Optional[float] = None
 
 
 def _cache_key(
@@ -151,6 +157,27 @@ def _is_same_origin(url: str, host: str) -> bool:
     parsed = urllib.parse.urlsplit(url)
     expected = urllib.parse.urlsplit(host)
     return (parsed.scheme, parsed.netloc) == (expected.scheme, expected.netloc)
+
+
+def _parse_retry_after_seconds(value: Optional[str]) -> Optional[float]:
+    """Read a Retry-After header of the delta-seconds form the API sends."""
+    if not value:
+        return None
+    try:
+        seconds = float(value.strip())
+    except ValueError:
+        return None
+    if not math.isfinite(seconds) or seconds <= 0:
+        return None
+    return min(seconds, MAX_REFETCH_COOLDOWN_SECONDS)
+
+
+class PromptFetchError(Exception):
+    """Carries the server's own cooldown so a rate-limited client waits as long as it was told to."""
+
+    def __init__(self, message: str, retry_after_seconds: Optional[float] = None):
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _authentication_error(reference: str) -> Exception:
@@ -525,6 +552,19 @@ class Prompts:
                     config=copy.deepcopy(cached.config),
                 )
 
+            # A failed refetch left this entry in cooldown. Serving it keeps one
+            # throttled client from turning every later get() into another
+            # request, which is what holds it against the limit.
+            if cached.retry_not_before is not None and now < cached.retry_not_before:
+                return PromptResult(
+                    source="stale_cache",
+                    prompt=cached.prompt,
+                    name=cached.name,
+                    version=cached.version,
+                    label=cached.label,
+                    config=copy.deepcopy(cached.config),
+                )
+
         # Try to fetch from API
         try:
             data = self._fetch_prompt_from_api(name, version, label)
@@ -568,6 +608,15 @@ class Prompts:
             prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
             if cached is not None:
+                cooldown_seconds = DEFAULT_REFETCH_COOLDOWN_SECONDS
+                if (
+                    isinstance(error, PromptFetchError)
+                    and error.retry_after_seconds is not None
+                ):
+                    cooldown_seconds = error.retry_after_seconds
+                cached.retry_not_before = max(
+                    cached.retry_not_before or 0, time.time() + cooldown_seconds
+                )
                 log.warning(
                     "[PostHog Prompts] Failed to fetch %s, using stale cache: %s",
                     prompt_reference,
@@ -723,8 +772,11 @@ class Prompts:
                     raise _authentication_error(reference)
                 if response.status_code == 403:
                     raise _access_denied_error(reference)
-                raise Exception(
-                    f"[PostHog Prompts] Failed to fetch {reference}: HTTP {response.status_code}"
+                raise PromptFetchError(
+                    f"[PostHog Prompts] Failed to fetch {reference}: HTTP {response.status_code}",
+                    _parse_retry_after_seconds(response.headers.get("Retry-After"))
+                    if response.status_code == 429
+                    else None,
                 )
 
             try:
@@ -811,8 +863,11 @@ class Prompts:
             if response.status_code == 403:
                 raise _access_denied_error(prompt_reference)
 
-            raise Exception(
-                f"[PostHog Prompts] Failed to fetch {prompt_title}: HTTP {response.status_code}"
+            raise PromptFetchError(
+                f"[PostHog Prompts] Failed to fetch {prompt_title}: HTTP {response.status_code}",
+                _parse_retry_after_seconds(response.headers.get("Retry-After"))
+                if response.status_code == 429
+                else None,
             )
 
         try:
