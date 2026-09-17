@@ -43,7 +43,6 @@ class TestStartSpan:
         pipeline, _, active = make()
         span = pipeline.start_span("a")
         assert active.get() is None
-        assert active.get() is None
         span.end()
 
     def test_parents_a_child_to_an_explicit_span_handle(self):
@@ -223,6 +222,13 @@ class TestTraceContinuation:
         assert record.parent_span_id is None
         assert record.trace_id != TRACE_ID
 
+    @pytest.mark.parametrize("blank", ["", "   ", [""]])
+    def test_a_blank_parent_means_the_default_parent(self, blank):
+        pipeline, _, _ = make()
+        with pipeline.start_span("outer") as outer:
+            pipeline.start_span("inner", parent=blank).end()
+        assert queued(pipeline)[0].parent_span_id == outer._span_id
+
     def test_ignores_an_unusable_parent_and_falls_back_to_the_active_span(self):
         pipeline, _, _ = make()
         with pipeline.start_span("outer") as outer:
@@ -342,6 +348,12 @@ class TestPassThroughWhenTracingCannotRun:
             assert active.get() is span
         assert active.get() is None
 
+    def test_a_blank_parent_still_forwards_the_active_pass_through(self):
+        pipeline, _, _ = make(client=SimpleNamespace(disabled=True, send=True))
+        with pipeline.start_span("a", parent=f"00-{TRACE_ID}-{SPAN_ID}-01"):
+            child = pipeline.start_span("b", parent="")
+        assert child.traceparent() == f"00-{TRACE_ID}-{SPAN_ID}-01"
+
     def test_passes_the_inbound_context_through_when_the_live_span_limit_refuses(self):
         pipeline, _, _ = make(max_live_spans=1)
         held = pipeline.start_span("held")
@@ -361,6 +373,20 @@ class TestAutoContext:
 
     def test_omits_keys_with_no_value(self):
         pipeline, _, _ = make(context={"distinct_id": "", "session_id": None})
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].attributes == {}
+
+    def test_stringifies_ids_and_keeps_a_zero(self):
+        pipeline, _, _ = make(context={"distinct_id": 0, "session_id": 42})
+        pipeline.start_span("a").end()
+        assert queued(pipeline)[0].attributes == {
+            "posthogDistinctId": "0",
+            "sessionId": "42",
+        }
+
+    def test_still_records_the_span_when_the_context_is_not_a_mapping(self):
+        pipeline, _, _ = make()
+        pipeline._get_context = lambda: "not a mapping"
         pipeline.start_span("a").end()
         assert queued(pipeline)[0].attributes == {}
 
@@ -431,12 +457,20 @@ class TestLiveSpanBounds:
         assert isinstance(pipeline.start_span("b"), RecordingSpan)
 
     def test_never_exports_a_span_evicted_for_exceeding_max_span_age(self, clock):
-        pipeline, _, _ = make(max_span_age=10)
+        pipeline, _, _ = make(max_live_spans=1, max_span_age=10)
         leaked = pipeline.start_span("leaked")
         clock["now"] += 11
         pipeline.start_span("fresh").end()
         leaked.end()
         assert [r.name for r in queued(pipeline)] == ["fresh"]
+
+    def test_exports_a_long_span_that_ends_while_under_the_bound(self, clock):
+        pipeline, _, _ = make(max_span_age=10)
+        long_running = pipeline.start_span("batch")
+        clock["now"] += 11
+        pipeline.start_span("probe").end()
+        long_running.end()
+        assert [r.name for r in queued(pipeline)] == ["probe", "batch"]
 
     def test_returns_the_slot_on_age_eviction_so_a_leak_cannot_disable_tracing(
         self, clock
@@ -448,11 +482,11 @@ class TestLiveSpanBounds:
         assert isinstance(pipeline.start_span("recovered"), RecordingSpan)
 
     def test_ages_from_start_span_not_from_a_caller_supplied_start_time(self, clock):
-        pipeline, _, _ = make(max_span_age=10)
+        pipeline, _, _ = make(max_live_spans=1, max_span_age=10)
         backdated = pipeline.start_span("old", start_time=1)
-        pipeline.start_span("probe").end()
+        assert pipeline.start_span("probe") is NOOP_SPAN
         backdated.end()
-        assert [r.name for r in queued(pipeline)] == ["probe", "old"]
+        assert [r.name for r in queued(pipeline)] == ["old"]
 
     def test_holds_only_ids_and_floats_so_a_dropped_handle_is_collectable(self):
         pipeline, _, _ = make()

@@ -134,6 +134,9 @@ class PostHogTraces:
             return inert_span(parent, tracestate, self._active_var)
 
         parent = traceparent_header(parent)
+        if isinstance(parent, str) and not parent.strip():
+            # `headers.get("traceparent", "")` with no header: the default applies.
+            parent = None
         if parent is not None and not isinstance(parent, (str, RecordingSpan)):
             if isinstance(parent, Span):
                 # A child of an inert handle is inert too, still forwarding any
@@ -149,9 +152,11 @@ class PostHogTraces:
             if self._is_closed():
                 # close() may have run since the check above.
                 return inert_span(parent, tracestate, self._active_var)
-            # Swept first, so a process that leaked its way to the bound
-            # recovers once the leaks age out.
-            aged = self._evict_aged_spans_locked()
+            # Swept only at the bound, so a long span that does end is still
+            # exported, while a process that leaked its way there recovers.
+            aged = 0
+            if len(self._live_spans) >= self._config.max_live_spans:
+                aged = self._evict_aged_spans_locked()
             at_limit = len(self._live_spans) >= self._config.max_live_spans
             if not at_limit:
                 span_id = new_span_id()
@@ -254,15 +259,19 @@ class PostHogTraces:
     def _auto_context_attributes(self) -> Dict[str, Any]:
         try:
             context = self._get_context() or {}
+            values = [
+                (wire_key, context.get(source_key))
+                for source_key, wire_key in _CONTEXT_ATTRIBUTE_KEYS
+            ]
         except Exception:
             log.debug("Failed to read the request context for a span", exc_info=True)
             return {}
-        attributes: Dict[str, Any] = {}
-        for source_key, wire_key in _CONTEXT_ATTRIBUTE_KEYS:
-            value = context.get(source_key)
-            if value:
-                attributes[wire_key] = value
-        return attributes
+        # Stringified as capture() does with ids, so an int id joins as a string.
+        return {
+            wire_key: str(value)
+            for wire_key, value in values
+            if value is not None and value != ""
+        }
 
     def _evict_aged_spans_locked(self) -> int:
         # An evicted span is never exported (its end() finds no entry), so a

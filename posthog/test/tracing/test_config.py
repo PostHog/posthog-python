@@ -109,6 +109,14 @@ class TestExplicitValues:
     def test_ignores_a_non_string_named_field(self):
         assert resolve_traces_config({"service_name": 42}).service_name is None
 
+    def test_warns_about_an_unknown_key_and_keeps_the_rest(self, caplog):
+        with caplog.at_level("WARNING", logger="posthog"):
+            resolved = resolve_traces_config(
+                {"service_name": "api", "before_span_snd": 1, 7: 2}
+            )
+        assert resolved.service_name == "api"
+        assert "Ignoring unknown traces option(s): before_span_snd, 7" in caplog.text
+
 
 class TestResourceAttributes:
     def test_lets_otlp_resource_attributes_override_the_named_fields(self):

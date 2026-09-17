@@ -137,6 +137,8 @@ def inert_span(
     """
     try:
         parent = traceparent_header(parent)
+        if isinstance(parent, str) and not parent.strip():
+            parent = None
         if parent is None and active_var is not None:
             parent = active_var.get(None)
         if isinstance(parent, Span):

@@ -5,7 +5,7 @@ An unusable value falls back to its documented default with a warning.
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any, Dict, Mapping, Optional
 
 from ._sanitize import attribute_key
@@ -37,6 +37,9 @@ class ResolvedTracesConfig:
     max_queue_size: int = DEFAULT_MAX_QUEUE_SIZE
     max_live_spans: int = DEFAULT_MAX_LIVE_SPANS
     max_span_age: float = DEFAULT_MAX_SPAN_AGE_SECONDS
+
+
+_KNOWN_KEYS = frozenset(field.name for field in fields(ResolvedTracesConfig))
 
 
 def _positive_number(config: Mapping, key: str, default: float) -> float:
@@ -122,6 +125,12 @@ def resolve_traces_config(
                 "Ignoring traces config: expected a dict, got %s", type(config).__name__
             )
         config = {}
+
+    unknown = [key for key in config if key not in _KNOWN_KEYS]
+    if unknown:
+        log.warning(
+            "Ignoring unknown traces option(s): %s", ", ".join(map(str, unknown))
+        )
 
     resource_attributes: Dict[str, Any] = dict(host_resource_attributes or {})
     resource_attributes.update(
