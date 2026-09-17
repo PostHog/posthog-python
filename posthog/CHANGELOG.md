@@ -1,5 +1,11 @@
 # posthog
 
+## 7.55.0 — 2026-09-17
+
+### Minor changes
+
+- [d0ecc9f](https://github.com/posthog/posthog-python/commit/d0ecc9f6edea206664af62d43c10ffb512d9fcd0) `prompts.get_all()` now works without a label. It fetches the latest version of every prompt in one request and warms the cache for plain `prompts.get(name)` calls. Previously the label was required, and passing `label=None` sent the literal string "None" as the label filter, returning an empty result. — Thanks @jurajmajerik!
+
 ## 7.54.2 — 2026-09-17
 
 ### Patch changes
