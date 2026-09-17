@@ -1,5 +1,8 @@
+from unittest import mock
+
 import pytest
 
+from posthog.tracing import _limits as limits_module
 from posthog.tracing._limits import (
     bound_attributes,
     truncate_attribute_value,
@@ -18,6 +21,13 @@ from posthog.tracing._sanitize import FUNCTION_VALUE, UNSERIALIZABLE_VALUE
 class TestTruncateAttributeValue:
     def test_truncates_a_long_string(self):
         assert truncate_attribute_value("x" * 40000, 8192) == "x" * 8192
+
+    def test_never_walks_a_scalar(self):
+        with mock.patch.object(limits_module, "_truncate") as walk:
+            assert truncate_attribute_value("short", 8) == "short"
+            assert truncate_attribute_value(7, 8) == 7
+            assert truncate_attribute_value(None, 8) is None
+        assert not walk.called
 
     def test_returns_a_short_string_unchanged(self):
         assert truncate_attribute_value("short", 8192) == "short"
@@ -138,8 +148,10 @@ class TestBoundAttributes:
         attributes, _ = bound_attributes({"a": "x" * 20}, 2, 5)
         assert attributes == {"a": "xxxxx"}
 
-    def test_a_non_mapping_yields_nothing(self):
-        assert bound_attributes(["a"], 2, 5) == ({}, 0)
+    def test_an_empty_key_spends_no_slot_and_counts_no_drop(self):
+        attributes, dropped = bound_attributes({"": 1, "b": 2, "c": 3}, 2, 8)
+        assert attributes == {"b": 2, "c": 3}
+        assert dropped == 0
 
 
 class TestTruncateAttributes:

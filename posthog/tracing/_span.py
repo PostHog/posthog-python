@@ -193,7 +193,8 @@ def _exception_event_attributes(
         "exception.type": exc_type,
         "exception.message": message,
     }
-    # The tail is kept: Python lists the raising frame last.
+    # The tail is kept: Python lists the raising frame last. For a chained
+    # exception that is the outermost one; a cause printed above it goes first.
     stacktrace = describe_stacktrace(error)
     if stacktrace:
         attributes["exception.stacktrace"] = stacktrace[-max_length:]
@@ -277,6 +278,10 @@ class RecordingSpan(_Activatable, Span):
 
     def _write_attribute(self, key: str, value: Any) -> None:
         """Write an attribute unless the span is at its cap of distinct user keys."""
+        if not key:
+            # The encoder drops it, so it must not spend a slot.
+            log.debug("Dropping an attribute with an empty key")
+            return
         if value is None:
             # None removes the key, freeing its slot.
             if key in self._attributes and key not in self._auto_keys:
@@ -322,7 +327,7 @@ class RecordingSpan(_Activatable, Span):
             dropped = 0
             if attributes is not None:
                 bounded, dropped = bound_attributes(
-                    attributes,
+                    copy_user_attributes({}, attributes),
                     MAX_ATTRIBUTES_PER_EVENT,
                     self._max_attribute_value_length,
                 )

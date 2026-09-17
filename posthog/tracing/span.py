@@ -84,7 +84,8 @@ class Span:
         Ignored after ``end()``. The event carries ``exception.type``,
         ``exception.message`` and, for a raised exception,
         ``exception.stacktrace`` (its last ``max_attribute_value_length``
-        characters). Returns the span, so calls chain. Inside
+        characters, so a chained traceback keeps the outermost exception and
+        may lose its cause). Returns the span, so calls chain. Inside
         ``with span:`` a raised ``Exception`` is recorded automatically, so
         this is for exceptions that are caught and handled.
 

@@ -12,7 +12,7 @@ import pytest
 
 from posthog.tracing import _span as span_module
 from posthog.tracing._config import MAX_ATTRIBUTES_PER_EVENT
-from posthog.tracing._otlp import SpanRecord, build_otlp_span
+from posthog.tracing._otlp import CIRCULAR_VALUE, SpanRecord, build_otlp_span
 from posthog.tracing._sanitize import (
     FALLBACK_SPAN_NAME,
     FUNCTION_VALUE,
@@ -793,14 +793,34 @@ class TestSpanLimits:
         assert record.events[0].attributes == {"k": "long"}
         assert record.status.message == "long"
 
-    def test_a_self_referencing_attribute_ends_the_span(self):
+    def test_a_self_referencing_attribute_is_stored_as_the_encoders_marker(self):
         records: list = []
         value: dict = {}
         value["self"] = value
         span = make_span(records)
         span.set_attribute("loop", value)
         span.end()
-        assert len(records) == 1
+        assert records[0].attributes["loop"] == {"self": CIRCULAR_VALUE}
+
+    def test_an_empty_key_spends_no_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+        span.set_attribute("", 1).set_attribute("real", 2)
+        span.set_attributes({"": 3})
+        span.add_event("e", {"": 1, "k": 2})
+        span.end()
+        assert records[0].attributes == {"real": 2}
+        assert records[0].dropped_attributes_count == 0
+        assert records[0].events[0].attributes == {"k": 2}
+
+    def test_add_event_with_a_non_mapping_logs_and_keeps_the_event(self, caplog):
+        records: list = []
+        span = make_span(records)
+        with caplog.at_level("DEBUG", logger="posthog"):
+            span.add_event("e", ["not", "a", "mapping"])
+        span.end()
+        assert records[0].events[0].attributes == {}
+        assert "expected a mapping" in caplog.text
 
 
 class TestExceptionStacktrace:
@@ -823,9 +843,9 @@ class TestExceptionStacktrace:
         span.end()
         assert "exception.stacktrace" not in records[0].events[0].attributes
 
-    def test_bounds_the_stack_keeping_the_crash_site(self):
-        # Python lists the most recent call last, so the tail is what matters:
-        # the raising frame and the exception line.
+    def test_bounds_the_stack_keeping_the_outermost_exception(self):
+        # Python prints a cause first and the outermost exception last, so
+        # the tail keeps the outermost raise and may cut the cause off.
         def recurse(depth):
             if depth == 0:
                 raise ValueError("the actual crash site")

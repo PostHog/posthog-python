@@ -36,6 +36,11 @@ def truncate_attribute_value(value: Any, max_length: int) -> Any:
 
     A value that cannot be walked is returned as it is.
     """
+    # The common case never allocates a walk.
+    if isinstance(value, str):
+        return truncate_string(value, max_length)
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
     try:
         return _truncate(value, max_length, _WalkState(), 0)
     except Exception:
@@ -113,32 +118,20 @@ def _truncate_items(value: Any, max_length: int, state: _WalkState, depth: int) 
 
 
 def bound_attributes(
-    source: Any, max_count: int, max_length: int
+    source: Mapping[str, Any], max_count: int, max_length: int
 ) -> Tuple[Dict[str, Any], int]:
-    """A copy of ``source`` with at most ``max_count`` entries, each bounded, and
-    how many entries the cap refused. A ``None`` value spends no slot."""
-    if not isinstance(source, Mapping):
-        return {}, 0
-    try:
-        keys = list(source.keys())
-    except Exception:
-        return {}, 0
+    """A copy of a ``copy_user_attributes`` result with at most ``max_count``
+    entries, each bounded, and how many entries the cap refused. An empty key
+    or a ``None`` value spends no slot."""
     attributes: Dict[str, Any] = {}
     dropped = 0
-    for key in keys:
-        key_str = attribute_key(key)
-        if key_str is None:
+    for key, value in source.items():
+        if not key or value is None:
             continue
-        try:
-            value = source[key]
-        except Exception:
-            value = UNSERIALIZABLE_VALUE
-        if value is None:
-            continue
-        if len(attributes) >= max_count and key_str not in attributes:
+        if len(attributes) >= max_count and key not in attributes:
             dropped += 1
             continue
-        attributes[key_str] = truncate_attribute_value(value, max_length)
+        attributes[key] = truncate_attribute_value(value, max_length)
     return attributes, dropped
 
 
