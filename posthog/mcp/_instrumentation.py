@@ -474,10 +474,11 @@ class ToolCallLifecycle:
             self.data, mcp_session_id=self.mcp_session_id, token=self.token
         )
 
-    def prompt_back_text(self) -> Optional[str]:
+    def virtual_result_texts(self, primary_text: str) -> List[str]:
+        """Build the text payload for an SDK virtual-tool result."""
         if not self.conversation_id or not self.minted_conversation_id:
-            return None
-        return build_prompt_back(self.conversation_id)["text"]
+            return [primary_text]
+        return [primary_text, build_prompt_back(self.conversation_id)["text"]]
 
     def _anchored_conversation_id(self, delivered: bool) -> Optional[str]:
         if self.minted_conversation_id and not delivered:

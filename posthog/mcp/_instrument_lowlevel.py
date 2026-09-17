@@ -213,12 +213,9 @@ def _wrap_call_tool(
             await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
             virtual_content = [
-                mcp_types.TextContent(type="text", text=get_more_tools_result_text())
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
             ]
-            if prompt_back := lifecycle.prompt_back_text():
-                virtual_content.append(
-                    mcp_types.TextContent(type="text", text=prompt_back)
-                )
             await lifecycle.record_missing_capability(conversation_id_delivered=True)
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
@@ -231,11 +228,10 @@ def _wrap_call_tool(
             await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
             reply = await lifecycle.record_feedback(conversation_id_delivered=True)
-            virtual_content = [mcp_types.TextContent(type="text", text=reply)]
-            if prompt_back := lifecycle.prompt_back_text():
-                virtual_content.append(
-                    mcp_types.TextContent(type="text", text=prompt_back)
-                )
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
                     content=virtual_content,
