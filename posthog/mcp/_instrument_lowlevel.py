@@ -41,6 +41,7 @@ from ._instrumentation import (
     resolve_virtual_tool_injection,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
@@ -501,10 +502,7 @@ async def _name_owned_by_real_tool(
             # -- guessing that would swallow a real tool of theirs. What reaches
             # here is the visibility, transform and auth work layered on top of
             # the providers; a provider failure never does (see the docstring).
-            log(
-                f'Warning: could not determine whether "{name}" is a real tool of '
-                f"yours; delegating the call to your server - {err}"
-            )
+            warn_ownership_lookup_failed(name, err)
             return None
     # May be None: see `raw_listing_owns_tool_name`. Callers intercept only on a
     # definite False.

@@ -14,7 +14,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -58,6 +58,10 @@ from .types import CollectFeedbackOptions, FeedbackReport
 # bookkeeping, warning text -- is keyed by kind so the two can't drift apart.
 VIRTUAL_TOOL_MISSING_CAPABILITY = "missing_capability"
 VIRTUAL_TOOL_FEEDBACK = "feedback"
+
+# Why a collision happened, which picks the warning's wording. Named so a typo
+# is a type error instead of silently getting the "blocked" text.
+VirtualToolCollisionVariant = Literal["blocked", "duplicate", "shadowed"]
 
 # The option that renames each virtual tool, quoted verbatim in the collision
 # warnings.
@@ -875,16 +879,26 @@ async def raw_listing_owns_tool_name(
     try:
         names = await probe(ctx)
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
-        log(
-            f'Warning: could not determine whether "{name}" is a real tool of '
-            f"yours; delegating the call to your server - {err}"
-        )
+        warn_ownership_lookup_failed(name, err)
         return None
     return None if names is None else name in names
 
 
+def warn_ownership_lookup_failed(name: str, err: Exception) -> None:
+    """A tool-ownership lookup raised instead of answering. Every adapter's probe
+    reports it the same way and then returns ``None``, so the call is delegated
+    to the host rather than intercepted on a guess."""
+    log(
+        f'Warning: could not determine whether "{name}" is a real tool of '
+        f"yours; delegating the call to your server - {err}"
+    )
+
+
 def _warn_virtual_tool_collision(
-    data: MCPAnalyticsData, kind: str, name: str, variant: str
+    data: MCPAnalyticsData,
+    kind: str,
+    name: str,
+    variant: VirtualToolCollisionVariant,
 ) -> None:
     """Warn once per ``(kind, name, variant)`` for the life of the server's
     tracking state, so a client that re-lists tools on every turn doesn't flood
@@ -897,7 +911,11 @@ def _warn_virtual_tool_collision(
 
 
 def virtual_tool_collision_message(
-    kind: str, name: str, variant: str, *, rename_option: Optional[str] = None
+    kind: str,
+    name: str,
+    variant: VirtualToolCollisionVariant,
+    *,
+    rename_option: Optional[str] = None,
 ) -> str:
     """The warning text for a virtual-tool name collision. Always names the option
     that renames PostHog's tool -- a warning without its own remedy gets ignored.

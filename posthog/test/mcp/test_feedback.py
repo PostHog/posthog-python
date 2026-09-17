@@ -948,6 +948,31 @@ async def test_posthogmcp_prepare_tool_call_without_opt_in_never_flags():
     assert call.is_feedback is False and call.feedback_report is None
 
 
+async def test_posthogmcp_one_name_for_both_virtual_tools(caplog):
+    # Both virtual tools configured with the same name. Missing-capability wins
+    # every call path, so advertising the feedback tool too would dead-letter it
+    # — the stateless twin of the "duplicate" drop `instrument()` performs.
+    client, _ = make_client(
+        missing_capability_tool_name="assist",
+        collect_feedback=CollectFeedbackOptions(tool_name="assist"),
+    )
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        prepared = client.prepare_tool_list(
+            tools, report_missing=True, collect_feedback=True
+        )
+
+    assert [t["name"] for t in prepared] == ["search", "assist"]
+    assert any("both" in r.message for r in caplog.records if r.name == "posthog.mcp")
+
+    # A dispatcher testing `is_feedback` first must not swallow the call: the
+    # name belongs to missing-capability, so only that flag is set.
+    call = client.prepare_tool_call("assist", {"context": "need csv export"})
+    assert call.is_missing_capability is True
+    assert call.is_feedback is False and call.feedback_report is None
+
+
 async def test_posthogmcp_original_tool_wins_name_collision():
     # A host whose own list holds a real `send_feedback` tool passes it as
     # `original_tool`; the call then dispatches as a real tool call instead of

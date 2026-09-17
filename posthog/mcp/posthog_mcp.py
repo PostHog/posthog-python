@@ -27,6 +27,7 @@ from ._exceptions import capture_exception
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
+    VirtualToolCollisionVariant,
     drain_pending_sync,
     fire_and_forget,
     virtual_tool_collision_message,
@@ -398,38 +399,42 @@ class PostHogMCP(Client):
         # straight back. Warning about that would be warning about ourselves.
         if report_missing:
             name = self._missing_capability_tool_name
-            if self._real_tool_owns_name(prepared, name):
+            existing = _find_tool(prepared, name)
+            if existing is not None and not self._is_sdk_virtual_tool(existing):
                 self._warn_virtual_tool_collision(
                     VIRTUAL_TOOL_MISSING_CAPABILITY,
                     name,
                     'PostHogMCP(missing_capability_tool_name="...")',
                 )
-            elif not any(_tool_name(t) == name for t in prepared):
+            elif existing is None:
                 prepared.append(build_report_missing_descriptor(name))
         if collect_feedback and self._collect_feedback is not None:
             name = self._feedback_tool_name
-            if self._real_tool_owns_name(prepared, name):
+            existing = _find_tool(prepared, name)
+            # Both virtual tools under one name: missing-capability wins in
+            # `prepare_tool_call`, so advertising this one too would dead-letter
+            # the feedback path. Same precedence as `instrument()`.
+            duplicate = name == self._missing_capability_tool_name
+            if duplicate or (
+                existing is not None and not self._is_sdk_virtual_tool(existing)
+            ):
                 self._warn_virtual_tool_collision(
                     VIRTUAL_TOOL_FEEDBACK,
                     name,
                     'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
+                    variant="duplicate" if duplicate else "blocked",
                 )
-            elif not any(_tool_name(t) == name for t in prepared):
+            elif existing is None:
                 prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
         prepared = self._inject_models(prepared)
         return prepared
 
-    def _real_tool_owns_name(self, prepared: List[Any], name: str) -> bool:
-        """Whether a *host* tool in this listing owns ``name``. Our own
-        descriptor doesn't count: a host may re-prepare an already-prepared
-        list, and that is not a collision to warn about."""
-        return any(
-            _tool_name(tool) == name and not self._is_sdk_virtual_tool(tool)
-            for tool in prepared
-        )
-
     def _warn_virtual_tool_collision(
-        self, kind: str, name: str, rename_option: str
+        self,
+        kind: str,
+        name: str,
+        rename_option: str,
+        variant: VirtualToolCollisionVariant = "blocked",
     ) -> None:
         """Warn once per ``(kind, name)`` for this client's lifetime, so a host
         that prepares a listing on every request doesn't flood the log."""
@@ -439,7 +444,7 @@ class PostHogMCP(Client):
         self._warned_virtual_tool_collisions.add(key)
         warn(
             virtual_tool_collision_message(
-                kind, name, "blocked", rename_option=rename_option
+                kind, name, variant, rename_option=rename_option
             )
         )
 
@@ -489,9 +494,13 @@ class PostHogMCP(Client):
         # the real tool wins — the stateless twin of the ownership check
         # instrument() runs. Without it the name match stands, and the
         # documented remedy for a collision is renaming PostHog's tool.
+        # The name check against missing-capability keeps one precedence when
+        # both tools share a name: without it both flags are true, and a
+        # dispatcher testing `is_feedback` first misroutes every call.
         is_feedback = (
             self._collect_feedback is not None
             and name == self._feedback_tool_name
+            and name != self._missing_capability_tool_name
             and original_tool is None
         )
         # Same guard for the missing-capability tool. Unlike feedback it has no
@@ -688,6 +697,12 @@ def _tool_name(tool: Any) -> Optional[str]:
     if isinstance(tool, dict):
         return tool.get("name")
     return getattr(tool, "name", None)
+
+
+def _find_tool(prepared: List[Any], name: str) -> Optional[Any]:
+    """The listed tool using ``name``, or ``None``. One pass answers both "is
+    the name taken" and "is the tool holding it ours"."""
+    return next((tool for tool in prepared if _tool_name(tool) == name), None)
 
 
 def _tool_schema(tool: Any) -> Optional[Dict[str, Any]]:

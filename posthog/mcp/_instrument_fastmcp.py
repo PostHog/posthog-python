@@ -40,6 +40,7 @@ from ._instrumentation import (
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
@@ -326,10 +327,7 @@ def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
     try:
         return tool_manager.get_tool(name) is not None
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
-        log(
-            f'Warning: could not determine whether "{name}" is a real tool of '
-            f"yours; delegating the call to your server - {err}"
-        )
+        warn_ownership_lookup_failed(name, err)
         return None
 
 
