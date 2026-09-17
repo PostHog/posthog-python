@@ -1,4 +1,5 @@
 import threading
+import time
 from types import SimpleNamespace
 from unittest import mock
 
@@ -152,8 +153,9 @@ class TestExport:
         assert queued(pipeline) == []
 
     def test_returns_without_draining_when_another_flush_holds_the_lock_past_the_deadline(
-        self,
+        self, caplog
     ):
+        caplog.set_level("DEBUG", logger="posthog")
         pipeline, sender, _ = make_traces()
         pipeline.start_span("a").end()
         timer = FakeTimer.instances[-1]
@@ -165,6 +167,31 @@ class TestExport:
         assert sender.payloads == []
         assert pipeline._exporter._flush_timer is timer
         assert not timer.cancelled
+        assert "another flush was still in flight" in caplog.text
+
+    def test_the_budget_starts_once_the_lock_is_held(self, clock):
+        pipeline, sender, _ = make_traces(max_export_batch_size=1)
+        exporter = pipeline._exporter
+
+        def send_slowly(client, payload):
+            sender.payloads.append(payload)
+            clock["now"] += 0.1
+            return SendOutcome("ok")
+
+        exporter._send = send_slowly
+        for _ in range(2):
+            pipeline.start_span("a").end()
+        exporter._flush_lock.acquire()
+
+        def release_after_a_while():
+            time.sleep(0.05)
+            clock["now"] += 1.0
+            exporter._flush_lock.release()
+
+        threading.Thread(target=release_after_a_while).start()
+        pipeline.flush(timeout=0.5)
+        assert len(sender.payloads) == 2
+        assert queued(pipeline) == []
 
     def test_re_arms_after_a_timer_that_failed_to_start(self):
         class FlakyTimer(FakeTimer):
@@ -263,8 +290,18 @@ class TestExportFailures:
         for i in range(8):
             pipeline.start_span(str(i)).end()
         pipeline.flush()
-        assert pipeline._exporter._max_export_batch_size == 6
+        assert pipeline._exporter._max_export_batch_size == 8
         assert [len(b) for b in sender.batches()] == [8, 4, 4]
+
+    def test_restores_the_batch_size_once_a_413_isolates_the_oversized_span(self):
+        sender = FakeSender(*([SendOutcome("too-large")] * 4), SendOutcome("ok"))
+        pipeline, _, _ = make_traces(sender=sender, max_export_batch_size=8)
+        for i in range(8):
+            pipeline.start_span(str(i)).end()
+        pipeline.flush()
+        assert [len(b) for b in sender.batches()] == [8, 4, 2, 1, 7]
+        assert pipeline._exporter._max_export_batch_size == 8
+        assert queued(pipeline) == []
 
     def test_a_batch_measured_too_large_locally_splits_only_that_drain(self):
         sender = FakeSender(TOO_LARGE_LOCALLY, SendOutcome("ok"))
@@ -911,3 +948,88 @@ class TestCloseAndFork:
         )
         pipeline.start_span("child-span").end()
         assert [r.name for r in queued(pipeline)] == ["child-span"]
+
+
+def waits_advance(clock, pipeline):
+    """Make the exporter's backoff wait move the fake clock instead of sleeping."""
+    waited = []
+
+    def wait(seconds):
+        waited.append(seconds)
+        clock["now"] += seconds
+        return False
+
+    pipeline._exporter._wait_for_retry = wait
+    return waited
+
+
+class TestRetryWithinBudget:
+    def test_retries_a_retriable_failure_after_its_backoff(self, clock):
+        sender = FakeSender(SendOutcome("retry-later"), SendOutcome("ok"))
+        pipeline, _, _ = make_traces(sender=sender)
+        waited = waits_advance(clock, pipeline)
+        pipeline.start_span("a").end()
+        pipeline.flush(timeout=30)
+        assert len(sender.payloads) == 2
+        assert waited == [5]
+        assert queued(pipeline) == []
+
+    def test_makes_a_last_attempt_at_the_deadline(self, clock):
+        sender = FakeSender(SendOutcome("retry-later"))
+        pipeline, _, _ = make_traces(sender=sender)
+        waited = waits_advance(clock, pipeline)
+        pipeline.start_span("a").end()
+        pipeline.flush(timeout=12)
+        # Attempts at 0, 5 and 12: the second backoff of 10 is cut to the budget.
+        assert len(sender.payloads) == 3
+        assert waited == [5, 7]
+        assert len(queued(pipeline)) == 1
+
+    def test_honours_a_retry_after_within_the_budget(self, clock):
+        sender = FakeSender(SendOutcome("retry-later", 60), SendOutcome("ok"))
+        pipeline, _, _ = make_traces(sender=sender)
+        waited = waits_advance(clock, pipeline)
+        pipeline.start_span("a").end()
+        pipeline.flush(timeout=40)
+        assert waited == [MAX_RETRY_AFTER_SECONDS]
+        assert queued(pipeline) == []
+
+    def test_a_timer_flush_does_not_retry(self, clock):
+        sender = FakeSender(SendOutcome("retry-later"))
+        pipeline, _, _ = make_traces(sender=sender)
+        waited = waits_advance(clock, pipeline)
+        pipeline.start_span("a").end()
+        FakeTimer.instances[-1].fire()
+        assert len(sender.payloads) == 1
+        assert waited == []
+
+    def test_a_flush_without_a_timeout_does_not_retry(self, clock):
+        sender = FakeSender(SendOutcome("retry-later"))
+        pipeline, _, _ = make_traces(sender=sender)
+        waited = waits_advance(clock, pipeline)
+        pipeline.start_span("a").end()
+        pipeline.flush()
+        assert len(sender.payloads) == 1
+        assert waited == []
+
+    def test_close_cuts_the_wait_short(self, clock):
+        sender = FakeSender(SendOutcome("retry-later"))
+        pipeline, _, _ = make_traces(sender=sender)
+        exporter = pipeline._exporter
+        pipeline.start_span("a").end()
+
+        def close_during_wait(seconds):
+            exporter.close()
+            return True
+
+        exporter._wait_for_retry = close_during_wait
+        pipeline.flush(timeout=30)
+        assert len(sender.payloads) == 1
+
+    def test_the_real_wait_returns_when_close_is_called(self):
+        pipeline, _, _ = make_traces()
+        exporter = pipeline._exporter
+        threading.Thread(target=lambda: (time.sleep(0.05), exporter.close())).start()
+        started = time.monotonic()
+        assert exporter._wait_for_retry(5) is True
+        assert time.monotonic() - started < 2

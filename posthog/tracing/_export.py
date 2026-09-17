@@ -20,6 +20,7 @@ from ._otlp import (
     build_otlp_span,
     build_resource_attributes,
     build_traces_payload,
+    to_resource_key_value_list,
 )
 from ._transport import SendOutcome, send_traces_batch
 
@@ -101,20 +102,28 @@ class SpanExporter:
         self._config = config
         self._drops = drops
         self._send = send
-        self._resource_attributes = build_resource_attributes(
-            config.service_name,
-            config.service_version,
-            config.environment,
-            config.resource_attributes,
+        # Encoded once: the resource is the same for every batch.
+        self._resource = to_resource_key_value_list(
+            build_resource_attributes(
+                config.service_name,
+                config.service_version,
+                config.environment,
+                config.resource_attributes,
+            )
         )
 
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
+        # Set by close(), so a flush waiting out a backoff returns at once.
+        self._closing = threading.Event()
         self._closed = False
         self._queue: List[SpanRecord] = []
         self._flush_timer: Optional[threading.Timer] = None
         self._flush_timer_fires_at = 0.0
         self._max_export_batch_size = config.max_export_batch_size
+        # The size before a server 413 halved it, restored once the oversized
+        # span is isolated and dropped.
+        self._batch_size_before_halving: Optional[int] = None
         self._consecutive_failures = 0
         # Drawn once per failure, so the timer and the retry-budget charge see
         # the same delay.
@@ -151,15 +160,24 @@ class SpanExporter:
     ) -> None:
         """Drain the queue: one pass over what was queued, then one follow-up pass.
 
-        With a ``timeout``, no request starts once it is spent, except the
-        first. A request already in flight is bounded by the client's timeout.
+        With a ``timeout``, the budget starts once no other flush is in flight;
+        one still in flight after that long a wait is left to finish and
+        nothing is sent here. No request starts once the budget is spent,
+        except the first, and a retriable failure is retried after its backoff
+        while budget remains, once more at the deadline. Without a timeout a
+        retriable failure is left to the timer. A request already in flight is
+        bounded by the client's timeout.
         """
-        deadline = None if timeout is None else time.monotonic() + timeout
         # -1 is Lock.acquire's unbounded form.
         if not self._flush_lock.acquire(
             timeout=-1 if timeout is None else max(0.0, timeout)
         ):
+            log.debug(
+                "Skipping a span flush: another flush was still in flight after %ss",
+                timeout,
+            )
             return
+        deadline = None if timeout is None else time.monotonic() + timeout
         try:
             with self._lock:
                 # A timer that waited behind another flush may have been
@@ -168,14 +186,7 @@ class SpanExporter:
                     return
                 self._clear_timer_locked()
             try:
-                removed, stop = self._drain(deadline)
-                if (
-                    removed
-                    and not stop
-                    and self._queue
-                    and (deadline is None or time.monotonic() < deadline)
-                ):
-                    self._drain(deadline)
+                self._drain_within_budget(deadline, retry=_timer is None)
             finally:
                 with self._lock:
                     self._rearm_after_pass_locked()
@@ -183,10 +194,42 @@ class SpanExporter:
             self._flush_lock.release()
             self._drops.warn_if_due(force=True)
 
+    def _drain_within_budget(self, deadline: Optional[float], retry: bool) -> None:
+        while True:
+            removed, stop = self._drain(deadline)
+            if not stop:
+                if (
+                    removed
+                    and self._queue
+                    and (deadline is None or time.monotonic() < deadline)
+                ):
+                    self._drain(deadline)
+                return
+            if deadline is None or not retry:
+                return
+            wait = self._retry_wait_locked()
+            remaining = deadline - time.monotonic()
+            if wait is None or remaining <= 0:
+                return
+            if self._wait_for_retry(min(wait, remaining)):
+                return
+
+    def _retry_wait_locked(self) -> Optional[float]:
+        """The backoff to wait out before retrying, or ``None`` when there is nothing to retry."""
+        with self._lock:
+            if self._closed or not self._queue or not self._consecutive_failures:
+                return None
+            return self._next_flush_delay_locked()
+
+    def _wait_for_retry(self, seconds: float) -> bool:
+        """Wait out a backoff; ``True`` when close() cut the wait short."""
+        return self._closing.wait(seconds)
+
     def close(self) -> None:
         """Stop exporting and discard what is still queued. Called at shutdown."""
         with self._lock:
             self._closed = True
+            self._closing.set()
             self._clear_timer_locked()
             discarded = len(self._queue)
             self._queue = []
@@ -212,10 +255,12 @@ class SpanExporter:
         # in the child, so they are replaced rather than acquired.
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
+        self._closing = threading.Event()
         self._flush_timer = None
         self._flush_timer_fires_at = 0.0
         self._queue = []
         self._max_export_batch_size = self._config.max_export_batch_size
+        self._batch_size_before_halving = None
         self._retry_after.reset()
         self._end_failure_sequence_locked()
 
@@ -281,7 +326,7 @@ class SpanExporter:
             sent_any = True
             try:
                 outcome = self._send(
-                    self._client, build_traces_payload(spans, self._resource_attributes)
+                    self._client, build_traces_payload(spans, self._resource)
                 )
             except Exception:
                 log.debug("Span batch send failed", exc_info=True)
@@ -312,8 +357,11 @@ class SpanExporter:
         if outcome.kind == "ok":
             del self._queue[:size]
             self._end_failure_sequence_locked()
+            self._batch_size_before_halving = None
             if self._max_export_batch_size < self._config.max_export_batch_size:
-                self._max_export_batch_size += 1
+                self._max_export_batch_size = min(
+                    self._config.max_export_batch_size, self._max_export_batch_size * 2
+                )
             return size, False, None
 
         if outcome.kind == "too-large":
@@ -321,11 +369,17 @@ class SpanExporter:
                 del self._queue[:1]
                 self._end_failure_sequence_locked()
                 self._drops.record(1, "it is too large for the ingestion endpoint")
+                # The oversized span is gone; the batches after it are not suspect.
+                if self._batch_size_before_halving is not None:
+                    self._max_export_batch_size = self._batch_size_before_halving
+                    self._batch_size_before_halving = None
                 return 1, False, None
             # Halve the refused batch, not the configured size: a shallow queue
             # would otherwise resend the same body.
             halved = max(1, size // 2)
             if not outcome.measured_locally:
+                if self._batch_size_before_halving is None:
+                    self._batch_size_before_halving = self._max_export_batch_size
                 self._max_export_batch_size = halved
             self._reset_head_batch_budget_locked()
             return (
