@@ -265,6 +265,12 @@ class TestTraceContinuation:
         pipeline, _, _ = make()
         assert pipeline.start_span("a", parent=Hostile()) is NOOP_SPAN
 
+    def test_continues_a_trace_from_a_raw_asgi_header_value(self):
+        pipeline, _, _ = make()
+        pipeline.start_span("a", parent=f"00-{TRACE_ID}-{SPAN_ID}-01".encode()).end()
+        assert queued(pipeline)[0].trace_id == TRACE_ID
+        assert queued(pipeline)[0].parent_span_id == SPAN_ID
+
     def test_continues_a_trace_from_a_one_element_header_list(self):
         pipeline, _, _ = make()
         pipeline.start_span("a", parent=[f"00-{TRACE_ID}-{SPAN_ID}-01"]).end()
