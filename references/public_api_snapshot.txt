@@ -98,6 +98,7 @@ alias posthog.ai.gemini.Client -> posthog.ai.gemini.gemini.Client
 alias posthog.ai.gemini.extract_gemini_tools -> posthog.ai.gemini.gemini_converter.extract_gemini_tools
 alias posthog.ai.gemini.format_gemini_input -> posthog.ai.gemini.gemini_converter.format_gemini_input
 alias posthog.ai.gemini.format_gemini_response -> posthog.ai.gemini.gemini_converter.format_gemini_response
+alias posthog.ai.gemini.gemini.AsyncModels -> posthog.ai.gemini.gemini_async.AsyncModels
 alias posthog.ai.gemini.gemini.PostHogClient -> posthog.client.Client
 alias posthog.ai.gemini.gemini.StreamingEventData -> posthog.ai.types.StreamingEventData
 alias posthog.ai.gemini.gemini.TokenUsage -> posthog.ai.types.TokenUsage
@@ -382,8 +383,12 @@ attribute posthog.ai.claude_agent_sdk.client.log = logging.getLogger('posthog')
 attribute posthog.ai.claude_agent_sdk.processor.log = logging.getLogger('posthog')
 attribute posthog.ai.gateway.POSTHOG_AI_GATEWAY_HOSTS = ['gateway.posthog.com', 'gateway.us.posthog.com', 'gateway.eu.posthog.com', 'ai-gateway.us.posthog.com', 'ai-gateway.eu.posthog.com']
 attribute posthog.ai.gateway.log = logging.getLogger('posthog')
-attribute posthog.ai.gemini.gemini.Client.models = Models(api_key=api_key, vertexai=vertexai, credentials=credentials, project=project, location=location, debug_config=debug_config, http_options=http_options, posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
-attribute posthog.ai.gemini.gemini_async.AsyncClient.models = AsyncModels(api_key=api_key, vertexai=vertexai, credentials=credentials, project=project, location=location, debug_config=debug_config, http_options=http_options, posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
+attribute posthog.ai.gemini.gemini.Client.aio = _GeminiAioNamespace(models=(AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)), files=(self._provider_client.aio.files))
+attribute posthog.ai.gemini.gemini.Client.files = self._provider_client.files
+attribute posthog.ai.gemini.gemini.Client.models = Models(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
+attribute posthog.ai.gemini.gemini_async.AsyncClient.aio = _GeminiAioNamespace(models=(self.models), files=(self.files))
+attribute posthog.ai.gemini.gemini_async.AsyncClient.files = self._provider_client.aio.files
+attribute posthog.ai.gemini.gemini_async.AsyncClient.models = AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.content: Union[str, List[Any]]
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.parts: List[Union[GeminiPart, Dict[str, Any]]]
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.role: str
@@ -411,6 +416,7 @@ attribute posthog.ai.langchain.callbacks.SpanMetadata.latency: float
 attribute posthog.ai.langchain.callbacks.SpanMetadata.name: str
 attribute posthog.ai.langchain.callbacks.SpanMetadata.start_time: float
 attribute posthog.ai.langchain.callbacks.log = logging.getLogger('posthog')
+attribute posthog.ai.langchain.middleware.PostHogMiddleware.state_schema = _PostHogMiddlewareState
 attribute posthog.ai.openai.openai.OpenAI.beta: WrappedBeta
 attribute posthog.ai.openai.openai.OpenAI.chat: WrappedChat
 attribute posthog.ai.openai.openai.OpenAI.embeddings: WrappedEmbeddings
@@ -952,15 +958,16 @@ class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex(posthog_clie
 class posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient(options: Optional[ClaudeAgentOptions] = None, transport: Any = None, *, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
 class posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.gemini.gemini.Client(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
-class posthog.ai.gemini.gemini.Models(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
+class posthog.ai.gemini.gemini.Models(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, **kwargs)
 class posthog.ai.gemini.gemini_async.AsyncClient(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
-class posthog.ai.gemini.gemini_async.AsyncModels(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
+class posthog.ai.gemini.gemini_async.AsyncModels(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, **kwargs)
 class posthog.ai.gemini.gemini_converter.GeminiMessage 
 class posthog.ai.gemini.gemini_converter.GeminiPart 
 class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[Dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None)
 class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None)
 class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int], cache_write_5m_tokens: Optional[int] = None, cache_write_1h_tokens: Optional[int] = None)
 class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any])
+class posthog.ai.langchain.middleware.PostHogMiddleware(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[dict[str, Any]] = None)
 class posthog.ai.openai.openai.OpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai.WrappedBeta 
 class posthog.ai.openai.openai.WrappedBetaChat 
@@ -1305,6 +1312,14 @@ method posthog.ai.langchain.callbacks.CallbackHandler.on_retriever_start(seriali
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_end(output: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_error(error: BaseException, *, run_id: UUID, parent_run_id: Optional[UUID] = None, tags: Optional[list[str]] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_tool_start(serialized: Optional[Dict[str, Any]], input_str: str, *, run_id: UUID, parent_run_id: Optional[UUID] = None, metadata: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any
+method posthog.ai.langchain.middleware.PostHogMiddleware.aafter_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.abefore_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.after_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.awrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]]) -> ModelResponse[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.awrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]) -> ToolMessage | Command[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.before_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], ModelResponse[Any]]) -> ModelResponse[Any]
+method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]) -> ToolMessage | Command[Any]
 method posthog.ai.openai.openai.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
 method posthog.ai.openai.openai.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
 method posthog.ai.openai.openai.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
@@ -1333,7 +1348,7 @@ method posthog.ai.otel.processor.PostHogSpanProcessor.shutdown() -> None
 method posthog.ai.prompts.Prompts.clear_cache(name: Optional[str] = None, *, version: Optional[int] = None) -> None
 method posthog.ai.prompts.Prompts.compile(prompt: str, variables: PromptVariables) -> str
 method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool] = None, cache_ttl_seconds: Optional[int] = None, fallback: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None) -> Union[str, PromptResult]
-method posthog.ai.prompts.Prompts.get_all(*, label: str) -> Dict[str, PromptResult]
+method posthog.ai.prompts.Prompts.get_all(*, label: Optional[str] = None) -> Dict[str, PromptResult]
 method posthog.ai.stream.AsyncStreamWrapper.aclose() -> None
 method posthog.ai.stream.AsyncStreamWrapper.close() -> None
 method posthog.async_client.AsyncClient.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
@@ -1492,6 +1507,7 @@ module posthog.ai.gemini.gemini_async
 module posthog.ai.gemini.gemini_converter
 module posthog.ai.langchain
 module posthog.ai.langchain.callbacks
+module posthog.ai.langchain.middleware
 module posthog.ai.media
 module posthog.ai.openai
 module posthog.ai.openai.openai

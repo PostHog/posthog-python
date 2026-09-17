@@ -182,6 +182,9 @@ class MCPAnalyticsOptions:
 
     logger: Optional[LoggerFn] = None
     report_missing: bool = False
+    # Rename the `get_more_tools` virtual tool. Use it when a real tool of yours
+    # already owns the default name: the real tool wins, so without a rename no
+    # `$mcp_missing_capability` events are captured at all.
     missing_capability_tool_name: Optional[str] = None
     enable_conversation_id: bool = True
     enable_exception_autocapture: bool = True

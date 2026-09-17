@@ -1427,6 +1427,41 @@ class TestPromptsGetAll(TestPrompts):
         self.assertEqual(cached.version, 3)
 
     @patch("posthog.ai.prompts._get_session")
+    def test_unlabeled_fetch_omits_the_label_param_and_seeds_the_cache(
+        self, mock_get_session
+    ):
+        # Without a label the param must be left off the URL entirely --
+        # urlencode would otherwise send the literal string "label=None" and
+        # the server would filter by a label named "None". Rows without any
+        # labels must be accepted, since no label was requested.
+        mock_get = mock_get_session.return_value.get
+        unlabeled = {**self.labeled_row("prompt-a", version=2), "all_labels": []}
+        mock_get.return_value = self.list_response([unlabeled])
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all()
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertNotIn("label", requested_url)
+        self.assertEqual(
+            results,
+            {
+                "prompt-a": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-a",
+                    name="prompt-a",
+                    version=2,
+                )
+            },
+        )
+
+        # Later unlabeled get() calls are cache hits, not new requests.
+        cached = prompts.get("prompt-a", with_metadata=True)
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(cached.source, "cache")
+        self.assertEqual(cached.version, 2)
+
+    @patch("posthog.ai.prompts._get_session")
     def test_raises_when_the_server_ignores_the_label(self, mock_get_session):
         # An old server ignores ?label= and returns latest versions of every
         # prompt, including prompts without the label. Even when some labels

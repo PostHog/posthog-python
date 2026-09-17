@@ -85,6 +85,28 @@ async def test_list_tools_injects_model_into_real_and_virtual_tools():
         assert "llm_model" in tools[name].inputSchema["required"]
 
 
+async def test_virtual_tool_uses_conversation_id():
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, enable_conversation_id=True),
+    )
+
+    listed = await _list_tools(server)
+    tool = next(t for t in listed.root.tools if t.name == "get_more_tools")
+    assert "conversation_id" in tool.inputSchema["properties"]
+
+    result = await server._tool_manager.call_tool("get_more_tools", {"context": "csv"})
+    await _flush()
+
+    handle = _events(client, "$mcp_missing_capability")[0]["properties"][
+        "$mcp_conversation_id"
+    ]
+    assert any(handle in item.text for item in result)
+
+
 # --- tools/call --------------------------------------------------------------
 
 
@@ -298,3 +320,44 @@ async def test_public_call_tool_entrypoint_still_works_outside_a_request():
 
     text_blocks = [c.text for c in result[0] if getattr(c, "type", None) == "text"]
     assert "5" in text_blocks
+
+
+async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
+    # A lookup that raises means "could not answer", not "the name is free".
+    # Answering False there swallows the host's own tool and returns PostHog's
+    # canned reply as a success. Same contract as the low-level adapter.
+    server = FastMCP("flaky-registry")
+
+    @server.tool()
+    def get_more_tools(context: str) -> str:
+        return "real tool ran"
+
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True, capture_model=False, logger=messages.append
+        ),
+    )
+
+    original_get_tool = server._tool_manager.get_tool
+    failed = []
+
+    def flaky_get_tool(name, *args, **kwargs):
+        if name == "get_more_tools" and not failed:
+            failed.append(name)
+            raise ConnectionError("registry unreachable")
+        return original_get_tool(name, *args, **kwargs)
+
+    server._tool_manager.get_tool = flaky_get_tool
+
+    out = await server._tool_manager.call_tool(
+        "get_more_tools", {"context": "need csv export"}
+    )
+    await _flush()
+
+    assert "real tool ran" in str(out)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert any("delegating the call to your server" in m for m in messages)

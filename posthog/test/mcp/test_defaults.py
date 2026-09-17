@@ -87,3 +87,43 @@ async def test_v1_cold_capture_and_opt_out(enabled):
     # A cold raw instance reads the self-reported model but strips nothing: it
     # cannot prove it owns the argument, and raw handlers ignore extra keys.
     assert received == [{"msg": "ok", "llm_model": "model-a"}]
+
+
+@pytest.mark.parametrize("source", ["transport", "token"])
+@pytest.mark.parametrize("echoed", [False, True])
+async def test_carried_session_is_preserved_until_agent_echoes(source, echoed):
+    from posthog.mcp._internal import MCPAnalyticsData
+    from posthog.mcp._instrumentation import start_tool_call_lifecycle
+    from posthog.mcp.session import (
+        derive_session_id_from_conversation,
+        derive_session_id_from_mcp_session,
+    )
+    from posthog.mcp.session_token import SessionTokenPayload
+
+    handle = "019fd2b0-4444-7444-8444-444444444444"
+    call = start_tool_call_lifecycle(
+        MCPAnalyticsData(options=MCPAnalyticsOptions()),
+        name="echo",
+        arguments={"conversation_id": handle} if echoed else {},
+        request_meta=None,
+        allow_self_reported_model=True,
+        mcp_session_id="transport-session" if source == "transport" else None,
+        token=SessionTokenPayload(session_id="ses_carried")
+        if source == "token"
+        else None,
+        client_name=None,
+        client_version=None,
+        protocol_version=None,
+        extra={},
+    )
+    expected = (
+        derive_session_id_from_conversation(handle)
+        if echoed
+        else derive_session_id_from_mcp_session("transport-session")
+        if source == "transport"
+        else "ses_carried"
+    )
+    assert not call.minted_conversation_id
+    assert call.conversation_id == (handle if echoed else None)
+    assert call.virtual_result_texts("ok") == ["ok"]
+    assert await call.prepare_session(call.conversation_id) == expected

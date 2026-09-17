@@ -561,3 +561,49 @@ async def test_jlowin_cold_call_survives_a_fastmcp_without_middleware(monkeypatc
         _events(client, "$mcp_tool_call")[0]["properties"]["$mcp_llm_model"]
         == "model-a"
     )
+
+
+async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
+    # A real tool of the host's owns the virtual tool's name, so the SDK must
+    # never answer that call itself. fastmcp resolves a tool through a provider
+    # chain that can reach a mounted or proxied upstream over the network, so
+    # `get_tool` raising means "could not look it up", not "the name is free" --
+    # answering False there swallowed the host's tool and returned PostHog's
+    # canned reply as a success.
+    server = FastMCP("jlowin-flaky-registry")
+
+    @server.tool
+    def get_more_tools(context: str) -> str:
+        return "real tool ran"
+
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True, capture_model=False, logger=messages.append
+        ),
+    )
+
+    await _list(server)
+
+    original_get_tool = server.get_tool
+    failed = []
+
+    async def flaky_get_tool(name, *args, **kwargs):
+        # Transient, as a network blip is: the SDK's ownership lookup hits it,
+        # the host's own dispatch that follows does not.
+        if name == "get_more_tools" and not failed:
+            failed.append(name)
+            raise ConnectionError("upstream provider unreachable")
+        return await original_get_tool(name, *args, **kwargs)
+
+    server.get_tool = flaky_get_tool
+
+    out = await _call(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+
+    assert "real tool ran" in str(out.root.content[0].text)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert any("delegating the call to your server" in m for m in messages)

@@ -1,5 +1,43 @@
 # posthog
 
+## 7.55.0 — 2026-09-17
+
+### Minor changes
+
+- [d0ecc9f](https://github.com/posthog/posthog-python/commit/d0ecc9f6edea206664af62d43c10ffb512d9fcd0) `prompts.get_all()` now works without a label. It fetches the latest version of every prompt in one request and warms the cache for plain `prompts.get(name)` calls. Previously the label was required, and passing `label=None` sent the literal string "None" as the label filter, returning an empty result. — Thanks @jurajmajerik!
+
+## 7.54.2 — 2026-09-17
+
+### Patch changes
+
+- [79fcb12](https://github.com/posthog/posthog-python/commit/79fcb12a1a7a5e4d410672eb7428c2e91682101f) MCP virtual tools now use conversation IDs when `enable_conversation_id` is enabled. — Thanks @gesh!
+
+## 7.54.1 — 2026-09-17
+
+### Patch changes
+
+- [ed02588](https://github.com/posthog/posthog-python/commit/ed02588998568ea317ff7ac60fe4dc15d7f1b74a) MCP analytics now adds its virtual tools (`get_more_tools`, `send_feedback`) to the first `tools/list` page only, rather than to every page and to the last page respectively.
+  
+  If one of your own tools already uses a virtual tool's name, PostHog warns and names the option that renames its own — `missing_capability_tool_name`, or `collect_feedback`'s `tool_name`. Warnings also reach the `posthog.mcp` logger, so you see them without setting the `logger` option. — Thanks @gesh!
+
+## 7.54.0 — 2026-09-15
+
+### Minor changes
+
+- [f07d67c](https://github.com/posthog/posthog-python/commit/f07d67c1fb18066432864bc7bbe8f8869a7b114a) Add LangChain v1 agent middleware for AI observability. — Thanks @gouveags for your first contribution 🎉!
+
+## 7.53.0 — 2026-09-11
+
+### Minor changes
+
+- [e9f6b67](https://github.com/posthog/posthog-python/commit/e9f6b67ff04d454123fd00c33fd3122cbcb4dace) The Gemini adapter now covers two surfaces of `genai.Client` it previously lacked. `Client.aio.models` reaches the tracked async models adapter, so `await client.aio.models.generate_content(...)` works without swapping the class out for `AsyncClient`, and `client.files` (plus `client.aio.files`, and `AsyncClient.files` for the async Files API) passes through to the provider, so multimodal flows that upload a file before referencing it in `contents` no longer fail. Every surface of one client shares a single provider client instead of opening its own. — Thanks @DanielTobi0!
+
+## 7.52.1 — 2026-09-11
+
+### Patch changes
+
+- [9d965dd](https://github.com/posthog/posthog-python/commit/9d965ddf05de2127f0758542e2443afbadd240e2) Fix missing MCP analytics events with standalone FastMCP 4 while preserving tool arguments and compatibility with MCP SDK v1. — Thanks @lucasheriques!
+
 ## 7.52.0 — 2026-09-11
 
 ### Minor changes

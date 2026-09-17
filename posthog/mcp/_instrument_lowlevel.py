@@ -17,7 +17,8 @@ from __future__ import annotations
 import functools
 import inspect
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
@@ -26,27 +27,29 @@ from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
-    append_get_more_tools,
-    append_send_feedback,
+    advertised_tool_names,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
-    listing_has_next_page,
+    is_first_listing_page,
     mutate_tool_schema,
     prepare_request,
+    raw_listing_owns_tool_name,
     record_resource_request,
-    refresh_feedback_shadow,
     request_to_dict,
     resource_listing_response,
     resolve_session_and_client,
+    resolve_virtual_tool_injection,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
-from .logger import log
-from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
+from .logger import log, warn
+from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -212,26 +215,32 @@ def _wrap_call_tool(
             extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
         )
 
-        if lifecycle.is_missing_capability:
-            await lifecycle.record_missing_capability()
+        if lifecycle.is_missing_capability and (
+            await _name_owned_by_real_tool(high_level, data, name, server) is False
+        ):
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
-                    content=[
-                        mcp_types.TextContent(
-                            type="text", text=get_more_tools_result_text()
-                        )
-                    ],
+                    content=virtual_content,
                     isError=False,
                 )
             )
 
-        if lifecycle.is_feedback and not await _feedback_name_owned_by_real_tool(
-            high_level, name
+        if lifecycle.is_feedback and (
+            await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
-            reply = await lifecycle.record_feedback()
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
-                    content=[mcp_types.TextContent(type="text", text=reply)],
+                    content=virtual_content,
                     isError=False,
                 )
             )
@@ -335,6 +344,7 @@ def _inject_tool_schemas(
             schema_attribute="inputSchema",
             owns_context=schema_has_param(schema, "context"),
             context_required=context_required,
+            is_sdk_virtual_tool=False,
         )
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
@@ -354,6 +364,47 @@ def _wrap_list_tools(
     if original is None or getattr(original, _WRAPPED_FLAG, False):
         return
 
+    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[Set[str]]:
+        """The names the host's own handler advertises on its first page. Calls
+        ``original``, not the wrapper, so the probe never recurses into
+        instrumentation or appends a virtual tool. Read by
+        ``_name_owned_by_real_tool`` on raw low-level servers, which have no
+        tool registry to ask instead."""
+        # Late-bound on purpose: a host that replaces or removes tools/list
+        # *after* instrument() leaves `original` holding a catalogue the client
+        # never sees, and a confident answer from it would swallow a real tool.
+        # Report the question as unanswerable instead, so the call is delegated.
+        # `@posthog/mcp` re-captures the handler for the same reason.
+        current = handlers.get(mcp_types.ListToolsRequest)
+        if current is None or not getattr(current, _WRAPPED_FLAG, False):
+            # The virtual tools stay advertised -- a handler chained in front
+            # of ours still runs our injection -- but nothing is intercepted
+            # behind them, and a silent stop is invisible in the captured data.
+            if not data.warned_foreign_list_handler:
+                data.warned_foreign_list_handler = True
+                warn(
+                    "Warning: your tools/list handler was replaced or removed "
+                    "after instrument(), so PostHog can no longer tell whether a "
+                    "tool "
+                    "name is yours. Calls to PostHog's virtual tools are "
+                    "delegated to your server, so no $mcp_missing_capability or "
+                    "$mcp_feedback events are captured. Call instrument() after "
+                    "registering your handlers."
+                )
+            return None
+        result = await original(mcp_types.ListToolsRequest(method="tools/list"))
+        tools = extract_tools(result)
+        # `original` is usually the SDK's own list_tools decorator, which rebuilds
+        # `Server._tool_cache` from these un-injected schemas every time it runs.
+        # That cache is what the SDK validates real tool arguments against, so
+        # without re-injecting here the next real call is rejected for sending the
+        # `context` we advertised. Same reason the `req is None` branch below
+        # injects.
+        _inject_tool_schemas(data, tools, context_required=context_required)
+        return advertised_tool_names(tools)
+
+    data.raw_tool_names_probe = probe_raw_tool_names
+
     async def handler(req: Any) -> Any:
         # The server calls the handler with None to populate its tool cache.
         # Skip analytics there — but still inject, because that cache is the
@@ -365,10 +416,6 @@ def _wrap_list_tools(
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision flag here too: this pass sees the real tool
-            # registry, so a real tool named like the feedback tool is detected
-            # before any client-facing listing.
-            refresh_feedback_shadow(data, tools)
             _inject_tool_schemas(data, tools, context_required=context_required)
             return result
 
@@ -411,19 +458,17 @@ def _wrap_list_tools(
         # Zero advertised tools is treated as an errored tools/list before the
         # virtual missing-capability tool is appended.
         names, empty = collect_listed_tools(data, tools)
-        feedback_name = refresh_feedback_shadow(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data,
+            tools,
+            is_first_page=is_first_listing_page(getattr(req, "params", None)),
+        )
 
         _inject_tool_schemas(data, tools, context_required=context_required)
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name, data)
-                names.append(missing_name)
-
-        if feedback_name is not None and not listing_has_next_page(result):
-            append_send_feedback(result, data)
-            names.append(feedback_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="inputSchema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -438,17 +483,64 @@ def _wrap_list_tools(
     handlers[mcp_types.ListToolsRequest] = handler
 
 
-async def _feedback_name_owned_by_real_tool(high_level: Any, name: str) -> bool:
-    """Live registry probe on the standalone-fastmcp path, so a real tool by the
-    feedback tool's name is never shadowed even before the first listing refreshes
-    the collision flag. Raw low-level servers have no registry to probe; they rely
-    on the listing-derived flag alone."""
-    if high_level is None:
-        return False
+async def _name_owned_by_real_tool(
+    high_level: Any, data: MCPAnalyticsData, name: str, server: Any
+) -> Optional[bool]:
+    """Whether a real application tool owns ``name``, so a virtual tool never
+    shadows it. Kind-agnostic: a lookup by name, shared by both virtual tools
+    rather than twin helpers that can drift. The other two adapters keep the
+    same tri-state contract against their own registries.
+
+    On the standalone-fastmcp path the tool registry answers authoritatively. A
+    raw low-level server has no registry, so it asks the host's own tools/list
+    handler instead.
+
+    Known limit, and *not* one a fallback can close: a ``FastMCP`` is an
+    ``AggregateProvider``, which gathers its providers with
+    ``return_exceptions=True`` and drops the failures, so an unreachable
+    mounted or proxied sub-server reads back as a plain ``None`` --
+    indistinguishable from "no such tool" -- and we treat the name as free.
+    Consulting ``list_tools`` does not help: the same failure is dropped from
+    the listing too (``_collect_list_results``), and fastmcp 3.x exposes no
+    error strategy to opt out of. Narrower than it reads -- during the outage
+    the host's tool is absent from ``tools/list`` as well, so only a provider
+    that recovers between this check and dispatch loses a call that would have
+    worked. The remedy stays the documented one: rename PostHog's tool."""
+    if high_level is not None:
+        try:
+            return await high_level.get_tool(name) is not None
+        except Exception as err:  # noqa: BLE001 - analytics must not break the call
+            if isinstance(err, _tool_lookup_not_found_errors()):
+                return False
+            # The lookup failed rather than answered, so not "the name is free"
+            # -- guessing that would swallow a real tool of theirs. What reaches
+            # here is the visibility, transform and auth work layered on top of
+            # the providers; a provider failure never does (see the docstring).
+            warn_ownership_lookup_failed(name, err)
+            return None
+    # May be None: see `raw_listing_owns_tool_name`. Callers intercept only on a
+    # definite False.
+    return await raw_listing_owns_tool_name(data, name, server)
+
+
+@lru_cache(maxsize=1)
+def _tool_lookup_not_found_errors() -> Tuple[type, ...]:
+    """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
+    Anything else out of ``get_tool`` is the lookup itself failing. Empty when
+    fastmcp is absent or has moved them, which makes every failure delegate:
+    the safe direction."""
     try:
-        return await high_level.get_tool(name) is not None
-    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
-        return False
+        from fastmcp import exceptions
+    except Exception:  # noqa: BLE001 - no fastmcp on this path
+        return ()
+    return tuple(
+        err
+        for err in (
+            getattr(exceptions, "NotFoundError", None),
+            getattr(exceptions, "DisabledError", None),
+        )
+        if isinstance(err, type) and issubclass(err, BaseException)
+    )
 
 
 _INJECTED_KEYS = ("context", "conversation_id", "llm_model")
@@ -463,9 +555,9 @@ async def _standalone_ownership(
 
     Only keys injected under the current options are candidates. ``context``
     and ``conversation_id`` are stripped unless the registered schema (or,
-    without one, the function signature) declares them; a failed lookup strips
-    both — the prior behaviour, so a flaky introspection never leaks an injected
-    key into validation. ``llm_model`` is judged by the effective listing first,
+    without one, the function signature) declares them. A registry failure
+    protects all keys; a missing registry entry retains the middleware fallback
+    for ``context`` and ``conversation_id``. ``llm_model`` is judged by the effective listing first,
     because middleware can provide or shadow the tool the registry knows, then
     by the registry; with neither witness it stays and is still read — strips
     fail closed, reads fail open (posthog-js ADR-0011).
@@ -518,7 +610,10 @@ async def _registry_view(
     registry has no such tool or cannot be read."""
     try:
         tool = await _registered_tool(high_level, name, meta)
-    except Exception:  # noqa: BLE001 - introspection is best-effort
+    except Exception as error:  # noqa: BLE001 - introspection is best-effort
+        if not isinstance(error, _tool_lookup_not_found_errors()):
+            warn_ownership_lookup_failed(name, error)
+            return set(_INJECTED_KEYS), None
         return None, None
     if tool is None:
         return None, None

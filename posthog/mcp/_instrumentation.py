@@ -14,7 +14,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Set
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -23,7 +23,11 @@ from ._context_parameters import (
     is_context_enabled,
     schema_has_param,
 )
-from ._conversation_id import add_conversation_id_to_schema, resolve_conversation_id
+from ._conversation_id import (
+    add_conversation_id_to_schema,
+    build_prompt_back,
+    resolve_conversation_id,
+)
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from .feedback import (
@@ -50,8 +54,29 @@ from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
-from .tools import GET_MORE_TOOLS_NAME, resolve_missing_capability_tool_name
+from .tools import resolve_missing_capability_tool_name
 from .types import CollectFeedbackOptions, FeedbackReport
+
+# The virtual tools this SDK advertises into tools/list. Every piece of per-tool
+# policy -- enable switch, configured name, warning text, warn-once
+# bookkeeping, warning text -- is keyed by kind so the two can't drift apart.
+VIRTUAL_TOOL_MISSING_CAPABILITY = "missing_capability"
+VIRTUAL_TOOL_FEEDBACK = "feedback"
+
+# Why a collision happened, which picks the warning's wording. Named so a typo
+# is a type error instead of silently getting the "blocked" text.
+VirtualToolCollisionVariant = Literal["blocked", "duplicate", "shadowed"]
+
+# The option that renames each virtual tool, quoted verbatim in the collision
+# warnings.
+_VIRTUAL_TOOL_RENAME_OPTION = {
+    VIRTUAL_TOOL_MISSING_CAPABILITY: 'MCPAnalyticsOptions(missing_capability_tool_name="...")',
+    VIRTUAL_TOOL_FEEDBACK: 'MCPAnalyticsOptions(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
+}
+_VIRTUAL_TOOL_EVENT = {
+    VIRTUAL_TOOL_MISSING_CAPABILITY: "$mcp_missing_capability",
+    VIRTUAL_TOOL_FEEDBACK: "$mcp_feedback",
+}
 
 # Keep strong refs to in-flight capture tasks/futures and their lifecycle owners so
 # they aren't GC'd mid-flight and lifecycle drains can select only their own work.
@@ -415,7 +440,9 @@ class ToolCallLifecycle:
     client_name: Optional[str]
     client_version: Optional[str]
     protocol_version: Optional[str]
-    missing_name: str
+    # ``None`` when the virtual tool is disabled, so every downstream decision
+    # treats a real tool by that name like any other tool's.
+    missing_name: Optional[str]
     feedback_options: Optional[CollectFeedbackOptions]
     feedback_name: Optional[str]
     conversation_id: Optional[str]
@@ -423,17 +450,11 @@ class ToolCallLifecycle:
 
     @property
     def is_missing_capability(self) -> bool:
-        return self.data.options.report_missing and self.name == self.missing_name
+        return self.missing_name is not None and self.name == self.missing_name
 
     @property
     def is_feedback(self) -> bool:
-        # Never intercept a name a real application tool owns (fail-open): the
-        # listing pass records the collision on `feedback_tool_shadowed`.
-        return (
-            self.feedback_name is not None
-            and self.name == self.feedback_name
-            and not self.data.feedback_tool_shadowed
-        )
+        return self.feedback_name is not None and self.name == self.feedback_name
 
     async def prepare_session(self, conversation_id: Optional[str]) -> str:
         return await prepare_request(
@@ -453,12 +474,27 @@ class ToolCallLifecycle:
             self.data, mcp_session_id=self.mcp_session_id, token=self.token
         )
 
-    async def record_missing_capability(self) -> None:
-        session_id = await self.prepare_session(None)
+    def virtual_result_texts(self, primary_text: str) -> List[str]:
+        """Build the text payload for an SDK virtual-tool result."""
+        if not self.conversation_id or not self.minted_conversation_id:
+            return [primary_text]
+        return [primary_text, build_prompt_back(self.conversation_id)["text"]]
+
+    def _anchored_conversation_id(self, delivered: bool) -> Optional[str]:
+        if self.minted_conversation_id and not delivered:
+            return None
+        return self.conversation_id
+
+    async def record_missing_capability(
+        self, *, conversation_id_delivered: bool = False
+    ) -> None:
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session_id = await self.prepare_session(conversation_id)
         await record_missing_capability(
             self.data,
             session_id,
-            tool_name=self.missing_name,
+            conversation_id=conversation_id,
+            tool_name=self.missing_name or self.name,
             context=(self.arguments or {}).get("context"),
             arguments=self.arguments,
             request_meta=self.request_meta,
@@ -469,15 +505,17 @@ class ToolCallLifecycle:
             extra=self.extra,
         )
 
-    async def record_feedback(self) -> str:
+    async def record_feedback(self, *, conversation_id_delivered: bool = False) -> str:
         """Capture the ``$mcp_feedback`` event, then run the host's ``on_feedback``
         handler and return the reply text for the agent. The event is captured
         whether or not the handler raises."""
         report = parse_feedback_report(self.arguments, self.feedback_options)
-        session_id = await self.prepare_session(None)
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session_id = await self.prepare_session(conversation_id)
         await record_feedback(
             self.data,
             session_id,
+            conversation_id=conversation_id,
             report=report,
             tool_name=self.feedback_name or self.name,
             arguments=self.arguments,
@@ -492,7 +530,7 @@ class ToolCallLifecycle:
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
-        conversation_id = None if self.minted_conversation_id else self.conversation_id
+        conversation_id = self._anchored_conversation_id(False)
         session_id = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
@@ -513,9 +551,7 @@ class ToolCallLifecycle:
     async def record_result(
         self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
     ) -> None:
-        conversation_id = self.conversation_id
-        if self.minted_conversation_id and not conversation_id_delivered:
-            conversation_id = None
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
@@ -549,24 +585,18 @@ def start_tool_call_lifecycle(
     extra: Dict[str, Any],
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
-    missing_name = resolve_missing_capability_tool_name(data.options)
+    enabled = enabled_virtual_tool_names(data)
+    missing_name = enabled.get(VIRTUAL_TOOL_MISSING_CAPABILITY)
+    feedback_name = enabled.get(VIRTUAL_TOOL_FEEDBACK)
+    # Still needed whatever the name resolution says: parsing the report and
+    # running the host's `on_feedback` handler read the configured options.
     feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
-    feedback_name = (
-        resolve_send_feedback_tool_name(feedback_options)
-        # Mirrors `ToolCallLifecycle.is_feedback`'s fail-open guard below: once a
-        # real application tool is known to own this name, conversation-id
-        # resolution must treat calls to it like any other tool too, not skip
-        # them as if they were the (shadowed) virtual feedback tool.
-        if feedback_options is not None and not data.feedback_tool_shadowed
-        else None
-    )
     conversation_id, minted = resolve_conversation_id(
-        data.options.enable_conversation_id,
-        arguments,
-        name,
-        missing_name,
-        feedback_name,
+        data.options.enable_conversation_id, arguments
     )
+    # A carried session stays stable until the agent supplies its own handle.
+    if minted and (token or mcp_session_id):
+        conversation_id, minted = None, False
     return ToolCallLifecycle(
         data=data,
         name=name,
@@ -656,104 +686,280 @@ async def record_tool_call(
 
 
 def extract_tools(result: Any) -> list:
-    """Pull the tool list out of a ListTools ServerResult (a copy — to MUTATE the
-    real list use ``append_get_more_tools``)."""
+    """Pull the tool list out of a ListTools ServerResult, as a copy."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
 
 
-def append_get_more_tools(result: Any, name: str, data: MCPAnalyticsData) -> None:
-    """Append the get_more_tools virtual tool to the real ListToolsResult.tools list."""
-    import mcp.types as mcp_types
+def append_virtual_tool(result: Any, tool: Any) -> Any:
+    """Return a copy of a ``tools/list`` result with ``tool`` added.
 
+    A copy, not an in-place append: a host may return the *same* result object
+    from every ``tools/list``, and mutating it leaves PostHog's tool sitting in
+    what later reads back as the host's own catalogue.
+
+    1.x wraps ``ListToolsResult`` in a ``ServerResult`` root model, 2.x returns
+    it directly. The copy carries every other field, ``nextCursor`` included."""
+    root = getattr(result, "root", result)
+    tools_list = getattr(root, "tools", None)
+    if not isinstance(tools_list, list):
+        return result
+    updated = root.model_copy(update={"tools": [*tools_list, tool]})
+    return type(result)(updated) if hasattr(result, "root") else updated
+
+
+def virtual_tool_descriptor(
+    data: MCPAnalyticsData, kind: str, name: str
+) -> Dict[str, Any]:
+    """The advertised descriptor for a virtual tool, under its configured name."""
     from .tools import build_report_missing_descriptor
 
-    descriptor = build_report_missing_descriptor(name)
-    tool = mcp_types.Tool(
-        name=descriptor["name"],
-        description=descriptor["description"],
-        inputSchema=descriptor["inputSchema"],
-        annotations=descriptor["annotations"],
+    if kind == VIRTUAL_TOOL_MISSING_CAPABILITY:
+        return build_report_missing_descriptor(name)
+    return get_feedback_tool_descriptor(
+        resolve_collect_feedback_options(data.options.collect_feedback)
     )
-    root = getattr(result, "root", result)
-    tools_list = getattr(root, "tools", None)
-    if isinstance(tools_list, list):
-        mutate_tool_schema(
-            data,
-            tool,
-            schema_attribute="inputSchema",
-            owns_context=True,
-            context_required=True,
-        )
-        tools_list.append(tool)
 
 
-def refresh_feedback_shadow(data: MCPAnalyticsData, tools: list) -> Optional[str]:
-    """Refresh the collision flag from this listing's tools. Returns the resolved
-    feedback tool name when the virtual tool may be appended, ``None`` when the
-    feature is off or a real application tool owns the name (fail-open: the real
-    tool is advertised and dispatched untouched). Run before the schema-injection
-    pass so it reads the fresh flag.
+def append_virtual_tool_by_kind(
+    result: Any, kind: str, name: str, data: MCPAnalyticsData, *, schema_field: str
+) -> Any:
+    """Add a virtual tool to a ``tools/list`` result and return the result to
+    serve. ``schema_field`` is the SDK major's spelling of the input schema
+    field: ``inputSchema`` on 1.x, ``input_schema`` on 2.x.
 
-    Sticky for the instrumentation instance's lifetime: a paginated ``tools/list``
-    delivers one page per request, so a collision seen on an earlier page must
-    survive a later page that doesn't list the real tool — otherwise that page
-    would re-arm interception and swallow the real tool's calls. The trade-off is
-    deliberate: un-shadowing after the host removes the real tool requires
-    re-instrumentation."""
-    options = resolve_collect_feedback_options(data.options.collect_feedback)
-    if options is None:
-        return None
-    name = resolve_send_feedback_tool_name(options)
-    if any(getattr(tool, "name", None) == name for tool in tools):
-        if not data.feedback_tool_shadowed:
-            log(
-                f'Warning: Cannot inject agent-feedback tool "{name}" because a real tool '
-                "already uses that name. The real tool will not be intercepted."
-            )
-        data.feedback_tool_shadowed = True
-    return None if data.feedback_tool_shadowed else name
+    ``name`` is passed in rather than re-resolved, so a rename can't drift
+    between :func:`resolve_virtual_tool_injection`'s decision and this append.
 
-
-def listing_has_next_page(result: Any) -> bool:
-    """Whether this ``tools/list`` result is a non-final page of a paginated
-    listing. The virtual feedback tool is only appended to the final page: an
-    earlier page could advertise it before a later page reveals a real tool by
-    the same name. Reads both SDK majors' cursor spelling (1.x models expose
-    ``nextCursor``, 2.x ``next_cursor``)."""
-    root = getattr(result, "root", result)
-    return bool(getattr(root, "nextCursor", None) or getattr(root, "next_cursor", None))
-
-
-def append_send_feedback(result: Any, data: MCPAnalyticsData) -> None:
-    """Append the send_feedback virtual tool to the real ListToolsResult.tools
-    list. Callers gate on :func:`refresh_feedback_shadow` returning a name."""
+    ``owns_context=True``: a virtual tool carries its intent in its own
+    arguments, so no ``context`` is injected — but the capture_model pass still
+    runs, so it advertises ``llm_model``."""
     import mcp.types as mcp_types
 
-    options = resolve_collect_feedback_options(data.options.collect_feedback)
-    if options is None:
-        return
-    descriptor = get_feedback_tool_descriptor(options)
+    descriptor = virtual_tool_descriptor(data, kind, name)
     tool = mcp_types.Tool(
-        name=descriptor["name"],
+        name=name,
         description=descriptor["description"],
-        inputSchema=descriptor["inputSchema"],
         annotations=descriptor["annotations"],
+        **{schema_field: descriptor["inputSchema"]},
     )
-    root = getattr(result, "root", result)
-    tools_list = getattr(root, "tools", None)
-    if isinstance(tools_list, list):
-        # `owns_context=True`: the tool carries its intent in its own summary /
-        # details arguments, so no `context` parameter is injected — but the
-        # capture_model pass still runs, so it advertises `llm_model` too.
-        mutate_tool_schema(
-            data,
-            tool,
-            schema_attribute="inputSchema",
-            owns_context=True,
-            context_required=True,
+    mutate_tool_schema(
+        data,
+        tool,
+        schema_attribute=schema_field,
+        owns_context=True,
+        context_required=True,
+        is_sdk_virtual_tool=True,
+    )
+    return append_virtual_tool(result, tool)
+
+
+def apply_virtual_tool_injection(
+    result: Any,
+    injection: Dict[str, str],
+    names: List[str],
+    data: MCPAnalyticsData,
+    *,
+    schema_field: str,
+) -> Any:
+    """Append every virtual tool this page won, recording each name for the
+    ``$mcp_tools_list`` event. Missing-capability first: every call path tests
+    that kind first, which is what makes the ``duplicate`` rule in
+    :func:`resolve_virtual_tool_injection` resolve in its favour."""
+    for kind in (VIRTUAL_TOOL_MISSING_CAPABILITY, VIRTUAL_TOOL_FEEDBACK):
+        name = injection.get(kind)
+        if name is None:
+            continue
+        result = append_virtual_tool_by_kind(
+            result, kind, name, data, schema_field=schema_field
         )
-        tools_list.append(tool)
+        names.append(name)
+    return result
+
+
+def enabled_virtual_tool_names(data: MCPAnalyticsData) -> Dict[str, str]:
+    """``{kind: configured name}`` for each virtual tool the options enable,
+    ignoring collisions. The only place the two enable switches and the two
+    rename options are read together, so a rename can't drift."""
+    names: Dict[str, str] = {}
+    if data.options.report_missing:
+        names[VIRTUAL_TOOL_MISSING_CAPABILITY] = resolve_missing_capability_tool_name(
+            data.options
+        )
+    feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
+    if feedback_options is not None:
+        names[VIRTUAL_TOOL_FEEDBACK] = resolve_send_feedback_tool_name(feedback_options)
+    return names
+
+
+def is_first_listing_page(params: Any) -> bool:
+    """Whether a ``tools/list`` *request* is the first page of the listing.
+
+    Per the MCP spec an absent ``cursor`` means "start of the listing". A present
+    one -- *including the empty string* -- is an opaque value from a previous
+    page, so it is a continuation. Takes the request params, so both handler
+    shapes share the rule."""
+    return getattr(params, "cursor", None) is None
+
+
+def advertised_tool_names(tools: list) -> Set[str]:
+    """The names a listing page advertises. The virtual tools are appended to a
+    *copy* of the host's result, so a page always reads back as the host wrote
+    it -- see :func:`append_virtual_tool`."""
+    return {
+        name for tool in tools if isinstance(name := getattr(tool, "name", None), str)
+    }
+
+
+def resolve_virtual_tool_injection(
+    data: MCPAnalyticsData,
+    tools: list,
+    *,
+    is_first_page: bool,
+) -> Dict[str, str]:
+    """``{kind: name}`` for each virtual tool this listing page appends. A kind
+    is absent when the feature is off, a real tool owns the name, this is a
+    continuation page, or the other virtual tool already claimed the name.
+
+    Run after ``collect_listed_tools``, so the virtual tools don't count towards
+    "this server advertises nothing".
+
+    Stateless: this page's own tools are the whole input. Injection happens on a
+    first page only, so only a first page's view of the tool set decides
+    anything.
+
+    * name free on the **first** page -> inject it.
+    * name taken on the **first** page -> warn, inject nothing. The call path
+      dispatches it normally and the host's tool wins.
+    * name taken on a **later** page -> the virtual tool is already advertised
+      from page one, so the host's tool is shadowed. Warn, naming the rename
+      option; page one cannot be taken back.
+    """
+    enabled = enabled_virtual_tool_names(data)
+    if not enabled:
+        return {}
+
+    listed = advertised_tool_names(tools)
+
+    if not is_first_page:
+        for kind, name in enabled.items():
+            # Only warn about a tool we actually shadowed. If this kind never
+            # made it onto the first page -- a real tool already held the name
+            # ("blocked"), or the other virtual tool won it ("duplicate") --
+            # then nothing of ours is advertised under it and the host's tool
+            # runs untouched. Telling them otherwise sends them chasing a bug
+            # that isn't there.
+            if name in listed and not any(
+                (kind, name, variant) in data.warned_virtual_tool_collisions
+                for variant in ("blocked", "duplicate")
+            ):
+                _warn_virtual_tool_collision(data, kind, name, "shadowed")
+        return {}
+
+    injectable: Dict[str, str] = {}
+    for kind, name in enabled.items():
+        if name in listed:
+            _warn_virtual_tool_collision(data, kind, name, "blocked")
+        else:
+            injectable[kind] = name
+
+    # Both virtual tools configured with one name would advertise it twice and
+    # dead-letter the feedback path, since every call path checks
+    # missing-capability first. Keep that precedence and say so.
+    missing_name = injectable.get(VIRTUAL_TOOL_MISSING_CAPABILITY)
+    if (
+        missing_name is not None
+        and injectable.get(VIRTUAL_TOOL_FEEDBACK) == missing_name
+    ):
+        injectable.pop(VIRTUAL_TOOL_FEEDBACK)
+        _warn_virtual_tool_collision(
+            data, VIRTUAL_TOOL_FEEDBACK, missing_name, "duplicate"
+        )
+
+    return injectable
+
+
+async def raw_listing_owns_tool_name(
+    data: MCPAnalyticsData, name: str, ctx: Any = None
+) -> Optional[bool]:
+    """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
+    first page, asked at call time. For the raw low-level paths, 1.x and v2,
+    which have no tool registry to query instead.
+
+    Tri-state. ``True``/``False`` are answers; ``None`` means the question could
+    not be asked, and callers must not intercept on it -- guessing "not owned"
+    would swallow a real tool of the host's. Runs once per call to a virtual
+    tool's name, never for ordinary traffic.
+    """
+    probe = data.raw_tool_names_probe
+    if probe is None:
+        return None
+    try:
+        names = await probe(ctx)
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        warn_ownership_lookup_failed(name, err)
+        return None
+    return None if names is None else name in names
+
+
+def warn_ownership_lookup_failed(name: str, err: Exception) -> None:
+    """A tool-ownership lookup raised instead of answering. Every adapter's probe
+    reports it the same way and then returns ``None``, so the call is delegated
+    to the host rather than intercepted on a guess."""
+    log(
+        f'Warning: could not determine whether "{name}" is a real tool of '
+        f"yours; delegating the call to your server - {err}"
+    )
+
+
+def _warn_virtual_tool_collision(
+    data: MCPAnalyticsData,
+    kind: str,
+    name: str,
+    variant: VirtualToolCollisionVariant,
+) -> None:
+    """Warn once per ``(kind, name, variant)`` for the life of the server's
+    tracking state, so a client that re-lists tools on every turn doesn't flood
+    the log with the same misconfiguration."""
+    key = (kind, name, variant)
+    if key in data.warned_virtual_tool_collisions:
+        return
+    data.warned_virtual_tool_collisions.add(key)
+    warn(virtual_tool_collision_message(kind, name, variant))
+
+
+def virtual_tool_collision_message(
+    kind: str,
+    name: str,
+    variant: VirtualToolCollisionVariant,
+    *,
+    rename_option: Optional[str] = None,
+) -> str:
+    """The warning text for a virtual-tool name collision. Always names the option
+    that renames PostHog's tool -- a warning without its own remedy gets ignored.
+    ``rename_option`` overrides the ``instrument()`` spelling for hosts on the
+    ``PostHogMCP`` dispatcher path."""
+    remedy = rename_option or _VIRTUAL_TOOL_RENAME_OPTION[kind]
+    if variant == "shadowed":
+        return (
+            f'Warning: a later tools/list page advertises a real tool named "{name}", '
+            "but PostHog already injected its own tool by that name on the first page. "
+            f'Calls to "{name}" are intercepted by PostHog and the real tool will not '
+            f"run. Rename one of them; {remedy} renames PostHog's."
+        )
+    event = _VIRTUAL_TOOL_EVENT[kind]
+    if variant == "duplicate":
+        return (
+            "Warning: PostHog's missing-capability and agent-feedback tools are both "
+            f'configured to use the name "{name}". Only the missing-capability tool is '
+            f"advertised and intercepted, so no {event} events will be captured. "
+            f"Rename one with {remedy}."
+        )
+    return (
+        f'Warning: Cannot inject PostHog\'s "{name}" tool because a real tool already '
+        f"uses that name. PostHog will not intercept it and no {event} events will be "
+        f"captured. Rename PostHog's tool with {remedy}."
+    )
 
 
 def read_tool_category(tool: Any) -> Optional[str]:
@@ -779,19 +985,6 @@ def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str]
     return names, not tools
 
 
-def _is_sdk_virtual_tool(data: MCPAnalyticsData, tool_name: Any) -> bool:
-    """Whether this name is one of the SDK's own virtual tools (``get_more_tools``,
-    ``send_feedback``) — those carry their intent in their own arguments, so they
-    never get ``context``/``conversation_id`` injected. A shadowed feedback name
-    belongs to a real application tool and keeps normal injection."""
-    if tool_name == GET_MORE_TOOLS_NAME:
-        return True
-    options = resolve_collect_feedback_options(data.options.collect_feedback)
-    if options is None or data.feedback_tool_shadowed:
-        return False
-    return tool_name == resolve_send_feedback_tool_name(options)
-
-
 def mutate_tool_schema(
     data: MCPAnalyticsData,
     tool: Any,
@@ -799,6 +992,7 @@ def mutate_tool_schema(
     schema_attribute: str,
     owns_context: bool,
     context_required: bool,
+    is_sdk_virtual_tool: bool,
 ) -> None:
     """Apply the common analytics schema pipeline and write it back in place.
 
@@ -808,7 +1002,6 @@ def mutate_tool_schema(
     """
     schema = getattr(tool, schema_attribute, None)
     original_schema = schema
-    is_sdk_virtual_tool = _is_sdk_virtual_tool(data, tool.name)
     if (
         not is_sdk_virtual_tool
         and is_context_enabled(data.options.context)
@@ -835,10 +1028,8 @@ def mutate_tool_schema(
         data.tool_model_parameter_injected[tool.name] = (
             not app_owns_model and schema_has_param(schema, "llm_model")
         )
-    if (
-        not is_sdk_virtual_tool
-        and data.options.enable_conversation_id
-        and not schema_has_param(schema, "conversation_id")
+    if data.options.enable_conversation_id and not schema_has_param(
+        schema, "conversation_id"
     ):
         schema = add_conversation_id_to_schema(schema, tool.name)
     if schema is not original_schema:
@@ -963,6 +1154,7 @@ async def record_missing_capability(
     data: MCPAnalyticsData,
     session_id: str,
     *,
+    conversation_id: Optional[str] = None,
     tool_name: str,
     context: Optional[str],
     arguments: Optional[Dict[str, Any]],
@@ -980,6 +1172,7 @@ async def record_missing_capability(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             "session_id": session_id,
+            "conversation_id": conversation_id,
             "resource_name": tool_name,
             "parameters": build_captured_mcp_parameters(
                 request, strip_llm_model=allow_self_reported_model
@@ -1011,6 +1204,7 @@ async def record_feedback(
     data: MCPAnalyticsData,
     session_id: str,
     *,
+    conversation_id: Optional[str] = None,
     report: FeedbackReport,
     tool_name: str,
     arguments: Optional[Dict[str, Any]],
@@ -1031,6 +1225,7 @@ async def record_feedback(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_FEEDBACK,
             "session_id": session_id,
+            "conversation_id": conversation_id,
             "resource_name": tool_name,
             "client_name": client_name,
             "client_version": client_version,
