@@ -17,7 +17,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple
 
 from .logger import log
 from ._sink import McpEventSink
@@ -66,11 +66,24 @@ class MCPAnalyticsData:
     # signature of a stateless server whose mint middleware never attached. Warned
     # a single time per server so the log isn't flooded on every request.
     warned_no_stateless_session: bool = False
-    # True when the last tools/list showed a real application tool using the
-    # feedback tool's name. Calls to that name then dispatch normally instead of
-    # being intercepted (fail-open), and the tool keeps its normal analytics
-    # schema injection. Refreshed at every listing pass.
-    feedback_tool_shadowed: bool = False
+    # True once the SDK has told the host that its tools/list handler was
+    # replaced after instrument(), so ownership can no longer be determined and
+    # the virtual tools are advertised but never intercepted. Warned a single
+    # time per server so the log isn't flooded on every call.
+    warned_foreign_list_handler: bool = False
+    # ``(kind, name, variant)`` collision warnings already emitted, so a client
+    # that re-lists tools on every turn logs each misconfiguration once.
+    warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(
+        default_factory=set
+    )
+    # Adapter-supplied probe returning the names the host's own (original,
+    # un-instrumented) tools/list handler advertises on its first page, or None
+    # when it can't be determined. Registered by the adapters with no tool
+    # registry to query — raw low-level servers. Takes the adapter's request
+    # context, which the 1.x handler shape ignores.
+    raw_tool_names_probe: Optional[Callable[[Any], Awaitable[Optional[Set[str]]]]] = (
+        None
+    )
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)

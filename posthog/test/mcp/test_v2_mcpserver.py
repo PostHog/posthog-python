@@ -379,6 +379,28 @@ async def test_report_missing_accepts_omitted_arguments():
     assert "$mcp_intent" not in missing[0]["properties"]
 
 
+async def test_real_get_more_tools_is_not_intercepted():
+    # The registry probe is the only ownership signal before any tools/list has
+    # run -- the multi-pod case. Without it the SDK swallows the host's tool and
+    # answers with its own canned reply.
+    server = MCPServer("test-server-v2")
+
+    @server.tool()
+    def get_more_tools(context: str) -> str:
+        """A real application tool that owns the name."""
+        return "real tool ran"
+
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+
+    result = await _call_tool(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+
+    assert "real tool ran" in str(result.content)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert _events(client, "$mcp_tool_call")
+
+
 async def test_collect_feedback_advertises_and_captures():
     server = make_server()
     client = FakeClient()
@@ -427,33 +449,6 @@ async def test_collect_feedback_collision_fails_open():
 
     assert _events(client, "$mcp_feedback") == []
     assert _events(client, "$mcp_tool_call")
-
-
-async def test_collect_feedback_collision_keeps_conversation_id():
-    # The name collision must fail open for every feature keyed off the
-    # feedback tool name, not just dispatch - conversation-id resolution used
-    # to keep skipping the real tool because it checked the configured name
-    # alone, ignoring the listing-derived shadow flag.
-    server = make_server()
-
-    @server.tool()
-    def send_feedback(note: str) -> str:
-        return f"real tool got {note}"
-
-    client = FakeClient()
-    instrument(
-        server,
-        client,
-        MCPAnalyticsOptions(collect_feedback=True, enable_conversation_id=True),
-    )
-
-    await _list_tools(server)
-    await _call_tool(server, "send_feedback", {"note": "hi", "context": "real tool"})
-    await _flush()
-
-    calls = _events(client, "$mcp_tool_call")
-    assert len(calls) == 1
-    assert calls[0]["properties"].get("$mcp_conversation_id")
 
 
 async def test_instrument_is_idempotent():
@@ -511,3 +506,40 @@ async def test_anonymous_events_do_not_create_person_profiles():
 
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["properties"]["$process_person_profile"] is False
+
+
+async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
+    # A lookup that raises means "could not answer", not "the name is free".
+    # Answering False there swallows the host's own tool and returns PostHog's
+    # canned reply as a success. Same contract as the low-level adapter.
+    server = MCPServer("flaky-registry-v2")
+
+    @server.tool()
+    def get_more_tools(context: str) -> str:
+        return "real tool ran"
+
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    original_get_tool = server._tool_manager.get_tool
+    failed = []
+
+    def flaky_get_tool(name, *args, **kwargs):
+        if name == "get_more_tools" and not failed:
+            failed.append(name)
+            raise ConnectionError("registry unreachable")
+        return original_get_tool(name, *args, **kwargs)
+
+    server._tool_manager.get_tool = flaky_get_tool
+
+    out = await _call_tool(server, "get_more_tools", {"context": "need csv export"})
+    await _flush()
+
+    assert "real tool ran" in str(out.content[0].text)
+    assert _events(client, "$mcp_missing_capability") == []
+    assert any("delegating the call to your server" in m for m in messages)

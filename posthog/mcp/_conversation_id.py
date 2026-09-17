@@ -78,7 +78,7 @@ def resolve_conversation_id(
     enabled: bool,
     args: Any,
     tool_name: Optional[str],
-    missing_capability_tool_name: str,
+    missing_capability_tool_name: Optional[str],
     feedback_tool_name: Optional[str] = None,
 ) -> Tuple[Optional[str], bool]:
     """Return ``(conversation_id, minted)``. Disabled, get_more_tools, or
@@ -86,12 +86,19 @@ def resolve_conversation_id(
     → ``(value, False)``; anything else (omitted, or a value the agent made up)
     → ``(new uuid, True)``.
 
+    Either virtual tool's name arrives as ``None`` when that tool is disabled,
+    so a real application tool by the same name mints and echoes a handle like
+    any other tool's.
+
     Lowercased on the way in: the shape test is case-insensitive but the hash
     behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
     uuids) would land in a different session than the call that minted it."""
     if (
         not enabled
-        or tool_name == missing_capability_tool_name
+        or (
+            missing_capability_tool_name is not None
+            and tool_name == missing_capability_tool_name
+        )
         or (feedback_tool_name is not None and tool_name == feedback_tool_name)
     ):
         return None, False

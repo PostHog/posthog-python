@@ -41,16 +41,13 @@ def log(message: str) -> None:
 
 
 def warn(message: str) -> None:
-    """A misconfiguration the host almost certainly wants to know about, sent to
-    the ``logger`` option *and* to the ``posthog.mcp`` standard-library logger.
+    """A misconfiguration the host wants to know about, sent to the ``logger``
+    option *and* to the ``posthog.mcp`` standard-library logger.
 
-    Reserved for warnings that can only fire on an HTTP transport, where the
-    STDIO constraint above does not apply. A default-configured host still sees
-    these on stderr (logging's lastResort handler), which is the whole point:
-    the misconfigurations this is used for are invisible in the data, so a
-    warning nobody has opted in to receive is a warning nobody reads. Hosts that
-    do configure logging can route or silence them by name like any other
-    logger."""
+    For misconfigurations that are invisible in the captured data, so these go
+    out whether or not a ``logger`` option was passed. STDIO-safe: the
+    constraint above is on *stdout*, which carries the protocol stream, and the
+    MCP spec allows servers to log to stderr."""
     log(message)
     try:
         _stdlib_logger.warning(message)

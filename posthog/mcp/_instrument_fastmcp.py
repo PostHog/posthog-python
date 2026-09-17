@@ -30,17 +30,17 @@ from ._conversation_id import build_prompt_back
 from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
     _to_jsonable,
-    append_get_more_tools,
-    append_send_feedback,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
-    listing_has_next_page,
+    is_first_listing_page,
     mutate_tool_schema,
-    refresh_feedback_shadow,
     request_to_dict,
+    resolve_virtual_tool_injection,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
@@ -50,7 +50,7 @@ from ._model_parameters import (
 )
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
+from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -115,15 +115,15 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             },
         )
 
-        if lifecycle.is_missing_capability:
+        if lifecycle.is_missing_capability and (
+            _name_owned_by_real_tool(server, name) is False
+        ):
             await lifecycle.record_missing_capability()
             return [
                 mcp_types.TextContent(type="text", text=get_more_tools_result_text())
             ]
 
-        if lifecycle.is_feedback and not _feedback_name_owned_by_real_tool(
-            server, name
-        ):
+        if lifecycle.is_feedback and (_name_owned_by_real_tool(server, name) is False):
             reply = await lifecycle.record_feedback()
             return [mcp_types.TextContent(type="text", text=reply)]
 
@@ -206,6 +206,7 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
             schema_attribute="inputSchema",
             owns_context=_tool_owns_context(server, tool.name),
             context_required=True,
+            is_sdk_virtual_tool=False,
         )
 
 
@@ -229,10 +230,6 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            # Refresh the collision flag here too: this pass sees the real tool
-            # registry, so a real tool named like the feedback tool is detected
-            # before any client-facing listing.
-            refresh_feedback_shadow(data, tools)
             _inject_tool_schemas(server, data, tools)
             return result
 
@@ -272,19 +269,17 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         tools = extract_tools(result)
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
-        feedback_name = refresh_feedback_shadow(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data,
+            tools,
+            is_first_page=is_first_listing_page(getattr(req, "params", None)),
+        )
 
         _inject_tool_schemas(server, data, tools)
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name, data)
-                names.append(missing_name)
-
-        if feedback_name is not None and not listing_has_next_page(result):
-            append_send_feedback(result, data)
-            names.append(feedback_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="inputSchema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -322,14 +317,18 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result
 
 
-def _feedback_name_owned_by_real_tool(server: Any, name: str) -> bool:
-    """Live registry probe so a real tool by the feedback tool's name is never
-    shadowed even before the first listing refreshes the collision flag."""
-    try:
-        tool_manager = getattr(server, "_tool_manager", None)
-        return tool_manager is not None and tool_manager.get_tool(name) is not None
-    except Exception:  # noqa: BLE001 - unknown tool -> the name is not owned
+def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
+    """Live registry probe, so a real tool by a virtual tool's name is never
+    shadowed. Tri-state like its low-level twin: ``None`` when the lookup failed
+    rather than answered, and callers must not intercept on it."""
+    tool_manager = getattr(server, "_tool_manager", None)
+    if tool_manager is None:
         return False
+    try:
+        return tool_manager.get_tool(name) is not None
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        warn_ownership_lookup_failed(name, err)
+        return None
 
 
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:
