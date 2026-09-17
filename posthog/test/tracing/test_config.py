@@ -256,15 +256,14 @@ class TestBeforeSpanSendConfig:
         assert resolved.before_span_send == (hook,)
         assert not caplog.records
 
-    def test_ignores_and_warns_about_entries_that_are_not_callable(self, caplog):
-        caplog.set_level("WARNING", logger="posthog")
-
+    def test_rejects_an_entry_that_is_not_callable_rather_than_exporting_unhooked(
+        self,
+    ):
         def hook(span):
             return span
 
-        resolved = resolve_traces_config({"before_span_send": ["scrub", hook]})
-        assert resolved.before_span_send == (hook,)
-        assert any("1 of 2" in r.getMessage() for r in caplog.records)
+        with pytest.raises(ValueError, match="not callable"):
+            resolve_traces_config({"before_span_send": ["scrub", hook]})
 
     def test_a_hook_whose_truthiness_raises_is_still_resolved(self):
         class Hook:

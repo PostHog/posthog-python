@@ -123,26 +123,24 @@ def _usable_resource_attributes(value: Any) -> Dict[str, Any]:
 
 
 def _resolve_before_span_send(value: Any) -> Tuple[Callable, ...]:
-    """Keep only the callable hooks, in order.
+    """The hooks, in order. Raises for an entry that is not callable.
 
-    Anything else is dropped rather than called: a hook that raises drops every
-    span, which would leave tracing silently off.
+    The hook is the scrubbing point, so a broken entry turns tracing off
+    rather than exporting spans the entry was meant to redact. The client
+    reports the error and leaves tracing off for the life of the client.
     """
     if value is None:
         return ()
     supplied = list(value) if isinstance(value, (list, tuple)) else [value]
     # `[enabled and scrub]` yields None or False: no hook, rather than a broken one.
     supplied = [hook for hook in supplied if hook is not None and hook is not False]
-    hooks = tuple(hook for hook in supplied if callable(hook))
-    if len(hooks) != len(supplied):
-        log.warning(
-            "Ignoring %s of %s traces before_span_send entries that are not callable. "
-            "Spans export without them, so whatever they were redacting is not "
-            "redacted.",
-            len(supplied) - len(hooks),
-            len(supplied),
-        )
-    return hooks
+    for hook in supplied:
+        if not callable(hook):
+            raise ValueError(
+                "traces before_span_send entry {!r} is not callable; tracing is off "
+                "rather than exporting spans it was meant to redact".format(hook)
+            )
+    return tuple(supplied)
 
 
 def resolve_traces_config(

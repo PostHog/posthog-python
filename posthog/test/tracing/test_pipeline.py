@@ -761,13 +761,6 @@ class TestBeforeSpanSend:
         assert calls == ["first", "second"]
         assert queued(pipeline) == []
 
-    def test_ignores_non_callable_entries_and_exports_unhooked(self, caplog):
-        caplog.set_level("WARNING", logger="posthog")
-        pipeline, _, _ = make(before_span_send=["not a hook", None])
-        pipeline.start_span("a").end()
-        assert len(queued(pipeline)) == 1
-        assert any("not callable" in r.getMessage() for r in caplog.records)
-
     def test_a_hook_can_remove_the_stacktrace(self):
         def strip_stacks(span):
             for event in span["events"]:
