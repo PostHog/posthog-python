@@ -92,7 +92,15 @@ nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that 
 `llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
 otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
 standalone `fastmcp.FastMCP` read ownership from the registered tool schema, so they are
-unaffected and need no prior listing.
+unaffected and need no prior listing when dispatch uses that registry.
+
+On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute a tool.
+When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
+replica cannot safely distinguish that field from a replacement tool's own argument.
+Client metadata capture remains enabled. This also applies to pass-through logging or
+authorization middleware with those hooks; argument-based model capture is skipped so an
+application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
+during a tool call.
 
 For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
 metadata through explicitly:

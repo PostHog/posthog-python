@@ -85,7 +85,7 @@ def instrument_fastmcp_v2(server: Any, data: MCPAnalyticsData) -> None:
     # schema that requires `context` contradicts the arguments the SDK actually
     # sees: under `FastMCP(strict_input_validation=True)` every call fails with
     # "'context' is a required property".
-    _wrap_list_tools(low_level, data, context_required=False)
+    _wrap_list_tools(low_level, data, context_required=False, high_level=server)
     _wrap_resource_requests(low_level, data)
 
 
@@ -327,7 +327,11 @@ def _wrap_call_tool(
 
 
 def _inject_tool_schemas(
-    data: MCPAnalyticsData, tools: list, *, context_required: bool
+    data: MCPAnalyticsData,
+    tools: list,
+    *,
+    context_required: bool,
+    high_level: Any = None,
 ) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
@@ -335,6 +339,9 @@ def _inject_tool_schemas(
     population pass, so the schema the SDK validates against always matches the
     one we advertised — see the note in ``handler``.
     """
+    # Middleware can replace the registered tool on another replica. Without
+    # proof of ownership there, advertising a field could break its validation.
+    inject_model = high_level is None or not _dispatch_can_differ(high_level)
     verdicts: Dict[str, bool] = {}
     for tool in tools:
         schema = getattr(tool, "inputSchema", None)
@@ -345,6 +352,7 @@ def _inject_tool_schemas(
             owns_context=schema_has_param(schema, "context"),
             context_required=context_required,
             is_sdk_virtual_tool=False,
+            inject_model=inject_model,
         )
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
@@ -357,7 +365,11 @@ def _inject_tool_schemas(
 
 
 def _wrap_list_tools(
-    server: Any, data: MCPAnalyticsData, *, context_required: bool
+    server: Any,
+    data: MCPAnalyticsData,
+    *,
+    context_required: bool,
+    high_level: Any = None,
 ) -> None:
     handlers = server.request_handlers
     original = handlers.get(mcp_types.ListToolsRequest)
@@ -400,7 +412,9 @@ def _wrap_list_tools(
         # without re-injecting here the next real call is rejected for sending the
         # `context` we advertised. Same reason the `req is None` branch below
         # injects.
-        _inject_tool_schemas(data, tools, context_required=context_required)
+        _inject_tool_schemas(
+            data, tools, context_required=context_required, high_level=high_level
+        )
         return advertised_tool_names(tools)
 
     data.raw_tool_names_probe = probe_raw_tool_names
@@ -416,7 +430,9 @@ def _wrap_list_tools(
         if req is None:
             result = await original(req)
             tools = extract_tools(result)
-            _inject_tool_schemas(data, tools, context_required=context_required)
+            _inject_tool_schemas(
+                data, tools, context_required=context_required, high_level=high_level
+            )
             return result
 
         client_name, client_version = _client_info(server)
@@ -464,7 +480,9 @@ def _wrap_list_tools(
             is_first_page=is_first_listing_page(getattr(req, "params", None)),
         )
 
-        _inject_tool_schemas(data, tools, context_required=context_required)
+        _inject_tool_schemas(
+            data, tools, context_required=context_required, high_level=high_level
+        )
 
         result = apply_virtual_tool_injection(
             result, injection, names, data, schema_field="inputSchema"
@@ -557,25 +575,18 @@ async def _standalone_ownership(
     and ``conversation_id`` are stripped unless the registered schema (or,
     without one, the function signature) declares them. A registry failure
     protects all keys; a missing registry entry retains the middleware fallback
-    for ``context`` and ``conversation_id``. ``llm_model`` is judged by the effective listing first,
-    because middleware can provide or shadow the tool the registry knows, then
-    by the registry; with neither witness it stays and is still read — strips
-    fail closed, reads fail open (posthog-js ADR-0011).
+    for ``context`` and ``conversation_id``. Middleware that can replace a tool
+    disables model injection and invalidates earlier model ownership. Otherwise
+    the listing or registry decides; with neither witness the model argument
+    stays and is still read (posthog-js ADR-0011).
     """
     try:
         declared, model_injectable = await _registry_view(high_level, name, meta)
-        registry_trusted = model_injectable is not None and not _dispatch_can_differ(
-            high_level
-        )
+        model_ours = data.tool_model_parameter_injected.get(name, model_injectable)
+        if _dispatch_can_differ(high_level):
+            model_ours = False
     except Exception:  # noqa: BLE001 - ownership inference must never prevent dispatch
-        declared, model_injectable, registry_trusted = None, None, False
-    listed = data.tool_model_parameter_injected.get(name)
-    if listed is not None:
-        model_ours: Optional[bool] = listed
-    elif registry_trusted:
-        model_ours = model_injectable
-    else:
-        model_ours = None
+        declared, model_ours = None, None
     candidates = _injected_keys(data)
     strip = {k for k in candidates - {"llm_model"} if k not in (declared or set())}
     if "llm_model" in candidates and model_ours:

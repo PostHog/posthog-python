@@ -184,6 +184,44 @@ async def test_jlowin_call_strips_llm_model_and_records_it(listed):
     assert calls[0]["properties"]["$mcp_llm_model"] == "model-a"
 
 
+async def test_jlowin_middleware_defaults_work_across_fresh_instances(monkeypatch):
+    from types import SimpleNamespace
+
+    from fastmcp.server.middleware import Middleware
+
+    from posthog.mcp import _instrument_lowlevel
+
+    monkeypatch.setattr(
+        _instrument_lowlevel,
+        "_request_context",
+        lambda _: SimpleNamespace(meta={"x-codex-turn-metadata": {"model": "gpt-5"}}),
+    )
+    client = FakeClient()
+
+    class PassThrough(Middleware):
+        async def on_call_tool(self, context, call_next):
+            return await call_next(context)
+
+    def fresh():
+        server = make_server()
+        server.add_middleware(PassThrough())
+        instrument(server, client)
+        return server
+
+    listing = await _list(fresh())
+    schema = listing.root.tools[0].inputSchema
+    # A cold replica cannot distinguish pass-through from tool-replacing
+    # middleware, so discovery must not request an argument it cannot strip.
+    assert "llm_model" not in schema["properties"]
+    result = await _call(fresh(), "add", {"a": 2, "b": 3, "context": "sum"})
+    assert result.root.isError is False
+    assert result.root.content[0].text == "5"
+    await _flush()
+    event = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert event["$mcp_llm_model"] == "gpt-5"
+    assert event["$mcp_llm_model_source"] == "client_metadata"
+
+
 _OWN_MODEL = {"llm_model": {"type": "string"}}
 
 
@@ -401,8 +439,8 @@ async def test_jlowin_disabled_capture_leaves_llm_model_for_permissive_tools():
 @pytest.mark.parametrize("listed", [True, False], ids=["listed", "cold"])
 async def test_jlowin_middleware_provided_tool_keeps_its_llm_model(listed):
     # The registry does not know a middleware-provided tool, so the effective
-    # listing is the witness for llm_model. Cold, with no witness at all, the
-    # argument stays (strips fail closed) and is read (reads fail open).
+    # listing may differ from dispatch. Model injection stays off and the
+    # application argument stays intact, even without a prior listing.
     pytest.importorskip("fastmcp.server.middleware")
     from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware
     from fastmcp.tools import Tool
@@ -425,7 +463,7 @@ async def test_jlowin_middleware_provided_tool_keeps_its_llm_model(listed):
     assert out.root.isError is False, out.root.content
     assert out.root.content[0].text == "own"
     recorded = _events(client, "$mcp_tool_call")[0]["properties"].get("$mcp_llm_model")
-    assert recorded == (None if listed else "own")
+    assert recorded is None
 
 
 @pytest.mark.parametrize(
@@ -434,16 +472,27 @@ async def test_jlowin_middleware_provided_tool_keeps_its_llm_model(listed):
         ("listing", True),
         ("listing", False),
         ("dispatch", False),
+        ("dispatch", True),
+        ("listing-last", True),
+        ("late-dispatch", False),
         ("builtin-subclass", False),
     ],
-    ids=["listing-listed", "listing-cold", "dispatch-cold", "builtin-subclass-cold"],
+    ids=[
+        "listing-listed",
+        "listing-cold",
+        "dispatch-cold",
+        "dispatch-listed",
+        "listing-last",
+        "late-dispatch",
+        "builtin-subclass-cold",
+    ],
 )
 async def test_jlowin_middleware_shadowed_tool_keeps_its_llm_model(shadow, listed):
     # A registered tool without llm_model is shadowed by middleware serving one
     # that declares it, either by also advertising it or only at dispatch. The
     # registry would answer for the wrong tool, so with such middleware present
-    # it is not trusted: the argument stays and, cold, is read fail-open; a
-    # listing that advertised the shadowing tool settles it as the application's.
+    # it is not trusted: the argument stays and is not read as a self-report,
+    # regardless of listing order or a stale registered-tool verdict.
     pytest.importorskip("fastmcp.server.middleware")
     from fastmcp.server.middleware import Middleware
     from fastmcp.server.middleware.tool_injection import ToolInjectionMiddleware
@@ -461,6 +510,10 @@ async def test_jlowin_middleware_shadowed_tool_keeps_its_llm_model(shadow, liste
     shadowing = Tool.from_function(route)
 
     class DispatchShadow(Middleware):
+        async def on_list_tools(self, context, call_next):
+            tools = await call_next(context)
+            return [*tools, shadowing] if shadow == "listing-last" else tools
+
         async def on_call_tool(self, context, call_next):
             if context.message.name == "route":
                 return await shadowing.run(context.message.arguments or {})
@@ -480,14 +533,15 @@ async def test_jlowin_middleware_shadowed_tool_keeps_its_llm_model(shadow, liste
                     return await shadowing.run(context.message.arguments or {})
                 return await call_next(context)
 
+    client = FakeClient()
+    instrument(server, client)
+    if shadow == "late-dispatch":
+        await _list(server)
     server.add_middleware(
         ToolInjectionMiddleware(tools=[shadowing])
         if shadow == "listing"
         else DispatchShadow()
     )
-    client = FakeClient()
-    instrument(server, client)
-
     if listed:
         await _list(server)
     out = await _call(
@@ -498,7 +552,7 @@ async def test_jlowin_middleware_shadowed_tool_keeps_its_llm_model(shadow, liste
     assert out.root.isError is False, out.root.content
     assert out.root.content[0].text == "own"
     recorded = _events(client, "$mcp_tool_call")[0]["properties"].get("$mcp_llm_model")
-    assert recorded == (None if listed else "own")
+    assert recorded is None
 
 
 async def test_jlowin_without_dereferencing_a_root_ref_is_never_injected_into():

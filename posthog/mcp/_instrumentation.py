@@ -994,6 +994,7 @@ def mutate_tool_schema(
     owns_context: bool,
     context_required: bool,
     is_sdk_virtual_tool: bool,
+    inject_model: bool = True,
 ) -> None:
     """Apply the common analytics schema pipeline and write it back in place.
 
@@ -1014,21 +1015,14 @@ def mutate_tool_schema(
             get_context_description(data.options.context),
             required=context_required,
         )
-    if is_capture_model_enabled(data.options.capture_model):
-        model_was_injected = data.tool_model_parameter_injected.get(tool.name, False)
-        app_owns_model = (
-            schema_has_param(schema, "llm_model") and not model_was_injected
+    if inject_model:
+        schema = _mutate_model_schema(
+            data, tool.name, schema, required=context_required
         )
-        if not app_owns_model and not schema_has_param(schema, "llm_model"):
-            schema = add_model_parameter_to_schema(
-                schema,
-                tool.name,
-                get_model_description(data.options.capture_model),
-                required=context_required,
-            )
-        data.tool_model_parameter_injected[tool.name] = (
-            not app_owns_model and schema_has_param(schema, "llm_model")
-        )
+    else:
+        # Discard any earlier registered-tool verdict: middleware may now
+        # advertise or dispatch an application-owned field with the same name.
+        data.tool_model_parameter_injected[tool.name] = False
     if data.options.enable_conversation_id and not schema_has_param(
         schema, "conversation_id"
     ):
@@ -1042,6 +1036,26 @@ def mutate_tool_schema(
         data.tool_output_instructions[tool.name] = add_instructions_to_output_schema(
             tool
         )
+
+
+def _mutate_model_schema(
+    data: MCPAnalyticsData, name: str, schema: Any, *, required: bool
+) -> Any:
+    if not is_capture_model_enabled(data.options.capture_model):
+        return schema
+    model_was_injected = data.tool_model_parameter_injected.get(name, False)
+    app_owns_model = schema_has_param(schema, "llm_model") and not model_was_injected
+    if not app_owns_model and not schema_has_param(schema, "llm_model"):
+        schema = add_model_parameter_to_schema(
+            schema,
+            name,
+            get_model_description(data.options.capture_model),
+            required=required,
+        )
+    data.tool_model_parameter_injected[name] = not app_owns_model and schema_has_param(
+        schema, "llm_model"
+    )
+    return schema
 
 
 def request_to_dict(req: Any) -> Dict[str, Any]:
