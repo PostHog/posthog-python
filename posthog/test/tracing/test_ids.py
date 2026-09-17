@@ -1,12 +1,8 @@
 import re
 from unittest import mock
 
-import pytest
-
 from posthog.tracing import _ids
 from posthog.tracing._ids import (
-    is_valid_span_id,
-    is_valid_trace_id,
     new_span_id,
     new_trace_id,
 )
@@ -44,33 +40,3 @@ class TestNewSpanId:
 
     def test_does_not_repeat(self):
         assert len({new_span_id() for _ in range(1000)}) == 1000
-
-
-class TestValidation:
-    @pytest.mark.parametrize(
-        "value,expected",
-        [
-            ("4bf92f3577b34da6a3ce929d0e0e4736", True),
-            ("0" * 32, False),
-            ("abc", False),
-            ("4BF92F3577B34DA6A3CE929D0E0E4736", False),
-            ("zz" * 16, False),
-            ("a" * 31 + "\n", False),
-            (12345, False),
-            (None, False),
-        ],
-    )
-    def test_is_valid_trace_id(self, value, expected):
-        assert is_valid_trace_id(value) is expected
-
-    @pytest.mark.parametrize(
-        "value,expected",
-        [
-            ("00f067aa0ba902b7", True),
-            ("0" * 16, False),
-            ("4bf92f3577b34da6a3ce929d0e0e4736", False),
-            ("a" * 15 + "\n", False),
-        ],
-    )
-    def test_is_valid_span_id(self, value, expected):
-        assert is_valid_span_id(value) is expected

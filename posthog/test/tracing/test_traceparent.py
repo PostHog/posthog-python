@@ -40,6 +40,10 @@ class TestParseTraceparent:
         parsed = parse_traceparent(f"  00-{TRACE_ID}-{SPAN_ID}-01 ")
         assert parsed == RemoteSpanContext(TRACE_ID, SPAN_ID, "01")
 
+    def test_decodes_a_raw_asgi_header_value(self):
+        parsed = parse_traceparent(f"00-{TRACE_ID}-{SPAN_ID}-01".encode("ascii"))
+        assert parsed == RemoteSpanContext(TRACE_ID, SPAN_ID, "01")
+
     @pytest.mark.parametrize(
         "value",
         [
@@ -67,6 +71,7 @@ class TestParseTraceparent:
             42,
             None,
             [f"00-{TRACE_ID}-{SPAN_ID}-01"],
+            "00-caf\u00e9".encode("utf-8"),
         ],
     )
     def test_returns_none_for_malformed_input(self, value):
@@ -94,6 +99,10 @@ class TestNormalizeTraceparent:
             normalize_traceparent(f"01-{TRACE_ID}-{SPAN_ID}-05")
             == f"01-{TRACE_ID}-{SPAN_ID}-05"
         )
+
+    def test_decodes_a_raw_asgi_header_value(self):
+        header = f"00-{TRACE_ID}-{SPAN_ID}-01"
+        assert normalize_traceparent(header.encode("ascii")) == header
 
     def test_echoes_a_higher_version_whole_including_its_trailing_fields(self):
         assert (
@@ -137,6 +146,9 @@ class TestTraceparentHeader:
 class TestSanitizeTracestate:
     def test_preserves_a_valid_vendor_list_unchanged(self):
         assert sanitize_tracestate("vendor=abc,other=def") == "vendor=abc,other=def"
+
+    def test_decodes_a_raw_asgi_header_value(self):
+        assert sanitize_tracestate(b"vendor=abc") == "vendor=abc"
 
     def test_trims_surrounding_whitespace(self):
         assert sanitize_tracestate("  vendor=abc ") == "vendor=abc"

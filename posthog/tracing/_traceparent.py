@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import List, Optional
 
-from ._ids import is_valid_span_id, is_valid_trace_id
+from ._ids import INVALID_SPAN_ID, INVALID_TRACE_ID
 
 TRACE_FLAGS_SAMPLED = "01"
 TRACE_FLAGS_UNSAMPLED = "00"
@@ -14,14 +14,14 @@ _TRACEPARENT_RE = re.compile(
     r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})(-.*)?$"
 )
 
-# W3C sets no bound; the tracestate cap keeps a peer's header from being
+# W3C bounds neither header; the caps keep a peer's header from being
 # amplified onto every outbound call.
 _TRACEPARENT_MAX_LENGTH = 512
 _TRACESTATE_MAX_MEMBERS = 32
 _TRACESTATE_MAX_LENGTH = 512
 # W3C: when trimming, drop members longer than this first.
 _TRACESTATE_LARGE_MEMBER_LENGTH = 128
-_TRACESTATE_FORBIDDEN_RE = re.compile(r"[^\x20-\x7e\t]")
+_NON_PRINTABLE_ASCII_RE = re.compile(r"[^\x20-\x7e\t]")
 
 
 @dataclass(frozen=True)
@@ -40,8 +40,19 @@ class _TraceparentFields:
     flags: str
 
 
+def _header_text(value: object) -> Optional[str]:
+    """A header value as text; a raw ASGI scope carries it as ASCII bytes."""
+    if isinstance(value, bytes):
+        try:
+            return value.decode("ascii")
+        except UnicodeDecodeError:
+            return None
+    return value if isinstance(value, str) else None
+
+
 def _match_traceparent(value: object) -> Optional[_TraceparentFields]:
-    if not isinstance(value, str):
+    value = _header_text(value)
+    if value is None:
         return None
     # Not lowercased: a conformant peer restarts the trace on uppercase hex.
     stripped = value.strip()
@@ -53,9 +64,9 @@ def _match_traceparent(value: object) -> Optional[_TraceparentFields]:
     version, trace_id, span_id, flags, trailing = match.group(1, 2, 3, 4, 5)
     if version == "ff" or (version == "00" and trailing):
         return None
-    if trailing and _TRACESTATE_FORBIDDEN_RE.search(trailing):
+    if trailing and _NON_PRINTABLE_ASCII_RE.search(trailing):
         return None
-    if not is_valid_trace_id(trace_id) or not is_valid_span_id(span_id):
+    if trace_id == INVALID_TRACE_ID or span_id == INVALID_SPAN_ID:
         return None
     return _TraceparentFields(version, trace_id, span_id, flags)
 
@@ -82,9 +93,10 @@ def normalize_traceparent(value: object) -> Optional[str]:
     Echoed whole rather than rebuilt, so a higher version keeps the fields this
     SDK does not read.
     """
-    if not isinstance(value, str) or _match_traceparent(value) is None:
+    text = _header_text(value)
+    if text is None or _match_traceparent(text) is None:
         return None
-    return value.strip()
+    return text.strip()
 
 
 def traceparent_header(value: object) -> object:
@@ -109,10 +121,11 @@ def sanitize_tracestate(value: object) -> Optional[str]:
     An invalid value is discarded without invalidating its traceparent. One
     over 512 characters is trimmed by whole members.
     """
-    if not isinstance(value, str):
+    text = _header_text(value)
+    if text is None:
         return None
-    trimmed = value.strip()
-    if not trimmed or _TRACESTATE_FORBIDDEN_RE.search(trimmed):
+    trimmed = text.strip()
+    if not trimmed or _NON_PRINTABLE_ASCII_RE.search(trimmed):
         return None
     members = trimmed.split(",")
     if len(members) > _TRACESTATE_MAX_MEMBERS:
