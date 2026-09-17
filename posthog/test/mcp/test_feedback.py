@@ -813,7 +813,7 @@ async def test_collision_warning_is_logged_once_across_repeated_listings():
     assert len([m for m in messages if "Cannot inject PostHog's" in m]) == 1
 
 
-async def test_feedback_never_mints_conversation_id():
+async def test_feedback_mints_conversation_id():
     server = make_lowlevel()
     client = FakeClient()
     instrument(
@@ -824,15 +824,49 @@ async def test_feedback_never_mints_conversation_id():
 
     result = await _list_tools_lowlevel(server)
     virtual = [t for t in result.root.tools if t.name == "send_feedback"][0]
-    assert "conversation_id" not in virtual.inputSchema["properties"]
+    assert "conversation_id" in virtual.inputSchema["properties"]
 
     call_handler = server.request_handlers[mcp_types.CallToolRequest]
     out = await call_handler(_call_request("send_feedback", dict(_REPORT_ARGS)))
     await _flush()
 
     feedback = _events(client, "$mcp_feedback")
-    assert "$mcp_conversation_id" not in feedback[0]["properties"]
-    # No prompt-back block appended to the acknowledgement.
+    handle = feedback[0]["properties"]["$mcp_conversation_id"]
+    assert handle in out.root.content[1].text
+
+
+async def test_renamed_feedback_reuses_conversation_id():
+    server = make_lowlevel()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            collect_feedback=CollectFeedbackOptions(tool_name="report_feedback"),
+            enable_conversation_id=True,
+        ),
+    )
+
+    result = await _list_tools_lowlevel(server)
+    virtual = [t for t in result.root.tools if t.name == "report_feedback"][0]
+    assert "conversation_id" in virtual.inputSchema["properties"]
+
+    handle = "0198d3a7-1111-7222-8333-444455556666"
+    call_handler = server.request_handlers[mcp_types.CallToolRequest]
+    await call_handler(_call_request("echo", {"msg": "hi", "conversation_id": handle}))
+    out = await call_handler(
+        _call_request(
+            "report_feedback", {**dict(_REPORT_ARGS), "conversation_id": handle}
+        )
+    )
+    await _flush()
+
+    tool_call = _events(client, "$mcp_tool_call")[0]
+    feedback = _events(client, "$mcp_feedback")[0]
+    assert feedback["properties"]["$mcp_conversation_id"] == handle
+    assert (
+        tool_call["properties"]["$session_id"] == feedback["properties"]["$session_id"]
+    )
     assert len(out.root.content) == 1
 
 

@@ -299,6 +299,9 @@ needs no middleware and no ordering discipline, and it is the only thing that
 correlates a session under the 2026-07-28 revision's per-request server instances.
 Prefer it if you're on a recent client.
 
+The `get_more_tools` and `send_feedback` virtual tools also use the conversation
+handle when this option is enabled.
+
 ### How the SDK tells you it's misconfigured
 
 The failure used to be silent. It now surfaces two ways:

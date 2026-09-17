@@ -85,6 +85,28 @@ async def test_list_tools_injects_model_into_real_and_virtual_tools():
         assert "llm_model" in tools[name].inputSchema["required"]
 
 
+async def test_virtual_tool_uses_conversation_id():
+    server = make_server()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, enable_conversation_id=True),
+    )
+
+    listed = await _list_tools(server)
+    tool = next(t for t in listed.root.tools if t.name == "get_more_tools")
+    assert "conversation_id" in tool.inputSchema["properties"]
+
+    result = await server._tool_manager.call_tool("get_more_tools", {"context": "csv"})
+    await _flush()
+
+    handle = _events(client, "$mcp_missing_capability")[0]["properties"][
+        "$mcp_conversation_id"
+    ]
+    assert any(handle in item.text for item in result)
+
+
 # --- tools/call --------------------------------------------------------------
 
 

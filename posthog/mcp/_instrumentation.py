@@ -23,7 +23,11 @@ from ._context_parameters import (
     is_context_enabled,
     schema_has_param,
 )
-from ._conversation_id import add_conversation_id_to_schema, resolve_conversation_id
+from ._conversation_id import (
+    add_conversation_id_to_schema,
+    build_prompt_back,
+    resolve_conversation_id,
+)
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception
 from .feedback import (
@@ -470,11 +474,25 @@ class ToolCallLifecycle:
             self.data, mcp_session_id=self.mcp_session_id, token=self.token
         )
 
-    async def record_missing_capability(self) -> None:
-        session_id = await self.prepare_session(None)
+    def prompt_back_text(self) -> Optional[str]:
+        if not self.conversation_id or not self.minted_conversation_id:
+            return None
+        return build_prompt_back(self.conversation_id)["text"]
+
+    def _anchored_conversation_id(self, delivered: bool) -> Optional[str]:
+        if self.minted_conversation_id and not delivered:
+            return None
+        return self.conversation_id
+
+    async def record_missing_capability(
+        self, *, conversation_id_delivered: bool = False
+    ) -> None:
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session_id = await self.prepare_session(conversation_id)
         await record_missing_capability(
             self.data,
             session_id,
+            conversation_id=conversation_id,
             tool_name=self.missing_name or self.name,
             context=(self.arguments or {}).get("context"),
             arguments=self.arguments,
@@ -486,15 +504,17 @@ class ToolCallLifecycle:
             extra=self.extra,
         )
 
-    async def record_feedback(self) -> str:
+    async def record_feedback(self, *, conversation_id_delivered: bool = False) -> str:
         """Capture the ``$mcp_feedback`` event, then run the host's ``on_feedback``
         handler and return the reply text for the agent. The event is captured
         whether or not the handler raises."""
         report = parse_feedback_report(self.arguments, self.feedback_options)
-        session_id = await self.prepare_session(None)
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session_id = await self.prepare_session(conversation_id)
         await record_feedback(
             self.data,
             session_id,
+            conversation_id=conversation_id,
             report=report,
             tool_name=self.feedback_name or self.name,
             arguments=self.arguments,
@@ -509,7 +529,7 @@ class ToolCallLifecycle:
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
-        conversation_id = None if self.minted_conversation_id else self.conversation_id
+        conversation_id = self._anchored_conversation_id(False)
         session_id = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
@@ -530,9 +550,7 @@ class ToolCallLifecycle:
     async def record_result(
         self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
     ) -> None:
-        conversation_id = self.conversation_id
-        if self.minted_conversation_id and not conversation_id_delivered:
-            conversation_id = None
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
@@ -573,11 +591,7 @@ def start_tool_call_lifecycle(
     # running the host's `on_feedback` handler read the configured options.
     feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
     conversation_id, minted = resolve_conversation_id(
-        data.options.enable_conversation_id,
-        arguments,
-        name,
-        missing_name,
-        feedback_name,
+        data.options.enable_conversation_id, arguments
     )
     return ToolCallLifecycle(
         data=data,
@@ -1010,10 +1024,8 @@ def mutate_tool_schema(
         data.tool_model_parameter_injected[tool.name] = (
             not app_owns_model and schema_has_param(schema, "llm_model")
         )
-    if (
-        not is_sdk_virtual_tool
-        and data.options.enable_conversation_id
-        and not schema_has_param(schema, "conversation_id")
+    if data.options.enable_conversation_id and not schema_has_param(
+        schema, "conversation_id"
     ):
         schema = add_conversation_id_to_schema(schema, tool.name)
     if schema is not original_schema:
@@ -1138,6 +1150,7 @@ async def record_missing_capability(
     data: MCPAnalyticsData,
     session_id: str,
     *,
+    conversation_id: Optional[str] = None,
     tool_name: str,
     context: Optional[str],
     arguments: Optional[Dict[str, Any]],
@@ -1155,6 +1168,7 @@ async def record_missing_capability(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             "session_id": session_id,
+            "conversation_id": conversation_id,
             "resource_name": tool_name,
             "parameters": build_captured_mcp_parameters(
                 request, strip_llm_model=allow_self_reported_model
@@ -1186,6 +1200,7 @@ async def record_feedback(
     data: MCPAnalyticsData,
     session_id: str,
     *,
+    conversation_id: Optional[str] = None,
     report: FeedbackReport,
     tool_name: str,
     arguments: Optional[Dict[str, Any]],
@@ -1206,6 +1221,7 @@ async def record_feedback(
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_FEEDBACK,
             "session_id": session_id,
+            "conversation_id": conversation_id,
             "resource_name": tool_name,
             "client_name": client_name,
             "client_version": client_version,
