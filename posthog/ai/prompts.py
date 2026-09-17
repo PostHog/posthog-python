@@ -608,7 +608,7 @@ class Prompts:
             prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
             if cached is not None:
-                cooldown_seconds = DEFAULT_REFETCH_COOLDOWN_SECONDS
+                cooldown_seconds: float = DEFAULT_REFETCH_COOLDOWN_SECONDS
                 if (
                     isinstance(error, PromptFetchError)
                     and error.retry_after_seconds is not None
