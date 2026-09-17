@@ -12,6 +12,7 @@ import threading
 import time
 from typing import Any, Callable, List, Optional, Tuple
 
+from ..capture_v1 import _MAX_BACKOFF_SECONDS
 from ._config import ResolvedTracesConfig
 from ._drops import DropLog
 from ._otlp import (
@@ -27,11 +28,12 @@ log = logging.getLogger("posthog")
 MAX_RETRIES_PER_BATCH = 8
 
 MAX_FLUSH_BACKOFF_EXPONENT = 6
-MAX_FLUSH_BACKOFF_SECONDS = 30.0
+# The events lane's ceiling, so both backoffs and the Retry-After clamp share one.
+MAX_FLUSH_BACKOFF_SECONDS = float(_MAX_BACKOFF_SECONDS)
 
 # Nothing upstream bounds the header, and an unbounded value would strand the
-# queue. The same ceiling as the SDK's own backoff.
-MAX_RETRY_AFTER_SECONDS = 30.0
+# queue.
+MAX_RETRY_AFTER_SECONDS = MAX_FLUSH_BACKOFF_SECONDS
 
 # Spread each backoff by up to a quarter, so clients refused together do not
 # return together.
@@ -348,7 +350,8 @@ class SpanExporter:
             if self._head_batch_failures < MAX_RETRIES_PER_BATCH:
                 return 0, True, "Span export failed; retrying on the next flush"
             del self._queue[:size]
-            self._end_failure_sequence_locked()
+            # The endpoint is still failing: the next batch keeps backing off.
+            self._reset_head_batch_budget_locked()
             self._drops.record(
                 size,
                 "the ingestion endpoint failed {} times in a row".format(

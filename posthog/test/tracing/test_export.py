@@ -415,6 +415,21 @@ class TestRetryBudget:
         assert [[s["name"] for s in b] for b in sender.batches()][-1] == ["next"]
         assert queued(pipeline) == []
 
+    def test_a_dropped_batch_keeps_the_backoff_for_the_next_one(self, clock):
+        sender = FakeSender(*([SendOutcome("retry-later")] * MAX_RETRIES_PER_BATCH))
+        pipeline, _, _ = make_traces(sender=sender, max_export_batch_size=1)
+        pipeline.start_span("stuck").end()
+        pipeline.start_span("next").end()
+        for _ in range(MAX_RETRIES_PER_BATCH):
+            pipeline.flush()
+            clock["now"] += 100
+        exporter = pipeline._exporter
+        assert [s.name for s in queued(pipeline)] == ["next"]
+        assert exporter._consecutive_failures >= MAX_RETRIES_PER_BATCH
+        assert exporter._head_batch_failures == 1
+        pipeline.start_span("c").end()
+        assert FakeTimer.instances[-1].delay > 0
+
     def test_charges_the_budget_once_per_backoff_window_not_per_attempt(self, clock):
         pipeline, _, _ = make_traces(sender=FakeSender(SendOutcome("retry-later")))
         pipeline.start_span("a").end()

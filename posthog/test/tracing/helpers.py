@@ -41,6 +41,7 @@ class FakeTimer:
         self.cancelled = True
 
     def fire(self):
+        assert not self.cancelled, "fired a timer the code cancelled"
         self.fn()
 
 
