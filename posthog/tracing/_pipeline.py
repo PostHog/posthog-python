@@ -142,11 +142,12 @@ class PostHogTraces:
                 # A child of an inert handle is inert too, still forwarding any
                 # inbound context.
                 return inert_span(parent, tracestate, self._active_var)
-            # Two header values, or another tracer's span.
-            log.debug("Ignoring an unusable span parent")
-            parent = None
-
-        parent_context = self._resolve_parent(parent, tracestate)
+            # Two header values, or another tracer's span: like a malformed
+            # header, an explicit parent that cannot be used starts a new trace.
+            log.debug("Ignoring an unusable span parent; starting a new trace")
+            parent_context = None
+        else:
+            parent_context = self._resolve_parent(parent, tracestate)
 
         with self._lock:
             if self._is_closed():

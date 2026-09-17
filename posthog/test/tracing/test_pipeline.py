@@ -229,11 +229,16 @@ class TestTraceContinuation:
             pipeline.start_span("inner", parent=blank).end()
         assert queued(pipeline)[0].parent_span_id == outer._span_id
 
-    def test_ignores_an_unusable_parent_and_falls_back_to_the_active_span(self):
+    @pytest.mark.parametrize("unusable", ["garbage", ["dup", "header"], object()])
+    def test_an_unusable_explicit_parent_starts_a_new_trace(self, unusable):
+        # The same fallback as a malformed header: never the active span, which
+        # would silently attach the span to a trace the caller did not name.
         pipeline, _, _ = make()
         with pipeline.start_span("outer") as outer:
-            pipeline.start_span("inner", parent=["dup", "header"]).end()
-        assert queued(pipeline)[0].parent_span_id == outer._span_id
+            pipeline.start_span("inner", parent=unusable).end()
+        record = queued(pipeline)[0]
+        assert record.parent_span_id is None
+        assert record.trace_id != outer._trace_id
 
     def test_a_local_child_of_a_sampled_out_trace_keeps_the_00_flag(self):
         pipeline, _, _ = make()
