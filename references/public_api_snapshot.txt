@@ -851,6 +851,8 @@ attribute posthog.metrics = None
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
 attribute posthog.metrics_capture.log = logging.getLogger('posthog')
+attribute posthog.network_metrics.DEFAULT_METRIC_NAME = 'http.client.request.duration'
+attribute posthog.network_metrics.log = logging.getLogger('posthog')
 attribute posthog.on_error = None
 attribute posthog.personal_api_key = None
 attribute posthog.poll_interval = 30
@@ -1556,6 +1558,7 @@ module posthog.mcp.tools
 module posthog.mcp.types
 module posthog.mcp.version
 module posthog.metrics_capture
+module posthog.network_metrics
 module posthog.poller
 module posthog.request
 module posthog.types

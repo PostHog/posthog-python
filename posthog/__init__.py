@@ -339,7 +339,15 @@ Attributes:
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
-        call if the metrics API hasn't been used yet.
+        call if the metrics API hasn't been used yet. Set ``network`` to
+        ``True`` to record the duration of every HTTP request the application
+        makes with ``requests`` or ``httpx`` as the
+        ``http.client.request.duration`` histogram, with ``method``, ``host``,
+        templated ``path`` and ``status_class`` attributes. Pass a dict with
+        ``name`` (a string, or a function of the request that returns the name
+        or ``None`` to skip it) and ``attributes`` (a function of the request
+        and response whose result is merged over the defaults) to customise it.
+        The SDK's own requests are not recorded.
     enable_exception_autocapture: Automatically capture uncaught exceptions.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     project_root: Root path used to determine in-app exception stack frames.
@@ -1298,7 +1306,7 @@ def setup() -> Client:
     # module-attr assignment (e.g. a Django ready() hook running after something
     # already forced setup()) still applies until the metrics API is first used.
     if default_client._metrics is None:
-        default_client._metrics_config = metrics
+        default_client._configure_metrics(metrics)
 
     return default_client
 

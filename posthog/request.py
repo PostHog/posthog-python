@@ -16,6 +16,7 @@ from urllib3.connection import HTTPConnection
 from urllib3.util.retry import Retry
 
 from posthog._logging import _configure_posthog_logging
+from posthog.network_metrics import _mark_internal
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
@@ -84,7 +85,7 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
         ),
         socket_options=socket_options,
     )
-    session = requests.Session()
+    session = _mark_internal(requests.Session())
     session.mount("https://", adapter)
     return session
 
@@ -101,7 +102,7 @@ def _build_flags_session(
         max_retries=Retry(total=0, connect=0, read=0, status=0),
         socket_options=socket_options,
     )
-    session = requests.Session()
+    session = _mark_internal(requests.Session())
     session.mount("https://", adapter)
     return session
 

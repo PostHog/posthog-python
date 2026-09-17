@@ -1077,6 +1077,7 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+        self._configure_metrics(metrics)
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -2466,6 +2467,12 @@ class Client(object):
                         self._metrics = PostHogMetrics(self, None)
         return self._metrics
 
+    def _configure_metrics(self, metrics: Optional[dict]) -> None:
+        self._metrics_config = metrics
+        if isinstance(metrics, dict) and metrics.get("network"):
+            # Building the metrics API installs the network request wrappers.
+            _ = self.metrics
+
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
@@ -2681,6 +2688,11 @@ class Client(object):
             self._flush_or_discard_queues(errors)
 
         if self._metrics is not None:
+            self._run_lifecycle_cleanup(
+                "Failed to stop network metrics on shutdown",
+                self._metrics._stop_network_metrics,
+                errors,
+            )
             self._run_lifecycle_cleanup(
                 "Failed to flush metrics on shutdown", self._metrics.flush, errors
             )

@@ -33,6 +33,7 @@ from urllib.parse import quote
 
 import requests
 
+from posthog.network_metrics import _NetworkMetrics
 from posthog.request import _get_session
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
@@ -285,6 +286,11 @@ class PostHogMetrics:
         self._type_by_name: dict = {}
         self._type_collision_warned: set = set()
 
+        network = config.get("network")
+        self._network: Optional[_NetworkMetrics] = (
+            _NetworkMetrics(self, network) if network else None
+        )
+
     def count(
         self,
         name: str,
@@ -328,6 +334,11 @@ class PostHogMetrics:
             self._series_cap_warned = False
             self._type_by_name = {}
             self._type_collision_warned = set()
+
+    def _stop_network_metrics(self) -> None:
+        if self._network is not None:
+            self._network.stop()
+            self._network = None
 
     def _guarded_capture(
         self,

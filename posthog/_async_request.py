@@ -12,6 +12,7 @@ from urllib.parse import quote, urljoin, urlsplit
 
 from .capture_compression import CaptureCompression
 from .capture_v1 import _parse_retry_after, _send_v1_batch
+from .network_metrics import _mark_internal
 from .request import (
     APIError,
     DatetimeSerializer,
@@ -38,7 +39,9 @@ def _require_httpx():
 def _build_client(host: Optional[str] = None):
     httpx_module = _require_httpx()
     base_url = remove_trailing_slash(normalize_host(host))
-    return httpx_module.AsyncClient(base_url=base_url, follow_redirects=False)
+    return _mark_internal(
+        httpx_module.AsyncClient(base_url=base_url, follow_redirects=False)
+    )
 
 
 def _serialize_v0_body(
