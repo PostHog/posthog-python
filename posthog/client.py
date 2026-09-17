@@ -2539,7 +2539,7 @@ class Client(object):
                         # Off rather than defaults: defaults would drop a
                         # before_span_send hook and export unscrubbed spans.
                         self.log.exception("Error initializing traces; tracing is off")
-                        self._traces_config = None
+                        self._traces_config = False
         return self._traces
 
     def _tracing_context(self) -> Dict[str, Optional[str]]:
@@ -2578,6 +2578,8 @@ class Client(object):
             attributes: Initial attributes.
             parent: A span handle, or an inbound W3C ``traceparent`` header
                 value to continue a remote trace. Defaults to the active span.
+                A forked child starts with no active span; pass the parent
+                span to continue a trace across a fork.
             tracestate: The inbound ``tracestate`` header accompanying a
                 ``traceparent`` string ``parent``; preserved and propagated.
             start_time: A ``datetime`` or epoch seconds, to backdate the span.
@@ -2638,7 +2640,9 @@ class Client(object):
                 Queued spans are sent at the same time, within the same
                 budget: at least one span request is attempted even when the
                 budget is already spent, no further one starts once it is, and
-                each request is bounded by ``timeout``.
+                each request is bounded by ``timeout``. The wait for that first
+                request is not cut short, so a flush can take up to
+                ``timeout_seconds`` plus ``timeout`` in the worst case.
 
         Examples:
             ```python
@@ -2893,6 +2897,8 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to close traces on shutdown", traces.close, errors
             )
+            # The sync-mode exit drain, so a shut-down client is collectable.
+            atexit.unregister(self._atexit_spans)
         self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",

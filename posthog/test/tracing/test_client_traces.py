@@ -125,6 +125,16 @@ class TestConfiguration:
         assert isinstance(client.start_span("x"), RecordingSpan)
         client.shutdown()
 
+    def test_a_failed_init_is_not_retried_on_the_next_call(self):
+        client = make_client(traces={})
+        with mock.patch(
+            "posthog.client.resolve_traces_config", side_effect=RuntimeError("no")
+        ) as resolve:
+            assert client.start_span("x") is NOOP_SPAN
+            assert client.start_span("y") is NOOP_SPAN
+        assert resolve.call_count == 1
+        client.shutdown()
+
     def test_never_starts_a_pipeline_on_a_client_without_traces(self):
         client = make_client()
         client.flush()
@@ -623,6 +633,13 @@ class TestLifecycle:
         register.assert_called_once_with(client._atexit_spans)
         client.shutdown()
 
+    def test_shutdown_unregisters_the_sync_mode_exit_drain(self):
+        client = make_client(traces={}, sync_mode=True)
+        client.start_span("x").end()
+        with mock.patch("posthog.client.atexit.unregister") as unregister:
+            client.shutdown()
+        unregister.assert_called_once_with(client._atexit_spans)
+
     @pytest.mark.parametrize("traces", [False, None])
     def test_sync_mode_without_tracing_registers_no_exit_hook(self, traces):
         with mock.patch("posthog.client.atexit.register") as register:
@@ -734,6 +751,25 @@ class TestModuleLevelApi:
             }
 
         self._with_module_client(None, body)
+
+    def test_setup_leaves_an_explicitly_configured_default_client_alone(self):
+        def body():
+            posthog.default_client = make_client(traces={"service_name": "explicit"})
+            posthog.setup()
+            assert isinstance(posthog.start_span("x"), RecordingSpan)
+
+        self._with_module_client(None, body)
+
+    def test_setup_does_not_retry_a_traces_init_that_failed(self):
+        def body():
+            with mock.patch(
+                "posthog.client.resolve_traces_config", side_effect=RuntimeError("no")
+            ) as resolve:
+                assert posthog.start_span("x") is NOOP_SPAN
+                assert posthog.start_span("y") is NOOP_SPAN
+            assert resolve.call_count == 1
+
+        self._with_module_client({"service_name": "broken"}, body)
 
     def test_module_start_span_is_inert_without_config(self):
         def body():

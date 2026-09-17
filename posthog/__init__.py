@@ -12,7 +12,7 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
-from posthog.tracing.span import Span
+from posthog.tracing.span import Span as Span
 from posthog.async_client import AsyncClient as AsyncClient
 from posthog.async_client import AsyncPosthog as AsyncPosthog
 from posthog.exception_capture import ExceptionCapture
@@ -1393,7 +1393,9 @@ def setup() -> Client:
     # already forced setup()) still applies until the metrics API is first used.
     if default_client._metrics is None:
         default_client._metrics_config = metrics
-    if default_client._traces is None:
+    # traces=None means off, so the module option applies only where the client
+    # has none; False is the latch of an init that failed and stays off.
+    if traces is not None and default_client._traces_config is None:
         default_client._traces_config = traces
 
     return default_client

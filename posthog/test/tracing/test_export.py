@@ -1,5 +1,6 @@
 import threading
 import time
+from contextvars import ContextVar
 from types import SimpleNamespace
 from unittest import mock
 
@@ -940,7 +941,7 @@ class TestCloseAndFork:
         pipeline.start_span("parent-span").end()
         assert queued(pipeline) and pipeline._exporter._flush_timer is not None
         pipeline._exporter._max_export_batch_size = 1
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert queued(pipeline) == []
         assert pipeline._exporter._flush_timer is None
         assert (

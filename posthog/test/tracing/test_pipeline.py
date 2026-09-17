@@ -1,6 +1,7 @@
 import gc
 import logging
 import threading
+from contextvars import ContextVar
 import time
 import warnings
 import weakref
@@ -593,14 +594,14 @@ class TestCloseAndFork:
     def test_a_forked_child_drops_the_parents_live_spans(self):
         pipeline, exporter, _ = make()
         pipeline.start_span("live")
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert pipeline._live_spans == {}
         assert exporter.reinitialized
 
     def test_reinit_after_fork_replaces_locks_without_acquiring_them(self):
         pipeline, _, _ = make()
         pipeline._lock.acquire()
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert not pipeline._lock.locked()
         pipeline.start_span("a").end()
 
