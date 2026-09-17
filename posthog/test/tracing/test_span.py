@@ -3,6 +3,7 @@ import contextvars
 import gc
 import sys
 import threading
+import time
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -821,6 +822,68 @@ class TestSpanLimits:
         span.end()
         assert records[0].events[0].attributes == {}
         assert "expected a mapping" in caplog.text
+
+
+class TestConcurrentWrites:
+    def _run(self, worker, count=8):
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+
+    def test_writes_to_one_key_from_many_threads_spend_one_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+
+        def worker(i):
+            for n in range(300):
+                span.set_attribute("k", n)
+
+        self._run(worker)
+        span.end()
+        assert list(records[0].attributes) == ["k"]
+        assert records[0].dropped_attributes_count == 0
+
+    def test_events_from_many_threads_never_exceed_the_cap(self):
+        records: list = []
+        span = make_span(records, max_events=100)
+
+        def worker(i):
+            for n in range(50):
+                span.add_event(f"{i}-{n}")
+
+        self._run(worker)
+        span.end()
+        assert len(records[0].events) == 100
+        assert records[0].dropped_events_count == 300
+
+    def test_a_write_racing_end_never_lands_after_the_record(self):
+        records: list = []
+        span = make_span(records)
+        stop = threading.Event()
+
+        def writer(i):
+            n = 0
+            while not stop.is_set():
+                span.set_attribute("k", n)
+                span.add_event("e")
+                n += 1
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.02)
+        span.end()
+        stop.set()
+        for thread in threads:
+            thread.join(30)
+        record = records[0]
+        assert len(records) == 1
+        assert span._events == record.events
+        assert {k: v for k, v in span._attributes.items() if v is not None} == (
+            record.attributes
+        )
 
 
 class TestExceptionStacktrace:

@@ -74,11 +74,12 @@ class _Activatable:
 
     _active_var: Optional[ContextVar]
     _tokens: List[Token]
-    _tokens_lock: threading.Lock
+    # Guards the tokens and, on a recording span, every write and end().
+    _lock: threading.Lock
 
     def _activate(self) -> None:
         if self._active_var is not None:
-            with self._tokens_lock:
+            with self._lock:
                 self._tokens.append(self._active_var.set(self))
 
     def _deactivate(self) -> None:
@@ -86,7 +87,7 @@ class _Activatable:
             return
         # The same handle can be entered in several threads or tasks at once,
         # and a token only resets in the context that created it.
-        with self._tokens_lock:
+        with self._lock:
             for index in range(len(self._tokens) - 1, -1, -1):
                 try:
                     self._active_var.reset(self._tokens[index])
@@ -117,7 +118,7 @@ class PassThroughSpan(_Activatable, NoopSpan):
         self._tracestate = tracestate
         self._active_var = active_var
         self._tokens = []
-        self._tokens_lock = threading.Lock()
+        self._lock = threading.Lock()
 
     def traceparent(self) -> Optional[str]:
         return self._traceparent
@@ -244,7 +245,7 @@ class RecordingSpan(_Activatable, Span):
         self._on_end = on_end
         self._active_var = active_var
         self._tokens = []
-        self._tokens_lock = threading.Lock()
+        self._lock = threading.Lock()
 
         self._name = name
         self._kind = kind
@@ -258,11 +259,11 @@ class RecordingSpan(_Activatable, Span):
         self._dropped_attributes = 0
         self._dropped_events = 0
         self._attributes: Dict[str, Any] = {}
-        for key, value in (attributes or {}).items():
-            self._write_attribute(key, value)
         self._events: List[SpanEventRecord] = []
         self._status: Optional[SpanStatus] = None
         self._ended = False
+        for key, value in (attributes or {}).items():
+            self._write_attribute(key, value)
 
     def _now_ns(self) -> int:
         """Now, on this span's clock basis: start plus monotonic elapsed, else wall clock."""
@@ -282,21 +283,27 @@ class RecordingSpan(_Activatable, Span):
             # The encoder drops it, so it must not spend a slot.
             log.debug("Dropping an attribute with an empty key")
             return
-        if value is None:
-            # None removes the key, freeing its slot.
-            if key in self._attributes and key not in self._auto_keys:
-                self._user_attribute_count -= 1
-            self._attributes.pop(key, None)
-            return
-        # Checked before the value is walked, which is the costly part.
-        if key not in self._auto_keys and key not in self._attributes:
-            if self._user_attribute_count >= self._max_attributes:
-                self._dropped_attributes += 1
+        with self._lock:
+            if self._ended:
                 return
-            self._user_attribute_count += 1
-        self._attributes[key] = truncate_attribute_value(
-            value, self._max_attribute_value_length
-        )
+            if value is None:
+                # None removes the key, freeing its slot.
+                if key in self._attributes and key not in self._auto_keys:
+                    self._user_attribute_count -= 1
+                self._attributes.pop(key, None)
+                return
+            # Checked before the value is walked, which is the costly part.
+            if key not in self._auto_keys and key not in self._attributes:
+                if self._user_attribute_count >= self._max_attributes:
+                    self._dropped_attributes += 1
+                    return
+                self._user_attribute_count += 1
+                # Reserved, so a concurrent write to the same key sees it taken.
+                self._attributes[key] = None
+        bounded = truncate_attribute_value(value, self._max_attribute_value_length)
+        with self._lock:
+            if not self._ended:
+                self._attributes[key] = bounded
 
     def set_attribute(self, key: str, value: Any) -> "Span":
         if self._mutable("set_attribute"):
@@ -318,11 +325,14 @@ class RecordingSpan(_Activatable, Span):
         timestamp: Optional[SpanTimeInput] = None,
     ) -> "Span":
         if self._mutable("add_event"):
-            # A recorded exception spends a slot like any other event.
-            if self._user_event_count >= self._max_events:
-                self._dropped_events += 1
-                return self
-            self._user_event_count += 1
+            with self._lock:
+                if self._ended:
+                    return self
+                # A recorded exception spends a slot like any other event.
+                if self._user_event_count >= self._max_events:
+                    self._dropped_events += 1
+                    return self
+                self._user_event_count += 1
             bounded: Optional[Dict[str, Any]] = None
             dropped = 0
             if attributes is not None:
@@ -331,18 +341,19 @@ class RecordingSpan(_Activatable, Span):
                     MAX_ATTRIBUTES_PER_EVENT,
                     self._max_attribute_value_length,
                 )
-            self._events.append(
-                SpanEventRecord(
-                    name=sanitize_name(
-                        name, "Span event name", self._max_attribute_value_length
-                    ),
-                    timestamp_ns=resolve_supplied_ns(
-                        timestamp, self._now_ns(), "event timestamp"
-                    ),
-                    attributes=bounded,
-                    dropped_attributes_count=dropped,
-                )
+            event = SpanEventRecord(
+                name=sanitize_name(
+                    name, "Span event name", self._max_attribute_value_length
+                ),
+                timestamp_ns=resolve_supplied_ns(
+                    timestamp, self._now_ns(), "event timestamp"
+                ),
+                attributes=bounded,
+                dropped_attributes_count=dropped,
             )
+            with self._lock:
+                if not self._ended:
+                    self._events.append(event)
         return self
 
     def set_status(self, code: str, message: Optional[str] = None) -> "Span":
@@ -351,12 +362,15 @@ class RecordingSpan(_Activatable, Span):
                 log.debug('Ignoring an unknown span status; expected "ok" or "error"')
                 return self
             text = None if message is None else safe_str(message)
-            self._status = SpanStatus(
+            status = SpanStatus(
                 code,
                 truncate_string(text, self._max_attribute_value_length)
                 if text
                 else None,
             )
+            with self._lock:
+                if not self._ended:
+                    self._status = status
         return self
 
     @property
@@ -379,9 +393,12 @@ class RecordingSpan(_Activatable, Span):
 
     def update_name(self, name: str) -> "Span":
         if self._mutable("update_name"):
-            self._name = sanitize_name(
+            sanitized = sanitize_name(
                 name, "Span name", self._max_attribute_value_length
             )
+            with self._lock:
+                if not self._ended:
+                    self._name = sanitized
         return self
 
     def traceparent(self) -> Optional[str]:
@@ -400,11 +417,22 @@ class RecordingSpan(_Activatable, Span):
         )
 
     def end(self, end_time: Optional[SpanTimeInput] = None) -> None:
-        with self._tokens_lock:
+        with self._lock:
             if self._ended:
                 log.debug("Ignoring end() on a span that has already ended")
                 return
             self._ended = True
+            # Snapshotted under the lock: a write that lost the race to end()
+            # must not land in the record or after it.
+            attributes = {
+                key: value
+                for key, value in self._attributes.items()
+                if value is not None
+            }
+            events = list(self._events)
+            name, status = self._name, self._status
+            dropped_attributes = self._dropped_attributes
+            dropped_events = self._dropped_events
 
         derived = self._now_ns()
         resolved = resolve_supplied_ns(end_time, derived, "end time")
@@ -415,15 +443,15 @@ class RecordingSpan(_Activatable, Span):
             trace_state=self._trace_state,
             trace_flags=self._trace_flags,
             parent_is_remote=self._parent_is_remote,
-            name=self._name,
+            name=name,
             kind=self._kind,
-            status=self._status,
-            attributes=dict(self._attributes),
-            events=self._events,
+            status=status,
+            attributes=attributes,
+            events=events,
             start_ns=self._start_ns,
             end_ns=clamp_end_ns(resolved, self._start_ns),
-            dropped_attributes_count=self._dropped_attributes,
-            dropped_events_count=self._dropped_events,
+            dropped_attributes_count=dropped_attributes,
+            dropped_events_count=dropped_events,
         )
         try:
             self._on_end(record)

@@ -290,7 +290,9 @@ def _to_otlp_event(event: SpanEventRecord) -> dict:
         attributes, cut = encode_attributes(event.attributes)
         if attributes:
             encoded["attributes"] = attributes
-    dropped = non_negative_count(non_negative_count(event.dropped_attributes_count) + cut)
+    dropped = non_negative_count(
+        non_negative_count(event.dropped_attributes_count) + cut
+    )
     if dropped:
         encoded["droppedAttributesCount"] = dropped
     return encoded
