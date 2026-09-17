@@ -96,6 +96,13 @@ def _prompt_reference(
     return reference
 
 
+def _prompt_list_reference(label: Optional[str]) -> str:
+    """Format a batch-fetch reference for logs and errors."""
+    if label is not None:
+        return f'prompts with label "{label}"'
+    return "all prompts"
+
+
 def _extract_config(data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Read config from an API response, tolerating servers that don't send it."""
     config = data.get("config")
@@ -200,6 +207,9 @@ class Prompts:
 
         # Fetch all prompts at a label in one request and warm the cache
         prod_prompts = prompts.get_all(label='production')
+
+        # Fetch the latest version of every prompt in one request
+        all_prompts = prompts.get_all()
 
         # Compile with variables
         system_prompt = prompts.compile(template, {
@@ -361,35 +371,39 @@ class Prompts:
                 return fallback
             raise
 
-    def get_all(self, *, label: str) -> Dict[str, PromptResult]:
+    def get_all(self, *, label: Optional[str] = None) -> Dict[str, PromptResult]:
         """
-        Fetch every prompt that carries a label, in one batch.
+        Fetch every prompt in one batch.
 
-        Returns a dict mapping prompt name to :class:`PromptResult`, with each
-        prompt at the version the label points to. Prompts without the label
-        are not included.
+        Returns a dict mapping prompt name to :class:`PromptResult`. With a
+        label, each prompt is at the version the label points to, and prompts
+        without the label are not included. Without a label, every prompt is
+        included at its latest version, matching what ``get(name)`` returns.
 
         Each fetched prompt is stored in the cache, so later
-        ``get(name, label=...)`` calls are served from cache within the TTL.
-        An app with many prompts can call this once per cache cycle instead of
-        making one ``get()`` request per prompt.
+        ``get(name, label=...)`` (or plain ``get(name)``) calls are served
+        from cache within the TTL. An app with many prompts can call this once
+        per cache cycle instead of making one ``get()`` request per prompt.
 
         Args:
-            label: The label to resolve, e.g. 'production'.
+            label: The label to resolve, e.g. 'production'. Omit to fetch
+                latest versions.
 
         Returns:
             Dict of prompt name to PromptResult.
 
         Raises:
-            Exception: If the request fails, or the server does not support
-                fetching prompts by label on the list endpoint (PostHog
-                releases from before September 2026).
+            Exception: If the request fails, or a label was passed and the
+                server does not support fetching prompts by label on the list
+                endpoint (PostHog releases from before September 2026).
         """
         try:
             rows = self._fetch_prompt_list_from_api(label)
         except Exception as error:
             self._maybe_capture_error(error, name="*", version=None, label=label)
             raise
+
+        reference = _prompt_list_reference(label)
 
         # Validate every row before caching any, so a rejected batch leaves
         # the cache untouched.
@@ -398,12 +412,16 @@ class Prompts:
         for row in rows:
             if not _is_prompt_api_response(row):
                 invalid_error = Exception(
-                    f'[PostHog Prompts] Invalid response format for prompts with label "{label}"'
+                    f"[PostHog Prompts] Invalid response format for {reference}"
                 )
                 self._maybe_capture_error(
                     invalid_error, name="*", version=None, label=label
                 )
                 raise invalid_error
+
+            if label is None:
+                resolved_rows.append(row)
+                continue
 
             label_state = _row_label_state(row, label)
             if label_state == "absent":
@@ -425,7 +443,7 @@ class Prompts:
                 continue
             resolved_rows.append(row)
 
-        if rows and not resolved_rows:
+        if label is not None and rows and not resolved_rows:
             # Every returned row was skipped as moved. One moved label is a
             # mid-request race, but all of them means the server most likely
             # ignored the label param and served latest versions.
@@ -655,26 +673,32 @@ class Prompts:
                 "Please provide it when initializing the Prompts instance."
             )
 
-    def _fetch_prompt_list_from_api(self, label: str) -> List[Dict[str, Any]]:
+    def _fetch_prompt_list_from_api(self, label: Optional[str]) -> List[Dict[str, Any]]:
         """
-        Fetch all prompts at a label from the paginated list endpoint.
+        Fetch all prompts from the paginated list endpoint.
 
         Endpoint:
             {host}/api/environments/@current/llm_prompts/
-            ?token={encoded_project_api_key}&label={label}&content=full
+            ?token={encoded_project_api_key}[&label={label}]&content=full
         Auth: Bearer {personal_api_key}
+
+        Without a label the endpoint serves the latest version of every
+        prompt; the param must then be omitted entirely, because a literal
+        ``label=None`` filters by a label named "None".
 
         Follows pagination links until the last page. Returns the raw rows.
         """
         self._require_credentials()
 
-        query = urllib.parse.urlencode(
-            {"token": self._project_api_key, "label": label, "content": "full"}
-        )
+        params: Dict[str, str] = {"token": self._project_api_key}
+        if label is not None:
+            params["label"] = label
+        params["content"] = "full"
+        query = urllib.parse.urlencode(params)
         url: Optional[str] = (
             f"{self._host}/api/environments/@current/llm_prompts/?{query}"
         )
-        reference = f'prompts with label "{label}"'
+        reference = _prompt_list_reference(label)
         headers = {
             "Authorization": f"Bearer {self._personal_api_key}",
             "User-Agent": USER_AGENT,
