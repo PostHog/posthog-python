@@ -25,7 +25,6 @@ from ._sanitize import (
 log = logging.getLogger("posthog")
 
 _READ_ONLY_ID_KEYS = ("trace_id", "span_id", "parent_span_id")
-_REQUIRED_KEYS = ("name", "kind", "start_time_ns", "end_time_ns")
 
 
 def run_before_span_send(
@@ -47,12 +46,15 @@ def run_before_span_send(
         for hook in config.before_span_send:
             result: Any = hook(data)
             if result is None:
-                drops.record(1, "before_span_send dropped it")
+                # The documented way to filter, so not a drop worth warning about.
+                log.debug("before_span_send dropped the span")
+                return None
+            if inspect.iscoroutine(result):
+                # Not awaited; closed so it does not warn.
+                result.close()
+                drops.record(1, "before_span_send is async, which is not supported")
                 return None
             if not isinstance(result, Mapping):
-                if inspect.iscoroutine(result):
-                    # An async hook is not awaited; closed so it does not warn.
-                    result.close()
                 log.debug(
                     "before_span_send did not return a span dict; dropping the span"
                 )
@@ -72,13 +74,13 @@ def run_before_span_send(
             MAX_ATTRIBUTES_PER_EVENT,
             config.max_attribute_value_length,
             keys_before_hook,
+            record.attributes,
         )
         return rebuilt
     except Exception:
-        log.debug(
-            "before_span_send failed; dropping the span rather than exporting it "
-            "unscrubbed",
-            exc_info=True,
+        drops.warn_failure(
+            "before_span_send raised; dropping the span rather than exporting it "
+            "unscrubbed"
         )
         drops.record(1, "before_span_send failed")
         return None
@@ -127,21 +129,18 @@ def _rebuild(
     """A span record from what the chain returned, sanitized as ``end()`` would.
 
     ``None`` when it is not a span dict, rather than exporting a span of
-    fallbacks joinable to nothing.
+    fallbacks joinable to nothing. A field the hook left out or made unusable
+    keeps the original's value.
     """
     attributes = data.get("attributes")
     events = data.get("events")
-    if (
-        not isinstance(attributes, Mapping)
-        or not isinstance(events, (list, tuple))
-        or any(key not in data for key in _REQUIRED_KEYS)
-    ):
+    if not isinstance(attributes, Mapping) or not isinstance(events, (list, tuple)):
         return None
 
     max_length = config.max_attribute_value_length
-    start_ns = _valid_ns(data["start_time_ns"], record.start_ns)
-    end_ns = clamp_end_ns(_valid_ns(data["end_time_ns"], record.end_ns), start_ns)
-    kind = data["kind"]
+    start_ns = _valid_ns(data.get("start_time_ns"), record.start_ns)
+    end_ns = clamp_end_ns(_valid_ns(data.get("end_time_ns"), record.end_ns), start_ns)
+    kind = data.get("kind")
 
     rebuilt_events = []
     for event in events:
@@ -175,7 +174,7 @@ def _rebuild(
         dropped_attributes_count=record.dropped_attributes_count,
         dropped_events_count=record.dropped_events_count,
         auto_attribute_keys=record.auto_attribute_keys,
-        name=sanitize_name(data["name"], "Span name", max_length),
+        name=sanitize_name(data.get("name", record.name), "Span name", max_length),
         kind=kind if isinstance(kind, str) else record.kind,
         status=_hook_status(data.get("status"), record.status),
         attributes=copy_user_attributes({}, attributes),

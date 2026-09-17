@@ -633,14 +633,13 @@ class TestLimitsReachTheExport:
 
 class TestBeforeSpanSend:
     def test_a_hook_returning_none_drops_the_span_quietly(self, caplog):
-        caplog.set_level("WARNING", logger="posthog")
+        caplog.set_level("DEBUG", logger="posthog")
         pipeline, _, _ = make(before_span_send=lambda span: None)
         pipeline.start_span("a").end()
+        pipeline.close()
         assert queued(pipeline) == []
-        assert any(
-            "Dropping 1 span(s): before_span_send dropped it" in r.getMessage()
-            for r in caplog.records
-        )
+        assert not [r for r in caplog.records if r.levelname == "WARNING"]
+        assert "before_span_send dropped the span" in caplog.text
 
     def test_a_raising_hook_drops_the_span_rather_than_exporting_it(self, caplog):
         caplog.set_level("WARNING", logger="posthog")
@@ -652,6 +651,34 @@ class TestBeforeSpanSend:
         pipeline.start_span("a", attributes={"password": "hunter2"}).end()
         assert queued(pipeline) == []
         assert any("before_span_send failed" in r.getMessage() for r in caplog.records)
+
+    def test_a_raising_hook_warns_with_its_traceback_once_per_interval(
+        self, caplog, clock
+    ):
+        caplog.set_level("WARNING", logger="posthog")
+
+        def broken(span):
+            raise RuntimeError("scrubber bug")
+
+        pipeline, _, _ = make(before_span_send=broken, flush_interval=5)
+        for _ in range(3):
+            pipeline.start_span("a").end()
+        clock["now"] += 6
+        pipeline.start_span("a").end()
+        warned = [r for r in caplog.records if "before_span_send raised" in r.message]
+        assert len(warned) == 2
+        assert "RuntimeError: scrubber bug" in caplog.text
+
+    def test_an_async_hook_is_named_as_unsupported(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+
+        async def hook(span):
+            return span
+
+        pipeline, _, _ = make(before_span_send=hook)
+        pipeline.start_span("a").end()
+        pipeline.close()
+        assert "before_span_send is async, which is not supported" in caplog.text
 
     def test_the_hook_sees_plain_values_not_the_wire_encoding(self):
         seen = {}
@@ -982,13 +1009,22 @@ class TestBeforeSpanSendBounds:
         span.end()
         assert queued(pipeline)[0].events[0].dropped_attributes_count == 2
 
-    def test_drops_a_dict_missing_a_required_key(self, caplog):
+    def test_a_field_the_hook_leaves_out_keeps_the_originals_value(self):
+        def allowlist(span):
+            return {"attributes": {"kept": 1}, "events": []}
+
+        pipeline, _, _ = make(before_span_send=allowlist)
+        pipeline.start_span("a", kind="server").end()
+        record = queued(pipeline)[0]
+        assert record.name == "a"
+        assert record.kind == "server"
+        assert record.start_ns <= record.end_ns
+        assert record.attributes == {"kept": 1}
+
+    def test_drops_a_dict_without_attributes_and_events(self, caplog):
         caplog.set_level("WARNING", logger="posthog")
-
-        def incomplete(span):
-            return {"attributes": {}, "events": []}
-
-        pipeline, _, _ = make(before_span_send=incomplete)
+        pipeline, _, _ = make(before_span_send=lambda span: {"name": "x"})
         pipeline.start_span("a").end()
+        pipeline.close()
         assert queued(pipeline) == []
-        assert any("unusable record" in r.getMessage() for r in caplog.records)
+        assert "unusable record" in caplog.text

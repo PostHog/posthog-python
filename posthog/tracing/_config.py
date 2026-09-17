@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, field, fields
 from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from ..types import BeforeSpanSendCallback
 from ._sanitize import attribute_key
 
 log = logging.getLogger("posthog")
@@ -47,7 +48,7 @@ class ResolvedTracesConfig:
     max_attributes_per_span: int = DEFAULT_MAX_ATTRIBUTES_PER_SPAN
     max_events_per_span: int = DEFAULT_MAX_EVENTS_PER_SPAN
     max_attribute_value_length: int = DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
-    before_span_send: Tuple[Callable[[dict], Optional[dict]], ...] = ()
+    before_span_send: Tuple[BeforeSpanSendCallback, ...] = ()
 
 
 _KNOWN_KEYS = frozenset(field.name for field in fields(ResolvedTracesConfig))
