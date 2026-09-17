@@ -1,5 +1,11 @@
 # posthog
 
+## 7.54.2 — 2026-09-17
+
+### Patch changes
+
+- [79fcb12](https://github.com/posthog/posthog-python/commit/79fcb12a1a7a5e4d410672eb7428c2e91682101f) MCP virtual tools now use conversation IDs when `enable_conversation_id` is enabled. — Thanks @gesh!
+
 ## 7.54.1 — 2026-09-17
 
 ### Patch changes
