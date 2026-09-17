@@ -21,6 +21,7 @@ from posthog.tracing._otlp import (
     span_kind_to_otlp,
     to_any_value,
     to_key_value_list,
+    to_resource_key_value_list,
 )
 from posthog.tracing._sanitize import UNSERIALIZABLE_VALUE
 from posthog.version import VERSION
@@ -163,6 +164,21 @@ class TestToAnyValue:
 
 
 class TestToKeyValueList:
+    def test_counts_the_entries_the_budget_cuts(self):
+        huge = [list(range(1000))] * 20
+        span = build_otlp_span(
+            record(attributes={"huge": huge, "posthogDistinctId": "u", "n": None})
+        )
+        assert [kv["key"] for kv in span["attributes"]] == ["huge"]
+        assert span["droppedAttributesCount"] == 1
+
+    def test_counts_event_attributes_the_budget_cuts(self):
+        huge = [list(range(1000))] * 20
+        span = build_otlp_span(
+            record(events=[SpanEventRecord("e", 1, {"huge": huge, "after": 1})])
+        )
+        assert span["events"][0]["droppedAttributesCount"] == 1
+
     def test_drops_none_values_and_empty_keys(self):
         assert to_key_value_list({"": 1, "a": None, "b": 2}) == [
             {"key": "b", "value": {"intValue": "2"}}
@@ -396,7 +412,7 @@ class TestResourceAttributes:
         attrs = build_resource_attributes(
             "api", "1.2.3", "prod", {"huge": [list(range(1000))] * 20, "os.name": "x"}
         )
-        payload = build_traces_payload([], attrs)
+        payload = build_traces_payload([], to_resource_key_value_list(attrs))
         keys = [
             kv["key"] for kv in payload["resourceSpans"][0]["resource"]["attributes"]
         ]
@@ -419,7 +435,9 @@ class TestResourceAttributes:
 class TestBuildTracesPayload:
     def test_produces_one_resource_one_scope_n_spans(self):
         spans = [build_otlp_span(record()) for _ in range(20)]
-        payload = build_traces_payload(spans, {"service.name": "api"})
+        payload = build_traces_payload(
+            spans, to_resource_key_value_list({"service.name": "api"})
+        )
         assert len(payload["resourceSpans"]) == 1
         assert len(payload["resourceSpans"][0]["scopeSpans"]) == 1
         assert len(payload["resourceSpans"][0]["scopeSpans"][0]["spans"]) == 20
@@ -454,7 +472,9 @@ class TestBuildTracesPayload:
                     )
                 )
             ],
-            {"service.name": "checkout-api", "telemetry.sdk.name": "posthog-python"},
+            to_resource_key_value_list(
+                {"service.name": "checkout-api", "telemetry.sdk.name": "posthog-python"}
+            ),
         )
 
         scope = payload["resourceSpans"][0]["scopeSpans"][0]["scope"]

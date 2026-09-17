@@ -11,7 +11,7 @@ import math
 import platform
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from ..version import VERSION
 from ._sanitize import FUNCTION_VALUE, UNSERIALIZABLE_VALUE, attribute_key, safe_str
@@ -108,12 +108,18 @@ def to_any_value(value: Any) -> dict:
         return {"stringValue": UNSERIALIZABLE_VALUE}
 
 
-def to_key_value_list(attributes: Any) -> list:
-    """Encode an attribute mapping as an OTLP ``KeyValue`` list; ``None`` values are dropped."""
+def encode_attributes(attributes: Any) -> Tuple[list, int]:
+    """An attribute mapping as an OTLP ``KeyValue`` list, and how many entries
+    the encoder's budget cut. ``None`` values are dropped and not counted."""
     try:
         return _encode_key_value_list(attributes, _EncodeState(), 0)
     except Exception:
-        return []
+        return [], 0
+
+
+def to_key_value_list(attributes: Any) -> list:
+    """Encode an attribute mapping as an OTLP ``KeyValue`` list; ``None`` values are dropped."""
+    return encode_attributes(attributes)[0]
 
 
 def _encode(value: Any, state: _EncodeState, depth: int) -> dict:
@@ -154,7 +160,7 @@ def _encode(value: Any, state: _EncodeState, depth: int) -> dict:
             if isinstance(value, Mapping):
                 return {
                     "kvlistValue": {
-                        "values": _encode_key_value_list(value, state, depth + 1)
+                        "values": _encode_key_value_list(value, state, depth + 1)[0]
                     }
                 }
             return {"arrayValue": {"values": _encode_array(value, state, depth + 1)}}
@@ -187,11 +193,14 @@ def _encode_array(values: Any, state: _EncodeState, depth: int) -> list:
     return result
 
 
-def _encode_key_value_list(attributes: Any, state: _EncodeState, depth: int) -> list:
+def _encode_key_value_list(
+    attributes: Any, state: _EncodeState, depth: int
+) -> Tuple[list, int]:
     result: list = []
     if not isinstance(attributes, Mapping):
-        return result
-    for key in list(attributes.keys()):
+        return result, 0
+    keys = list(attributes.keys())
+    for index, key in enumerate(keys):
         key_str = attribute_key(key)
         if key_str is None:
             continue
@@ -200,7 +209,7 @@ def _encode_key_value_list(attributes: Any, state: _EncodeState, depth: int) -> 
             continue
         if len(result) >= MAX_VALUE_ITEMS or state.remaining_nodes <= 0:
             log.debug("Attributes truncated: the value exceeds the OTLP encoder budget")
-            break
+            return result, _emittable_count(attributes, keys[index:])
         try:
             value = attributes[key]
             if value is None:
@@ -215,7 +224,23 @@ def _encode_key_value_list(attributes: Any, state: _EncodeState, depth: int) -> 
                     "value": {"stringValue": UNSERIALIZABLE_VALUE},
                 }
             )
-    return result
+    return result, 0
+
+
+def _emittable_count(attributes: Mapping, keys: List[Any]) -> int:
+    """How many of ``keys`` the encoder would have emitted: a non-empty key with a value."""
+    count = 0
+    for key in keys:
+        key_str = attribute_key(key)
+        if not key_str:
+            continue
+        try:
+            if attributes[key] is None:
+                continue
+        except Exception:
+            pass
+        count += 1
+    return count
 
 
 def span_kind_to_otlp(kind: Any) -> int:
@@ -242,9 +267,11 @@ def _to_otlp_event(event: SpanEventRecord) -> dict:
         "timeUnixNano": str(event.timestamp_ns),
     }
     if event.attributes:
-        attributes = to_key_value_list(event.attributes)
+        attributes, cut = encode_attributes(event.attributes)
         if attributes:
             encoded["attributes"] = attributes
+        if cut:
+            encoded["droppedAttributesCount"] = cut
     return encoded
 
 
@@ -262,9 +289,11 @@ def build_otlp_span(record: SpanRecord) -> dict:
         span["parentSpanId"] = record.parent_span_id
     if record.trace_state:
         span["traceState"] = wire_string(record.trace_state)
-    attributes = to_key_value_list(record.attributes)
+    attributes, cut = encode_attributes(record.attributes)
     if attributes:
         span["attributes"] = attributes
+    if cut:
+        span["droppedAttributesCount"] = cut
     if record.events:
         span["events"] = [_to_otlp_event(event) for event in record.events]
     if record.status is not None and record.status.code in SPAN_STATUS_TO_OTLP:
@@ -275,14 +304,16 @@ def build_otlp_span(record: SpanRecord) -> dict:
     return span
 
 
-def build_traces_payload(spans: List[dict], resource_attributes: Mapping) -> dict:
-    """Wrap spans in the OTLP envelope: one resource, one scope, N spans per batch."""
+def build_traces_payload(spans: List[dict], resource: list) -> dict:
+    """Wrap spans in the OTLP envelope: one resource, one scope, N spans per batch.
+
+    ``resource`` is the ``to_resource_key_value_list`` output, encoded once by
+    the caller since it is the same for every batch.
+    """
     return {
         "resourceSpans": [
             {
-                "resource": {
-                    "attributes": to_resource_key_value_list(resource_attributes)
-                },
+                "resource": {"attributes": resource},
                 "scopeSpans": [
                     {
                         "scope": {"name": SCOPE_NAME, "version": VERSION},
