@@ -325,17 +325,26 @@ class TestPromptsGet(TestPrompts):
         warning_call = mock_log.warning.call_args
         self.assertIn("using stale cache", warning_call[0][0])
 
+    @parameterized.expand(
+        [
+            # The Retry-After cooldown (300s) outlives the 60s default, so the
+            # holds after second 1460 prove the server's value governs.
+            ("server_error", 500, None, 60.0),
+            ("rate_limited_retry_after", 429, {"Retry-After": "300"}, 300.0),
+        ]
+    )
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.time.time")
-    def test_hold_a_cooldown_after_a_failed_refetch_then_retry(
-        self, mock_time, mock_get_session
+    def test_hold_a_cooldown_after_each_failed_refetch(
+        self, _scenario, status, headers, cooldown, mock_time, mock_get_session
     ):
         # Without the cooldown, one throttled client turns every later get()
         # into another network request until one succeeds.
         mock_get = mock_get_session.return_value.get
         mock_get.side_effect = [
             MockResponse(json_data=self.mock_prompt_response),
-            MockResponse(status_code=500, ok=False),
+            MockResponse(status_code=status, ok=False, headers=headers),
+            MockResponse(status_code=status, ok=False, headers=headers),
             MockResponse(json_data=self.mock_prompt_response),
         ]
         mock_time.return_value = 1000.0
@@ -343,57 +352,35 @@ class TestPromptsGet(TestPrompts):
         prompts = Prompts(self.create_mock_posthog())
         prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=False)
 
-        # Past TTL: the refetch fails, stale cache is served, cooldown starts.
+        # Past TTL: the refetch fails, stale cache is served, a cooldown starts.
         mock_time.return_value = 1400.0
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "stale_cache")
         self.assertEqual(mock_get.call_count, 2)
 
-        # Within the 60s cooldown: stale cache again, no network attempt.
-        mock_time.return_value = 1430.0
+        # Within the cooldown: stale cache again, no network attempt.
+        mock_time.return_value = 1400.0 + cooldown - 1
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "stale_cache")
         self.assertEqual(mock_get.call_count, 2)
 
-        # Past the cooldown: the network is retried and the cache refreshed.
-        mock_time.return_value = 1470.0
-        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
-        self.assertEqual(result.source, "api")
-        self.assertEqual(mock_get.call_count, 3)
-
-    @patch("posthog.ai.prompts._get_session")
-    @patch("posthog.ai.prompts.time.time")
-    def test_hold_the_cooldown_for_the_retry_after_a_429_sends(
-        self, mock_time, mock_get_session
-    ):
-        # A rate-limited client must wait as long as the server told it to,
-        # not the 60s default.
-        mock_get = mock_get_session.return_value.get
-        mock_get.side_effect = [
-            MockResponse(json_data=self.mock_prompt_response),
-            MockResponse(status_code=429, ok=False, headers={"Retry-After": "300"}),
-            MockResponse(json_data=self.mock_prompt_response),
-        ]
-        mock_time.return_value = 1000.0
-
-        prompts = Prompts(self.create_mock_posthog())
-        prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=False)
-
-        mock_time.return_value = 1400.0
+        # Past the cooldown: the retry fails too and a new cooldown starts.
+        mock_time.return_value = 1400.0 + cooldown + 1
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(mock_get.call_count, 3)
 
-        # Past the 60s default but within Retry-After: no network attempt.
-        mock_time.return_value = 1600.0
+        # Within the second cooldown: no network attempt.
+        mock_time.return_value = 1400.0 + 2 * cooldown
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "stale_cache")
-        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_count, 3)
 
-        # Past Retry-After: the network is retried.
-        mock_time.return_value = 1701.0
+        # Past the second cooldown: the network is retried and the cache refreshed.
+        mock_time.return_value = 1400.0 + 2 * cooldown + 2
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "api")
-        self.assertEqual(mock_get.call_count, 3)
+        self.assertEqual(mock_get.call_count, 4)
 
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.log")
@@ -618,6 +605,18 @@ class TestPromptsGet(TestPrompts):
         # No time has passed, and a TTL of 0 still means every read refetches.
         prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 2)
+
+        # A failed refetch must not start a cooldown here: a zero TTL is an
+        # explicit request to refetch on every read.
+        mock_get.side_effect = [
+            MockResponse(status_code=500, ok=False),
+            MockResponse(json_data=self.mock_prompt_response),
+        ]
+        result = prompts.get("test-prompt", with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        result = prompts.get("test-prompt", with_metadata=True)
+        self.assertEqual(result.source, "api")
+        self.assertEqual(mock_get.call_count, 4)
 
     @patch("posthog.ai.prompts._get_session")
     def test_url_encode_prompt_names_with_special_characters(self, mock_get_session):

@@ -14,6 +14,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union, overload
 
+from posthog.capture_v1 import _parse_retry_after
 from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
 
@@ -160,14 +161,9 @@ def _is_same_origin(url: str, host: str) -> bool:
 
 
 def _parse_retry_after_seconds(value: Optional[str]) -> Optional[float]:
-    """Read a Retry-After header of the delta-seconds form the API sends."""
-    if not value:
-        return None
-    try:
-        seconds = float(value.strip())
-    except ValueError:
-        return None
-    if not math.isfinite(seconds) or seconds <= 0:
+    """Read a Retry-After header (delta-seconds or HTTP-date) as a bounded cooldown."""
+    seconds = _parse_retry_after(value)
+    if seconds is None or not math.isfinite(seconds) or seconds <= 0:
         return None
     return min(seconds, MAX_REFETCH_COOLDOWN_SECONDS)
 
@@ -554,8 +550,13 @@ class Prompts:
 
             # A failed refetch left this entry in cooldown. Serving it keeps one
             # throttled client from turning every later get() into another
-            # request, which is what holds it against the limit.
-            if cached.retry_not_before is not None and now < cached.retry_not_before:
+            # request, which is what holds it against the limit. A zero TTL is
+            # an explicit request to refetch on every read, so it opts out.
+            if (
+                ttl > 0
+                and cached.retry_not_before is not None
+                and now < cached.retry_not_before
+            ):
                 return PromptResult(
                     source="stale_cache",
                     prompt=cached.prompt,
