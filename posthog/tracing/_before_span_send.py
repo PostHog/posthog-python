@@ -74,7 +74,6 @@ def run_before_span_send(
             MAX_ATTRIBUTES_PER_EVENT,
             config.max_attribute_value_length,
             keys_before_hook,
-            record.attributes,
         )
         return rebuilt
     except Exception:

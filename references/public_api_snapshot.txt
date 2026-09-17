@@ -888,6 +888,7 @@ attribute posthog.send = True
 attribute posthog.super_properties = None
 attribute posthog.sync_mode = False
 attribute posthog.types.BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
+attribute posthog.types.BeforeSpanSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.FeatureFlag.enabled: bool
 attribute posthog.types.FeatureFlag.key: str
 attribute posthog.types.FeatureFlag.metadata: Union[FlagMetadata, LegacyFlagMetadata]

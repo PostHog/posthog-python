@@ -163,11 +163,12 @@ def apply_span_limits(
     max_attributes_per_event: int,
     max_length: int,
     keys_before_hook: Sequence[str] = (),
-    bounded_before_hook: Mapping[str, Any] = {},
 ) -> None:
     """Re-apply the per-span caps after a ``before_span_send`` hook, which
     bypasses the span's own writer. Counts add to what the span already dropped.
-    A value still the object the span bounded at write time is not walked again."""
+
+    Every container is walked again: the hook holds the same nested objects
+    the span stored, so one it grew in place has the same identity."""
     attributes: Dict[str, Any] = {}
     kept = 0
     dropped_attributes = 0
@@ -180,10 +181,7 @@ def apply_span_limits(
                 dropped_attributes += 1
                 continue
             kept += 1
-        if bounded_before_hook.get(key) is value:
-            attributes[key] = value
-        else:
-            attributes[key] = truncate_attribute_value(value, max_length)
+        attributes[key] = truncate_attribute_value(value, max_length)
     record.attributes = attributes
     if dropped_attributes:
         record.dropped_attributes_count = (

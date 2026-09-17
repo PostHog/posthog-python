@@ -186,20 +186,12 @@ class TestWalkBounds:
 
 
 class TestApplySpanLimits:
-    def test_walks_only_values_the_hook_changed(self):
-        untouched = ["already", "bounded"]
-        record = SpanRecord(
-            "t", "s", "n", 1, 2, attributes={"same": untouched, "new": "x" * 9}
-        )
-        with mock.patch.object(
-            limits_module, "truncate_attribute_value", wraps=truncate_attribute_value
-        ) as walk:
-            apply_span_limits(
-                record, frozenset(), 128, 128, 128, 8, (), {"same": untouched}
-            )
-        assert walk.call_args_list == [mock.call("x" * 9, 8)]
-        assert record.attributes["same"] is untouched
-        assert record.attributes["new"] == "x" * 8
+    def test_rebounds_a_container_the_hook_grew_in_place(self):
+        grown = ["x" * 3]
+        record = SpanRecord("t", "s", "n", 1, 2, attributes={"k": grown})
+        grown.append("y" * 20)
+        apply_span_limits(record, frozenset(), 128, 128, 128, 8)
+        assert record.attributes["k"] == ["xxx", "y" * 8]
 
     def test_an_empty_key_spends_no_slot(self):
         record = SpanRecord("t", "s", "n", 1, 2, attributes={"": 1, "a": 2, "b": 3})
