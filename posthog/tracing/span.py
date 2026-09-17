@@ -12,7 +12,10 @@ class Span:
     Every method is safe to call on any handle, including after ``end()`` and
     on the inert handles returned when tracing is off, so calling code never
     branches on whether tracing is running. Entering a handle (``with span:``)
-    makes it the active span for the block and ends it on exit.
+    makes it the active span for the block and ends it on exit, recording an
+    ``Exception`` raised inside it. A ``BaseException`` that is not an
+    ``Exception`` (``GeneratorExit``, ``CancelledError``, ``KeyboardInterrupt``)
+    still ends the span but is not recorded as a failure.
     """
 
     def set_attribute(self, key: str, value: Any) -> "Span":
@@ -65,7 +68,7 @@ class Span:
         """Set the span status to ``"ok"`` or ``"error"``. Ignored after ``end()``.
 
         Unset by default. Any other ``code`` is ignored. ``ok`` is final for the
-        scoped form: an exception raised inside ``with span:`` does not override
+        scoped form: an ``Exception`` raised inside ``with span:`` does not override
         it. Returns the span, so calls chain.
 
         Examples:
@@ -80,8 +83,8 @@ class Span:
 
         Ignored after ``end()``. The event carries ``exception.type`` and
         ``exception.message``. Returns the span, so calls chain. Inside
-        ``with span:`` a raised exception is recorded automatically, so this
-        is for exceptions that are caught and handled.
+        ``with span:`` a raised ``Exception`` is recorded automatically, so
+        this is for exceptions that are caught and handled.
 
         Examples:
             ```python

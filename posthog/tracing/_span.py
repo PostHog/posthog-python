@@ -86,6 +86,10 @@ class _Activatable:
                     continue
                 del self._tokens[index]
                 return
+        log.debug(
+            "Span exited in a context that never entered it; it stays active "
+            "where it was entered"
+        )
 
 
 class PassThroughSpan(_Activatable, NoopSpan):
@@ -299,10 +303,11 @@ class RecordingSpan(_Activatable, Span):
         )
 
     def end(self, end_time: Optional[SpanTimeInput] = None) -> None:
-        if self._ended:
-            log.debug("Ignoring end() on a span that has already ended")
-            return
-        self._ended = True
+        with self._tokens_lock:
+            if self._ended:
+                log.debug("Ignoring end() on a span that has already ended")
+                return
+            self._ended = True
 
         derived = self._now_ns()
         resolved = resolve_supplied_ns(end_time, derived, "end time")
@@ -331,9 +336,11 @@ class RecordingSpan(_Activatable, Span):
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
-        try:
-            if exc is not None and not self._ended:
-                self._record_exception(exc, keep_ok=True)
-            self.end()
-        finally:
-            self._deactivate()
+        # Detached before it ends, so a span started from the on_end path
+        # does not become a child of one that is already over.
+        self._deactivate()
+        # GeneratorExit, CancelledError and the like are control flow, not
+        # failures of the span's work.
+        if isinstance(exc, Exception) and not self._ended:
+            self._record_exception(exc, keep_ok=True)
+        self.end()

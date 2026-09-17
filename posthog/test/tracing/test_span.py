@@ -1,4 +1,5 @@
 import asyncio
+import contextvars
 import gc
 import sys
 import threading
@@ -360,6 +361,32 @@ class TestContextManager:
             "exception.message": "boom",
         }
 
+    @pytest.mark.parametrize(
+        "error", [GeneratorExit(), asyncio.CancelledError(), KeyboardInterrupt()]
+    )
+    def test_ends_without_recording_a_base_exception_that_is_control_flow(self, error):
+        records: list = []
+        with pytest.raises(type(error)):
+            with make_span(records):
+                raise error
+        assert len(records) == 1
+        assert records[0].status is None
+        assert records[0].events == []
+
+    def test_a_closed_generator_holding_a_span_is_not_an_error(self):
+        records: list = []
+
+        def stream():
+            with make_span(records):
+                yield 1
+                yield 2
+
+        consumer = stream()
+        next(consumer)
+        consumer.close()
+        assert len(records) == 1
+        assert records[0].status is None
+
     def test_treats_an_explicit_ok_status_as_final_when_the_block_raises(self):
         records: list = []
         with pytest.raises(ValueError):
@@ -375,6 +402,25 @@ class TestContextManager:
         with pytest.raises(RuntimeError):
             with make_span(active_var=active):
                 raise RuntimeError("x")
+        assert active.get() is None
+
+    def test_is_no_longer_active_when_on_end_runs(self):
+        active: ContextVar = ContextVar("active", default=None)
+        seen: list = []
+        span = make_span(active_var=active, on_end=lambda _: seen.append(active.get()))
+        with span:
+            pass
+        assert seen == [None]
+
+    def test_exiting_in_a_context_that_never_entered_leaves_it_active(self, caplog):
+        active: ContextVar = ContextVar("active", default=None)
+        span = make_span(active_var=active)
+        span.__enter__()
+        with caplog.at_level("DEBUG", logger="posthog"):
+            contextvars.copy_context().run(span.__exit__, None, None, None)
+        assert active.get() is span
+        assert "never entered it" in caplog.text
+        span.__exit__(None, None, None)
         assert active.get() is None
 
     def test_ending_inside_the_block_does_not_double_record(self):
