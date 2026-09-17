@@ -595,7 +595,8 @@ def start_tool_call_lifecycle(
         data.options.enable_conversation_id, arguments
     )
     # A carried session stays stable until the agent supplies its own handle.
-    if minted and (token or mcp_session_id):
+    has_carried_session = token is not None or bool(mcp_session_id)
+    if minted and has_carried_session:
         conversation_id, minted = None, False
     return ToolCallLifecycle(
         data=data,
