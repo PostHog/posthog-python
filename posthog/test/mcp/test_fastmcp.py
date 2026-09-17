@@ -337,7 +337,9 @@ async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
     instrument(
         server,
         client,
-        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+        MCPAnalyticsOptions(
+            report_missing=True, capture_model=False, logger=messages.append
+        ),
     )
 
     original_get_tool = server._tool_manager.get_tool

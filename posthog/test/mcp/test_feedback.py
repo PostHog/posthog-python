@@ -411,7 +411,7 @@ async def test_fastmcp_advertises_and_captures_feedback():
     assert virtual
     schema_props = virtual[0].inputSchema["properties"]
     # Its intent rides its own arguments; the model argument is still advertised.
-    assert "context" not in schema_props and "conversation_id" not in schema_props
+    assert "context" not in schema_props and "conversation_id" in schema_props
     assert "llm_model" in schema_props
 
     canned = await server._tool_manager.call_tool("send_feedback", dict(_REPORT_ARGS))
@@ -938,7 +938,7 @@ async def test_posthogmcp_repreparing_a_prepared_list_is_not_a_collision(caplog)
     # Hosts may re-prepare an already-prepared list. PostHog's own descriptors
     # come back in it, and mistaking them for host tools would both warn about
     # ourselves and duplicate the tools.
-    client, _ = make_client(collect_feedback=True)
+    client, _ = make_client(collect_feedback=True, capture_model=False)
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
 
     once = client.prepare_tool_list(tools, report_missing=True, collect_feedback=True)

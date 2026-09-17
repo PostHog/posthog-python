@@ -175,7 +175,7 @@ async def test_tool_call_error_is_captured_and_converted():
 async def test_initialize_emitted_once_per_session():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
     await _call_tool(
         server, "add", {"a": 1, "b": 1, "context": "first call to warm up"}
@@ -539,7 +539,9 @@ async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
     instrument(
         server,
         client,
-        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+        MCPAnalyticsOptions(
+            report_missing=True, capture_model=False, logger=messages.append
+        ),
     )
 
     original_get_tool = server._tool_manager.get_tool

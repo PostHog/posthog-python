@@ -489,15 +489,18 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     async def handler(ctx: Any, params: Any) -> Any:
         name = params.name
         arguments = dict(params.arguments or {})
-        analytics_owns_model = data.tool_model_parameter_injected.get(name, False)
+        # A raw instance that never served a listing has no ownership answer and
+        # reads the self-reported model anyway; only a listing that proved the
+        # application owns `llm_model` stops it (posthog-js ADR-0011).
+        analytics_owns_model = data.tool_model_parameter_injected.get(name) is not False
         standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
         if standalone is not None:
             version = _requested_tool_version(ctx)
             injected = await _standalone_injected_parameters(
                 standalone, data, name, version
             )
-            analytics_owns_model = injected is not None and "llm_model" in injected
             if injected is not None:
+                analytics_owns_model = "llm_model" in injected
                 call_arguments = {
                     key: value
                     for key, value in arguments.items()

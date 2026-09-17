@@ -227,6 +227,7 @@ async def test_renamed_tool_carries_its_own_intent(enable_conversation_id):
         FakeClient(),
         MCPAnalyticsOptions(
             report_missing=True,
+            capture_model=False,
             missing_capability_tool_name="find_tools",
             enable_conversation_id=enable_conversation_id,
         ),
