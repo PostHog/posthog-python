@@ -142,6 +142,14 @@ class TestTraceparentHeader:
     def test_passes_a_string_through(self):
         assert traceparent_header("x") == "x"
 
+    def test_decodes_a_raw_asgi_header_value_even_inside_a_list(self):
+        assert traceparent_header(b"x") == "x"
+        assert traceparent_header([b"x"]) == "x"
+
+    def test_leaves_undecodable_bytes_for_the_parser_to_reject(self):
+        assert traceparent_header(b"caf\xc3\xa9") == b"caf\xc3\xa9"
+        assert parse_traceparent(traceparent_header(b"caf\xc3\xa9")) is None
+
 
 class TestSanitizeTracestate:
     def test_preserves_a_valid_vendor_list_unchanged(self):

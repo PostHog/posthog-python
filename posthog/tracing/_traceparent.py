@@ -100,12 +100,16 @@ def normalize_traceparent(value: object) -> Optional[str]:
 
 
 def traceparent_header(value: object) -> object:
-    """Unwrap the one-element list a multi-value header API returns.
+    """Unwrap the one-element list a multi-value header API returns, and decode
+    the bytes a raw ASGI scope carries.
 
-    A longer list holds two different inbound values and is left to be rejected.
+    A longer list holds two different inbound values and is left to be rejected,
+    as is a value that is not ASCII.
     """
     if isinstance(value, (list, tuple)) and len(value) == 1:
-        return value[0]
+        value = value[0]
+    if isinstance(value, bytes):
+        return _header_text(value) or value
     return value
 
 
