@@ -1,7 +1,9 @@
 """OTLP/JSON encoding for spans.
 
-Values come from application code, and one the server refuses rejects the whole
-request, so the encoder produces an acceptable payload whatever it is handed.
+Attribute values come from application code, and one the server refuses
+rejects the whole request, so they are encoded to an acceptable payload
+whatever they are. Ids and timestamps are trusted: the span pipeline only
+hands over ones it generated or validated.
 """
 
 import logging
@@ -28,7 +30,7 @@ SPAN_KIND_TO_OTLP = {
 SPAN_STATUS_TO_OTLP = {"ok": 1, "error": 2}
 
 # The W3C trace flags are the low byte; OTel's parent-remoteness bits sit above.
-TRACE_FLAGS_SAMPLED = 0x01
+SAMPLED_FLAG_BIT = 0x01
 SPAN_FLAGS_CONTEXT_HAS_IS_REMOTE = 0x100
 SPAN_FLAGS_CONTEXT_IS_REMOTE = 0x200
 
@@ -226,7 +228,7 @@ def _span_flags(record: SpanRecord) -> int:
     try:
         w3c = int(record.trace_flags, 16) & 0xFF
     except (TypeError, ValueError):
-        w3c = TRACE_FLAGS_SAMPLED
+        w3c = SAMPLED_FLAG_BIT
     return (
         w3c
         | SPAN_FLAGS_CONTEXT_HAS_IS_REMOTE
