@@ -1,5 +1,13 @@
 # posthog
 
+## 7.56.0 — 2026-09-17
+
+### Minor changes
+
+- [8ee7ad1](https://github.com/posthog/posthog-python/commit/8ee7ad16b98427b6f3c3888668eba01f7525ba03) Enable MCP model capture and conversation correlation by default. Advertised tool schemas gain an `llm_model` argument (never enforced at dispatch) and eligible tool results gain a conversation handle; `MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False)` restores the previous shape. Fresh low-level instances now read the self-reported model instead of staying silent.
+  
+  Standalone FastMCP on MCP SDK 1.x skips `llm_model` injection when application middleware can change tool listing or dispatch. Model metadata capture remains enabled; this prevents cold replicas from rejecting injected arguments and preserves replacement tools' own arguments. — Thanks @lucasheriques!
+
 ## 7.55.0 — 2026-09-17
 
 ### Minor changes
