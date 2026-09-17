@@ -2639,10 +2639,13 @@ class Client(object):
                 Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
                 Queued spans are sent at the same time, within the same
                 budget: at least one span request is attempted even when the
-                budget is already spent, no further one starts once it is, and
-                each request is bounded by ``timeout``. The wait for that first
-                request is not cut short, so a flush can take up to
-                ``timeout_seconds`` plus ``timeout`` in the worst case.
+                budget is already spent, a retriable failure is retried after
+                its backoff while budget remains, no other request starts once
+                it is spent, and each request is bounded by ``timeout``. The
+                wait for the last request is not cut short, so a flush can
+                take up to ``timeout_seconds`` plus ``timeout`` in the worst
+                case. A span flush already in flight for the whole wait is
+                left to finish instead.
 
         Examples:
             ```python
@@ -2664,19 +2667,25 @@ class Client(object):
                 for lane in self._lanes:
                     lane.flush(max(0.0, deadline - time.monotonic()))
             if span_flush is not None:
-                # The first span request is exempt from the budget and bounded
-                # only by the request timeout, so the join is not.
-                span_flush.join()
+                # The last span request is bounded only by the request
+                # timeout, so the wait is not.
+                span_flush(None)
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
 
     def _start_span_flush(
         self, timeout_seconds: Optional[float]
-    ) -> Optional[threading.Thread]:
-        """Flush spans alongside the events, so a handler waits one round trip, not two."""
+    ) -> Optional[Callable[[Optional[float]], None]]:
+        """Flush spans alongside the events, so a handler waits one round trip, not two.
+
+        Returns a waiter taking the seconds to wait, or ``None`` when nothing
+        is queued. When no thread can start (interpreter shutdown), the waiter
+        runs the flush on the calling thread, after the caller has flushed the
+        event lanes.
+        """
         traces = self._traces
-        if traces is None:
+        if traces is None or not traces.has_queued_spans():
             return None
 
         def flush_spans() -> None:
@@ -2691,10 +2700,8 @@ class Client(object):
         try:
             flusher.start()
         except RuntimeError:
-            # No new threads at interpreter shutdown; flush on this one.
-            flush_spans()
-            return None
-        return flusher
+            return lambda _seconds: flush_spans()
+        return flusher.join
 
     def _is_consumer_thread(self) -> bool:
         current = threading.current_thread()
@@ -3009,10 +3016,10 @@ class Client(object):
         self._join_span_flush(span_flush, deadline)
 
     def _join_span_flush(
-        self, flusher: Optional[threading.Thread], deadline: float
+        self, waiter: Optional[Callable[[Optional[float]], None]], deadline: float
     ) -> None:
-        if flusher is not None:
-            flusher.join(max(0.0, deadline - time.monotonic()))
+        if waiter is not None:
+            waiter(max(0.0, deadline - time.monotonic()))
         if self._traces is not None:
             # Not close(): an app's own shutdown() hook may still run and send them.
             self._traces.warn_if_queued()

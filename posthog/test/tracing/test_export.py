@@ -10,10 +10,7 @@ from posthog.test.tracing.helpers import (
     FakeSender,
     FakeTimer,
     RealTimer,
-    clock,
-    fake_timers,
     make_traces,
-    no_jitter,
     queued,
 )
 from posthog.tracing import _export as export_module
@@ -22,7 +19,7 @@ from posthog.tracing._export import MAX_RETRIES_PER_BATCH, MAX_RETRY_AFTER_SECON
 from posthog.tracing._span import NOOP_SPAN
 from posthog.tracing._transport import TOO_LARGE_LOCALLY, SendOutcome
 
-__all__ = ["clock", "fake_timers", "no_jitter"]
+pytestmark = pytest.mark.usefixtures("fake_timers", "no_jitter")
 
 
 class TestExport:

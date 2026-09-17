@@ -11,14 +11,12 @@ import posthog
 from posthog import Posthog
 from posthog.client import Client
 from posthog.contexts import identify_context, new_context, set_context_session
-from posthog.test.tracing.helpers import FakeTimer
+from posthog.test.tracing.helpers import SPAN_ID, TRACE_ID
 from posthog.tracing._transport import OK
 from posthog.tracing._span import NOOP_SPAN, RecordingSpan, Span
 from posthog.version import VERSION
 
 FAKE_API_KEY = "phc_test_key"
-TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
-SPAN_ID = "00f067aa0ba902b7"
 
 
 def make_client(**kwargs):
@@ -33,11 +31,15 @@ def mock_session(status_code=200):
     return session
 
 
-@pytest.fixture
-def no_timers():
-    # No background drain racing the test.
-    with mock.patch.object(threading, "Timer", FakeTimer):
-        yield
+def slow_send(requests, delay=0.2):
+    """A sender that records each payload and takes ``delay`` seconds to answer."""
+
+    def send(pipeline_client, payload):
+        requests.append(payload)
+        time.sleep(delay)
+        return OK
+
+    return send
 
 
 @pytest.fixture(autouse=True)
@@ -133,6 +135,14 @@ class TestConfiguration:
             assert client.start_span("x") is NOOP_SPAN
             assert client.start_span("y") is NOOP_SPAN
         assert resolve.call_count == 1
+        client.shutdown()
+
+    def test_a_non_callable_hook_turns_tracing_off(self, caplog):
+        caplog.set_level("ERROR", logger="posthog")
+        client = make_client(traces={"before_span_send": "scrub"})
+        assert client.start_span("x") is NOOP_SPAN
+        assert "Error initializing traces" in caplog.text
+        assert "not callable" in caplog.text
         client.shutdown()
 
     def test_never_starts_a_pipeline_on_a_client_without_traces(self):
@@ -370,19 +380,13 @@ class TestLifecycle:
         client.shutdown()
 
     def test_flush_stops_starting_span_requests_once_its_budget_is_spent(
-        self, no_timers
+        self, fake_timers
     ):
         client = make_client(traces={"max_export_batch_size": 1})
         client.start_span("x").end()
         client.start_span("y").end()
         requests = []
-
-        def slow_send(pipeline_client, payload):
-            requests.append(payload)
-            time.sleep(0.2)
-            return OK
-
-        client._traces._exporter._send = slow_send
+        client._traces._exporter._send = slow_send(requests)
         client.flush(timeout_seconds=0.05)
         assert len(requests) == 1
         assert len(client._traces._exporter._queue) == 1
@@ -404,7 +408,7 @@ class TestLifecycle:
         assert client._traces._exporter._queue == []
         client.shutdown()
 
-    def test_flush_sends_spans_while_events_are_still_draining(self, no_timers):
+    def test_flush_sends_spans_while_events_are_still_draining(self, fake_timers):
         client = make_client(traces={}, sync_mode=False)
         client.start_span("x").end()
         span_sent = threading.Event()
@@ -421,7 +425,7 @@ class TestLifecycle:
         assert overlapped and all(overlapped)
         client.shutdown()
 
-    def test_flush_sends_spans_inline_when_no_thread_can_start(self, no_timers):
+    def test_flush_sends_spans_inline_when_no_thread_can_start(self, fake_timers):
         client = make_client(traces={})
         client.start_span("x").end()
         with mock.patch("posthog.client.threading.Thread") as thread:
@@ -430,6 +434,32 @@ class TestLifecycle:
             )
             payload, _, _ = flush_and_capture(client)
         assert len(spans_from(payload)) == 1
+        client.shutdown()
+
+    def test_flush_starts_no_span_thread_when_nothing_is_queued(self, fake_timers):
+        client = make_client(traces={})
+        client.start_span("x").end()
+        client.flush()
+        with mock.patch("posthog.client.threading.Thread") as thread:
+            client.flush()
+        thread.assert_not_called()
+        client.shutdown()
+
+    def test_exit_flushes_the_lanes_before_an_inline_span_flush(self, fake_timers):
+        client = make_client(traces={}, sync_mode=False)
+        client.start_span("x").end()
+        order = []
+        client._traces.flush = lambda timeout: order.append("spans")
+        for lane in client._lanes:
+            lane.flush = lambda timeout, _lane=lane: order.append("lanes")
+        with (
+            mock.patch("posthog.client.threading.Thread") as thread,
+            mock.patch("posthog.client._atexit_deadline", None),
+        ):
+            thread.return_value.start.side_effect = RuntimeError("no threads")
+            client._atexit()
+        assert order[0] == "lanes"
+        assert order[-1] == "spans"
         client.shutdown()
 
     def test_shutdown_flushes_pending_spans(self):
@@ -444,33 +474,27 @@ class TestLifecycle:
         assert client._traces._exporter._queue == []
 
     def test_shutdown_bounds_the_final_span_flush_and_warns_about_the_rest(
-        self, no_timers, caplog
+        self, fake_timers, caplog
     ):
         caplog.set_level("WARNING", logger="posthog")
         client = make_client(traces={"max_export_batch_size": 1})
         for name in ("a", "b", "c"):
             client.start_span(name).end()
         requests = []
-
-        def slow_send(pipeline_client, payload):
-            requests.append(payload)
-            time.sleep(0.2)
-            return OK
-
-        client._traces._exporter._send = slow_send
+        client._traces._exporter._send = slow_send(requests)
         with mock.patch("posthog.client._TRACES_SHUTDOWN_FLUSH_SECONDS", 0.05):
             client.shutdown()
         assert len(requests) == 1
         assert any("Discarding 2 span(s)" in r.getMessage() for r in caplog.records)
 
-    def test_tracing_is_inert_after_shutdown(self, no_timers):
+    def test_tracing_is_inert_after_shutdown(self, fake_timers):
         client = make_client(traces={})
         client.start_span("before").end()
         client.shutdown()
         assert client.start_span("late") is NOOP_SPAN
         assert client._traces._exporter._flush_timer is None
 
-    def test_shutdown_closes_a_pipeline_still_initializing(self, no_timers):
+    def test_shutdown_closes_a_pipeline_still_initializing(self, fake_timers):
         client = make_client(traces={})
         shutdown = threading.Thread(target=client.shutdown)
         resolve = posthog.client.resolve_traces_config
@@ -488,13 +512,13 @@ class TestLifecycle:
         assert client._traces._closed
         assert client._traces._exporter._flush_timer is None
 
-    def test_tracing_never_starts_after_shutdown(self, no_timers):
+    def test_tracing_never_starts_after_shutdown(self, fake_timers):
         client = make_client(traces={})
         client.shutdown()
         assert client.start_span("late") is NOOP_SPAN
         assert client._traces is None
 
-    def test_exit_drains_spans_the_timer_would_have_sent(self, no_timers):
+    def test_exit_drains_spans_the_timer_would_have_sent(self, fake_timers):
         client = make_client(traces={}, sync_mode=False)
         client.start_span("x").end()
         session = mock_session()
@@ -516,7 +540,7 @@ class TestLifecycle:
         assert session.post.called
 
     def test_exit_flushes_spans_alongside_events_that_use_up_the_budget(
-        self, no_timers
+        self, fake_timers
     ):
         client = make_client(traces={}, sync_mode=False)
         client.start_span("x").end()
@@ -535,7 +559,7 @@ class TestLifecycle:
         assert session.post.called
         client.shutdown()
 
-    def test_exit_does_not_wait_on_a_hung_span_request(self, no_timers, caplog):
+    def test_exit_does_not_wait_on_a_hung_span_request(self, fake_timers, caplog):
         caplog.set_level("WARNING", logger="posthog")
         client = make_client(traces={}, sync_mode=False)
         client.start_span("x").end()
@@ -570,7 +594,7 @@ class TestLifecycle:
         "sync_mode, hook", [(False, "_atexit"), (True, "_atexit_spans")]
     )
     def test_exit_warns_about_spans_it_could_not_send(
-        self, no_timers, caplog, sync_mode, hook
+        self, fake_timers, caplog, sync_mode, hook
     ):
         caplog.set_level("WARNING", logger="posthog")
         client = make_client(traces={}, sync_mode=sync_mode)
@@ -591,17 +615,12 @@ class TestLifecycle:
 
     @pytest.mark.parametrize("sync_mode", [True, False])
     def test_an_app_exit_hook_registered_earlier_still_gets_to_flush_spans(
-        self, no_timers, caplog, sync_mode
+        self, fake_timers, caplog, sync_mode
     ):
         caplog.set_level("WARNING", logger="posthog")
         hooks = []
         holder = {}
         requests = []
-
-        def slow_send(pipeline_client, payload):
-            requests.append(payload)
-            time.sleep(0.2)
-            return OK
 
         with (
             mock.patch("posthog.client.atexit.register", side_effect=hooks.append),
@@ -614,7 +633,7 @@ class TestLifecycle:
                 traces={"max_export_batch_size": 1}, sync_mode=sync_mode
             )
             client.start_span("a").end()
-            client._traces._exporter._send = slow_send
+            client._traces._exporter._send = slow_send(requests)
             client.start_span("b").end()
             client.start_span("c").end()
             assert len(hooks) == 2

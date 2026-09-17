@@ -15,8 +15,6 @@ from posthog.test.tracing.helpers import (
     TRACE_ID,
     FakeSender,
     FakeTimer,
-    clock,
-    fake_timers,
     make,
     make_traces,
     queued,
@@ -28,7 +26,7 @@ from posthog.tracing._drops import DropLog
 from posthog.tracing._span import NOOP_SPAN, PassThroughSpan, RecordingSpan
 from posthog.tracing._transport import SendOutcome
 
-__all__ = ["clock", "fake_timers"]
+pytestmark = pytest.mark.usefixtures("fake_timers", "no_jitter")
 
 
 class TestStartSpan:

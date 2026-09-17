@@ -244,6 +244,10 @@ class SpanExporter:
                 discarded,
             )
 
+    def has_queued(self) -> bool:
+        with self._lock:
+            return bool(self._queue)
+
     def warn_if_queued(self) -> None:
         with self._lock:
             queued = len(self._queue)

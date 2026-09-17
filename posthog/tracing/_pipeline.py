@@ -49,6 +49,8 @@ class Exporter(Protocol):
 
     def warn_if_queued(self) -> None: ...
 
+    def has_queued(self) -> bool: ...
+
     def reinit_after_fork(self) -> None: ...
 
 
@@ -113,6 +115,9 @@ class PostHogTraces:
         """Warn about spans still queued at exit, without discarding them."""
         self._exporter.warn_if_queued()
         self._drops.warn_if_due(force=True)
+
+    def has_queued_spans(self) -> bool:
+        return self._exporter.has_queued()
 
     def reinit_after_fork(self, active_var: ContextVar) -> None:
         # Runs in the forked child before user code; the parent's spans stay
