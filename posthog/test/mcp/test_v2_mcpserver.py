@@ -348,11 +348,17 @@ async def test_mirror_is_skipped_when_no_listing_declared_the_key():
 async def test_report_missing_advertises_and_captures():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, enable_conversation_id=True),
+    )
 
     listed = await _list_tools(server)
     names = [t.name for t in listed.tools]
     assert "get_more_tools" in names
+    virtual = next(t for t in listed.tools if t.name == "get_more_tools")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     result = await _call_tool(
         server, "get_more_tools", {"context": "need a tool to send emails"}
@@ -363,6 +369,8 @@ async def test_report_missing_advertises_and_captures():
     missing = _events(client, "$mcp_missing_capability")
     assert missing
     assert missing[0]["properties"]["$mcp_intent"] == "need a tool to send emails"
+    handle = missing[0]["properties"]["$mcp_conversation_id"]
+    assert handle in result.content[1].text
 
 
 async def test_report_missing_accepts_omitted_arguments():
@@ -404,10 +412,16 @@ async def test_real_get_more_tools_is_not_intercepted():
 async def test_collect_feedback_advertises_and_captures():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, enable_conversation_id=True),
+    )
 
     listed = await _list_tools(server)
     assert "send_feedback" in [t.name for t in listed.tools]
+    virtual = next(t for t in listed.tools if t.name == "send_feedback")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     result = await _call_tool(
         server,
@@ -427,6 +441,8 @@ async def test_collect_feedback_advertises_and_captures():
     assert props["$mcp_feedback_type"] == "missing_capability"
     assert props["$mcp_intent"] == "No email tool.\n\nWanted to notify a teammate."
     assert "$mcp_parameters" not in props
+    handle = props["$mcp_conversation_id"]
+    assert handle in result.content[1].text
     # A send_feedback call is NOT a normal tool call.
     assert _events(client, "$mcp_tool_call") == []
 

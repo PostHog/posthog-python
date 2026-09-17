@@ -478,11 +478,17 @@ async def test_instrument_is_idempotent():
 async def test_report_missing_appends_virtual_tool():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, enable_conversation_id=True),
+    )
 
     result = await _list_tools(server)
     names = [t.name for t in result.tools]
     assert "get_more_tools" in names
+    virtual = next(t for t in result.tools if t.name == "get_more_tools")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     call_result = await _call_tool(
         server, "get_more_tools", {"context": "need an email tool"}
@@ -492,15 +498,23 @@ async def test_report_missing_appends_virtual_tool():
     assert call_result.is_error is False
     missing = _events(client, "$mcp_missing_capability")
     assert missing and missing[0]["properties"]["$mcp_intent"] == "need an email tool"
+    handle = missing[0]["properties"]["$mcp_conversation_id"]
+    assert handle in call_result.content[1].text
 
 
 async def test_collect_feedback_appends_virtual_tool():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, enable_conversation_id=True),
+    )
 
     result = await _list_tools(server)
     assert "send_feedback" in [t.name for t in result.tools]
+    virtual = next(t for t in result.tools if t.name == "send_feedback")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     call_result = await _call_tool(
         server,
@@ -514,6 +528,8 @@ async def test_collect_feedback_appends_virtual_tool():
     assert len(feedback) == 1
     assert feedback[0]["properties"]["$mcp_feedback_type"] == "issue"
     assert "$mcp_parameters" not in feedback[0]["properties"]
+    handle = feedback[0]["properties"]["$mcp_conversation_id"]
+    assert handle in call_result.content[1].text
     assert _events(client, "$mcp_tool_call") == []
 
 

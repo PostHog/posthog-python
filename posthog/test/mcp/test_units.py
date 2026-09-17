@@ -282,21 +282,11 @@ def test_extract_conversation_id():
 
 
 def test_resolve_conversation_id_disabled():
-    assert resolve_conversation_id(False, {}, "t", "get_more_tools") == (None, False)
+    assert resolve_conversation_id(False, {}) == (None, False)
 
 
-def test_resolve_conversation_id_skips_missing_capability_tool():
-    assert resolve_conversation_id(True, {}, "get_more_tools", "get_more_tools") == (
-        None,
-        False,
-    )
-
-
-def test_resolve_conversation_id_mints_for_a_shadowed_virtual_tool_name():
-    # `None` means the virtual tool is disabled or a real application tool owns
-    # the name. Either way the call belongs to that real tool, so it mints and
-    # echoes a handle like any other tool's.
-    cid, minted = resolve_conversation_id(True, {}, "get_more_tools", None)
+def test_resolve_conversation_id_applies_to_virtual_tools():
+    cid, minted = resolve_conversation_id(True, {})
     assert minted is True and cid
 
 
@@ -305,20 +295,19 @@ def test_resolve_conversation_id_uses_supplied_when_mintable_shape():
     # the handle becomes $session_id, so an invented value ("conv-1") must not
     # anchor two unrelated callers to one session (parity with posthog-js).
     handle = "0198d3a7-1111-7222-8333-444455556666"
-    assert resolve_conversation_id(
-        True, {"conversation_id": handle}, "t", "get_more_tools"
-    ) == (handle, False)
+    assert resolve_conversation_id(True, {"conversation_id": handle}) == (
+        handle,
+        False,
+    )
 
 
 def test_resolve_conversation_id_replaces_invented_values():
-    cid, minted = resolve_conversation_id(
-        True, {"conversation_id": "conv-1"}, "t", "get_more_tools"
-    )
+    cid, minted = resolve_conversation_id(True, {"conversation_id": "conv-1"})
     assert minted is True and cid != "conv-1"
 
 
 def test_resolve_conversation_id_mints_when_absent():
-    cid, minted = resolve_conversation_id(True, {}, "t", "get_more_tools")
+    cid, minted = resolve_conversation_id(True, {})
     assert minted is True and isinstance(cid, str) and cid
 
 

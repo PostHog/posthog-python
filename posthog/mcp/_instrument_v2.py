@@ -302,22 +302,22 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and (
             _name_owned_by_real_tool_v2(server, name) is False
         ):
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
-            )
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return mcp_types.CallToolResult(content=virtual_content)
 
         if lifecycle.is_feedback and (
             _name_owned_by_real_tool_v2(server, name) is False
         ):
-            reply = await lifecycle.record_feedback()
-            return mcp_types.CallToolResult(
-                content=[mcp_types.TextContent(type="text", text=reply)]
-            )
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
+            return mcp_types.CallToolResult(content=virtual_content)
 
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never
@@ -526,22 +526,22 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and (
             await raw_listing_owns_tool_name(data, name, ctx) is False
         ):
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
-            )
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return mcp_types.CallToolResult(content=virtual_content)
 
         if lifecycle.is_feedback and (
             await raw_listing_owns_tool_name(data, name, ctx) is False
         ):
-            reply = await lifecycle.record_feedback()
-            return mcp_types.CallToolResult(
-                content=[mcp_types.TextContent(type="text", text=reply)]
-            )
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
+            return mcp_types.CallToolResult(content=virtual_content)
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.

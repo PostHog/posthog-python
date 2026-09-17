@@ -221,8 +221,6 @@ async def test_both_virtual_tools_configured_with_the_same_name():
 
 @pytest.mark.parametrize("enable_conversation_id", [False, True])
 async def test_renamed_tool_carries_its_own_intent(enable_conversation_id):
-    # A virtual tool states its intent in its own `context` argument, so it gets
-    # neither an injected `context` nor a `conversation_id` -- renamed or not.
     server = make_paged_lowlevel([[_ECHO_TOOL]])
     instrument(
         server,
@@ -236,8 +234,38 @@ async def test_renamed_tool_carries_its_own_intent(enable_conversation_id):
 
     page = await _list_page(server)
     virtual = [tool for tool in page.root.tools if tool.name == "find_tools"][0]
-    assert list(virtual.inputSchema["properties"]) == ["context"]
+    expected = {"context", "conversation_id"} if enable_conversation_id else {"context"}
+    assert set(virtual.inputSchema["properties"]) == expected
     assert virtual.inputSchema["required"] == ["context"]
+
+
+async def test_renamed_tool_uses_the_conversation_id():
+    server = make_paged_lowlevel([[_ECHO_TOOL]])
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            report_missing=True,
+            missing_capability_tool_name="find_tools",
+            enable_conversation_id=True,
+        ),
+    )
+    await _list_page(server)
+
+    handle = "0198d3a7-1111-7222-8333-444455556666"
+    await _call(server, "echo", {"msg": "hi", "conversation_id": handle})
+    await _call(
+        server, "find_tools", {"context": "need csv", "conversation_id": handle}
+    )
+    await _flush()
+
+    tool_call = _events(client, "$mcp_tool_call")[0]
+    missing = _events(client, "$mcp_missing_capability")[0]
+    assert missing["properties"]["$mcp_conversation_id"] == handle
+    assert (
+        tool_call["properties"]["$session_id"] == missing["properties"]["$session_id"]
+    )
 
 
 async def test_renamed_tool_is_intercepted_and_the_default_name_is_not():

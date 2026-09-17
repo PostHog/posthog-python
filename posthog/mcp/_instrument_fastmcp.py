@@ -118,14 +118,19 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         if lifecycle.is_missing_capability and (
             _name_owned_by_real_tool(server, name) is False
         ):
-            await lifecycle.record_missing_capability()
-            return [
-                mcp_types.TextContent(type="text", text=get_more_tools_result_text())
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
             ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return virtual_content
 
         if lifecycle.is_feedback and (_name_owned_by_real_tool(server, name) is False):
-            reply = await lifecycle.record_feedback()
-            return [mcp_types.TextContent(type="text", text=reply)]
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            return [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),

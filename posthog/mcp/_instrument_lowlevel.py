@@ -212,14 +212,14 @@ def _wrap_call_tool(
         if lifecycle.is_missing_capability and (
             await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
-            await lifecycle.record_missing_capability()
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
-                    content=[
-                        mcp_types.TextContent(
-                            type="text", text=get_more_tools_result_text()
-                        )
-                    ],
+                    content=virtual_content,
                     isError=False,
                 )
             )
@@ -227,10 +227,14 @@ def _wrap_call_tool(
         if lifecycle.is_feedback and (
             await _name_owned_by_real_tool(high_level, data, name, server) is False
         ):
-            reply = await lifecycle.record_feedback()
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
             return mcp_types.ServerResult(
                 mcp_types.CallToolResult(
-                    content=[mcp_types.TextContent(type="text", text=reply)],
+                    content=virtual_content,
                     isError=False,
                 )
             )
