@@ -2,7 +2,8 @@ import gzip
 import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from unittest import mock
@@ -149,11 +150,10 @@ class TestOutcomes:
         assert outcome == SendOutcome("retry-later", 120.0)
 
     def test_reads_retry_after_http_date(self):
-        outcome, _ = send(
-            session=mock_session(503, {"Retry-After": "Wed, 21 Oct 2099 07:28:00 GMT"})
-        )
+        when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120))
+        outcome, _ = send(session=mock_session(503, {"Retry-After": when}))
         assert outcome.kind == "retry-later"
-        assert outcome.retry_after is not None and outcome.retry_after > 0
+        assert outcome.retry_after is not None and 100 < outcome.retry_after <= 120
 
 
 NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)
@@ -195,13 +195,25 @@ class TestParseRetryAfter:
         outcome, _ = send(session=mock_session(429, {"Retry-After": "10 minutes"}))
         assert outcome == SendOutcome("retry-later", None)
 
-    def test_survives_a_throwing_headers_object(self):
-        response = mock.Mock(status_code=503)
-        response.headers.get.side_effect = RuntimeError("no headers")
-        session = mock.Mock()
-        session.post.return_value = response
-        outcome, _ = send(session=session)
-        assert outcome == SendOutcome("retry-later", None)
+
+class _SizedHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def setup(self):
+        super().setup()
+        self.server.connections += 1
+
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        body = self.server.body
+        self.send_response(self.server.status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
 
 
 class _ChunkedHandler(BaseHTTPRequestHandler):
@@ -230,16 +242,19 @@ class _ChunkedHandler(BaseHTTPRequestHandler):
 def local_server():
     servers = []
 
-    def start(status):
-        server = ThreadingHTTPServer(("127.0.0.1", 0), _ChunkedHandler)
+    def start(status, body=None):
+        handler = _ChunkedHandler if body is None else _SizedHandler
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         server.status = status
+        server.body = body
+        server.connections = 0
         server.stop = threading.Event()
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         servers.append((server, thread))
         return "http://127.0.0.1:{}".format(server.server_port)
 
-    yield start
+    yield servers, start
     for server, thread in servers:
         server.stop.set()
         server.shutdown()
@@ -248,18 +263,48 @@ def local_server():
 
 
 class TestResponseBody:
-    def test_closes_the_response_without_reading_the_body(self):
+    def test_closes_the_response_without_reading_an_unsized_body(self):
         _, session = send()
         assert session.post.call_args[1]["stream"] is True
         assert session.post.return_value.close.called
 
     def test_does_not_wait_for_a_dripping_error_body(self, local_server):
-        client = fake_client(host=local_server(503), timeout=0.5)
+        _, start = local_server
+        client = fake_client(host=start(503), timeout=0.5)
         started = time.monotonic()
         outcome = send_traces_batch(client, PAYLOAD)
         assert outcome == SendOutcome("retry-later", None)
         assert time.monotonic() - started < 2
 
     def test_a_completed_response_is_still_ok(self, local_server):
-        client = fake_client(host=local_server(200), timeout=0.5)
+        _, start = local_server
+        client = fake_client(host=start(200), timeout=0.5)
         assert send_traces_batch(client, PAYLOAD) == SendOutcome("ok")
+
+    def test_drains_a_small_sized_body_so_the_connection_is_reused(self, local_server):
+        servers, start = local_server
+        client = fake_client(host=start(200, body=b"{}"), timeout=2)
+        for _ in range(5):
+            assert send_traces_batch(client, PAYLOAD) == SendOutcome("ok")
+        assert servers[0][0].connections == 1
+
+    def test_leaves_a_large_sized_body_unread(self):
+        response = mock.Mock(
+            status_code=200, headers={"Content-Length": str(64 * 1024 + 1)}
+        )
+        type(response).text = mock.PropertyMock(side_effect=AssertionError("read"))
+        session = mock.Mock()
+        session.post.return_value = response
+        assert send(session=session)[0] == SendOutcome("ok")
+        assert response.close.called
+
+    def test_logs_the_server_error_body_on_a_fatal_status(self, caplog):
+        body = '{"error": "invalid api key"}'
+        response = mock.Mock(
+            status_code=401, headers={"Content-Length": str(len(body))}, text=body
+        )
+        session = mock.Mock()
+        session.post.return_value = response
+        with caplog.at_level("ERROR", logger="posthog"):
+            assert send(session=session)[0] == SendOutcome("fatal")
+        assert 'HTTP 401: {"error": "invalid api key"}' in caplog.text

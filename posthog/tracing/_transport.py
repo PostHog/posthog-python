@@ -8,7 +8,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import requests
 
@@ -26,6 +26,15 @@ OTLP_MAX_BODY_BYTES = 10 * 1024 * 1024
 
 _RETRIABLE_STATUSES = frozenset({408, 429})
 
+# Level 9 costs about twice the CPU of 6 for about 1% fewer bytes.
+_GZIP_LEVEL = 6
+
+# A body this small is read so the pooled connection survives the response;
+# an unread stream is torn down on close, and every batch would then pay a
+# new TCP and TLS handshake.
+_MAX_DRAINED_BODY_BYTES = 64 * 1024
+_LOGGED_BODY_CHARS = 512
+
 _DELTA_SECONDS_RE = re.compile(r"^\d+$")
 _NUMERIC_RE = re.compile(r"^[+-]?[\d.]+$")
 
@@ -34,7 +43,7 @@ _NUMERIC_RE = re.compile(r"^[+-]?[\d.]+$")
 class SendOutcome:
     """How one export attempt went: ``ok``, ``retry-later``, ``too-large`` or ``fatal``."""
 
-    kind: str
+    kind: Literal["ok", "retry-later", "too-large", "fatal"]
     retry_after: Optional[float] = None
     # Too large by the SDK's own measure, so no request was spent (too-large only).
     measured_locally: bool = False
@@ -100,7 +109,7 @@ def send_traces_batch(client: Any, payload: dict) -> SendOutcome:
     try:
         response = _get_session().post(
             url,
-            data=gzip.compress(serialized),
+            data=gzip.compress(serialized, compresslevel=_GZIP_LEVEL),
             headers={
                 "Content-Type": "application/json",
                 "Content-Encoding": "gzip",
@@ -113,26 +122,40 @@ def send_traces_batch(client: Any, payload: dict) -> SendOutcome:
     except requests.exceptions.RequestException as e:
         log.debug("Span batch request failed: %s", e)
         return SendOutcome("retry-later")
-    # Status and headers alone classify the response, so the body is never
-    # read: the timeout bounds read inactivity, and a body that keeps dripping
-    # would otherwise hold the exporter's single flight open indefinitely.
+    # Status and headers classify the response. A body of unknown or large
+    # size is left unread: the timeout bounds read inactivity, and a body that
+    # keeps dripping would otherwise hold the exporter's single flight open.
     try:
-        return _classify(response)
+        return _classify(response, _read_small_body(response))
     finally:
         response.close()
 
 
-def _classify(response: requests.Response) -> SendOutcome:
+def _read_small_body(response: requests.Response) -> Optional[str]:
+    try:
+        length = int(response.headers.get("Content-Length", ""))
+    except (TypeError, ValueError):
+        return None
+    if not 0 <= length <= _MAX_DRAINED_BODY_BYTES:
+        return None
+    try:
+        return response.text
+    except requests.exceptions.RequestException:
+        return None
+
+
+def _classify(response: requests.Response, body: Optional[str]) -> SendOutcome:
     status = response.status_code
     if status < 300:
         return OK
     if status == 413:
         return TOO_LARGE
     if status >= 500 or status in _RETRIABLE_STATUSES:
-        try:
-            retry_after = parse_retry_after(response.headers.get("Retry-After"))
-        except Exception:
-            retry_after = None
-        return SendOutcome("retry-later", retry_after)
-    log.error("Failed to send span batch: HTTP %s", status)
+        return SendOutcome(
+            "retry-later", parse_retry_after(response.headers.get("Retry-After"))
+        )
+    detail = body.strip()[:_LOGGED_BODY_CHARS] if body else ""
+    log.error(
+        "Failed to send span batch: HTTP %s%s", status, ": " + detail if detail else ""
+    )
     return FATAL
