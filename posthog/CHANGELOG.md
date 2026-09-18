@@ -1,5 +1,11 @@
 # posthog
 
+## 7.57.0 — 2026-09-18
+
+### Minor changes
+
+- [f69e670](https://github.com/posthog/posthog-python/commit/f69e6709e38f4e4463fc30a523fe33c2d1837f6c) After a failed prompt refetch, the SDK now serves the stale cached prompt for a cooldown period (60 seconds by default) instead of retrying the network on every `prompts.get()` call. When the failure is a 429, the cooldown follows the `Retry-After` the server sends, capped at one hour. This keeps a rate-limited client from holding itself against the limit. Matches the behavior the JavaScript SDK already has. — Thanks @jurajmajerik!
+
 ## 7.56.0 — 2026-09-17
 
 ### Minor changes
