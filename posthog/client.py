@@ -3429,7 +3429,7 @@ class Client(object):
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
         )
-        flag_value, local_definition_version = self._locally_evaluate_flag(
+        flag_value, snapshot = self._locally_evaluate_flag(
             key,
             distinct_id,
             groups,
@@ -3437,6 +3437,7 @@ class Client(object):
             group_properties,
             device_id,
         )
+        local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_value is not None:
@@ -3444,7 +3445,9 @@ class Client(object):
                 override_match_value if override_match_value is not None else flag_value
             )
             payload = (
-                self._compute_payload_locally(key, lookup_match_value)
+                self._compute_payload_locally(
+                    key, lookup_match_value, _definition_snapshot=snapshot
+                )
                 if lookup_match_value is not None
                 else None
             )
@@ -3456,7 +3459,11 @@ class Client(object):
             cached_flag_result = flag_result
             if override_match_value is not None:
                 cached_flag_result = FeatureFlagResult.from_value_and_payload(
-                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                    key,
+                    flag_value,
+                    self._compute_payload_locally(
+                        key, flag_value, _definition_snapshot=snapshot
+                    ),
                 )
             if self.flag_cache and cached_flag_result:
                 # The cache rejects invalidated generations, including writes
@@ -3689,8 +3696,8 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FlagValue], int]:
-        """Return the local value and the generation of the evaluated snapshot."""
+    ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
+        """Return the local value and its definitions for consistent payload lookup."""
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -3718,7 +3725,7 @@ class Client(object):
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant locally: {e}"
                     )
-        return response, snapshot["flag_definition_version"]
+        return response, snapshot
 
     def get_feature_flag_payload(
         self,
@@ -4009,14 +4016,19 @@ class Client(object):
             )
 
     def _compute_payload_locally(
-        self, key: str, match_value: FlagValue
+        self,
+        key: str,
+        match_value: FlagValue,
+        *,
+        _definition_snapshot: Optional[_LocalEvaluationSnapshot] = None,
     ) -> Optional[str]:
         payload = None
-
-        if self.feature_flags_by_key is None:
-            return payload
-
-        flag_definition = self.feature_flags_by_key.get(key)
+        snapshot = (
+            _definition_snapshot
+            if _definition_snapshot is not None
+            else self._local_evaluation_snapshot()
+        )
+        flag_definition = snapshot["flags_by_key"].get(key)
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
@@ -4437,7 +4449,9 @@ class Client(object):
                         _definition_snapshot=snapshot,
                     )
                     matched_payload = self._compute_payload_locally(
-                        flag["key"], flags[flag["key"]]
+                        flag["key"],
+                        flags[flag["key"]],
+                        _definition_snapshot=snapshot,
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload

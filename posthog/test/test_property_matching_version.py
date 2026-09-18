@@ -249,6 +249,113 @@ def test_in_flight_full_evaluation_keeps_matching_snapshot(client):
     assert evaluate(client) is False
 
 
+@pytest.mark.parametrize("refresh", ["replace", "remove"])
+@pytest.mark.parametrize(
+    "api,override",
+    [
+        ("result", None),
+        ("payload", None),
+        ("payload", False),
+        ("payload", "variant"),
+        ("bulk", None),
+        ("evaluate", None),
+    ],
+)
+def test_in_flight_payload_keeps_matching_snapshot(client, refresh, api, override):
+    original_definitions = definitions(1)
+    original_definitions["flags"] = original_definitions["flags"][:1]
+    original_definitions["flags"][0]["filters"]["payloads"] = {
+        "true": '"original-true"',
+        "false": '"original-false"',
+        "variant": '"original-variant"',
+    }
+    second_flag = deepcopy(original_definitions["flags"][0])
+    second_flag["key"] = "second"
+    original_definitions["flags"].append(second_flag)
+    client._update_flag_state(original_definitions)
+    original_generation = client.flag_definition_version
+
+    refreshed_definitions = deepcopy(original_definitions)
+    refreshed_definitions["property_matching_version"] = 2
+    if refresh == "remove":
+        refreshed_definitions["flags"] = []
+    else:
+        for flag in refreshed_definitions["flags"]:
+            flag["filters"]["payloads"] = {
+                "true": '"replacement-true"',
+                "false": '"replacement-false"',
+                "variant": '"replacement-variant"',
+            }
+
+    compute = client._compute_flag_locally
+    refreshed = False
+
+    def refresh_after_matching(*args, **kwargs):
+        nonlocal refreshed
+        value = compute(*args, **kwargs)
+        if not refreshed:
+            refreshed = True
+            client._update_flag_state(refreshed_definitions)
+        return value
+
+    options = {
+        "person_properties": {"value": "banana"},
+        "only_evaluate_locally": True,
+    }
+    with (
+        mock.patch.object(
+            client, "_compute_flag_locally", side_effect=refresh_after_matching
+        ),
+        mock.patch.object(
+            client.flag_cache,
+            "set_cached_flag",
+            wraps=client.flag_cache.set_cached_flag,
+        ) as cache_write,
+    ):
+        if api == "result":
+            result = client.get_feature_flag_result(
+                "person", "user", send_feature_flag_events=False, **options
+            )
+            assert result.get_value() is True
+            assert result.payload == "original-true"
+        elif api == "payload":
+            payload = client.get_feature_flag_payload(
+                "person", "user", match_value=override, **options
+            )
+            expected = {
+                None: "original-true",
+                False: "original-false",
+                "variant": "original-variant",
+            }
+            assert payload == expected[override]
+        elif api == "bulk":
+            result = client.get_all_flags_and_payloads("user", **options)
+            assert result == {
+                "featureFlags": {"person": True, "second": True},
+                "featureFlagPayloads": {
+                    "person": '"original-true"',
+                    "second": '"original-true"',
+                },
+            }
+        else:
+            result = client.evaluate_flags("user", **options)
+            for key in ("person", "second"):
+                assert result.get_flag(key) is True
+                assert result.get_flag_payload(key) == "original-true"
+
+    assert refreshed
+    assert client.flag_definition_version == original_generation + 1
+    if api in ("result", "payload"):
+        # Overrides affect the requested payload, never the cached evaluated value.
+        cache_write.assert_called_once()
+        cached_result, generation = cache_write.call_args.args[2:]
+        assert cached_result.get_value() is True
+        assert cached_result.payload == "original-true"
+        assert generation == original_generation
+        # Publication invalidated this evaluation before its cache write.
+        assert client.flag_cache.get_stale_cached_flag("user", "person") is None
+
+
 @pytest.mark.parametrize("provider_class", [MockCacheProvider, AsyncMockCacheProvider])
 def test_provider_hydration_version_only_changes_and_older_entries(
     client, provider_class
