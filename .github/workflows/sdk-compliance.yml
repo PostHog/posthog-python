@@ -12,20 +12,37 @@ on:
       - main
 
 jobs:
+  adapter-tests:
+    name: Compliance adapter protocol tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install adapter and test dependencies
+        run: python -m pip install -e . -r sdk_compliance_adapter/requirements.txt pytest pytest-timeout pytest-asyncio
+      - name: Test adapter protocol
+        run: python -m pytest sdk_compliance_adapter/test_adapter.py --timeout=30
+
   compliance:
     name: PostHog SDK compliance tests (capture v0)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@1d6b197ef46758f577f470535bb3d70e37a15fa2 # 1.1.1
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
       adapter-context: "."
-      test-harness-version: "0.10.0"
+      test-harness-version: "1.1.1"
+      continue-on-error: false
       report-name: "sdk-compliance-report-v0"
 
   compliance-v1:
     name: PostHog SDK compliance tests (capture v1)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@03d972e49be84402c491324320b0a0f38c2ddc53
+    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@1d6b197ef46758f577f470535bb3d70e37a15fa2 # 1.1.1
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
       adapter-context: "."
-      test-harness-version: "0.10.0"
+      test-harness-version: "1.1.1"
+      continue-on-error: false
       report-name: "sdk-compliance-report-v1"
