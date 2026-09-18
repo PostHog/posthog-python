@@ -1,14 +1,9 @@
 """Shared fakes for the tracing pipeline and export tests."""
 
 import threading
-import time
 from contextvars import ContextVar
 from types import SimpleNamespace
-from unittest import mock
 
-import pytest
-
-from posthog.tracing import _export as export_module
 from posthog.tracing._config import resolve_traces_config
 from posthog.tracing._drops import DropLog
 from posthog.tracing._export import SpanExporter
@@ -80,29 +75,11 @@ class RecordingExporter:
     def warn_if_queued(self):
         pass
 
+    def has_queued(self):
+        return bool(self.records)
+
     def reinit_after_fork(self):
         self.reinitialized = True
-
-
-@pytest.fixture(autouse=True)
-def fake_timers():
-    FakeTimer.instances = []
-    with mock.patch.object(threading, "Timer", FakeTimer):
-        yield FakeTimer
-
-
-@pytest.fixture(autouse=True)
-def no_jitter():
-    # Backoff delays are asserted exactly; TestJitter covers the spread.
-    with mock.patch.object(export_module, "_draw_jitter", return_value=1.0):
-        yield
-
-
-@pytest.fixture
-def clock():
-    state = {"now": 1000.0}
-    with mock.patch.object(time, "monotonic", lambda: state["now"]):
-        yield state
 
 
 def make(client=None, context=None, **config):

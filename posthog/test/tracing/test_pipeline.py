@@ -1,6 +1,7 @@
 import gc
 import logging
 import threading
+from contextvars import ContextVar
 import time
 import warnings
 import weakref
@@ -14,8 +15,6 @@ from posthog.test.tracing.helpers import (
     TRACE_ID,
     FakeSender,
     FakeTimer,
-    clock,
-    fake_timers,
     make,
     make_traces,
     queued,
@@ -27,7 +26,7 @@ from posthog.tracing._drops import DropLog
 from posthog.tracing._span import NOOP_SPAN, PassThroughSpan, RecordingSpan
 from posthog.tracing._transport import SendOutcome
 
-__all__ = ["clock", "fake_timers"]
+pytestmark = pytest.mark.usefixtures("fake_timers", "no_jitter")
 
 
 class TestStartSpan:
@@ -593,14 +592,14 @@ class TestCloseAndFork:
     def test_a_forked_child_drops_the_parents_live_spans(self):
         pipeline, exporter, _ = make()
         pipeline.start_span("live")
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert pipeline._live_spans == {}
         assert exporter.reinitialized
 
     def test_reinit_after_fork_replaces_locks_without_acquiring_them(self):
         pipeline, _, _ = make()
         pipeline._lock.acquire()
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert not pipeline._lock.locked()
         pipeline.start_span("a").end()
 

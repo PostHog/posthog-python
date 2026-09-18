@@ -1,5 +1,6 @@
 import threading
 import time
+from contextvars import ContextVar
 from types import SimpleNamespace
 from unittest import mock
 
@@ -9,10 +10,7 @@ from posthog.test.tracing.helpers import (
     FakeSender,
     FakeTimer,
     RealTimer,
-    clock,
-    fake_timers,
     make_traces,
-    no_jitter,
     queued,
 )
 from posthog.tracing import _export as export_module
@@ -21,7 +19,7 @@ from posthog.tracing._export import MAX_RETRIES_PER_BATCH, MAX_RETRY_AFTER_SECON
 from posthog.tracing._span import NOOP_SPAN
 from posthog.tracing._transport import TOO_LARGE_LOCALLY, SendOutcome
 
-__all__ = ["clock", "fake_timers", "no_jitter"]
+pytestmark = pytest.mark.usefixtures("fake_timers", "no_jitter")
 
 
 class TestExport:
@@ -940,7 +938,7 @@ class TestCloseAndFork:
         pipeline.start_span("parent-span").end()
         assert queued(pipeline) and pipeline._exporter._flush_timer is not None
         pipeline._exporter._max_export_batch_size = 1
-        pipeline.reinit_after_fork()
+        pipeline.reinit_after_fork(ContextVar("child-active", default=None))
         assert queued(pipeline) == []
         assert pipeline._exporter._flush_timer is None
         assert (
