@@ -113,12 +113,14 @@ packages = [
     "posthog.ai.claude_agent_sdk",
     "posthog.ai.otel",
     "posthog.mcp",
+    "posthog.tracing",
     "posthog.test",
     "posthog.test.ai",
     "posthog.test.ai.openai_agents",
     "posthog.test.ai.claude_agent_sdk",
     "posthog.test.ai.otel",
     "posthog.test.mcp",
+    "posthog.test.tracing",
     "posthog.integrations",
 ]
 
