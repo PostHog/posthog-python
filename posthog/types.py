@@ -4,6 +4,16 @@ from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 
 FlagValue = Union[bool, str]
 
+
+def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
+    if isinstance(raw_payload, str):
+        try:
+            return json.loads(raw_payload)
+        except json.JSONDecodeError:
+            return None
+    return raw_payload
+
+
 # Type alias for the before_send callback function
 # Takes an event dictionary and returns the modified event or None to drop it
 BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
@@ -231,9 +241,7 @@ class FeatureFlagResult:
             key=key,
             enabled=enabled,
             variant=variant,
-            payload=json.loads(payload)
-            if isinstance(payload, str) and payload
-            else payload,
+            payload=_parse_flag_payload(payload),
             reason=None,
         )
 
@@ -271,12 +279,7 @@ class FeatureFlagResult:
             key=details.key,
             enabled=enabled,
             variant=variant,
-            payload=(
-                json.loads(details.metadata.payload)
-                if isinstance(details.metadata.payload, str)
-                and details.metadata.payload
-                else details.metadata.payload
-            ),
+            payload=_parse_flag_payload(details.metadata.payload),
             reason=details.reason.description if details.reason else None,
         )
 
