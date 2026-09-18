@@ -1050,6 +1050,7 @@ class posthog.request.DatetimeSerializer
 class posthog.request.GetResponse(data: Any, etag: Optional[str] = None, not_modified: bool = False)
 class posthog.request.HTTPAdapterWithSocketOptions(*args, socket_options: Optional[SocketOptions] = None, **kwargs)
 class posthog.request.QuotaLimitError 
+class posthog.tracing.span.Span 
 class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata])
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
@@ -1473,6 +1474,15 @@ method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
 method posthog.request.DatetimeSerializer.default(obj: Any)
 method posthog.request.HTTPAdapterWithSocketOptions.init_poolmanager(*args, **kwargs)
+method posthog.tracing.span.Span.add_event(name: str, attributes: Optional[Mapping[str, Any]] = None, timestamp: Union[datetime, float, None] = None) -> Span
+method posthog.tracing.span.Span.end(end_time: Union[datetime, float, None] = None) -> None
+method posthog.tracing.span.Span.record_exception(exception: BaseException) -> Span
+method posthog.tracing.span.Span.set_attribute(key: str, value: Any) -> Span
+method posthog.tracing.span.Span.set_attributes(attributes: Mapping[str, Any]) -> Span
+method posthog.tracing.span.Span.set_status(code: str, message: Optional[str] = None) -> Span
+method posthog.tracing.span.Span.traceparent() -> Optional[str]
+method posthog.tracing.span.Span.tracestate() -> Optional[str]
+method posthog.tracing.span.Span.update_name(name: str) -> Span
 method posthog.types.FeatureFlag.from_json(resp: Any) -> FeatureFlag
 method posthog.types.FeatureFlag.from_value_and_payload(key: str, value: FlagValue, payload: Any) -> FeatureFlag
 method posthog.types.FeatureFlag.get_value() -> FlagValue
@@ -1564,6 +1574,7 @@ module posthog.metrics_capture
 module posthog.poller
 module posthog.request
 module posthog.tracing
+module posthog.tracing.span
 module posthog.types
 module posthog.utils
 module posthog.version
