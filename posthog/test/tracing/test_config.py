@@ -229,3 +229,51 @@ class TestSpanLimitKnobs:
         assert resolved.max_attributes_per_span == DEFAULT_MAX_ATTRIBUTES_PER_SPAN
         assert resolved.max_events_per_span == DEFAULT_MAX_EVENTS_PER_SPAN
         assert resolved.max_attribute_value_length == DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
+
+
+class TestBeforeSpanSendConfig:
+    def test_accepts_one_hook_or_a_list(self):
+        def hook(span):
+            return span
+
+        assert resolve_traces_config({"before_span_send": hook}).before_span_send == (
+            hook,
+        )
+        assert resolve_traces_config(
+            {"before_span_send": [hook, hook]}
+        ).before_span_send == (hook, hook)
+
+    def test_defaults_to_no_hooks(self):
+        assert resolve_traces_config({}).before_span_send == ()
+
+    def test_skips_falsy_entries_silently(self, caplog):
+        caplog.set_level("WARNING", logger="posthog")
+
+        def hook(span):
+            return span
+
+        resolved = resolve_traces_config({"before_span_send": [None, False, hook]})
+        assert resolved.before_span_send == (hook,)
+        assert not caplog.records
+
+    def test_rejects_an_entry_that_is_not_callable_rather_than_exporting_unhooked(
+        self,
+    ):
+        def hook(span):
+            return span
+
+        with pytest.raises(ValueError, match="not callable"):
+            resolve_traces_config({"before_span_send": ["scrub", hook]})
+
+    def test_a_hook_whose_truthiness_raises_is_still_resolved(self):
+        class Hook:
+            def __bool__(self):
+                raise RuntimeError("no")
+
+            def __call__(self, span):
+                return span
+
+        hook = Hook()
+        assert resolve_traces_config({"before_span_send": hook}).before_span_send == (
+            hook,
+        )

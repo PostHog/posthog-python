@@ -10,6 +10,7 @@ import time
 from contextvars import ContextVar
 from typing import Any, Callable, Dict, List, Mapping, Optional, Protocol
 
+from ._before_span_send import run_before_span_send
 from ._config import ResolvedTracesConfig
 from ._drops import DropLog
 from ._ids import new_span_id, new_trace_id
@@ -301,8 +302,11 @@ class PostHogTraces:
         if disabled:
             self._drops.record(1, "the client is disabled")
         else:
-            _report_limit_drops(record)
-            self._exporter.enqueue(record)
+            # The hook is application code, so it runs with no lock held.
+            hooked = run_before_span_send(record, self._config, self._drops)
+            if hooked is not None:
+                _report_limit_drops(hooked)
+                self._exporter.enqueue(hooked)
         self._drops.warn_if_due()
 
 

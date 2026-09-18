@@ -6,8 +6,9 @@ An unusable value falls back to its documented default with a warning.
 import logging
 import math
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
+from ..types import BeforeSpanSendCallback
 from ._sanitize import attribute_key
 
 log = logging.getLogger("posthog")
@@ -47,6 +48,7 @@ class ResolvedTracesConfig:
     max_attributes_per_span: int = DEFAULT_MAX_ATTRIBUTES_PER_SPAN
     max_events_per_span: int = DEFAULT_MAX_EVENTS_PER_SPAN
     max_attribute_value_length: int = DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
+    before_span_send: Tuple[BeforeSpanSendCallback, ...] = ()
 
 
 _KNOWN_KEYS = frozenset(field.name for field in fields(ResolvedTracesConfig))
@@ -120,6 +122,27 @@ def _usable_resource_attributes(value: Any) -> Dict[str, Any]:
     return attributes
 
 
+def _resolve_before_span_send(value: Any) -> Tuple[Callable, ...]:
+    """The hooks, in order. Raises for an entry that is not callable.
+
+    The hook is the scrubbing point, so a broken entry turns tracing off
+    rather than exporting spans the entry was meant to redact. The client
+    reports the error and leaves tracing off for the life of the client.
+    """
+    if value is None:
+        return ()
+    supplied = list(value) if isinstance(value, (list, tuple)) else [value]
+    # `[enabled and scrub]` yields None or False: no hook, rather than a broken one.
+    supplied = [hook for hook in supplied if hook is not None and hook is not False]
+    for hook in supplied:
+        if not callable(hook):
+            raise ValueError(
+                "traces before_span_send entry {!r} is not callable; tracing is off "
+                "rather than exporting spans it was meant to redact".format(hook)
+            )
+    return tuple(supplied)
+
+
 def resolve_traces_config(
     config: Any, host_resource_attributes: Optional[Mapping[str, str]] = None
 ) -> ResolvedTracesConfig:
@@ -182,4 +205,5 @@ def resolve_traces_config(
         max_attribute_value_length=_positive_int(
             config, "max_attribute_value_length", DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
         ),
+        before_span_send=_resolve_before_span_send(config.get("before_span_send")),
     )

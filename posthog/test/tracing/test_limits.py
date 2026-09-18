@@ -4,12 +4,14 @@ import pytest
 
 from posthog.tracing import _limits as limits_module
 from posthog.tracing._limits import (
+    apply_span_limits,
     bound_attributes,
     truncate_attribute_value,
     truncate_attributes,
 )
 from posthog.tracing._otlp import (
     CIRCULAR_VALUE,
+    SpanRecord,
     MAX_VALUE_ITEMS,
     MAX_VALUE_NODES,
     TRUNCATED_VALUE,
@@ -181,3 +183,18 @@ class TestWalkBounds:
         value = {f"k{i}": "v" * 50 for i in range(MAX_VALUE_ITEMS + 50)}
         bounded = truncate_attribute_value(value, 4)
         assert len(bounded) == MAX_VALUE_ITEMS
+
+
+class TestApplySpanLimits:
+    def test_rebounds_a_container_the_hook_grew_in_place(self):
+        grown = ["x" * 3]
+        record = SpanRecord("t", "s", "n", 1, 2, attributes={"k": grown})
+        grown.append("y" * 20)
+        apply_span_limits(record, frozenset(), 128, 128, 128, 8)
+        assert record.attributes["k"] == ["xxx", "y" * 8]
+
+    def test_an_empty_key_spends_no_slot(self):
+        record = SpanRecord("t", "s", "n", 1, 2, attributes={"": 1, "a": 2, "b": 3})
+        apply_span_limits(record, frozenset(), 2, 128, 128, 8)
+        assert record.attributes == {"a": 2, "b": 3}
+        assert record.dropped_attributes_count == 0
