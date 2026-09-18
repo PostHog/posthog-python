@@ -449,9 +449,13 @@ attribute posthog.ai.prompts.CachedPrompt.fetched_at = fetched_at
 attribute posthog.ai.prompts.CachedPrompt.label = label
 attribute posthog.ai.prompts.CachedPrompt.name = name
 attribute posthog.ai.prompts.CachedPrompt.prompt = prompt
+attribute posthog.ai.prompts.CachedPrompt.retry_not_before: Optional[float] = None
 attribute posthog.ai.prompts.CachedPrompt.version = version
 attribute posthog.ai.prompts.DEFAULT_CACHE_TTL_SECONDS = 300
+attribute posthog.ai.prompts.DEFAULT_REFETCH_COOLDOWN_SECONDS = 60
+attribute posthog.ai.prompts.MAX_REFETCH_COOLDOWN_SECONDS = 3600
 attribute posthog.ai.prompts.PromptCacheKey = tuple[str, Optional[int], Optional[str]]
+attribute posthog.ai.prompts.PromptFetchError.retry_after_seconds = retry_after_seconds
 attribute posthog.ai.prompts.PromptResult.config: Optional[Dict[str, Any]] = None
 attribute posthog.ai.prompts.PromptResult.label: Optional[str] = None
 attribute posthog.ai.prompts.PromptResult.name: Optional[str] = None
@@ -990,6 +994,7 @@ class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optiona
 class posthog.ai.otel.exporter.PostHogTraceExporter(api_key: str, host: str = DEFAULT_HOST)
 class posthog.ai.otel.processor.PostHogSpanProcessor(api_key: str, host: str = DEFAULT_HOST)
 class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int, label: Optional[str] = None, config: Optional[Dict[str, Any]] = None)
+class posthog.ai.prompts.PromptFetchError(message: str, retry_after_seconds: Optional[float] = None)
 class posthog.ai.prompts.PromptResult(source: PromptSource, prompt: str, name: Optional[str] = None, version: Optional[int] = None, label: Optional[str] = None, config: Optional[Dict[str, Any]] = None)
 class posthog.ai.prompts.Prompts(posthog: Optional[Any] = None, *, personal_api_key: Optional[str] = None, project_api_key: Optional[str] = None, host: Optional[str] = None, default_cache_ttl_seconds: Optional[int] = None, capture_errors: bool = False)
 class posthog.ai.stream.AsyncStreamWrapper(generator: AsyncGenerator[T, None], stream: Optional[Any] = None)
