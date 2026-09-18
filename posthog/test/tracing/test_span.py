@@ -574,6 +574,12 @@ class TestInertSpan:
             assert active.get() is span
         assert active.get() is None
 
+    def test_a_blank_parent_echoes_the_active_pass_through(self):
+        active: ContextVar = ContextVar("active", default=None)
+        with inert_span(f"00-{TRACE_ID}-{SPAN_ID}-01", active_var=active):
+            span = inert_span("  ", active_var=active)
+        assert span.traceparent() == f"00-{TRACE_ID}-{SPAN_ID}-01"
+
     def test_echoes_the_active_pass_through_when_no_parent_is_given(self):
         # Tracing off, a span nested inside the one that received the inbound
         # trace: it must keep forwarding that trace, not return a no-op.
