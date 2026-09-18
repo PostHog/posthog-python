@@ -79,10 +79,7 @@ def add_context_parameter_to_schema(
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
 
-    # additionalProperties: false would reject the injected context — remove it
-    # (the SDK adds this when converting Pydantic models to JSON Schema).
-    if schema.get("additionalProperties") is False:
-        schema.pop("additionalProperties", None)
+    # The declared context property is allowed even under additionalProperties: false.
 
     schema["properties"]["context"] = {
         "type": "string",

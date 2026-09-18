@@ -57,8 +57,6 @@ def add_conversation_id_to_schema(
     schema = copy.deepcopy(schema)
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
-    if schema.get("additionalProperties") is False:
-        schema.pop("additionalProperties", None)
     schema["properties"][CONVERSATION_ID_PARAM_NAME] = {
         "type": "string",
         "description": DEFAULT_CONVERSATION_ID_DESCRIPTION,
@@ -76,20 +74,13 @@ def extract_conversation_id(args: Any) -> Optional[str]:
     return trimmed or None
 
 
-def resolve_conversation_id(
-    enabled: bool,
-    args: Any,
-    tool_name: Optional[str],
-    missing_capability_tool_name: str,
-) -> Tuple[Optional[str], bool]:
-    """Return ``(conversation_id, minted)``. Disabled or get_more_tools → ``(None, False)``;
-    agent echoed a handle we could have minted → ``(value, False)``; anything
-    else (omitted, or a value the agent made up) → ``(new uuid, True)``.
+def resolve_conversation_id(enabled: bool, args: Any) -> Tuple[Optional[str], bool]:
+    """Return the conversation id and whether the SDK minted it.
 
     Lowercased on the way in: the shape test is case-insensitive but the hash
     behind ``$session_id`` is not, so an uppercased echo (some hosts normalise
     uuids) would land in a different session than the call that minted it."""
-    if not enabled or tool_name == missing_capability_tool_name:
+    if not enabled:
         return None, False
     supplied = extract_conversation_id(args)
     if supplied and _MINTED_CONVERSATION_ID.match(supplied):

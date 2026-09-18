@@ -63,6 +63,8 @@ def capture_event(
         "response": event_input.get("response"),
         "user_intent": event_input.get("user_intent"),
         "user_intent_source": event_input.get("user_intent_source"),
+        "llm_model": event_input.get("llm_model"),
+        "llm_model_source": event_input.get("llm_model_source"),
         "is_error": event_input.get("is_error"),
         "error": event_input.get("error"),
         "error_type": event_input.get("error_type"),

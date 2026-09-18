@@ -11,7 +11,7 @@ from typing import Any, Optional
 from urllib.parse import quote, urljoin, urlsplit
 
 from .capture_compression import CaptureCompression
-from .capture_v1 import _send_v1_batch
+from .capture_v1 import _parse_retry_after, _send_v1_batch
 from .request import (
     APIError,
     DatetimeSerializer,
@@ -76,14 +76,17 @@ def _origin(url: str) -> tuple[str, str, Optional[int]]:
     return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
 
 
-def _same_origin_redirect_path(
-    base_url: str, current_path: str, location: str
+def _same_origin_redirect_url(
+    base_url: str, current_url: str, location: str
 ) -> Optional[str]:
-    target = urlsplit(urljoin(urljoin(f"{base_url}/", current_path), location))
+    target = urlsplit(urljoin(current_url, location))
     if _origin(target.geturl()) != _origin(base_url):
         return None
-    path = target.path or "/"
-    return f"{path}?{target.query}" if target.query else path
+    return (
+        urlsplit(base_url)
+        ._replace(path=target.path or "/", query=target.query, fragment="")
+        .geturl()
+    )
 
 
 def _serialize_flags_body(
@@ -100,21 +103,11 @@ def _serialize_flags_body(
     }
 
 
-def _parse_retry_after(response: Any) -> Optional[float]:
-    value = response.headers.get("Retry-After")
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _process_response(response: Any) -> None:
     if response.status_code == 200:
         return
 
-    retry_after = _parse_retry_after(response)
+    retry_after = _parse_retry_after(response.headers.get("Retry-After"))
     try:
         payload = response.json()
         detail = payload["detail"]
@@ -233,10 +226,11 @@ async def async_batch_post(
     try:
         logging.getLogger("posthog").debug("making async capture request")
         base_url = remove_trailing_slash(normalize_host(host))
-        request_path = path
+        # Absolute URLs avoid reapplying an HTTPX base_url path on redirects.
+        request_url = f"{base_url}{path}"
         for redirect_count in range(6):
             response = await http_client.post(
-                request_path, content=data, headers=headers, timeout=timeout
+                request_url, content=data, headers=headers, timeout=timeout
             )
             if response.status_code not in (307, 308):
                 _process_response(response)
@@ -245,16 +239,16 @@ async def async_batch_post(
             location = response.headers.get("Location") or response.headers.get(
                 "location"
             )
-            redirect_path = (
-                _same_origin_redirect_path(base_url, request_path, location)
+            redirect_url = (
+                _same_origin_redirect_url(base_url, request_url, location)
                 if location
                 else None
             )
-            if redirect_path is None:
+            if redirect_url is None:
                 raise APIError(400, "Cross-origin or invalid redirect blocked")
             if redirect_count >= 5:
                 raise APIError(400, "Too many capture redirects")
-            request_path = redirect_path
+            request_url = redirect_url
     finally:
         if owns_client:
             await http_client.aclose()

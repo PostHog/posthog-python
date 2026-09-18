@@ -85,7 +85,7 @@ def test_build_client_scopes_requests_to_host_without_following_redirects():
 
 
 @pytest.mark.asyncio
-async def test_async_batch_post_uses_relative_path_and_sanitized_logs(caplog):
+async def test_async_batch_post_uses_configured_host_and_sanitized_logs(caplog):
     caplog.set_level(logging.DEBUG, logger="posthog")
     client = FakeAsyncClient()
 
@@ -97,7 +97,7 @@ async def test_async_batch_post_uses_relative_path_and_sanitized_logs(caplog):
         client=client,
     )
 
-    assert client.calls[0][1] == ("/batch/",)
+    assert client.calls[0][1] == ("https://example.com/batch/",)
     assert "super-secret" not in caplog.text
     assert "test-secret-key" not in caplog.text
     assert "https://example.com" not in caplog.text
@@ -121,9 +121,56 @@ async def test_async_batch_post_follows_same_origin_temporary_redirect():
     )
 
     assert [call[1] for call in client.calls] == [
-        ("/batch/",),
-        ("/redirected-batch/",),
+        ("https://example.com/batch/",),
+        ("https://example.com/redirected-batch/",),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [307, 308])
+@pytest.mark.parametrize(
+    "host", ["https://example.com/proxy", "https://example.com/proxy/"]
+)
+@pytest.mark.parametrize(
+    ("location", "redirected_path"),
+    [
+        ("/proxy/redirected-batch/", "/proxy/redirected-batch/"),
+        ("https://example.com/proxy/redirected-batch/", "/proxy/redirected-batch/"),
+        ("/redirected-batch/", "/redirected-batch/"),
+        ("../redirected-batch/", "/proxy/redirected-batch/"),
+        ("?accepted=1", "/proxy/batch/?accepted=1"),
+    ],
+)
+async def test_async_batch_post_redirects_with_host_path_prefix(
+    status, host, location, redirected_path
+):
+    requests = []
+    responses = [
+        httpx.Response(status, headers={"Location": location}),
+        httpx.Response(status, headers={"Location": "?attempt=2"}),
+        httpx.Response(200),
+    ]
+
+    def handle_request(request):
+        requests.append(request)
+        return responses.pop(0)
+
+    batch = [{"event": "test", "distinct_id": "test-user"}]
+    async with httpx.AsyncClient(
+        base_url=host, transport=httpx.MockTransport(handle_request)
+    ) as client:
+        await async_batch_post(
+            "test-key", host, batch=batch, path="/batch/", client=client
+        )
+
+    assert [str(request.url) for request in requests] == [
+        "https://example.com/proxy/batch/",
+        f"https://example.com{redirected_path}",
+        f"https://example.com{redirected_path.split('?')[0]}?attempt=2",
+    ]
+    assert all(request.method == "POST" for request in requests)
+    assert all(request.content == requests[0].content for request in requests)
+    assert json.loads(requests[0].content)["batch"] == batch
 
 
 @pytest.mark.asyncio

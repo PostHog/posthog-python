@@ -53,11 +53,13 @@ LEGACY_PROTOCOL_VERSION = "2025-11-25"
 
 
 def modern_meta(
-    client_name: str = "wire-client", client_version: str = "1.2.3"
+    client_name: str = "wire-client",
+    client_version: str = "1.2.3",
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """The 2026-07-28 per-request ``_meta`` envelope (protocol version and
     client capabilities are required; client info is a SHOULD)."""
-    return {
+    meta: Dict[str, Any] = {
         "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
         "io.modelcontextprotocol/clientCapabilities": {},
         "io.modelcontextprotocol/clientInfo": {
@@ -65,6 +67,9 @@ def modern_meta(
             "version": client_version,
         },
     }
+    if model is not None:
+        meta["x-codex-turn-metadata"] = {"model": model}
+    return meta
 
 
 def modern_headers(method: str, tool_name: Optional[str] = None) -> Dict[str, str]:
