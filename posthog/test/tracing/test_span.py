@@ -3,6 +3,7 @@ import contextvars
 import gc
 import sys
 import threading
+import time
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timezone
@@ -11,8 +12,13 @@ from unittest import mock
 import pytest
 
 from posthog.tracing import _span as span_module
-from posthog.tracing._otlp import SpanRecord
-from posthog.tracing._sanitize import FALLBACK_SPAN_NAME, UNSERIALIZABLE_VALUE
+from posthog.tracing._config import MAX_ATTRIBUTES_PER_EVENT
+from posthog.tracing._otlp import CIRCULAR_VALUE, SpanRecord, build_otlp_span
+from posthog.tracing._sanitize import (
+    FALLBACK_SPAN_NAME,
+    FUNCTION_VALUE,
+    UNSERIALIZABLE_VALUE,
+)
 from posthog.tracing._span import (
     NOOP_SPAN,
     ClockAnchor,
@@ -356,10 +362,13 @@ class TestContextManager:
         assert records[0].status is not None
         assert records[0].status.code == "error"
         assert records[0].status.message == "boom"
-        assert records[0].events[0].attributes == {
-            "exception.type": "TypeError",
-            "exception.message": "boom",
-        }
+        attributes = records[0].events[0].attributes
+        assert attributes["exception.type"] == "TypeError"
+        assert attributes["exception.message"] == "boom"
+        assert attributes["exception.stacktrace"].startswith(
+            "Traceback (most recent call last):"
+        )
+        assert "TypeError: boom" in attributes["exception.stacktrace"]
 
     @pytest.mark.parametrize(
         "error", [GeneratorExit(), asyncio.CancelledError(), KeyboardInterrupt()]
@@ -650,3 +659,316 @@ class TestHandleLifetime:
         del span
         gc.collect()
         assert ref() is None
+
+
+class TestSpanLimits:
+    def test_keeps_the_first_attributes_and_counts_the_overflow(self):
+        records: list = []
+        span = make_span(records, max_attributes=128)
+        for i in range(130):
+            span.set_attribute(f"k{i}", i)
+        span.end()
+        assert len(records[0].attributes) == 128
+        assert "k127" in records[0].attributes and "k128" not in records[0].attributes
+        assert records[0].dropped_attributes_count == 2
+
+    def test_overwriting_a_key_does_not_spend_a_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+        span.set_attribute("a", 1).set_attribute("a", 2).set_attribute("b", 3)
+        span.end()
+        assert records[0].attributes == {"a": 2}
+        assert records[0].dropped_attributes_count == 1
+
+    def test_none_removes_a_key_and_frees_its_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+        span.set_attribute("a", 1).set_attribute("a", None).set_attribute("b", 2)
+        span.end()
+        assert records[0].attributes == {"b": 2}
+        assert records[0].dropped_attributes_count == 0
+
+    def test_auto_context_is_exempt_from_the_cap_and_never_evicted(self):
+        records: list = []
+        span = make_span(
+            records,
+            attributes={"posthogDistinctId": "user-1", "sessionId": "s-1"},
+            auto_attribute_keys=["posthogDistinctId", "sessionId"],
+            max_attributes=2,
+        )
+        span.set_attributes({"a": 1, "b": 2, "c": 3})
+        span.end()
+        assert records[0].attributes == {
+            "posthogDistinctId": "user-1",
+            "sessionId": "s-1",
+            "a": 1,
+            "b": 2,
+        }
+        assert records[0].dropped_attributes_count == 1
+
+    def test_keeps_the_first_events_and_counts_the_overflow(self):
+        records: list = []
+        span = make_span(records, max_events=2)
+        span.add_event("a").add_event("b").add_event("c")
+        span.end()
+        assert [e.name for e in records[0].events] == ["a", "b"]
+        assert records[0].dropped_events_count == 1
+
+    def test_a_recorded_exception_spends_an_event_slot(self):
+        records: list = []
+        span = make_span(records, max_events=1)
+        span.add_event("a")
+        span.record_exception(ValueError("boom"))
+        span.end()
+        assert [e.name for e in records[0].events] == ["a"]
+        assert records[0].dropped_events_count == 1
+        assert records[0].status.code == "error"
+
+    def test_caps_each_events_attributes(self):
+        records: list = []
+        span = make_span(records)
+        span.add_event("batch", {f"k{i}": i for i in range(130)})
+        span.end()
+        event = records[0].events[0]
+        assert len(event.attributes) == 128
+        assert event.dropped_attributes_count == 2
+
+    def test_truncates_a_long_attribute_value_without_counting_a_drop(self):
+        records: list = []
+        span = make_span(records, max_attribute_value_length=8192)
+        span.set_attribute("payload", "x" * 40000)
+        span.set_attribute("nested", {"body": "y" * 40000})
+        span.end()
+        assert records[0].attributes["payload"] == "x" * 8192
+        assert records[0].attributes["nested"] == {"body": "y" * 8192}
+        assert records[0].dropped_attributes_count == 0
+
+    def test_a_callable_reaches_the_encoder_as_its_marker(self):
+        def handler():
+            pass
+
+        records: list = []
+        span = make_span(records)
+        span.set_attribute("fn", handler)
+        span.add_event("e", {"fn": handler, "nested": {"fn": handler}})
+        span.end()
+        encoded = build_otlp_span(records[0])
+        assert encoded["attributes"] == [
+            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}}
+        ]
+        assert encoded["events"][0]["attributes"] == [
+            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}},
+            {
+                "key": "nested",
+                "value": {
+                    "kvlistValue": {
+                        "values": [
+                            {"key": "fn", "value": {"stringValue": FUNCTION_VALUE}}
+                        ]
+                    }
+                },
+            },
+        ]
+
+    def test_a_none_event_attribute_past_the_cap_counts_no_drop(self):
+        records: list = []
+        span = make_span(records)
+        attributes = {f"k{i}": i for i in range(MAX_ATTRIBUTES_PER_EVENT)}
+        attributes["late"] = None
+        span.add_event("batch", attributes)
+        span.end()
+        event = records[0].events[0]
+        assert len(event.attributes) == MAX_ATTRIBUTES_PER_EVENT
+        assert event.dropped_attributes_count == 0
+
+    def test_truncates_event_attributes_names_and_status_messages(self):
+        records: list = []
+        span = make_span(records, max_attribute_value_length=4)
+        span.add_event("long event name", {"k": "long value"})
+        span.update_name("long span name")
+        span.set_status("error", "long message")
+        span.end()
+        record = records[0]
+        assert record.name == "long"
+        assert record.events[0].name == "long"
+        assert record.events[0].attributes == {"k": "long"}
+        assert record.status.message == "long"
+
+    def test_a_self_referencing_attribute_is_stored_as_the_encoders_marker(self):
+        records: list = []
+        value: dict = {}
+        value["self"] = value
+        span = make_span(records)
+        span.set_attribute("loop", value)
+        span.end()
+        assert records[0].attributes["loop"] == {"self": CIRCULAR_VALUE}
+
+    def test_an_empty_key_spends_no_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+        span.set_attribute("", 1).set_attribute("real", 2)
+        span.set_attributes({"": 3})
+        span.add_event("e", {"": 1, "k": 2})
+        span.end()
+        assert records[0].attributes == {"real": 2}
+        assert records[0].dropped_attributes_count == 0
+        assert records[0].events[0].attributes == {"k": 2}
+
+    def test_add_event_with_a_non_mapping_logs_and_keeps_the_event(self, caplog):
+        records: list = []
+        span = make_span(records)
+        with caplog.at_level("DEBUG", logger="posthog"):
+            span.add_event("e", ["not", "a", "mapping"])
+        span.end()
+        assert records[0].events[0].attributes == {}
+        assert "expected a mapping" in caplog.text
+
+
+class TestConcurrentWrites:
+    def _run(self, worker, count=8):
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(count)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(30)
+
+    def test_writes_to_one_key_from_many_threads_spend_one_slot(self):
+        records: list = []
+        span = make_span(records, max_attributes=1)
+
+        def worker(i):
+            for n in range(300):
+                span.set_attribute("k", n)
+
+        self._run(worker)
+        span.end()
+        assert list(records[0].attributes) == ["k"]
+        assert records[0].dropped_attributes_count == 0
+
+    def test_events_from_many_threads_never_exceed_the_cap(self):
+        records: list = []
+        span = make_span(records, max_events=100)
+
+        def worker(i):
+            for n in range(50):
+                span.add_event(f"{i}-{n}")
+
+        self._run(worker)
+        span.end()
+        assert len(records[0].events) == 100
+        assert records[0].dropped_events_count == 300
+
+    def test_a_write_racing_end_never_lands_after_the_record(self):
+        records: list = []
+        span = make_span(records)
+        stop = threading.Event()
+
+        def writer(i):
+            n = 0
+            while not stop.is_set():
+                span.set_attribute("k", n)
+                span.add_event("e")
+                n += 1
+
+        threads = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        for thread in threads:
+            thread.start()
+        time.sleep(0.02)
+        span.end()
+        stop.set()
+        for thread in threads:
+            thread.join(30)
+        record = records[0]
+        assert len(records) == 1
+        assert span._events == record.events
+        assert {k: v for k, v in span._attributes.items() if v is not None} == (
+            record.attributes
+        )
+
+
+class TestExceptionStacktrace:
+    def test_record_exception_attaches_the_stack_of_a_raised_exception(self):
+        records: list = []
+        span = make_span(records)
+        try:
+            raise KeyError("missing")
+        except KeyError as e:
+            span.record_exception(e)
+        span.end()
+        stack = records[0].events[0].attributes["exception.stacktrace"]
+        assert stack.startswith("Traceback (most recent call last):")
+        assert "KeyError: 'missing'" in stack
+
+    def test_omits_the_stack_of_an_exception_that_was_never_raised(self):
+        records: list = []
+        span = make_span(records)
+        span.record_exception(ValueError("constructed, not raised"))
+        span.end()
+        assert "exception.stacktrace" not in records[0].events[0].attributes
+
+    def test_bounds_the_stack_keeping_the_outermost_exception(self):
+        # Python prints a cause first and the outermost exception last, so
+        # the tail keeps the outermost raise and may cut the cause off.
+        def recurse(depth):
+            if depth == 0:
+                raise ValueError("the actual crash site")
+            recurse(depth - 1)
+
+        records: list = []
+        span = make_span(records, max_attribute_value_length=300)
+        try:
+            try:
+                recurse(60)
+            except ValueError as cause:
+                raise RuntimeError("wrapped") from cause
+        except RuntimeError as e:
+            span.record_exception(e)
+        span.end()
+        stack = records[0].events[0].attributes["exception.stacktrace"]
+        assert len(stack) == 300
+        assert stack.rstrip().endswith("RuntimeError: wrapped")
+
+    def test_a_stack_that_cannot_be_formatted_costs_only_the_attribute(self):
+        records: list = []
+        span = make_span(records)
+        try:
+            raise ValueError("boom")
+        except ValueError as e:
+            with mock.patch.object(
+                span_module.traceback,
+                "format_exception",
+                side_effect=RuntimeError("no"),
+            ):
+                span.record_exception(e)
+        span.end()
+        attributes = records[0].events[0].attributes
+        assert attributes["exception.message"] == "boom"
+        assert "exception.stacktrace" not in attributes
+
+
+class TestSpanLimitInteractions:
+    def test_the_attribute_and_event_caps_are_independent(self):
+        records: list = []
+        span = make_span(records, max_attributes=1, max_events=1)
+        span.set_attributes({"a": 1, "b": 2})
+        span.add_event("e1", {"x": 1, "y": 2})
+        span.add_event("e2")
+        span.end()
+        record = records[0]
+        assert record.attributes == {"a": 1}
+        assert record.events[0].attributes == {"x": 1, "y": 2}
+        assert (record.dropped_attributes_count, record.dropped_events_count) == (1, 1)
+
+    def test_a_raising_key_in_add_event_costs_only_that_key(self):
+        class HostileKey:
+            def __str__(self):
+                raise RuntimeError("no")
+
+        records: list = []
+        span = make_span(records)
+        span.add_event("e", {HostileKey(): 1, "ok": 2})
+        span.end()
+        assert records[0].events[0].attributes == {"ok": 2}
+
+    def test_the_per_event_attribute_cap_is_opentelemetrys_default(self):
+        assert MAX_ATTRIBUTES_PER_EVENT == 128

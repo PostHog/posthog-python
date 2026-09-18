@@ -50,6 +50,7 @@ class SpanEventRecord:
     name: str
     timestamp_ns: int
     attributes: Optional[Dict[str, Any]] = None
+    dropped_attributes_count: int = 0
 
 
 @dataclass
@@ -76,6 +77,24 @@ class SpanRecord:
     status: Optional[SpanStatus] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     events: List[SpanEventRecord] = field(default_factory=list)
+    # User attributes and events the per-span caps refused.
+    dropped_attributes_count: int = 0
+    dropped_events_count: int = 0
+
+
+MAX_UINT32 = 0xFFFFFFFF
+
+
+def non_negative_count(value: Any) -> int:
+    """A dropped count as the ``uint32`` the wire declares, or 0 for anything else.
+
+    One that overflows the field is refused for the whole request.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if not math.isfinite(value) or value <= 0:
+        return 0
+    return min(int(value), MAX_UINT32)
 
 
 def sanitize_string(value: str) -> str:
@@ -266,12 +285,16 @@ def _to_otlp_event(event: SpanEventRecord) -> dict:
         "name": wire_string(event.name),
         "timeUnixNano": str(event.timestamp_ns),
     }
+    cut = 0
     if event.attributes:
         attributes, cut = encode_attributes(event.attributes)
         if attributes:
             encoded["attributes"] = attributes
-        if cut:
-            encoded["droppedAttributesCount"] = cut
+    dropped = non_negative_count(
+        non_negative_count(event.dropped_attributes_count) + cut
+    )
+    if dropped:
+        encoded["droppedAttributesCount"] = dropped
     return encoded
 
 
@@ -292,10 +315,16 @@ def build_otlp_span(record: SpanRecord) -> dict:
     attributes, cut = encode_attributes(record.attributes)
     if attributes:
         span["attributes"] = attributes
-    if cut:
-        span["droppedAttributesCount"] = cut
     if record.events:
         span["events"] = [_to_otlp_event(event) for event in record.events]
+    dropped_attributes = non_negative_count(
+        non_negative_count(record.dropped_attributes_count) + cut
+    )
+    if dropped_attributes:
+        span["droppedAttributesCount"] = dropped_attributes
+    dropped_events = non_negative_count(record.dropped_events_count)
+    if dropped_events:
+        span["droppedEventsCount"] = dropped_events
     if record.status is not None and record.status.code in SPAN_STATUS_TO_OTLP:
         status: dict = {"code": SPAN_STATUS_TO_OTLP[record.status.code]}
         if record.status.message:

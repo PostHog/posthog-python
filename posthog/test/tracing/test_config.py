@@ -1,6 +1,9 @@
 import pytest
 
 from posthog.tracing._config import (
+    DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH,
+    DEFAULT_MAX_ATTRIBUTES_PER_SPAN,
+    DEFAULT_MAX_EVENTS_PER_SPAN,
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     DEFAULT_MAX_EXPORT_BATCH_SIZE,
     DEFAULT_MAX_LIVE_SPANS,
@@ -190,3 +193,39 @@ class TestHostileResourceAttributeKeys:
         assert resolved.service_name == "api"
         assert resolved.resource_attributes["team"] == "x"
         assert all(isinstance(key, str) for key in resolved.resource_attributes)
+
+
+class TestSpanLimitKnobs:
+    def test_defaults_to_opentelemetrys_counts_and_a_finite_value_length(self):
+        resolved = resolve_traces_config({})
+        assert (
+            resolved.max_attributes_per_span == DEFAULT_MAX_ATTRIBUTES_PER_SPAN == 128
+        )
+        assert resolved.max_events_per_span == DEFAULT_MAX_EVENTS_PER_SPAN == 128
+        assert resolved.max_attribute_value_length == DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH
+        assert DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH == 8192
+
+    def test_honours_explicit_values(self):
+        resolved = resolve_traces_config(
+            {
+                "max_attributes_per_span": 10,
+                "max_events_per_span": 5,
+                "max_attribute_value_length": 100,
+            }
+        )
+        assert resolved.max_attributes_per_span == 10
+        assert resolved.max_events_per_span == 5
+        assert resolved.max_attribute_value_length == 100
+
+    @pytest.mark.parametrize("value", [0, -1, 1.5, "128", None, True])
+    def test_an_unusable_value_falls_back_rather_than_dropping_every_span(self, value):
+        resolved = resolve_traces_config(
+            {
+                "max_attributes_per_span": value,
+                "max_events_per_span": value,
+                "max_attribute_value_length": value,
+            }
+        )
+        assert resolved.max_attributes_per_span == DEFAULT_MAX_ATTRIBUTES_PER_SPAN
+        assert resolved.max_events_per_span == DEFAULT_MAX_EVENTS_PER_SPAN
+        assert resolved.max_attribute_value_length == DEFAULT_MAX_ATTRIBUTE_VALUE_LENGTH

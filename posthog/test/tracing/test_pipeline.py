@@ -11,14 +11,17 @@ import pytest
 from posthog.test.tracing.helpers import (
     SPAN_ID,
     TRACE_ID,
+    FakeSender,
     clock,
     fake_timers,
     make,
+    make_traces,
     queued,
 )
 from posthog.tracing import _pipeline as pipeline_module
 from posthog.tracing import _span as span_module
 from posthog.tracing._drops import DropLog
+from posthog.tracing._transport import SendOutcome
 from posthog.tracing._span import NOOP_SPAN, PassThroughSpan, RecordingSpan
 
 __all__ = ["clock", "fake_timers"]
@@ -414,6 +417,17 @@ class TestAutoContext:
         pipeline.start_span("a", attributes={"posthogDistinctId": "override"}).end()
         assert queued(pipeline)[0].attributes["posthogDistinctId"] == "override"
 
+    def test_the_join_keys_survive_a_span_at_its_attribute_cap(self):
+        pipeline, _, _ = make(
+            context={"distinct_id": "user-1", "session_id": "sess-1"},
+            max_attributes_per_span=2,
+        )
+        pipeline.start_span("a", attributes={"x": 1, "y": 2, "z": 3}).end()
+        record = queued(pipeline)[0]
+        assert record.attributes["posthogDistinctId"] == "user-1"
+        assert record.attributes["sessionId"] == "sess-1"
+        assert record.dropped_attributes_count == 1
+
     def test_still_records_the_span_when_reading_context_raises(self):
         pipeline, _, _ = make()
         pipeline._get_context = mock.Mock(side_effect=RuntimeError("no context"))
@@ -586,3 +600,29 @@ class TestCloseAndFork:
         pipeline.reinit_after_fork()
         assert not pipeline._lock.locked()
         pipeline.start_span("a").end()
+
+
+class TestLimitsReachTheExport:
+    def test_bounds_names_and_attributes_with_the_configured_length(self):
+        sender = FakeSender(SendOutcome("ok"))
+        pipeline, _, _ = make_traces(sender=sender, max_attribute_value_length=5)
+        pipeline.start_span("a long name", attributes={"k": "a long value"}).end()
+        pipeline.flush()
+        (span,) = sender.batches()[0]
+        assert span["name"] == "a lon"
+        assert span["attributes"] == [{"key": "k", "value": {"stringValue": "a lon"}}]
+
+    def test_reports_a_spans_limit_drops_once_at_debug(self, caplog):
+        caplog.set_level("DEBUG", logger="posthog")
+        pipeline, _, _ = make(max_attributes_per_span=1, max_events_per_span=1)
+        span = pipeline.start_span("capped", attributes={"a": 1, "b": 2})
+        span.add_event("e1", {"k": 1}).add_event("e2")
+        span.end()
+        messages = [
+            r.getMessage() for r in caplog.records if "Span limits" in r.getMessage()
+        ]
+        assert len(messages) == 1
+        assert messages[0].endswith(
+            'Span limits discarded data from "capped": 1 attributes, 1 events, '
+            "0 event attributes"
+        )

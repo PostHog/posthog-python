@@ -199,11 +199,12 @@ class PostHogTraces:
         start_ns = resolve_start_ns(start_time, now_ns)
         auto_attributes = self._auto_context_attributes()
         span_attributes = copy_user_attributes(dict(auto_attributes), attributes)
+        config = self._config
 
         return RecordingSpan(
             trace_id=parent_context.trace_id if parent_context else new_trace_id(),
             span_id=span_id,
-            name=sanitize_name(name, "Span name"),
+            name=sanitize_name(name, "Span name", config.max_attribute_value_length),
             start_ns=start_ns,
             backdated=start_ns != now_ns,
             on_end=self._on_span_end,
@@ -218,6 +219,10 @@ class PostHogTraces:
             clock_anchor=parent_context.clock_anchor
             if parent_context and to_epoch_ns(start_time) is None
             else None,
+            auto_attribute_keys=auto_attributes.keys(),
+            max_attributes=config.max_attributes_per_span,
+            max_events=config.max_events_per_span,
+            max_attribute_value_length=config.max_attribute_value_length,
         )
 
     def _is_closed(self) -> bool:
@@ -296,5 +301,23 @@ class PostHogTraces:
         if disabled:
             self._drops.record(1, "the client is disabled")
         else:
+            _report_limit_drops(record)
             self._exporter.enqueue(record)
         self._drops.warn_if_due()
+
+
+def _report_limit_drops(record: SpanRecord) -> None:
+    event_attributes = sum(event.dropped_attributes_count for event in record.events)
+    if (
+        record.dropped_attributes_count
+        or record.dropped_events_count
+        or event_attributes
+    ):
+        log.debug(
+            'Span limits discarded data from "%s": %s attributes, %s events, '
+            "%s event attributes",
+            record.name,
+            record.dropped_attributes_count,
+            record.dropped_events_count,
+            event_attributes,
+        )
