@@ -1,4 +1,5 @@
 import atexit
+import hashlib as _hashlib
 import inspect
 import json
 import logging
@@ -138,6 +139,11 @@ _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
+
+
+class _LocalEvaluationSnapshot(FlagDefinitionCacheData):
+    flags_by_key: Dict[str, Any]
+    flag_definition_version: int
 
 
 def _supports_lane_synchronization(queue) -> bool:
@@ -904,6 +910,7 @@ class Client(object):
         self.feature_flags_by_key: Optional[dict[str, Any]] = None
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
+        self._property_matching_version = 1
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
@@ -916,11 +923,17 @@ class Client(object):
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
+        # Until definitions load, only explicitly remote Redis results are shared.
+        self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
+        if self.flag_cache:
+            self.flag_cache._advance_generation(
+                self.flag_definition_version, self._flag_definition_fingerprint
+            )
         self._flags_etag: Optional[str] = None
         self._flag_definition_fetch_generation = 0
         self._flag_definition_published_generation = 0
         self._flag_definition_cache_generation = 0
-        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_publication_lock = threading.RLock()
         self._flag_definition_cache_write_lock = threading.RLock()
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
@@ -2267,7 +2280,7 @@ class Client(object):
 
         # A parent thread may have been publishing or caching flag definitions at
         # fork time.
-        self._flag_definition_publication_lock = threading.Lock()
+        self._flag_definition_publication_lock = threading.RLock()
         self._flag_definition_cache_write_lock = threading.RLock()
 
         # Metrics locks may have been held by a parent thread at fork time; replace
@@ -2282,10 +2295,20 @@ class Client(object):
         if self._traces is not None:
             self._traces.reinit_after_fork(self._active_span_var)
 
+        # Unknown definitions cannot establish shared provenance in a new worker.
+        if self._flag_definition_fingerprint.startswith("remote-only:"):
+            self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
+            self.flag_definition_version += 1
+
         # If using Redis cache, we must reinitialize to get a fresh connection (fork-safe).
         # If using Memory cache, we keep it as-is to benefit from the inherited warm cache.
         if isinstance(self.flag_cache, RedisFlagCache):
             self.flag_cache = self._initialize_flag_cache(self.flag_fallback_cache_url)
+        if self.flag_cache:
+            self.flag_cache._write_lock = threading.Lock()
+            self.flag_cache._advance_generation(
+                self.flag_definition_version, self._flag_definition_fingerprint
+            )
 
         reset_sessions()
 
@@ -3110,28 +3133,65 @@ class Client(object):
                     self._flag_definition_cache_provider_async_runner.close()
                     self._flag_definition_cache_provider_async_runner = None
 
-    def _update_flag_state(
-        self, data: FlagDefinitionCacheData, old_flags_by_key: Optional[dict] = None
-    ) -> None:
-        """Update internal flag state from cache data and invalidate evaluation cache if changed."""
-        self.feature_flags = data["flags"]
-        self.group_type_mapping = data["group_type_mapping"]
-        self.cohorts = data["cohorts"]
-        # Server-controlled gate for minimal $feature_flag_called events; the
-        # local-evaluation payload carries it as a top-level key. Absent means False.
-        self._minimal_flag_called_events = (
-            data.get("minimal_flag_called_events") is True
+    @staticmethod
+    def _hash_flag_definitions(data: FlagDefinitionCacheData) -> str:
+        # Hash only evaluation inputs, not transport metadata such as the ETag.
+        serialized = json.dumps(
+            {
+                "flags": data["flags"],
+                "cohorts": data["cohorts"],
+                "group_type_mapping": data["group_type_mapping"],
+                "property_matching_version": data.get("property_matching_version", 1),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
         )
+        return _hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
-        # Invalidate evaluation cache if flag definitions changed
-        if (
-            self.flag_cache
-            and old_flags_by_key is not None
-            and old_flags_by_key != (self.feature_flags_by_key or {})
-        ):
-            old_version = self.flag_definition_version
-            self.flag_definition_version += 1
-            self.flag_cache.invalidate_version(old_version)
+    def _update_flag_state(
+        self,
+        data: FlagDefinitionCacheData,
+        *,
+        _fingerprint: Optional[str] = None,
+    ) -> Optional[str]:
+        """Publish definitions and return the old cache identity for unlocked cleanup."""
+        fingerprint = _fingerprint or self._hash_flag_definitions(data)
+        with self._flag_definition_publication_lock:
+            old_fingerprint = self._flag_definition_fingerprint
+            self.feature_flags = data["flags"]
+            self.group_type_mapping = data["group_type_mapping"]
+            self.cohorts = data["cohorts"]
+            self._property_matching_version = data.get("property_matching_version", 1)
+            # Absent server-controlled metadata resets to its legacy default.
+            self._minimal_flag_called_events = (
+                data.get("minimal_flag_called_events") is True
+            )
+
+            if fingerprint != self._flag_definition_fingerprint:
+                self._flag_definition_fingerprint = fingerprint
+                if self.flag_cache:
+                    self.flag_definition_version += 1
+                    # No Redis I/O under this lock. The fingerprint remains valid
+                    # across processes; the counter fences this process's writes.
+                    self.flag_cache._advance_generation(
+                        self.flag_definition_version, fingerprint
+                    )
+                return old_fingerprint
+        return None
+
+    def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
+        # Capture references together. Publication replaces these collections, so
+        # recursive and multi-flag evaluations can finish on their original rules.
+        with self._flag_definition_publication_lock:
+            return {
+                "flags": self.feature_flags or [],
+                "flags_by_key": self.feature_flags_by_key or {},
+                "group_type_mapping": self.group_type_mapping or {},
+                "cohorts": self.cohorts or {},
+                "property_matching_version": self._property_matching_version,
+                "flag_definition_version": self.flag_definition_version,
+            }
 
     def _load_feature_flags(self):
         should_fetch = True
@@ -3157,9 +3217,9 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
-                    self._update_flag_state(
-                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
-                    )
+                    old_fingerprint = self._update_flag_state(cached_data)
+                    if isinstance(self.flag_cache, RedisFlagCache):
+                        self.flag_cache._invalidate_snapshot(old_fingerprint)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
@@ -3193,6 +3253,7 @@ class Client(object):
             request_etag = self._flags_etag
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
+        old_fingerprint: Optional[str] = None
         try:
             request_get = _get_with_identity if self._request_identity_kwargs() else get
             response = request_get(
@@ -3202,6 +3263,13 @@ class Client(object):
                 timeout=10,
                 etag=request_etag,
                 **self._request_identity_kwargs(),
+            )
+
+            # Canonical serialization can be expensive; do it before publication.
+            fingerprint = (
+                self._hash_flag_definitions(response.data)
+                if response.data is not None and not response.not_modified
+                else None
             )
 
             with self._flag_definition_publication_lock:
@@ -3237,9 +3305,8 @@ class Client(object):
                     )
                     return
 
-                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
-                self._update_flag_state(
-                    response.data, old_flags_by_key=old_flags_by_key
+                old_fingerprint = self._update_flag_state(
+                    response.data, _fingerprint=fingerprint
                 )
 
                 if self._flag_definition_cache_provider:
@@ -3248,6 +3315,7 @@ class Client(object):
                         "group_type_mapping": self.group_type_mapping or {},
                         "cohorts": self.cohorts or {},
                         "minimal_flag_called_events": self._minimal_flag_called_events,
+                        "property_matching_version": self._property_matching_version,
                     }
 
                 # Publish the ETag only after its matching flag state is installed.
@@ -3291,12 +3359,19 @@ class Client(object):
                     self.feature_flags = []
                     self.group_type_mapping = {}
                     self.cohorts = {}
+                    self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
+                    self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
 
                     if self.flag_cache:
-                        self.flag_cache.clear()
+                        self.flag_definition_version += 1
+                        self.flag_cache._advance_generation(
+                            self.flag_definition_version,
+                            self._flag_definition_fingerprint,
+                        )
 
                     if self.debug:
                         raise APIError(status=401, message=detail)
@@ -3308,13 +3383,20 @@ class Client(object):
                     self.feature_flags = []
                     self.group_type_mapping = {}
                     self.cohorts = {}
+                    self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
+                    self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
 
-                    # Clear flag cache when quota limited
+                    # Invalidate results without waiting for external cache I/O.
                     if self.flag_cache:
-                        self.flag_cache.clear()
+                        self.flag_definition_version += 1
+                        self.flag_cache._advance_generation(
+                            self.flag_definition_version,
+                            self._flag_definition_fingerprint,
+                        )
 
                     if self.debug:
                         raise APIError(
@@ -3329,6 +3411,11 @@ class Client(object):
                 % self.poll_interval
             )
             self.log.warning(e)
+        finally:
+            # Legacy readers ignore snapshot metadata. Cleanup is best effort and
+            # must not hold the publication lock, including when debug raises.
+            if isinstance(self.flag_cache, RedisFlagCache):
+                self.flag_cache._invalidate_snapshot(old_fingerprint)
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 
@@ -3345,14 +3432,18 @@ class Client(object):
             Feature flags
         """
         if self.disabled:
-            self.feature_flags = []
+            with self._flag_definition_publication_lock:
+                self.feature_flags = []
+                self._property_matching_version = 1
             return
 
         if not self.personal_api_key:
             self.log.warning(
                 "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
-            self.feature_flags = []
+            with self._flag_definition_publication_lock:
+                self.feature_flags = []
+                self._property_matching_version = 1
             return
 
         self._load_feature_flags()
@@ -3377,7 +3468,15 @@ class Client(object):
         group_properties=None,
         warn_on_unknown_groups=True,
         device_id=None,
+        _definition_snapshot: Optional[_LocalEvaluationSnapshot] = None,
     ) -> FlagValue:
+        snapshot = (
+            _definition_snapshot
+            if _definition_snapshot is not None
+            else self._local_evaluation_snapshot()
+        )
+        flags_by_key = snapshot["flags_by_key"]
+        property_matching_version = snapshot.get("property_matching_version", 1)
         groups = groups or {}
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -3393,7 +3492,7 @@ class Client(object):
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-        group_type_mapping = self.group_type_mapping or {}
+        group_type_mapping = snapshot["group_type_mapping"]
 
         if aggregation_group_type_index is not None:
             group_name = group_type_mapping.get(str(aggregation_group_type_index))
@@ -3428,8 +3527,9 @@ class Client(object):
                 feature_flag,
                 group_key,
                 focused_group_properties,
-                cohort_properties=self.cohorts,
-                flags_by_key=self.feature_flags_by_key,
+                cohort_properties=snapshot["cohorts"],
+                flags_by_key=flags_by_key,
+                property_matching_version=property_matching_version,
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
                 bucketing_value=group_key,
@@ -3445,8 +3545,9 @@ class Client(object):
                 feature_flag,
                 distinct_id,
                 person_properties,
-                cohort_properties=self.cohorts,
-                flags_by_key=self.feature_flags_by_key,
+                cohort_properties=snapshot["cohorts"],
+                flags_by_key=flags_by_key,
+                property_matching_version=property_matching_version,
                 evaluation_cache=evaluation_cache,
                 device_id=device_id,
                 bucketing_value=bucketing_value,
@@ -3577,7 +3678,7 @@ class Client(object):
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
         )
-        flag_value = self._locally_evaluate_flag(
+        flag_value, snapshot = self._locally_evaluate_flag(
             key,
             distinct_id,
             groups,
@@ -3585,6 +3686,7 @@ class Client(object):
             group_properties,
             device_id,
         )
+        local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_value is not None:
@@ -3592,7 +3694,9 @@ class Client(object):
                 override_match_value if override_match_value is not None else flag_value
             )
             payload = (
-                self._compute_payload_locally(key, lookup_match_value)
+                self._compute_payload_locally(
+                    key, lookup_match_value, _definition_snapshot=snapshot
+                )
                 if lookup_match_value is not None
                 else None
             )
@@ -3604,11 +3708,17 @@ class Client(object):
             cached_flag_result = flag_result
             if override_match_value is not None:
                 cached_flag_result = FeatureFlagResult.from_value_and_payload(
-                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                    key,
+                    flag_value,
+                    self._compute_payload_locally(
+                        key, flag_value, _definition_snapshot=snapshot
+                    ),
                 )
             if self.flag_cache and cached_flag_result:
+                # The cache rejects invalidated generations, including writes
+                # already in flight when new definitions are published.
                 self.flag_cache.set_cached_flag(
-                    distinct_id, key, cached_flag_result, self.flag_definition_version
+                    distinct_id, key, cached_flag_result, local_definition_version
                 )
         elif only_evaluate_locally:
             if self.feature_flags is None:
@@ -3645,10 +3755,11 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
-                # Cache successful remote evaluation
+                # The request-start generation is an invalidation boundary, not
+                # a claim about the server's definitions. Refresh rejects late writes.
                 if self.flag_cache and flag_result:
-                    self.flag_cache.set_cached_flag(
-                        distinct_id, key, flag_result, self.flag_definition_version
+                    self.flag_cache._set_cached_remote_flag(
+                        distinct_id, key, flag_result, local_definition_version
                     )
 
                 self.log.debug(
@@ -3834,17 +3945,15 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
-    ) -> Optional[FlagValue]:
+    ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
+        """Return the local value and its definitions for consistent payload lookup."""
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
 
-        if self.feature_flags:
-            assert self.feature_flags_by_key is not None, (
-                "feature_flags_by_key should be initialized when feature_flags is set"
-            )
-            # Local evaluation
-            flag = self.feature_flags_by_key.get(key)
+        snapshot = self._local_evaluation_snapshot()
+        if snapshot["flags"]:
+            flag = snapshot["flags_by_key"].get(key)
             if flag:
                 try:
                     response = self._compute_flag_locally(
@@ -3854,6 +3963,7 @@ class Client(object):
                         person_properties=person_properties,
                         group_properties=group_properties,
                         device_id=device_id,
+                        _definition_snapshot=snapshot,
                     )
                     self.log.debug(
                         f"Successfully computed flag locally: {key} -> {response}"
@@ -3864,7 +3974,7 @@ class Client(object):
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant locally: {e}"
                     )
-        return response
+        return response, snapshot
 
     def get_feature_flag_payload(
         self,
@@ -4155,14 +4265,19 @@ class Client(object):
             )
 
     def _compute_payload_locally(
-        self, key: str, match_value: FlagValue
+        self,
+        key: str,
+        match_value: FlagValue,
+        *,
+        _definition_snapshot: Optional[_LocalEvaluationSnapshot] = None,
     ) -> Optional[str]:
         payload = None
-
-        if self.feature_flags_by_key is None:
-            return payload
-
-        flag_definition = self.feature_flags_by_key.get(key)
+        snapshot = (
+            _definition_snapshot
+            if _definition_snapshot is not None
+            else self._local_evaluation_snapshot()
+        )
+        flag_definition = snapshot["flags_by_key"].get(key)
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
@@ -4559,14 +4674,15 @@ class Client(object):
         flags: dict[str, FlagValue] = {}
         payloads: dict[str, str] = {}
         fallback_to_flags = False
+        snapshot = self._local_evaluation_snapshot()
         # If loading in previous line failed
-        if self.feature_flags:
+        if snapshot["flags"]:
             # Filter flags based on flag_keys_to_evaluate if provided
-            flags_to_process = self.feature_flags
+            flags_to_process = snapshot["flags"]
             if flag_keys_to_evaluate:
                 flag_keys_set = set(flag_keys_to_evaluate)
                 flags_to_process = [
-                    flag for flag in self.feature_flags if flag["key"] in flag_keys_set
+                    flag for flag in snapshot["flags"] if flag["key"] in flag_keys_set
                 ]
 
             for flag in flags_to_process:
@@ -4579,9 +4695,12 @@ class Client(object):
                         group_properties=group_properties,
                         warn_on_unknown_groups=warn_on_unknown_groups,
                         device_id=device_id,
+                        _definition_snapshot=snapshot,
                     )
                     matched_payload = self._compute_payload_locally(
-                        flag["key"], flags[flag["key"]]
+                        flag["key"],
+                        flags[flag["key"]],
+                        _definition_snapshot=snapshot,
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload

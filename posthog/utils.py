@@ -2,6 +2,7 @@ import json
 import logging
 import numbers
 import re
+import threading
 import time
 from collections import defaultdict
 from dataclasses import asdict, is_dataclass
@@ -216,6 +217,8 @@ class FlagCacheEntry:
         self.flag_result = flag_result
         self.flag_definition_version = flag_definition_version
         self.timestamp = timestamp or time.time()
+        self._snapshot_fingerprint: Optional[str] = None
+        self._is_remote = False
 
     def is_valid(self, current_time, ttl, current_flag_version):
         time_valid = (current_time - self.timestamp) < ttl
@@ -232,6 +235,23 @@ class FlagCache:
         self.access_times = {}  # distinct_id -> last_access_time
         self.max_size = max_size
         self.default_ttl = default_ttl
+        self._minimum_version = None
+        self._write_lock = threading.Lock()
+
+    def _set_cached_remote_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        self.set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version
+        )
+
+    def _advance_generation(self, version, fingerprint=None):
+        # Client generations only move forward. Standalone cache invalidation
+        # retains its existing exact-version deletion semantics.
+        self._minimum_version = version
+
+    def _is_version_current(self, version):
+        return self._minimum_version is None or version >= self._minimum_version
 
     def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
         current_time = time.time()
@@ -244,7 +264,9 @@ class FlagCache:
             return None
 
         entry = user_flags[flag_key]
-        if entry.is_valid(current_time, self.default_ttl, current_flag_version):
+        if self._is_version_current(entry.flag_definition_version) and entry.is_valid(
+            current_time, self.default_ttl, current_flag_version
+        ):
             self.access_times[distinct_id] = current_time
             return entry.flag_result
 
@@ -264,7 +286,9 @@ class FlagCache:
             return None
 
         entry = user_flags[flag_key]
-        if entry.is_stale_but_usable(current_time, max_stale_age):
+        if self._is_version_current(
+            entry.flag_definition_version
+        ) and entry.is_stale_but_usable(current_time, max_stale_age):
             return entry.flag_result
 
         return None
@@ -272,20 +296,28 @@ class FlagCache:
     def set_cached_flag(
         self, distinct_id, flag_key, flag_result, flag_definition_version
     ):
-        current_time = time.time()
+        with self._write_lock:
+            if not self._is_version_current(flag_definition_version):
+                return
+            current_time = time.time()
 
-        # Evict LRU users if we're at capacity
-        if distinct_id not in self.cache and len(self.cache) >= self.max_size:
-            self._evict_lru()
+            # Initialize new users, evicting LRU users if we're at capacity.
+            if distinct_id not in self.cache:
+                if len(self.cache) >= self.max_size:
+                    self._evict_lru()
+                self.cache[distinct_id] = {}
 
-        # Initialize user cache if needed
-        if distinct_id not in self.cache:
-            self.cache[distinct_id] = {}
+            # Prune invalidated flags for reused users, not only on LRU eviction.
+            self.cache[distinct_id] = {
+                key: entry
+                for key, entry in self.cache[distinct_id].items()
+                if self._is_version_current(entry.flag_definition_version)
+            }
 
-        # Store the flag result
-        entry = FlagCacheEntry(flag_result, flag_definition_version)
-        self.cache[distinct_id][flag_key] = entry
-        self.access_times[distinct_id] = current_time
+            # Store the flag result
+            entry = FlagCacheEntry(flag_result, flag_definition_version)
+            self.cache[distinct_id][flag_key] = entry
+            self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
         users_to_remove = [
@@ -348,11 +380,40 @@ class RedisFlagCache:
         self.stale_ttl = stale_ttl
         self.key_prefix = key_prefix
         self.version_key = f"{key_prefix}version"
+        self._snapshot = None
+        self._minimum_version = None
+        self._write_lock = threading.Lock()
+
+    def _advance_generation(self, version, fingerprint=None):
+        # No Redis I/O or write lock here: publication must never wait for Redis.
+        self._minimum_version = version
+        if fingerprint is not None:
+            self._snapshot = (version, fingerprint)
+
+    def _is_entry_current(self, entry):
+        snapshot = self._snapshot
+        if snapshot is not None:
+            # A worker starting during an outage has no local snapshot to verify.
+            # Only explicitly remote results may cross that provenance boundary.
+            if snapshot[1].startswith("remote-only:") and entry._is_remote:
+                return True
+            return bool(snapshot[1]) and entry._snapshot_fingerprint == snapshot[1]
+        return self._is_version_current(entry.flag_definition_version)
+
+    def _is_version_current(self, version):
+        return self._minimum_version is None or version >= self._minimum_version
 
     def _get_cache_key(self, distinct_id, flag_key):
         return f"{self.key_prefix}{distinct_id}:{flag_key}"
 
-    def _serialize_entry(self, flag_result, flag_definition_version, timestamp=None):
+    def _serialize_entry(
+        self,
+        flag_result,
+        flag_definition_version,
+        timestamp=None,
+        fingerprint=None,
+        is_remote=False,
+    ):
         if timestamp is None:
             timestamp = time.time()
 
@@ -364,6 +425,10 @@ class RedisFlagCache:
             "flag_version": flag_definition_version,
             "timestamp": timestamp,
         }
+        if fingerprint is not None:
+            entry["snapshot_fingerprint"] = fingerprint
+        if is_remote:
+            entry["evaluation_source"] = "remote"
         if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
             entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
@@ -381,11 +446,14 @@ class RedisFlagCache:
                 ):
                     return None
                 flag_result = _FeatureFlagResult(**flag_result)
-            return FlagCacheEntry(
+            result = FlagCacheEntry(
                 flag_result=flag_result,
                 flag_definition_version=entry["flag_version"],
                 timestamp=entry["timestamp"],
             )
+            result._snapshot_fingerprint = entry.get("snapshot_fingerprint")
+            result._is_remote = entry.get("evaluation_source") == "remote"
+            return result
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
             return None
@@ -397,10 +465,17 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if entry and entry.is_valid(
-                    time.time(), self.default_ttl, current_flag_version
-                ):
-                    return entry.flag_result
+                if entry and self._is_entry_current(entry):
+                    if self._snapshot is not None:
+                        valid = current_flag_version == self._snapshot[
+                            0
+                        ] and entry.is_stale_but_usable(time.time(), self.default_ttl)
+                    else:
+                        valid = entry.is_valid(
+                            time.time(), self.default_ttl, current_flag_version
+                        )
+                    if valid:
+                        return entry.flag_result
 
             return None
         except Exception:
@@ -417,7 +492,11 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if entry and entry.is_stale_but_usable(time.time(), max_stale_age):
+                if (
+                    entry
+                    and self._is_entry_current(entry)
+                    and entry.is_stale_but_usable(time.time(), max_stale_age)
+                ):
                     return entry.flag_result
 
             return None
@@ -428,17 +507,51 @@ class RedisFlagCache:
     def set_cached_flag(
         self, distinct_id, flag_key, flag_result, flag_definition_version
     ):
+        self._set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version
+        )
+
+    def _set_cached_remote_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        self._set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version, is_remote=True
+        )
+
+    def _set_cached_flag(
+        self,
+        distinct_id,
+        flag_key,
+        flag_result,
+        flag_definition_version,
+        is_remote=False,
+    ):
         try:
             cache_key = self._get_cache_key(distinct_id, flag_key)
+            # Capture provenance before any blocking work. Never stamp an old
+            # evaluation with the fingerprint installed by a concurrent refresh.
+            snapshot = self._snapshot
+            fingerprint = None
+            if snapshot is not None:
+                if flag_definition_version != snapshot[0] or not snapshot[1]:
+                    return
+                fingerprint = snapshot[1]
             serialized_entry = self._serialize_entry(
-                flag_result, flag_definition_version
+                flag_result,
+                flag_definition_version,
+                fingerprint=fingerprint,
+                is_remote=is_remote,
             )
 
-            # Set with TTL for automatic cleanup (use stale_ttl for total lifetime)
-            self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
-
-            # Update the current version
-            self.redis.set(self.version_key, flag_definition_version)
+            # Serialize writes so an old in-flight SETEX cannot overwrite a newer
+            # result. Publication advances the fence without taking this lock.
+            with self._write_lock:
+                if not self._is_version_current(flag_definition_version):
+                    return
+                # Late writes keep their original fingerprint, so workers with
+                # different loaded definitions cannot accept them.
+                self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
+                self.redis.set(self.version_key, flag_definition_version)
 
         except Exception:
             # Redis error - silently fail, don't break flag evaluation
@@ -461,6 +574,36 @@ class RedisFlagCache:
         except Exception:
             # Redis error - silently fail
             pass
+
+    def _invalidate_snapshot(self, fingerprint):
+        # Initial hydration must preserve remote outage fallback. Only retire an
+        # actual loaded snapshot, never unbound or legacy entries with no identity.
+        if not fingerprint or fingerprint.startswith("remote-only:"):
+            return
+        try:
+            for key in self.redis.scan_iter(match=f"{self.key_prefix}*", count=100):
+                self._delete_snapshot_entry(key, fingerprint)
+        except Exception:
+            # This cannot revoke later stale-worker writes or reach an offline
+            # Redis. Snapshot-aware readers still enforce their local fences.
+            pass
+
+    def _delete_snapshot_entry(self, key, fingerprint):
+        if self._is_version_key(key):
+            return
+        data = self.redis.get(key)
+        entry = self._deserialize_entry(data)
+        if entry and entry._snapshot_fingerprint == fingerprint:
+            # EVAL is supported by redis-py and executes atomically on one key
+            # (also safe for Redis Cluster). Script errors propagate to the
+            # best-effort scan; never fall back to an unsafe GET/DELETE.
+            self.redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) end return 0",
+                1,
+                key,
+                data,
+            )
 
     def _delete_keys_with_version(self, keys, old_version):
         for key in keys:
