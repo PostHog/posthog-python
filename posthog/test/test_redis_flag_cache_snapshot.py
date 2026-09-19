@@ -24,13 +24,13 @@ def workers():
     redis = FakeRedis()
     clients = []
 
-    def worker():
+    def worker(secret_key="test-secret"):
         with mock.patch.object(
             Client, "_initialize_flag_cache", return_value=RedisFlagCache(redis)
         ):
             client = Client(
                 FAKE_TEST_API_KEY,
-                secret_key="test-secret",
+                secret_key=secret_key,
                 send=False,
                 enable_local_evaluation=False,
             )
@@ -253,7 +253,13 @@ def test_fork_retains_snapshot_binding(workers):
 
 
 def remote_success(client, during_request=None):
-    details = FeatureFlag.from_json({"key": "person", "enabled": True})
+    details = FeatureFlag.from_json(
+        {
+            "key": "person",
+            "enabled": True,
+            "metadata": {"payload": '{"source":"remote"}'},
+        }
+    )
 
     def request(*args, **kwargs):
         if during_request:
@@ -274,8 +280,8 @@ def test_remote_only_success_remains_available_for_stale_fallback(workers):
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
         assert remote_success(writer).get_value() is True
         assert fallback(writer).get_value() is True
-        # Without verified definitions, a new Client cannot reuse this provenance.
-        assert fallback(workers()) is None
+        # Remote results remain usable by a worker starting during the outage.
+        assert fallback(workers()).get_value() is True
 
 
 @pytest.mark.parametrize("transition", ["hydrate", "empty-hydrate", 401, 402])
@@ -299,6 +305,7 @@ def test_delayed_remote_response_cannot_cross_snapshot_transition(workers, trans
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
         assert remote_success(client, change).get_value() is True
         assert fallback(client) is None
+        assert fallback(workers()) is None
     load(client, definitions(1))
     assert evaluate(client).get_value() is True
     assert fallback(client).get_value() is True
@@ -327,7 +334,7 @@ def test_reset_empty_fingerprint_cannot_cache_or_read_results(workers, status):
     assert fallback(client) is None
 
 
-def test_invalidated_remote_only_result_does_not_revive_after_restart(workers):
+def test_remote_result_requires_matching_snapshot_after_hydration(workers):
     writer = workers()
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
         assert remote_success(writer).get_value() is True
@@ -336,10 +343,10 @@ def test_invalidated_remote_only_result_does_not_revive_after_restart(workers):
     assert fallback(writer) is None
     writer.shutdown()
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
-        assert fallback(workers()) is None
+        assert fallback(workers()).get_value() is True
 
 
-def test_fork_renews_remote_only_provenance(workers):
+def test_fork_retains_remote_fallback(workers):
     client = workers()
     with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
         assert remote_success(client).get_value() is True
@@ -348,6 +355,68 @@ def test_fork_renews_remote_only_provenance(workers):
             client, "_initialize_flag_cache", return_value=RedisFlagCache(redis)
         ):
             client._reinit_after_fork()
-        assert fallback(client) is None
+        assert fallback(client).get_value() is True
         assert remote_success(client).get_value() is True
         assert fallback(client).get_value() is True
+
+
+@pytest.mark.parametrize("secret_key", [None, "test-secret"])
+@pytest.mark.parametrize("writer_has_definitions", [False, True])
+def test_cold_worker_uses_shared_remote_result_during_outage(
+    workers, secret_key, writer_has_definitions
+):
+    writer = workers(secret_key)
+    if writer_has_definitions:
+        load(writer, definitions(1))
+    with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
+        assert remote_success(writer).get_value() is True
+        reader = workers(secret_key)
+        # Reproduce startup when neither endpoint is available.
+        reader._load_feature_flags()
+        assert reader.feature_flags is None
+        result = fallback(reader)
+    assert result is not None
+    assert result.get_value() is True
+    assert result.payload == {"source": "remote"}
+
+
+def test_cold_worker_rejects_shared_local_result_during_outage(workers):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    with mock.patch("posthog.client.get", side_effect=APIError(503, "offline")):
+        assert fallback(workers()) is None
+
+
+def test_loaded_worker_rejects_remote_result_from_different_snapshot(workers):
+    writer = workers()
+    load(writer, definitions(1))
+    assert remote_success(writer).get_value() is True
+    reader = workers()
+    load(reader, definitions(2))
+    assert fallback(reader) is None
+
+
+@pytest.mark.parametrize("status", [401, 402])
+def test_reset_worker_rejects_shared_remote_result(workers, status):
+    writer = workers()
+    load(writer, definitions(1))
+    assert remote_success(writer).get_value() is True
+    reader = workers()
+    with mock.patch("posthog.client.get", side_effect=APIError(status, "reset")):
+        reader._load_feature_flags()
+        assert fallback(reader) is None
+
+
+def test_shared_remote_fallback_respects_stale_ttl(workers):
+    writer = workers()
+    with (
+        mock.patch("posthog.client.get", side_effect=APIError(503, "offline")),
+        mock.patch("posthog.utils.time.time", return_value=100) as clock,
+    ):
+        assert remote_success(writer).get_value() is True
+        reader = workers()
+        clock.return_value = 100 + writer.flag_cache.stale_ttl - 1
+        assert fallback(reader).get_value() is True
+        clock.return_value += 1
+        assert fallback(reader) is None

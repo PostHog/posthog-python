@@ -218,6 +218,7 @@ class FlagCacheEntry:
         self.flag_definition_version = flag_definition_version
         self.timestamp = timestamp or time.time()
         self._snapshot_fingerprint: Optional[str] = None
+        self._is_remote = False
 
     def is_valid(self, current_time, ttl, current_flag_version):
         time_valid = (current_time - self.timestamp) < ttl
@@ -236,6 +237,13 @@ class FlagCache:
         self.default_ttl = default_ttl
         self._minimum_version = None
         self._write_lock = threading.Lock()
+
+    def _set_cached_remote_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        self.set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version
+        )
 
     def _advance_generation(self, version, fingerprint=None):
         # Client generations only move forward. Standalone cache invalidation
@@ -385,6 +393,10 @@ class RedisFlagCache:
     def _is_entry_current(self, entry):
         snapshot = self._snapshot
         if snapshot is not None:
+            # A worker starting during an outage has no local snapshot to verify.
+            # Only explicitly remote results may cross that provenance boundary.
+            if snapshot[1].startswith("remote-only:") and entry._is_remote:
+                return True
             return bool(snapshot[1]) and entry._snapshot_fingerprint == snapshot[1]
         return self._is_version_current(entry.flag_definition_version)
 
@@ -395,7 +407,12 @@ class RedisFlagCache:
         return f"{self.key_prefix}{distinct_id}:{flag_key}"
 
     def _serialize_entry(
-        self, flag_result, flag_definition_version, timestamp=None, fingerprint=None
+        self,
+        flag_result,
+        flag_definition_version,
+        timestamp=None,
+        fingerprint=None,
+        is_remote=False,
     ):
         if timestamp is None:
             timestamp = time.time()
@@ -410,6 +427,8 @@ class RedisFlagCache:
         }
         if fingerprint is not None:
             entry["snapshot_fingerprint"] = fingerprint
+        if is_remote:
+            entry["evaluation_source"] = "remote"
         if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
             entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
@@ -433,6 +452,7 @@ class RedisFlagCache:
                 timestamp=entry["timestamp"],
             )
             result._snapshot_fingerprint = entry.get("snapshot_fingerprint")
+            result._is_remote = entry.get("evaluation_source") == "remote"
             return result
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
@@ -487,6 +507,25 @@ class RedisFlagCache:
     def set_cached_flag(
         self, distinct_id, flag_key, flag_result, flag_definition_version
     ):
+        self._set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version
+        )
+
+    def _set_cached_remote_flag(
+        self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        self._set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version, is_remote=True
+        )
+
+    def _set_cached_flag(
+        self,
+        distinct_id,
+        flag_key,
+        flag_result,
+        flag_definition_version,
+        is_remote=False,
+    ):
         try:
             cache_key = self._get_cache_key(distinct_id, flag_key)
             # Capture provenance before any blocking work. Never stamp an old
@@ -498,7 +537,10 @@ class RedisFlagCache:
                     return
                 fingerprint = snapshot[1]
             serialized_entry = self._serialize_entry(
-                flag_result, flag_definition_version, fingerprint=fingerprint
+                flag_result,
+                flag_definition_version,
+                fingerprint=fingerprint,
+                is_remote=is_remote,
             )
 
             # Serialize writes so an old in-flight SETEX cannot overwrite a newer
@@ -506,8 +548,8 @@ class RedisFlagCache:
             with self._write_lock:
                 if not self._is_version_current(flag_definition_version):
                     return
-                # Late writes keep their original fingerprint. Other workers
-                # reject them too, even if their local generation counters differ.
+                # Late writes keep their original fingerprint, so workers with
+                # different loaded definitions cannot accept them.
                 self.redis.setex(cache_key, self.stale_ttl, serialized_entry)
                 self.redis.set(self.version_key, flag_definition_version)
 

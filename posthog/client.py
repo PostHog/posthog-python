@@ -898,7 +898,7 @@ class Client(object):
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
-        # Without definitions, remote results have only process-local provenance.
+        # Until definitions load, only explicitly remote Redis results are shared.
         self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
         if self.flag_cache:
             self.flag_cache._advance_generation(
@@ -2910,7 +2910,6 @@ class Client(object):
     def _update_flag_state(
         self,
         data: FlagDefinitionCacheData,
-        old_flags_by_key: Optional[dict] = None,
         *,
         _fingerprint: Optional[str] = None,
     ) -> None:
@@ -2973,9 +2972,7 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
-                    self._update_flag_state(
-                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
-                    )
+                    self._update_flag_state(cached_data)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
@@ -3060,12 +3057,7 @@ class Client(object):
                     )
                     return
 
-                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
-                self._update_flag_state(
-                    response.data,
-                    old_flags_by_key=old_flags_by_key,
-                    _fingerprint=fingerprint,
-                )
+                self._update_flag_state(response.data, _fingerprint=fingerprint)
 
                 if self._flag_definition_cache_provider:
                     cache_data_to_store = {
@@ -3509,7 +3501,7 @@ class Client(object):
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
                 if self.flag_cache and flag_result:
-                    self.flag_cache.set_cached_flag(
+                    self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
 

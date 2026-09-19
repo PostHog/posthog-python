@@ -231,7 +231,7 @@ def test_in_flight_full_evaluation_keeps_matching_snapshot(client):
         nonlocal calls
         calls += 1
         if calls == 1:
-            client._update_flag_state(definitions(2), client.feature_flags_by_key)
+            client._update_flag_state(definitions(2))
         return original(*args, **kwargs)
 
     with mock.patch(
@@ -481,7 +481,7 @@ def test_in_flight_result_is_not_cached_in_new_generation(client):
     original = client_module.match_feature_flag_properties
 
     def reload_during_evaluation(*args, **kwargs):
-        client._update_flag_state(definitions(2), client.feature_flags_by_key)
+        client._update_flag_state(definitions(2))
         return original(*args, **kwargs)
 
     with mock.patch(
