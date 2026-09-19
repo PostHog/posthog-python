@@ -588,6 +588,7 @@ class TestFlagCache(unittest.TestCase):
 
         # Standalone entries have no definition snapshot provenance.
         assert entry._snapshot_fingerprint is None
+        assert entry._is_remote is False
         assert entry.is_valid(current_time=109, ttl=10, current_flag_version=1) is True
         assert entry.is_valid(current_time=110, ttl=10, current_flag_version=1) is False
         assert entry.is_valid(current_time=111, ttl=10, current_flag_version=1) is False
@@ -613,6 +614,14 @@ class TestFlagCache(unittest.TestCase):
         result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
         assert result is not None
         assert result.get_value()
+
+    def test_remote_result_uses_memory_generation_fence(self):
+        self.cache._advance_generation(7)
+        self.cache._set_cached_remote_flag("user", "beta", self.flag_result, 7)
+        assert self.cache.get_cached_flag("user", "beta", 7) is self.flag_result
+        self.cache._advance_generation(8)
+        self.cache._set_cached_remote_flag("user", "beta", False, 7)
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
 
     def test_generation_fences_reads_and_writes_and_prunes_reused_users(self):
         self.cache.set_cached_flag("user", "old", False, 1)
@@ -969,6 +978,47 @@ class TestRedisFlagCache(unittest.TestCase):
             True, 7, timestamp=time.time() - 3600.5
         )
         assert self.cache.get_stale_cached_flag("user123", "boundary-stale") is None
+
+    def test_remote_result_round_trip_and_cold_worker_provenance(self):
+        self.cache._advance_generation(7, "snapshot-a")
+        with mock.patch("posthog.utils.time.time", return_value=100):
+            self.cache._set_cached_remote_flag("user", "beta", False, 7)
+        key, ttl, data = self.redis.setex_calls[-1]
+        assert key == "test:flags:user:beta"
+        assert ttl == 60
+        assert json.loads(data) == {
+            "flag_result": False,
+            "flag_version": 7,
+            "timestamp": 100,
+            "snapshot_fingerprint": "snapshot-a",
+            "evaluation_source": "remote",
+        }
+        entry = self.cache._deserialize_entry(data)
+        assert entry._is_remote is True
+        assert entry._snapshot_fingerprint == "snapshot-a"
+        reader = utils.RedisFlagCache(self.redis, key_prefix="test:flags:")
+        with mock.patch("posthog.utils.time.time", return_value=101):
+            reader._advance_generation(2, "remote-only:cold-worker")
+            assert reader.get_cached_flag("user", "beta", 2) is False
+            assert reader.get_stale_cached_flag("user", "beta") is False
+            for fingerprint in ("snapshot-b", "", "not-remote-only:cold-worker"):
+                reader._advance_generation(3, fingerprint)
+                assert reader.get_stale_cached_flag("user", "beta") is None
+            reader._advance_generation(4, "snapshot-a")
+            assert reader.get_stale_cached_flag("user", "beta") is False
+
+    @parameterized.expand([(None,), ("local",), ("REMOTE",)])
+    def test_cold_worker_rejects_entries_not_explicitly_remote(self, source):
+        data = json.loads(
+            self.cache._serialize_entry(True, 7, fingerprint="snapshot-a")
+        )
+        if source is not None:
+            data["evaluation_source"] = source
+        entry = self.cache._deserialize_entry(json.dumps(data))
+        assert entry._is_remote is False
+        self.cache._advance_generation(2, "remote-only:cold-worker")
+        self.redis.store[self.cache._get_cache_key("user", "beta")] = json.dumps(data)
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
 
     def test_snapshot_round_trip_reuses_matching_worker_with_different_generation(self):
         self.cache._advance_generation(7, "snapshot-a")
