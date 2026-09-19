@@ -2912,10 +2912,11 @@ class Client(object):
         data: FlagDefinitionCacheData,
         *,
         _fingerprint: Optional[str] = None,
-    ) -> None:
-        """Publish definitions and their result-cache identity together."""
+    ) -> Optional[str]:
+        """Publish definitions and return the old cache identity for unlocked cleanup."""
         fingerprint = _fingerprint or self._hash_flag_definitions(data)
         with self._flag_definition_publication_lock:
+            old_fingerprint = self._flag_definition_fingerprint
             self.feature_flags = data["flags"]
             self.group_type_mapping = data["group_type_mapping"]
             self.cohorts = data["cohorts"]
@@ -2934,6 +2935,8 @@ class Client(object):
                     self.flag_cache._advance_generation(
                         self.flag_definition_version, fingerprint
                     )
+                return old_fingerprint
+        return None
 
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
@@ -2972,7 +2975,9 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
-                    self._update_flag_state(cached_data)
+                    old_fingerprint = self._update_flag_state(cached_data)
+                    if isinstance(self.flag_cache, RedisFlagCache):
+                        self.flag_cache._invalidate_snapshot(old_fingerprint)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
@@ -3006,6 +3011,7 @@ class Client(object):
             request_etag = self._flags_etag
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
+        old_fingerprint: Optional[str] = None
         try:
             request_get = _get_with_identity if self._request_identity_kwargs() else get
             response = request_get(
@@ -3057,7 +3063,9 @@ class Client(object):
                     )
                     return
 
-                self._update_flag_state(response.data, _fingerprint=fingerprint)
+                old_fingerprint = self._update_flag_state(
+                    response.data, _fingerprint=fingerprint
+                )
 
                 if self._flag_definition_cache_provider:
                     cache_data_to_store = {
@@ -3110,6 +3118,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
                     self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
@@ -3133,6 +3142,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
                     self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
@@ -3159,6 +3169,11 @@ class Client(object):
                 % self.poll_interval
             )
             self.log.warning(e)
+        finally:
+            # Legacy readers ignore snapshot metadata. Cleanup is best effort and
+            # must not hold the publication lock, including when debug raises.
+            if isinstance(self.flag_cache, RedisFlagCache):
+                self.flag_cache._invalidate_snapshot(old_fingerprint)
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 

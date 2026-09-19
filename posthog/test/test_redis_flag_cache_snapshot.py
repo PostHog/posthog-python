@@ -420,3 +420,128 @@ def test_shared_remote_fallback_respects_stale_ttl(workers):
         assert fallback(reader).get_value() is True
         clock.return_value += 1
         assert fallback(reader) is None
+
+
+@pytest.mark.parametrize("transition", ["refresh", "provider", 401, 402])
+def test_legacy_reader_loses_invalidated_snapshot(workers, transition):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    legacy_reader = RedisFlagCache(writer.flag_cache.redis)
+    assert legacy_reader.get_stale_cached_flag("user", "person").get_value() is True
+    if isinstance(transition, int):
+        with mock.patch(
+            "posthog.client.get", side_effect=APIError(transition, "reset")
+        ):
+            writer._load_feature_flags()
+    elif transition == "provider":
+        provider = MockCacheProvider()
+        provider.should_fetch_return_value = False
+        provider.stored_data = definitions(2)
+        writer._flag_definition_cache_provider = provider
+        writer._load_feature_flags()
+    else:
+        load(writer, definitions(2))
+    assert legacy_reader.get_stale_cached_flag("user", "person") is None
+
+
+def test_snapshot_cleanup_preserves_concurrent_replacement(workers):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    replacement = workers()
+    load(replacement, definitions(2))
+    redis = writer.flag_cache.redis
+    original = redis.eval
+    calls = []
+
+    def replace_then_delete(*args):
+        calls.append(args)
+        assert evaluate(replacement).get_value() is False
+        return original(*args)
+
+    with mock.patch.object(redis, "eval", side_effect=replace_then_delete):
+        load(writer, definitions(2))
+    assert calls
+    assert (
+        RedisFlagCache(redis).get_stale_cached_flag("user", "person").get_value()
+        is False
+    )
+
+
+@pytest.mark.parametrize("transition", ["refresh", 401, 402])
+def test_snapshot_cleanup_does_not_hold_publication_lock(workers, transition):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    entered = threading.Event()
+    release = threading.Event()
+    snapshot_finished = threading.Event()
+    errors = []
+    original = writer.flag_cache.redis.scan
+
+    def pause(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    def refresh():
+        try:
+            if isinstance(transition, int):
+                with mock.patch(
+                    "posthog.client.get", side_effect=APIError(transition, "reset")
+                ):
+                    writer._load_feature_flags()
+            else:
+                load(writer, definitions(2))
+        except BaseException as error:
+            errors.append(error)
+
+    def read_snapshot():
+        writer._local_evaluation_snapshot()
+        snapshot_finished.set()
+
+    refresher = threading.Thread(target=refresh)
+    reader = threading.Thread(target=read_snapshot)
+    with mock.patch.object(writer.flag_cache.redis, "scan", side_effect=pause):
+        try:
+            refresher.start()
+            assert entered.wait(2), "cleanup was not attempted"
+            reader.start()
+            assert snapshot_finished.wait(1), "cleanup holds publication lock"
+        finally:
+            release.set()
+            refresher.join(5)
+            if reader.ident is not None:
+                reader.join(5)
+    assert not errors
+
+
+def test_snapshot_cleanup_failure_keeps_publication_and_fence(workers):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    with mock.patch.object(
+        writer.flag_cache.redis, "scan", side_effect=RuntimeError("offline")
+    ) as scan:
+        load(writer, definitions(2))
+    scan.assert_called_once()
+    assert writer._property_matching_version == 2
+    assert fallback(writer) is None
+
+
+@pytest.mark.parametrize("status", [401, 402])
+def test_debug_reset_still_cleans_legacy_snapshot(workers, status):
+    writer = workers()
+    load(writer, definitions(1))
+    assert evaluate(writer).get_value() is True
+    writer.debug = True
+    with (
+        mock.patch("posthog.client.get", side_effect=APIError(status, "reset")),
+        pytest.raises(APIError),
+    ):
+        writer._load_feature_flags()
+    assert (
+        RedisFlagCache(writer.flag_cache.redis).get_stale_cached_flag("user", "person")
+        is None
+    )

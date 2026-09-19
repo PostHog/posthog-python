@@ -575,6 +575,36 @@ class RedisFlagCache:
             # Redis error - silently fail
             pass
 
+    def _invalidate_snapshot(self, fingerprint):
+        # Initial hydration must preserve remote outage fallback. Only retire an
+        # actual loaded snapshot, never unbound or legacy entries with no identity.
+        if not fingerprint or fingerprint.startswith("remote-only:"):
+            return
+        try:
+            for key in self.redis.scan_iter(match=f"{self.key_prefix}*", count=100):
+                self._delete_snapshot_entry(key, fingerprint)
+        except Exception:
+            # This cannot revoke later stale-worker writes or reach an offline
+            # Redis. Snapshot-aware readers still enforce their local fences.
+            pass
+
+    def _delete_snapshot_entry(self, key, fingerprint):
+        if self._is_version_key(key):
+            return
+        data = self.redis.get(key)
+        entry = self._deserialize_entry(data)
+        if entry and entry._snapshot_fingerprint == fingerprint:
+            # EVAL is supported by redis-py and executes atomically on one key
+            # (also safe for Redis Cluster). Script errors propagate to the
+            # best-effort scan; never fall back to an unsafe GET/DELETE.
+            self.redis.eval(
+                "if redis.call('get', KEYS[1]) == ARGV[1] then "
+                "return redis.call('del', KEYS[1]) end return 0",
+                1,
+                key,
+                data,
+            )
+
     def _delete_keys_with_version(self, keys, old_version):
         for key in keys:
             if self._is_version_key(key):
