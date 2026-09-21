@@ -2,6 +2,7 @@ import atexit
 import inspect
 import json
 import logging
+import math
 import os
 import sys
 import threading
@@ -82,6 +83,7 @@ from posthog.flag_definition_cache import (
     FlagDefinitionCacheProvider,
 )
 from posthog.poller import Poller
+from ._remote_config import _RemoteConfigPoller
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
@@ -725,6 +727,7 @@ class Client(object):
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
+        remote_config_poll_interval_seconds: Optional[float] = 300,
     ):
         """
         Initialize a new PostHog client instance.
@@ -752,8 +755,16 @@ class Client(object):
                 background worker threads. This blocks the calling thread; in
                 asyncio applications such as FastAPI, use ``AsyncPosthog``
                 instead.
-            timeout: HTTP request timeout in seconds for event uploads.
+            timeout: HTTP request timeout in seconds for event uploads and project
+                remote configuration fetches.
             thread: Number of background consumer threads.
+            remote_config_poll_interval_seconds: Fetch project configuration in the
+                background at startup, then wait this many seconds between fetches
+                (default 300), including after failures.
+                None disables fetching. Must be positive and finite when enabled.
+                Disabled clients and send=False do not fetch. Responses are cached
+                in memory only and do not change SDK settings. Uses timeout for HTTP
+                requests; shutdown waits for an in-flight request to finish.
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
@@ -904,6 +915,17 @@ class Client(object):
         self.feature_flags_by_key: Optional[dict[str, Any]] = None
         self.group_type_mapping: Optional[dict[str, str]] = None
         self.cohorts: Optional[dict[str, Any]] = None
+        if remote_config_poll_interval_seconds is not None and (
+            isinstance(remote_config_poll_interval_seconds, bool)
+            or not isinstance(remote_config_poll_interval_seconds, (int, float))
+            or not math.isfinite(remote_config_poll_interval_seconds)
+            or remote_config_poll_interval_seconds <= 0
+        ):
+            raise ValueError(
+                "remote_config_poll_interval_seconds must be positive and finite or None"
+            )
+        self.remote_config_poll_interval_seconds = remote_config_poll_interval_seconds
+        self._remote_config_poller: Optional[_RemoteConfigPoller] = None
         self.poll_interval = poll_interval
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
@@ -1110,6 +1132,23 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+        self._start_remote_config()
+
+    def _start_remote_config(self) -> None:
+        if (
+            self.disabled
+            or not self.send
+            or self.remote_config_poll_interval_seconds is None
+        ):
+            return
+        self._remote_config_poller = _RemoteConfigPoller(
+            self.api_key,
+            self.host,
+            self.remote_config_poll_interval_seconds,
+            self.timeout,
+            is_enabled=lambda: not self.disabled and self.send,
+        )
+        self._remote_config_poller.start()
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -2290,6 +2329,9 @@ class Client(object):
         reset_sessions()
 
         # Start child threads only after replacing every lock they can touch.
+        self._remote_config_poller = None
+        if not terminal_requested:
+            self._start_remote_config()
         if terminal_requested:
             self.poller = None
         elif self.enable_local_evaluation:
@@ -2849,6 +2891,12 @@ class Client(object):
             self._workers_joined = True
 
         if not self._join_cleanup_complete:
+            if self._remote_config_poller:
+                self._run_lifecycle_cleanup(
+                    "Failed to stop remote config poller during lifecycle cleanup",
+                    self._remote_config_poller.stop,
+                    errors,
+                )
             if self.poller:
                 self._run_lifecycle_cleanup(
                     "Failed to stop feature flag poller during lifecycle cleanup",
@@ -2998,6 +3046,8 @@ class Client(object):
                     lane.flush(max(0.0, deadline - time.monotonic()))
                 self._join_span_flush(span_flush, deadline)
             finally:
+                if self._remote_config_poller:
+                    self._remote_config_poller._stopped.set()
                 # Consumers are daemon threads. Publish a non-draining stop to
                 # every consumer, but do not join in-flight requests at exit.
                 for lane in self._lanes:

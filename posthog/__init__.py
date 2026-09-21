@@ -325,6 +325,10 @@ Attributes:
     secret_key: A Personal API Key or Project Secret API Key used for local
         feature flag evaluation and remote config payloads.
     personal_api_key: Deprecated alias for secret_key.
+    remote_config_poll_interval_seconds: Seconds between background project config
+        fetches (default 300), also fetched at startup. None disables fetching.
+        Responses do not change SDK settings. Disabled clients and send=False
+        do not fetch. Applies when the default client is first constructed.
     poll_interval: Seconds between local feature flag definition refreshes.
     disable_geoip: Whether to disable server-side GeoIP enrichment. Defaults to
         True.
@@ -405,6 +409,7 @@ personal_api_key = None  # type: Optional[str]  # Deprecated: use secret_key
 # Preferred project token setting; takes precedence over the legacy api_key alias.
 project_api_key = None  # type: Optional[str]
 poll_interval = 30  # type: int
+remote_config_poll_interval_seconds = 300  # type: Optional[float]
 disable_geoip = True  # type: bool
 is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
@@ -1345,6 +1350,7 @@ def setup() -> Client:
             secret_key=secret_key,
             personal_api_key=personal_api_key,
             poll_interval=poll_interval,
+            remote_config_poll_interval_seconds=remote_config_poll_interval_seconds,
             disabled=disabled,
             disable_geoip=disable_geoip,
             is_server=is_server,
