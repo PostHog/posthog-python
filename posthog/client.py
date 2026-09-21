@@ -4772,10 +4772,9 @@ class Client(object):
         """
         wanted = FeatureFlagEvaluationRuntime(evaluation_runtime)
         return [
-            definition["key"]
-            for definition in (self.feature_flags or [])
-            if definition.get("key") is not None
-            and FeatureFlagEvaluationRuntime.from_value(
+            key
+            for key, definition in (self.feature_flags_by_key or {}).items()
+            if FeatureFlagEvaluationRuntime.from_value(
                 definition.get("evaluation_runtime")
             ).matches(wanted)
         ]
