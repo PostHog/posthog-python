@@ -91,17 +91,80 @@ def test_invalid_interval(interval):
 @pytest.mark.parametrize(
     "options",
     [
-        {"disabled": True},
         {"send": False},
         {"remote_config_poll_interval_seconds": None},
     ],
 )
-def test_disabled_does_not_start(options):
+def test_fetching_opt_out_does_not_start(options):
     with patch("posthog.client._RemoteConfigPoller") as worker:
         client = Client("phc_test", **options)
         try:
             worker.assert_not_called()
         finally:
+            client.shutdown()
+
+
+@pytest.mark.parametrize("module_client", [False, True])
+def test_disabled_client_fetches_after_reenabling(monkeypatch, module_client):
+    fetched = threading.Event()
+
+    def fetch(*args):
+        fetched.set()
+        return {}
+
+    with patch("posthog._remote_config._fetch_remote_config", side_effect=fetch):
+        if module_client:
+            monkeypatch.setattr(posthog, "default_client", None)
+            monkeypatch.setattr(posthog, "project_api_key", "phc_test")
+            monkeypatch.setattr(posthog, "disabled", True)
+            monkeypatch.setattr(posthog, "sync_mode", True)
+            monkeypatch.setattr(posthog, "send", True)
+            monkeypatch.setattr(posthog, "remote_config_poll_interval_seconds", 0.01)
+            client = posthog.setup()
+        else:
+            client = Client(
+                "phc_test",
+                disabled=True,
+                sync_mode=True,
+                remote_config_poll_interval_seconds=0.01,
+            )
+        try:
+            assert not fetched.wait(0.05)
+            if module_client:
+                posthog.disabled = False
+                assert posthog.setup() is client
+            else:
+                client.disabled = False
+            assert fetched.wait(2), "Re-enabled client never fetched remote config"
+        finally:
+            client.shutdown()
+
+
+def test_sync_client_registers_nonblocking_exit_cleanup():
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fetch(*args):
+        entered.set()
+        assert release.wait(5)
+        return {}
+
+    with (
+        patch("posthog._remote_config._fetch_remote_config", side_effect=fetch),
+        patch("posthog.client.atexit.register") as register,
+    ):
+        client = Client("phc_test", sync_mode=True)
+        try:
+            assert entered.wait(5)
+            for call in register.call_args_list:
+                callback, *args = call.args
+                callback(*args, **call.kwargs)
+            assert client._remote_config_poller.stopped.is_set(), (
+                "Registered exit callbacks did not signal the sync poller"
+            )
+            assert client._remote_config_poller.is_alive()
+        finally:
+            release.set()
             client.shutdown()
 
 

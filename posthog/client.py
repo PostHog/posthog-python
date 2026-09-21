@@ -762,8 +762,10 @@ class Client(object):
                 background at startup, then wait this many seconds between fetches
                 (default 300), including after failures.
                 None disables fetching. Must be positive and finite when enabled.
-                Disabled clients and send=False do not fetch. Responses are cached
-                in memory only and do not change SDK settings. Uses timeout for HTTP
+                Disabled clients skip requests until re-enabled, at which point
+                fetching resumes on the next interval. send=False does not start
+                a poller. Responses are cached in memory only and do not change
+                SDK settings. Uses timeout for HTTP
                 requests; shutdown waits for an in-flight request to finish.
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
@@ -1132,15 +1134,16 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
-        self._start_remote_config()
+        if self._start_remote_config() and self.sync_mode:
+            atexit.register(self._atexit_remote_config)
 
-    def _start_remote_config(self) -> None:
+    def _start_remote_config(self) -> bool:
         if (
-            self.disabled
+            not self.api_key
             or not self.send
             or self.remote_config_poll_interval_seconds is None
         ):
-            return
+            return False
         self._remote_config_poller = _RemoteConfigPoller(
             self.api_key,
             self.host,
@@ -1149,6 +1152,7 @@ class Client(object):
             is_enabled=lambda: not self.disabled and self.send,
         )
         self._remote_config_poller.start()
+        return True
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -3023,6 +3027,10 @@ class Client(object):
                     self._lifecycle_condition.notify_all()
                 raise
 
+    def _atexit_remote_config(self) -> None:
+        if self._remote_config_poller:
+            self._remote_config_poller.stopped.set()
+
     @no_throw()
     def _atexit(self) -> None:
         """Make a bounded delivery attempt, then stop daemon workers."""
@@ -3046,8 +3054,7 @@ class Client(object):
                     lane.flush(max(0.0, deadline - time.monotonic()))
                 self._join_span_flush(span_flush, deadline)
             finally:
-                if self._remote_config_poller:
-                    self._remote_config_poller.stopped.set()
+                self._atexit_remote_config()
                 # Consumers are daemon threads. Publish a non-draining stop to
                 # every consumer, but do not join in-flight requests at exit.
                 for lane in self._lanes:
