@@ -80,6 +80,7 @@ from posthog.request import (
 from posthog.types import (
     BeforeSendCallback as BeforeSendCallback,
     FeatureFlag as FeatureFlag,
+    FeatureFlagEvaluationRuntime as FeatureFlagEvaluationRuntime,
     FlagValue as FlagValue,
     FlagsAndPayloads as FlagsAndPayloads,
 )
@@ -1155,6 +1156,54 @@ def feature_flag_definitions():
         Feature flags
     """
     return _proxy("feature_flag_definitions")
+
+
+def get_feature_flag_evaluation_runtime(
+    key: str,
+) -> Optional[FeatureFlagEvaluationRuntime]:
+    """
+    Return where a locally loaded feature flag is meant to be evaluated.
+
+    Details:
+        Reads the `evaluation_runtime` each flag definition carries, so no extra
+        request is made. Returns `None` when local evaluation has not loaded a
+        definition for this key. A definition that carries no runtime reports
+        `FeatureFlagEvaluationRuntime.ALL`, the default PostHog applies.
+
+    Examples:
+        ```python
+        from posthog import FeatureFlagEvaluationRuntime, get_feature_flag_evaluation_runtime
+        runtime = get_feature_flag_evaluation_runtime("my-flag")
+        ```
+
+    Category:
+        Feature flags
+    """
+    return _proxy("get_feature_flag_evaluation_runtime", key)
+
+
+def get_feature_flag_keys_by_evaluation_runtime(
+    evaluation_runtime: Union[FeatureFlagEvaluationRuntime, str],
+) -> list[str]:
+    """
+    Return the keys of locally loaded flags that a runtime can evaluate.
+
+    Details:
+        A flag set to `FeatureFlagEvaluationRuntime.ALL` suits either runtime, so
+        it is returned for `CLIENT` and for `SERVER`. Use this to decide which
+        flags to hand to a browser when a backend serves flags to its own
+        frontend.
+
+    Examples:
+        ```python
+        from posthog import FeatureFlagEvaluationRuntime, get_feature_flag_keys_by_evaluation_runtime
+        client_keys = get_feature_flag_keys_by_evaluation_runtime(FeatureFlagEvaluationRuntime.CLIENT)
+        ```
+
+    Category:
+        Feature flags
+    """
+    return _proxy("get_feature_flag_keys_by_evaluation_runtime", evaluation_runtime)
 
 
 def load_feature_flags():

@@ -103,6 +103,7 @@ from posthog.request import (
 from posthog.types import (
     FeatureFlag,
     FeatureFlagError,
+    FeatureFlagEvaluationRuntime,
     FeatureFlagResult,
     FlagMetadata,
     FlagsAndPayloads,
@@ -4703,6 +4704,81 @@ class Client(object):
             Feature flags
         """
         return self.feature_flags
+
+    def get_feature_flag_evaluation_runtime(
+        self, key: str
+    ) -> Optional[FeatureFlagEvaluationRuntime]:
+        """
+        Return where a locally loaded feature flag is meant to be evaluated.
+
+        Args:
+            key: The feature flag key.
+
+        Returns:
+            The flag's evaluation runtime, or ``None`` when local evaluation has
+            not loaded a definition for this key. A definition that carries no
+            runtime reports ``FeatureFlagEvaluationRuntime.ALL``, the default
+            PostHog applies.
+
+        Examples:
+            ```python
+            from posthog import FeatureFlagEvaluationRuntime
+
+            runtime = posthog.get_feature_flag_evaluation_runtime("my-flag")
+            if runtime is FeatureFlagEvaluationRuntime.SERVER:
+                ...
+            ```
+
+        Category:
+            Feature flags
+        """
+        definition = (self.feature_flags_by_key or {}).get(key)
+        if definition is None:
+            return None
+        return FeatureFlagEvaluationRuntime.from_value(
+            definition.get("evaluation_runtime")
+        )
+
+    def get_feature_flag_keys_by_evaluation_runtime(
+        self, evaluation_runtime: Union[FeatureFlagEvaluationRuntime, str]
+    ) -> list[str]:
+        """
+        Return the keys of locally loaded flags that a runtime can evaluate.
+
+        A flag set to ``FeatureFlagEvaluationRuntime.ALL`` suits either runtime,
+        so it is returned for ``CLIENT`` and for ``SERVER``, and asking for
+        ``ALL`` returns every loaded flag. Use this to decide which flags to hand
+        to a browser when a backend serves flags to its own frontend.
+
+        Args:
+            evaluation_runtime: The runtime to match, as a
+                ``FeatureFlagEvaluationRuntime`` or its string value.
+
+        Returns:
+            The matching flag keys, in the order local evaluation loaded them.
+            Empty when no definitions are loaded.
+
+        Examples:
+            ```python
+            from posthog import FeatureFlagEvaluationRuntime
+
+            client_keys = posthog.get_feature_flag_keys_by_evaluation_runtime(
+                FeatureFlagEvaluationRuntime.CLIENT
+            )
+            ```
+
+        Category:
+            Feature flags
+        """
+        wanted = FeatureFlagEvaluationRuntime(evaluation_runtime)
+        return [
+            definition["key"]
+            for definition in (self.feature_flags or [])
+            if definition.get("key") is not None
+            and FeatureFlagEvaluationRuntime.from_value(
+                definition.get("evaluation_runtime")
+            ).matches(wanted)
+        ]
 
     def _person_properties_for_local_evaluation(self, distinct_id, person_properties):
         local_person_properties = dict(person_properties or {})

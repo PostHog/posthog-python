@@ -1,5 +1,6 @@
 import json
 from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 
 FlagValue = Union[bool, str]
@@ -40,6 +41,41 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
     person_properties: Optional[dict[str, Any]]
     group_properties: Optional[dict[str, dict[str, Any]]]
     flag_keys_filter: Optional[list[str]]
+
+
+class FeatureFlagEvaluationRuntime(str, Enum):
+    """Where a feature flag is meant to be evaluated.
+
+    Set per flag in PostHog and carried on every locally cached flag definition.
+    ``ALL`` means the flag suits both client-side and server-side evaluation, so
+    it matches either runtime. Inheriting from ``str`` keeps the members directly
+    comparable to their ``"all"`` / ``"client"`` / ``"server"`` values.
+    """
+
+    ALL = "all"
+    CLIENT = "client"
+    SERVER = "server"
+
+    @classmethod
+    def from_value(cls, value: Any) -> "FeatureFlagEvaluationRuntime":
+        """Coerce a raw ``evaluation_runtime`` value to a member.
+
+        A missing, null or unrecognized value becomes ``ALL``, which is the
+        default PostHog applies to a flag that does not set a runtime.
+        """
+        if isinstance(value, str):
+            try:
+                return cls(value.strip().lower())
+            except ValueError:
+                pass
+        return cls.ALL
+
+    def matches(self, other: "FeatureFlagEvaluationRuntime") -> bool:
+        """Whether a flag set to one of these runtimes suits the other runtime.
+
+        ``ALL`` matches every runtime, so the check is symmetric.
+        """
+        return self is other or FeatureFlagEvaluationRuntime.ALL in (self, other)
 
 
 @dataclass(frozen=True)
