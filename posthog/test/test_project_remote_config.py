@@ -36,6 +36,101 @@ def test_request_contract(host, base):
         response.raise_for_status.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    "config,expected",
+    [
+        ({"sdkDiagnosticsEnabled": True}, True),
+        ({"sdkDiagnosticsEnabled": False}, False),
+        ({}, False),
+        *[
+            ({"sdkDiagnosticsEnabled": value}, False)
+            for value in [None, 1, 0, "true", "false", [], {}, [True]]
+        ],
+    ],
+)
+@pytest.mark.parametrize("local_enabled", [True, False])
+def test_sdk_diagnostics_remote_config_value(config, expected, local_enabled):
+    with (
+        patch("posthog._remote_config._RemoteConfigPoller.start"),
+        patch("posthog._remote_config._RemoteConfigPoller.stop"),
+        patch("posthog._remote_config._fetch_remote_config", return_value=config),
+    ):
+        client = Client(
+            "phc_test", sync_mode=True, sdk_diagnostics_enabled=local_enabled
+        )
+        try:
+            assert client._sdk_diagnostics_enabled is False
+            client._remote_config_poller._refresh()
+            assert client._sdk_diagnostics_enabled is (local_enabled and expected)
+            assert client.sdk_diagnostics_enabled is local_enabled
+        finally:
+            client.shutdown()
+
+
+def test_module_sdk_diagnostics_local_setting(monkeypatch):
+    monkeypatch.setattr(posthog, "default_client", None)
+    monkeypatch.setattr(posthog, "project_api_key", "phc_test")
+    monkeypatch.setattr(posthog, "sync_mode", True)
+    monkeypatch.setattr(posthog, "sdk_diagnostics_enabled", False)
+    with (
+        patch("posthog._remote_config._RemoteConfigPoller.start"),
+        patch("posthog._remote_config._RemoteConfigPoller.stop"),
+        patch(
+            "posthog._remote_config._fetch_remote_config",
+            return_value={
+                "sdkDiagnosticsEnabled": True,
+            },
+        ),
+    ):
+        client = posthog.setup()
+        try:
+            client._remote_config_poller._refresh()
+            assert client.sdk_diagnostics_enabled is False
+            assert client._sdk_diagnostics_enabled is False
+            posthog.sdk_diagnostics_enabled = True
+            assert posthog.setup() is client
+            assert client._sdk_diagnostics_enabled is True
+            posthog.sdk_diagnostics_enabled = False
+            posthog.setup()
+            assert client._sdk_diagnostics_enabled is False
+        finally:
+            client.shutdown()
+
+
+def test_sdk_diagnostics_disabled_without_remote_config():
+    client = Client(
+        "phc_test", sync_mode=True, remote_config_poll_interval_seconds=None
+    )
+    try:
+        assert client.sdk_diagnostics_enabled is True
+        assert client._sdk_diagnostics_enabled is False
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("replacement", [{}, {"sdkDiagnosticsEnabled": "true"}])
+def test_sdk_diagnostics_missing_or_invalid_refresh_disables(replacement):
+    with (
+        patch("posthog._remote_config._RemoteConfigPoller.start"),
+        patch("posthog._remote_config._RemoteConfigPoller.stop"),
+        patch(
+            "posthog._remote_config._fetch_remote_config",
+            side_effect=[
+                {"sdkDiagnosticsEnabled": True},
+                replacement,
+            ],
+        ),
+    ):
+        client = Client("phc_test", sync_mode=True)
+        try:
+            client._remote_config_poller._refresh()
+            assert client._sdk_diagnostics_enabled is True
+            client._remote_config_poller._refresh()
+            assert client._sdk_diagnostics_enabled is False
+        finally:
+            client.shutdown()
+
+
 def test_stopped_before_start_does_not_fetch():
     worker = _RemoteConfigPoller("phc_test", "https://proxy.example", 300, 3)
     worker.stopped.set()
@@ -252,8 +347,13 @@ def wait_for_config(worker, expected):
 @pytest.mark.parametrize("sync_mode", [False, True])
 def test_startup_refresh_and_shutdown_with_http_server(server, sync_mode):
     host, replies, seen, release = server
-    first = {"hasFeatureFlags": False, "errorTracking": True, "futureSetting": 1}
-    last = {"surveys": False}
+    first = {
+        "hasFeatureFlags": False,
+        "errorTracking": True,
+        "futureSetting": 1,
+        "sdkDiagnosticsEnabled": True,
+    }
+    last = {"surveys": False, "sdkDiagnosticsEnabled": False}
     for status, body in [
         (200, json.dumps(first).encode()),
         (503, b"unavailable"),
@@ -278,13 +378,17 @@ def test_startup_refresh_and_shutdown_with_http_server(server, sync_mode):
         assert "Authorization" not in headers
         assert headers.get("Content-Length", "0") == "0"
         assert worker._config is None
+        assert client._sdk_diagnostics_enabled is False
         release.set()
         wait_for_config(worker, first)
+        assert client._sdk_diagnostics_enabled is True
         for _ in range(3):
             seen.get(timeout=5)
             assert worker._config == first
+            assert client._sdk_diagnostics_enabled is True
         seen.get(timeout=5)
         wait_for_config(worker, last)
+        assert client._sdk_diagnostics_enabled is False
         assert client.enable_exception_autocapture is False
         assert client._feature_flags is None
     finally:

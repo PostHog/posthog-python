@@ -728,6 +728,7 @@ class Client(object):
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
         remote_config_poll_interval_seconds: Optional[float] = 300,
+        sdk_diagnostics_enabled: bool = True,
     ):
         """
         Initialize a new PostHog client instance.
@@ -758,6 +759,10 @@ class Client(object):
             timeout: HTTP request timeout in seconds for event uploads and project
                 remote configuration fetches.
             thread: Number of background consumer threads.
+            sdk_diagnostics_enabled: Experimental; no diagnostics are collected yet.
+                Defaults to True. Diagnostics require both this local setting and
+                the remote sdkDiagnosticsEnabled value to be True. False locally
+                always disables diagnostics regardless of the remote value.
             remote_config_poll_interval_seconds: Fetch project configuration in the
                 background at startup, then wait this many seconds between fetches
                 (default 300), including after failures.
@@ -926,6 +931,8 @@ class Client(object):
             raise ValueError(
                 "remote_config_poll_interval_seconds must be positive and finite or None"
             )
+        # Experimental permission only; no diagnostics are collected yet.
+        self.sdk_diagnostics_enabled = sdk_diagnostics_enabled
         self.remote_config_poll_interval_seconds = remote_config_poll_interval_seconds
         self._remote_config_poller: Optional[_RemoteConfigPoller] = None
         self.poll_interval = poll_interval
@@ -1136,6 +1143,15 @@ class Client(object):
         self._warn_if_duplicate_async_client()
         if self._start_remote_config() and self.sync_mode:
             atexit.register(self._atexit_remote_config)
+
+    @property
+    def _sdk_diagnostics_enabled(self) -> bool:
+        """Experimental effective permission; no diagnostics are collected yet."""
+        if self.sdk_diagnostics_enabled is not True:
+            return False
+        poller = self._remote_config_poller
+        config = poller._config if poller is not None else None
+        return config is not None and config.get("sdkDiagnosticsEnabled") is True
 
     def _start_remote_config(self) -> bool:
         if (
