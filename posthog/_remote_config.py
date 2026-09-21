@@ -1,12 +1,13 @@
 import logging
-from threading import Event, Thread
+from datetime import timedelta
 from typing import Any, Callable, Optional
 from urllib.parse import quote
 
+from .poller import Poller
 from .request import _get_session, determine_server_host
 
 
-class _RemoteConfigPoller(Thread):
+class _RemoteConfigPoller(Poller):
     def __init__(
         self,
         api_key: str,
@@ -15,35 +16,29 @@ class _RemoteConfigPoller(Thread):
         timeout: float,
         is_enabled: Optional[Callable[[], bool]] = None,
     ):
-        super().__init__(name="posthog-remote-config", daemon=True)
+        super().__init__(interval=timedelta(seconds=interval), execute=self._refresh)
+        self.name = "posthog-remote-config"
         self._api_key = api_key
         self._host = host
-        self._interval = interval
         self._timeout = timeout
         self._is_enabled = is_enabled
-        self._stopped = Event()
         self._config: Optional[dict[str, Any]] = None
 
-    def stop(self) -> None:
-        self._stopped.set()
-        self.join()
-
     def run(self) -> None:
-        while not self._stopped.is_set():
-            try:
-                if self._is_enabled is None or self._is_enabled():
-                    config = _fetch_remote_config(
-                        self._api_key, self._host, self._timeout
-                    )
-                    if not self._stopped.is_set():
-                        self._config = config
-            except Exception:
-                # Request exceptions can contain proxy credentials in their URL.
-                logging.getLogger("posthog").debug(
-                    "Failed to fetch project remote config"
-                )
-            if self._stopped.wait(self._interval):
-                break
+        self._refresh()
+        super().run()
+
+    def _refresh(self) -> None:
+        if self.stopped.is_set():
+            return
+        try:
+            if self._is_enabled is None or self._is_enabled():
+                config = _fetch_remote_config(self._api_key, self._host, self._timeout)
+                if not self.stopped.is_set():
+                    self._config = config
+        except Exception:
+            # Request exceptions can contain proxy credentials in their URL.
+            logging.getLogger("posthog").debug("Failed to fetch project remote config")
 
 
 def _fetch_remote_config(

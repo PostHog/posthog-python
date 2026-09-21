@@ -36,6 +36,16 @@ def test_request_contract(host, base):
         response.raise_for_status.assert_called_once()
 
 
+def test_stopped_before_start_does_not_fetch():
+    worker = _RemoteConfigPoller("phc_test", "https://proxy.example", 300, 3)
+    worker.stopped.set()
+    with patch("posthog._remote_config._fetch_remote_config") as fetch:
+        worker.start()
+        worker.join(5)
+        assert not worker.is_alive()
+        fetch.assert_not_called()
+
+
 def test_token_is_one_path_segment():
     with patch("posthog._remote_config._get_session") as session:
         response = session.return_value.get.return_value.__enter__.return_value
@@ -60,16 +70,16 @@ def test_reject_non_object(value):
 )
 def test_refresh_failure_preserves_last_success(failure):
     worker = _RemoteConfigPoller("phc_test", "https://proxy.example", 300, 3)
-    worker._stopped = Mock()
-    worker._stopped.is_set.return_value = False
-    worker._stopped.wait.side_effect = [False, True]
+    worker.stopped = Mock()
+    worker.stopped.is_set.return_value = False
+    worker.stopped.wait.side_effect = [False, True]
     with patch(
         "posthog._remote_config._fetch_remote_config", side_effect=[{"x": 1}, failure]
     ) as fetch:
         worker.run()
     assert worker._config == {"x": 1}
     assert fetch.call_count == 2
-    assert worker._stopped.wait.call_args.args == (300,)
+    assert worker.stopped.wait.call_args.args == (300,)
 
 
 @pytest.mark.parametrize("interval", [0, -1, float("nan"), float("inf"), True, "300"])
@@ -229,9 +239,9 @@ def test_polling_skips_requests_while_disabled():
         3,
         is_enabled=Mock(side_effect=[True, False, True]),
     )
-    worker._stopped = Mock()
-    worker._stopped.is_set.return_value = False
-    worker._stopped.wait.side_effect = [False, False, True]
+    worker.stopped = Mock()
+    worker.stopped.is_set.return_value = False
+    worker.stopped.wait.side_effect = [False, False, True]
     with patch("posthog._remote_config._fetch_remote_config", return_value={}) as fetch:
         worker.run()
     assert fetch.call_count == 2
@@ -239,9 +249,9 @@ def test_polling_skips_requests_while_disabled():
 
 def test_startup_failure_recovers_on_next_interval():
     worker = _RemoteConfigPoller("phc_test", "https://proxy.example", 300, 3)
-    worker._stopped = Mock()
-    worker._stopped.is_set.return_value = False
-    worker._stopped.wait.side_effect = [False, True]
+    worker.stopped = Mock()
+    worker.stopped.is_set.return_value = False
+    worker.stopped.wait.side_effect = [False, True]
     with patch(
         "posthog._remote_config._fetch_remote_config",
         side_effect=[requests.ConnectionError(), {"recovered": True}],
@@ -266,7 +276,7 @@ def test_join_waits_for_inflight_fetch_without_publishing_after_stop():
         try:
             assert entered.wait(5)
             cleanup.start()
-            assert worker._stopped.wait(5)
+            assert worker.stopped.wait(5)
             assert cleanup.is_alive()
             release.set()
             cleanup.join(5)
@@ -292,7 +302,7 @@ def test_atexit_signals_stop_without_waiting_for_request():
         try:
             assert entered.wait(5)
             client._atexit()
-            assert client._remote_config_poller._stopped.is_set()
+            assert client._remote_config_poller.stopped.is_set()
             assert client._remote_config_poller.is_alive()
         finally:
             release.set()

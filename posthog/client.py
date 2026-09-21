@@ -3047,7 +3047,7 @@ class Client(object):
                 self._join_span_flush(span_flush, deadline)
             finally:
                 if self._remote_config_poller:
-                    self._remote_config_poller._stopped.set()
+                    self._remote_config_poller.stopped.set()
                 # Consumers are daemon threads. Publish a non-draining stop to
                 # every consumer, but do not join in-flight requests at exit.
                 for lane in self._lanes:
