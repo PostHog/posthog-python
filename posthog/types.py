@@ -1,4 +1,5 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 
@@ -10,6 +11,9 @@ def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
         try:
             return json.loads(raw_payload)
         except json.JSONDecodeError:
+            logging.getLogger("posthog").warning(
+                "[FEATURE FLAGS] Unable to parse flag payload as JSON"
+            )
             return None
     return raw_payload
 

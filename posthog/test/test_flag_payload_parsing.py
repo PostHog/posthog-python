@@ -3,10 +3,11 @@ from unittest.mock import patch
 import pytest
 
 from posthog.client import Client
+from posthog.types import _parse_flag_payload
 
 
 @pytest.mark.parametrize("local", [True, False])
-@pytest.mark.parametrize("legacy", [True, False])
+@pytest.mark.parametrize("api", ["payload", "snapshot", "bulk"])
 @pytest.mark.parametrize(
     "raw, expected",
     [
@@ -17,6 +18,7 @@ from posthog.client import Client
         ("[1, 2]", [1, 2]),
         ('{"ok": true}', {"ok": True}),
         ('"text"', "text"),
+        ('""', ""),
         ("false", False),
         ("0", 0),
         ("null", None),
@@ -24,7 +26,7 @@ from posthog.client import Client
         (None, None),
     ],
 )
-def test_payload_parsing(local, legacy, raw, expected):
+def test_payload_parsing(local, api, raw, expected):
     client = Client("test-key", send=False)
     if local:
         client.feature_flags = [
@@ -36,7 +38,16 @@ def test_payload_parsing(local, legacy, raw, expected):
                     "groups": [{"properties": [], "rollout_percentage": 100}],
                     "payloads": {"true": raw},
                 },
-            }
+            },
+            {
+                "id": 2,
+                "key": "healthy",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                    "payloads": {"true": '{"ok": true}'},
+                },
+            },
         ]
     response = {
         "flags": {
@@ -46,7 +57,11 @@ def test_payload_parsing(local, legacy, raw, expected):
                 "variant": None,
                 "reason": {"code": "condition_match", "description": "Matched"},
                 "metadata": {"id": 1, "version": 1, "payload": raw},
-            }
+            },
+            "healthy": {
+                "enabled": True,
+                "metadata": {"payload": '{"ok": true}'},
+            },
         }
     }
     try:
@@ -54,7 +69,14 @@ def test_payload_parsing(local, legacy, raw, expected):
             patch.object(client, "load_feature_flags"),
             patch("posthog.client.flags", return_value=response) as request,
         ):
-            if legacy:
+            if api == "bulk":
+                bulk = client.get_all_flags_and_payloads(
+                    "user", only_evaluate_locally=local
+                )
+                assert bulk["featureFlags"] == {"test-flag": True, "healthy": True}
+                assert bulk["featureFlagPayloads"]["healthy"] == {"ok": True}
+                result = bulk["featureFlagPayloads"].get("test-flag")
+            elif api == "payload":
                 with pytest.warns(DeprecationWarning):
                     result = client.get_feature_flag_payload(
                         "test-flag", "user", only_evaluate_locally=local
@@ -65,5 +87,74 @@ def test_payload_parsing(local, legacy, raw, expected):
                 ).get_flag_payload("test-flag")
             assert result == expected
             assert request.call_count == (0 if local else 1)
+    finally:
+        client.shutdown()
+
+
+@pytest.mark.parametrize("raw", ['{"private":', "", "   "])
+def test_parse_failure_logs_without_payload(raw, caplog):
+    with caplog.at_level("WARNING", logger="posthog"):
+        assert _parse_flag_payload(raw) is None
+    assert len(caplog.records) == 1
+    assert caplog.records[0].getMessage().removeprefix("[PostHog] ") == (
+        "[FEATURE FLAGS] Unable to parse flag payload as JSON"
+    )
+    assert caplog.records[0].exc_info is None
+
+
+@pytest.mark.parametrize("local", [True, False])
+@pytest.mark.parametrize("value", [True, False, "blue"])
+@pytest.mark.parametrize("raw", ['{"broken":', "", "   "])
+def test_invalid_payload_preserves_flag_getters(local, value, raw):
+    client = Client("test-key", send=False)
+    filters = {
+        "groups": [{"properties": [], "rollout_percentage": 100 if value else 0}],
+        "payloads": {str(value).lower(): raw},
+    }
+    if isinstance(value, str):
+        filters["multivariate"] = {
+            "variants": [{"key": value, "rollout_percentage": 100}]
+        }
+    if local:
+        client.feature_flags = [
+            {"id": 1, "key": "test-flag", "active": True, "filters": filters}
+        ]
+    response = {
+        "flags": {
+            "test-flag": {
+                "enabled": value is not False,
+                "variant": value if isinstance(value, str) else None,
+                "reason": {"code": "condition_match", "description": "Matched"},
+                "metadata": {"id": 1, "version": 1, "payload": raw},
+            }
+        }
+    }
+    try:
+        with (
+            patch.object(client, "load_feature_flags"),
+            patch("posthog.client.flags", return_value=response) as request,
+        ):
+            result = client.get_feature_flag_result(
+                "test-flag", "user", only_evaluate_locally=local
+            )
+            assert result is not None
+            assert result.key == "test-flag"
+            assert result.get_value() == value
+            assert result.enabled is (value is not False)
+            assert result.variant == (value if isinstance(value, str) else None)
+            assert result.payload is None
+            assert result.reason == (None if local else "Matched")
+            with pytest.warns(DeprecationWarning):
+                assert (
+                    client.get_feature_flag(
+                        "test-flag", "user", only_evaluate_locally=local
+                    )
+                    == value
+                )
+            with pytest.warns(DeprecationWarning):
+                assert client.feature_enabled(
+                    "test-flag", "user", only_evaluate_locally=local
+                ) is (value is not False)
+            assert request.call_count == (0 if local else 3)
     finally:
         client.shutdown()

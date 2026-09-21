@@ -4039,12 +4039,17 @@ class Client(object):
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                     device_id=device_id,
                 )
-                return to_flags_and_payloads(decide_response)
+                response = to_flags_and_payloads(decide_response)
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"
                 )
 
+        payloads = response.get("featureFlagPayloads")
+        if payloads is not None:
+            response["featureFlagPayloads"] = {
+                key: _parse_flag_payload(payload) for key, payload in payloads.items()
+            }
         return response
 
     def evaluate_flags(

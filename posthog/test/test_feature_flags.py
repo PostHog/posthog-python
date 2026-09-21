@@ -1263,7 +1263,7 @@ class TestLocalEvaluation(unittest.TestCase):
         ]
         self.assertEqual(
             client.get_all_flags_and_payloads("distinct_id")["featureFlagPayloads"],
-            {"beta-feature": "new"},
+            {"beta-feature": None},
         )
         # /flags is not called because this can be evaluated locally
         self.assertEqual(patch_flags.call_count, 0)
@@ -1403,7 +1403,7 @@ class TestLocalEvaluation(unittest.TestCase):
             client.get_all_flags_and_payloads(
                 "distinct_id", only_evaluate_locally=True
             )["featureFlagPayloads"],
-            {"beta-feature": "some-payload"},
+            {"beta-feature": None},
         )
         self.assertEqual(patch_flags.call_count, 0)
         self.assertEqual(patch_capture.call_count, 0)
