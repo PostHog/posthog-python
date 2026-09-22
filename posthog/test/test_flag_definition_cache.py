@@ -462,7 +462,11 @@ class TestAsyncCacheProvider(TestFlagDefinitionCacheProvider):
         # the flag definitions so it survives cache round-trips.
         self.assertEqual(
             self.cache_provider.stored_data,
-            {**self.sample_flags_data, "minimal_flag_called_events": False},
+            {
+                **self.sample_flags_data,
+                "minimal_flag_called_events": False,
+                "property_matching_version": 1,
+            },
         )
         self.assertEqual(len(set(self.cache_provider.loop_ids)), 1)
 
