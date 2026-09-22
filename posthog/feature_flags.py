@@ -127,7 +127,12 @@ def _holdout_hash(bucketing_value: str) -> float:
     out a different set of people than the server does.
     """
     hash_key = f"holdout-{bucketing_value}"
-    hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
+    # SHA-1 is the bucketing algorithm the server uses, not a security control, so the
+    # digest has to stay bit-identical. usedforsecurity=False says so without changing it.
+    hash_val = int(
+        hashlib.sha1(hash_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:15],
+        16,
+    )
     return hash_val / __LONG_SCALE__
 
 
