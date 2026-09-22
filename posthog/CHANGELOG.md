@@ -1,5 +1,129 @@
 # posthog
 
+## 7.58.0 — 2026-09-18
+
+### Minor changes
+
+- [7abd976](https://github.com/posthog/posthog-python/commit/7abd976e27d2716903c0493987593a392c9d6135) Add distributed tracing (alpha): `start_span()` and `get_active_span()` record spans and export them to PostHog as OTLP, with no OpenTelemetry dependency, when the new `traces` client option is set. — Thanks @turnipdabeets!
+
+## 7.57.0 — 2026-09-18
+
+### Minor changes
+
+- [f69e670](https://github.com/posthog/posthog-python/commit/f69e6709e38f4e4463fc30a523fe33c2d1837f6c) After a failed prompt refetch, the SDK now serves the stale cached prompt for a cooldown period (60 seconds by default) instead of retrying the network on every `prompts.get()` call. When the failure is a 429, the cooldown follows the `Retry-After` the server sends, capped at one hour. This keeps a rate-limited client from holding itself against the limit. Matches the behavior the JavaScript SDK already has. — Thanks @jurajmajerik!
+
+## 7.56.0 — 2026-09-17
+
+### Minor changes
+
+- [8ee7ad1](https://github.com/posthog/posthog-python/commit/8ee7ad16b98427b6f3c3888668eba01f7525ba03) Enable MCP model capture and conversation correlation by default. Advertised tool schemas gain an `llm_model` argument (never enforced at dispatch) and eligible tool results gain a conversation handle; `MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False)` restores the previous shape. Fresh low-level instances now read the self-reported model instead of staying silent.
+  
+  Standalone FastMCP on MCP SDK 1.x skips `llm_model` injection when application middleware can change tool listing or dispatch. Model metadata capture remains enabled; this prevents cold replicas from rejecting injected arguments and preserves replacement tools' own arguments. — Thanks @lucasheriques!
+
+## 7.55.0 — 2026-09-17
+
+### Minor changes
+
+- [d0ecc9f](https://github.com/posthog/posthog-python/commit/d0ecc9f6edea206664af62d43c10ffb512d9fcd0) `prompts.get_all()` now works without a label. It fetches the latest version of every prompt in one request and warms the cache for plain `prompts.get(name)` calls. Previously the label was required, and passing `label=None` sent the literal string "None" as the label filter, returning an empty result. — Thanks @jurajmajerik!
+
+## 7.54.2 — 2026-09-17
+
+### Patch changes
+
+- [79fcb12](https://github.com/posthog/posthog-python/commit/79fcb12a1a7a5e4d410672eb7428c2e91682101f) MCP virtual tools now use conversation IDs when `enable_conversation_id` is enabled. — Thanks @gesh!
+
+## 7.54.1 — 2026-09-17
+
+### Patch changes
+
+- [ed02588](https://github.com/posthog/posthog-python/commit/ed02588998568ea317ff7ac60fe4dc15d7f1b74a) MCP analytics now adds its virtual tools (`get_more_tools`, `send_feedback`) to the first `tools/list` page only, rather than to every page and to the last page respectively.
+  
+  If one of your own tools already uses a virtual tool's name, PostHog warns and names the option that renames its own — `missing_capability_tool_name`, or `collect_feedback`'s `tool_name`. Warnings also reach the `posthog.mcp` logger, so you see them without setting the `logger` option. — Thanks @gesh!
+
+## 7.54.0 — 2026-09-15
+
+### Minor changes
+
+- [f07d67c](https://github.com/posthog/posthog-python/commit/f07d67c1fb18066432864bc7bbe8f8869a7b114a) Add LangChain v1 agent middleware for AI observability. — Thanks @gouveags for your first contribution 🎉!
+
+## 7.53.0 — 2026-09-11
+
+### Minor changes
+
+- [e9f6b67](https://github.com/posthog/posthog-python/commit/e9f6b67ff04d454123fd00c33fd3122cbcb4dace) The Gemini adapter now covers two surfaces of `genai.Client` it previously lacked. `Client.aio.models` reaches the tracked async models adapter, so `await client.aio.models.generate_content(...)` works without swapping the class out for `AsyncClient`, and `client.files` (plus `client.aio.files`, and `AsyncClient.files` for the async Files API) passes through to the provider, so multimodal flows that upload a file before referencing it in `contents` no longer fail. Every surface of one client shares a single provider client instead of opening its own. — Thanks @DanielTobi0!
+
+## 7.52.1 — 2026-09-11
+
+### Patch changes
+
+- [9d965dd](https://github.com/posthog/posthog-python/commit/9d965ddf05de2127f0758542e2443afbadd240e2) Fix missing MCP analytics events with standalone FastMCP 4 while preserving tool arguments and compatibility with MCP SDK v1. — Thanks @lucasheriques!
+
+## 7.52.0 — 2026-09-11
+
+### Minor changes
+
+- [c3d3c96](https://github.com/posthog/posthog-python/commit/c3d3c9616f1871ac5d09dd26859c090c91c0df01) Capture Gemini thought summaries as `thinking` content blocks. When a request enables `thinking_config.include_thoughts`, parts marked `thought=True` in responses, inputs, and streaming chunks are now formatted as `{"type": "thinking", "thinking": ...}` (matching the Anthropic thinking-block shape PostHog renders as reasoning) instead of plain text blocks. — Thanks @fivestarspicy!
+- [8f5e8ef](https://github.com/posthog/posthog-python/commit/8f5e8eff190f0d95f728f3830a07b15d257a9c1b) Add an opt-in `collect_feedback` option to MCP analytics. It injects a `send_feedback` virtual tool and captures every call as a `$mcp_feedback` event, so agents can report a missing capability, a tool problem, or praise.
+  The option supports a custom tool name and description, host-declared extra schema fields, and an `on_feedback` handler that routes reports to a real backend. `PostHogMCP` gains the same option plus `capture_feedback` for custom dispatchers. — Thanks @gesh!
+
+## 7.51.2 — 2026-09-11
+
+### Patch changes
+
+- [56a4959](https://github.com/posthog/posthog-python/commit/56a495908772c9a68eac3c6f6f7b157513aa6d8f) `Prompts.get_all` now fails loudly in two cases it previously papered over: a server that ignores the label filter but happens to have some labels on latest versions no longer produces a silently incomplete result, and a malformed row in the list response now raises the invalid-response error instead of being skipped. A rejected batch also no longer leaves partially cached prompts. — Thanks @jurajmajerik!
+
+## 7.51.1 — 2026-09-11
+
+### Patch changes
+
+- [1cc513f](https://github.com/posthog/posthog-python/commit/1cc513f7e45b9d0fe3d5a32e1c733210268ad33c) Follow async capture redirects without duplicating or incorrectly retaining a configured host path prefix. — Thanks @nickita-khylkouski!
+- [dadd278](https://github.com/posthog/posthog-python/commit/dadd278b6dbf1dd5d4b4f023ffe62aab9bcf8c18) Clean up queue and flush waiters when the async capture consumer is cancelled. — Thanks @nickita-khylkouski!
+
+## 7.51.0 — 2026-09-10
+
+### Minor changes
+
+- [97ea5fd](https://github.com/posthog/posthog-python/commit/97ea5fd0d22a0fd693c43f7da3db01a9a9aafdf4) Capture MCP resource discovery and reads from instrumented servers. URL credential redaction (userinfo, credential-named query and fragment parameters) now applies to every captured string, including existing `$mcp_tool_call` parameters, responses and error messages, so URLs in existing tool-call data will show `%5Bredacted%5D` values after upgrading. — Thanks @lucasheriques!
+
+## 7.50.0 — 2026-09-10
+
+### Minor changes
+
+- [7db5105](https://github.com/posthog/posthog-python/commit/7db51053d3c4006cf21dd118d3947c6b9e77322c) `Prompts.get_all(label="production")` fetches every prompt that carries a label in one request and stores them in the prompt cache, so later `get(name, label=...)` calls are cache hits. Apps with many prompts no longer need one request per prompt per cache cycle. Against a PostHog server that does not support labels on the prompt list endpoint yet, the call fails with a clear error instead of caching wrong versions. — Thanks @jurajmajerik!
+
+## 7.49.0 — 2026-09-10
+
+### Minor changes
+
+- [e85647b](https://github.com/posthog/posthog-python/commit/e85647b351192c93a58f7687b2f42e51d04e5f17) OpenAI and LangChain generations now also emit the served service tier as the explicit `$ai_service_tier` event property, next to the copy inside `$ai_model_parameters`. Cost processing prices tiered calls only from the explicit property, whose writers assert response-derived values. — Thanks @bernatixer!
+
+## 7.48.0 — 2026-09-09
+
+### Minor changes
+
+- [b8f8253](https://github.com/posthog/posthog-python/commit/b8f8253a1111488a52bd9de402f22306cc02cfaf) Capture MCP model identifiers from client metadata or an SDK-owned self-report field.
+  Model capture remains opt-in and preserves application-owned fields across repeated tool listings.
+  
+  MCP context and conversation-ID injection now preserve `additionalProperties: false` in tool schemas, including when model capture is disabled. Servers that validate these schemas now reject undeclared arguments that earlier SDK versions allowed. Declared analytics fields remain valid. — Thanks @lucasheriques!
+
+## 7.47.3 — 2026-09-08
+
+### Patch changes
+
+- [09a8c4e](https://github.com/posthog/posthog-python/commit/09a8c4e1d94cd6bc48813815551aec17dddade0e) Only terminal Responses API statuses become `$ai_stop_reason`: a queued or in-progress background run no longer records a lifecycle state as its stop reason, and an incomplete run is named by what cut it short (`incomplete_details.reason`, e.g. `max_output_tokens`). Streaming runs that end incomplete or failed now carry a stop reason too, and the LangChain callback reads stop reasons from `response_metadata` as well, covering Responses API and Anthropic runs that previously recorded none. — Thanks @bernatixer!
+
+## 7.47.2 — 2026-09-08
+
+### Patch changes
+
+- [80c541d](https://github.com/posthog/posthog-python/commit/80c541d17eff6f08a35c11e217aa6a9b625f18e7) Honor HTTP-date Retry-After headers in asynchronous requests while preserving the existing retry backoff and delay cap. — Thanks @Bortlesboat!
+
+## 7.47.1 — 2026-09-07
+
+### Patch changes
+
+- [db8ecb8](https://github.com/posthog/posthog-python/commit/db8ecb8b8f790ea96bc8e08c209ad45641ec0365) Report the Python package version in MCP event metadata and request headers so SDK Health can assess the installed package. — Thanks @marandaneto!
+
 ## 7.47.0 — 2026-09-04
 
 ### Minor changes

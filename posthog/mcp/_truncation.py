@@ -36,6 +36,7 @@ _TRUNCATION_SUFFIX = "..."
 
 _METADATA_FIELDS = (
     ("user_intent", _MAX_USER_INTENT_LENGTH),
+    ("llm_model", _MAX_METADATA_LENGTH),
     ("resource_name", _MAX_RESOURCE_NAME_LENGTH),
     ("server_name", _MAX_METADATA_LENGTH),
     ("server_version", _MAX_METADATA_LENGTH),

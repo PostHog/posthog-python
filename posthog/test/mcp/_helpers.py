@@ -57,3 +57,10 @@ def events_named(source, name):
     (reads ``.events``) or a raw list of event dicts (PostHogMCP tests)."""
     events = source.events if hasattr(source, "events") else source
     return [e for e in events if e["event"] == name]
+
+
+def listed_uris(response):
+    """The uris a captured ``$mcp_resources_list`` response advertises, whether it
+    listed static resources or templates."""
+    listed = response.get("resources") or response.get("resourceTemplates") or []
+    return [item.get("uri") or item.get("uriTemplate") for item in listed]

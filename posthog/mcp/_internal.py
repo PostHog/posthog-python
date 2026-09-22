@@ -17,7 +17,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple
 
 from .logger import log
 from ._sink import McpEventSink
@@ -66,10 +66,31 @@ class MCPAnalyticsData:
     # signature of a stateless server whose mint middleware never attached. Warned
     # a single time per server so the log isn't flooded on every request.
     warned_no_stateless_session: bool = False
+    # True once the SDK has told the host that its tools/list handler was
+    # replaced after instrument(), so ownership can no longer be determined and
+    # the virtual tools are advertised but never intercepted. Warned a single
+    # time per server so the log isn't flooded on every call.
+    warned_foreign_list_handler: bool = False
+    # ``(kind, name, variant)`` collision warnings already emitted, so a client
+    # that re-lists tools on every turn logs each misconfiguration once.
+    warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(
+        default_factory=set
+    )
+    # Adapter-supplied probe returning the names the host's own (original,
+    # un-instrumented) tools/list handler advertises on its first page, or None
+    # when it can't be determined. Registered by the adapters with no tool
+    # registry to query — raw low-level servers. Takes the adapter's request
+    # context, which the 1.x handler shape ignores.
+    raw_tool_names_probe: Optional[Callable[[Any], Awaitable[Optional[Set[str]]]]] = (
+        None
+    )
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
+    # True only when PostHog added llm_model to this tool's advertised schema.
+    # Missing/False fails closed so an application-owned field is never read or stripped.
+    tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under
@@ -81,6 +102,8 @@ class MCPAnalyticsData:
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     server_name: Optional[str] = None
     server_version: Optional[str] = None
+    # A strong wrapper reference would retain the low-level WeakKeyDictionary key.
+    standalone_fastmcp: Optional["weakref.ReferenceType[Any]"] = None
     session_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
     def mark_session_initialized(self, session_id: str) -> None:
@@ -223,10 +246,15 @@ async def resolve_event_properties(
 
 
 def _get_request_resource_name(request: Any) -> str:
+    """The thing the request acts on: a tool/prompt ``name``, or the ``uri`` of a
+    resource read — which is the only name a ``resources/read`` request carries."""
     if not isinstance(request, dict):
         return "Unknown"
     params = request.get("params")
     if not isinstance(params, dict):
         return "Unknown"
-    name = params.get("name")
-    return name if isinstance(name, str) else "Unknown"
+    for key in ("name", "uri"):
+        value = params.get(key)
+        if isinstance(value, str):
+            return value
+    return "Unknown"

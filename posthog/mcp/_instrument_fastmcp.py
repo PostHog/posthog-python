@@ -27,21 +27,30 @@ from typing import Any, Dict, Optional, Tuple
 import mcp.types as mcp_types
 
 from ._conversation_id import build_prompt_back
+from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
     _to_jsonable,
-    append_get_more_tools,
+    apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
+    is_first_listing_page,
     mutate_tool_schema,
     request_to_dict,
+    resolve_virtual_tool_injection,
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import (
+    can_inject_model_parameter,
+    is_capture_model_enabled,
+    request_meta_from_context,
+)
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
-from .tools import get_more_tools_result_text, resolve_missing_capability_tool_name
+from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
@@ -53,6 +62,9 @@ def instrument_fastmcp(server: Any, data: MCPAnalyticsData) -> None:
     data.server_version = getattr(getattr(server, "_mcp_server", None), "version", None)
     _wrap_tool_manager_call(server, data)
     _wrap_list_tools_handler(server, data)
+    low_level = getattr(server, "_mcp_server", None)
+    if low_level is not None:
+        _wrap_resource_requests(low_level, data)
 
 
 # --- tool call seam ----------------------------------------------------------
@@ -90,6 +102,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(_tool_call_request_context(context)),
+            allow_self_reported_model=_analytics_owns_model(server, data, name),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -101,10 +115,21 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             },
         )
 
-        if lifecycle.is_missing_capability:
-            await lifecycle.record_missing_capability()
+        if lifecycle.is_missing_capability and (
+            _name_owned_by_real_tool(server, name) is False
+        ):
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return virtual_content
+
+        if lifecycle.is_feedback and (_name_owned_by_real_tool(server, name) is False):
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
             return [
-                mcp_types.TextContent(type="text", text=get_more_tools_result_text())
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
             ]
 
         # Strip each injected key independently. A tool can declare its own
@@ -119,6 +144,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 server, name, "conversation_id"
             ):
                 strip_keys.add("conversation_id")
+            if _analytics_owns_model(server, data, name):
+                strip_keys.add("llm_model")
             if strip_keys:
                 call_arguments = {
                     k: v for k, v in arguments.items() if k not in strip_keys
@@ -184,6 +211,7 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
             schema_attribute="inputSchema",
             owns_context=_tool_owns_context(server, tool.name),
             context_required=True,
+            is_sdk_virtual_tool=False,
         )
 
 
@@ -206,7 +234,8 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         # advertise and write, the SDK rejects the customer's own tool result.
         if req is None:
             result = await original(req)
-            _inject_tool_schemas(server, data, extract_tools(result))
+            tools = extract_tools(result)
+            _inject_tool_schemas(server, data, tools)
             return result
 
         client_name, client_version = _low_level_client_info(server)
@@ -245,14 +274,17 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         tools = extract_tools(result)
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data,
+            tools,
+            is_first_page=is_first_listing_page(getattr(req, "params", None)),
+        )
 
         _inject_tool_schemas(server, data, tools)
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                append_get_more_tools(result, missing_name)
-                names.append(missing_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="inputSchema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -290,6 +322,20 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result
 
 
+def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
+    """Live registry probe, so a real tool by a virtual tool's name is never
+    shadowed. Tri-state like its low-level twin: ``None`` when the lookup failed
+    rather than answered, and callers must not intercept on it."""
+    tool_manager = getattr(server, "_tool_manager", None)
+    if tool_manager is None:
+        return False
+    try:
+        return tool_manager.get_tool(name) is not None
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        warn_ownership_lookup_failed(name, err)
+        return None
+
+
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:
     """True when the tool's own function declares ``param`` — then it's a real tool
     argument we must neither inject nor strip (the agent's value belongs to the tool)."""
@@ -308,6 +354,16 @@ def _tool_owns_param(server: Any, name: str, param: str) -> bool:
 
 def _tool_owns_context(server: Any, name: str) -> bool:
     return _tool_owns_param(server, name, "context")
+
+
+def _analytics_owns_model(server: Any, data: MCPAnalyticsData, name: str) -> bool:
+    if not is_capture_model_enabled(data.options.capture_model):
+        return False
+    try:
+        tool = server._tool_manager.get_tool(name)
+        return can_inject_model_parameter(getattr(tool, "parameters", None))
+    except Exception:  # noqa: BLE001 - model analytics must never break dispatch
+        return data.tool_model_parameter_injected.get(name, False)
 
 
 def _tool_call_request_context(context: Any) -> Any:

@@ -10,10 +10,11 @@ from posthog.ai.prompts import PromptResult, Prompts
 class MockResponse:
     """Mock HTTP response for testing."""
 
-    def __init__(self, json_data=None, status_code=200, ok=True):
+    def __init__(self, json_data=None, status_code=200, ok=True, headers=None):
         self._json_data = json_data
         self.status_code = status_code
         self.ok = ok
+        self.headers = headers or {}
 
     def json(self):
         if self._json_data is None:
@@ -324,6 +325,63 @@ class TestPromptsGet(TestPrompts):
         warning_call = mock_log.warning.call_args
         self.assertIn("using stale cache", warning_call[0][0])
 
+    @parameterized.expand(
+        [
+            # The Retry-After cooldown (300s) outlives the 60s default, so the
+            # holds after second 1460 prove the server's value governs.
+            ("server_error", 500, None, 60.0),
+            ("rate_limited_retry_after", 429, {"Retry-After": "300"}, 300.0),
+        ]
+    )
+    @patch("posthog.ai.prompts._get_session")
+    @patch("posthog.ai.prompts.time.time")
+    def test_hold_a_cooldown_after_each_failed_refetch(
+        self, _scenario, status, headers, cooldown, mock_time, mock_get_session
+    ):
+        # Without the cooldown, one throttled client turns every later get()
+        # into another network request until one succeeds.
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = [
+            MockResponse(json_data=self.mock_prompt_response),
+            MockResponse(status_code=status, ok=False, headers=headers),
+            MockResponse(status_code=status, ok=False, headers=headers),
+            MockResponse(json_data=self.mock_prompt_response),
+        ]
+        mock_time.return_value = 1000.0
+
+        prompts = Prompts(self.create_mock_posthog())
+        prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=False)
+
+        # Past TTL: the refetch fails, stale cache is served, a cooldown starts.
+        mock_time.return_value = 1400.0
+        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(mock_get.call_count, 2)
+
+        # Within the cooldown: stale cache again, no network attempt.
+        mock_time.return_value = 1400.0 + cooldown - 1
+        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(mock_get.call_count, 2)
+
+        # Past the cooldown: the retry fails too and a new cooldown starts.
+        mock_time.return_value = 1400.0 + cooldown + 1
+        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(mock_get.call_count, 3)
+
+        # Within the second cooldown: no network attempt.
+        mock_time.return_value = 1400.0 + 2 * cooldown
+        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        self.assertEqual(mock_get.call_count, 3)
+
+        # Past the second cooldown: the network is retried and the cache refreshed.
+        mock_time.return_value = 1400.0 + 2 * cooldown + 2
+        result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
+        self.assertEqual(result.source, "api")
+        self.assertEqual(mock_get.call_count, 4)
+
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.log")
     def test_use_fallback_when_no_cache_and_fetch_fails_with_warning(
@@ -547,6 +605,18 @@ class TestPromptsGet(TestPrompts):
         # No time has passed, and a TTL of 0 still means every read refetches.
         prompts.get("test-prompt", with_metadata=False)
         self.assertEqual(mock_get.call_count, 2)
+
+        # A failed refetch must not start a cooldown here: a zero TTL is an
+        # explicit request to refetch on every read.
+        mock_get.side_effect = [
+            MockResponse(status_code=500, ok=False),
+            MockResponse(json_data=self.mock_prompt_response),
+        ]
+        result = prompts.get("test-prompt", with_metadata=True)
+        self.assertEqual(result.source, "stale_cache")
+        result = prompts.get("test-prompt", with_metadata=True)
+        self.assertEqual(result.source, "api")
+        self.assertEqual(mock_get.call_count, 4)
 
     @patch("posthog.ai.prompts._get_session")
     def test_url_encode_prompt_names_with_special_characters(self, mock_get_session):
@@ -1357,6 +1427,208 @@ class TestPromptsClearCache(TestPrompts):
         prompts.get("test-prompt", with_metadata=True)
         prompts.get("other-prompt", with_metadata=True)
         self.assertEqual(mock_get.call_count, 4)
+
+
+class TestPromptsGetAll(TestPrompts):
+    """Tests for fetching all prompts at a label in one request."""
+
+    def labeled_row(self, name, version=1, label="production", config=None):
+        return {
+            "id": f"id-{name}",
+            "name": name,
+            "prompt": f"Prompt for {name}",
+            "version": version,
+            "all_labels": [{"name": label, "version": version}],
+            "config": config,
+        }
+
+    def list_response(self, rows, next_url=None):
+        return MockResponse(
+            json_data={
+                "count": len(rows),
+                "next": next_url,
+                "previous": None,
+                "results": rows,
+            }
+        )
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_fetches_all_pages_and_seeds_the_cache(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        next_url = "https://us.posthog.com/api/environments/@current/llm_prompts/?token=phc_test_key&label=production&content=full&limit=100&offset=100"
+        mock_get.side_effect = [
+            self.list_response(
+                [self.labeled_row("prompt-a", config={"temperature": 0})],
+                next_url=next_url,
+            ),
+            self.list_response([self.labeled_row("prompt-b", version=3)]),
+        ]
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all(label="production")
+
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(mock_get.call_args_list[1].args[0], next_url)
+        self.assertEqual(
+            results,
+            {
+                "prompt-a": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-a",
+                    name="prompt-a",
+                    version=1,
+                    label="production",
+                    config={"temperature": 0},
+                ),
+                "prompt-b": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-b",
+                    name="prompt-b",
+                    version=3,
+                    label="production",
+                ),
+            },
+        )
+
+        # Later labeled get() calls are cache hits, not new requests.
+        cached = prompts.get("prompt-b", label="production", with_metadata=True)
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual(cached.source, "cache")
+        self.assertEqual(cached.version, 3)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_unlabeled_fetch_omits_the_label_param_and_seeds_the_cache(
+        self, mock_get_session
+    ):
+        # Without a label the param must be left off the URL entirely --
+        # urlencode would otherwise send the literal string "label=None" and
+        # the server would filter by a label named "None". Rows without any
+        # labels must be accepted, since no label was requested.
+        mock_get = mock_get_session.return_value.get
+        unlabeled = {**self.labeled_row("prompt-a", version=2), "all_labels": []}
+        mock_get.return_value = self.list_response([unlabeled])
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all()
+
+        requested_url = mock_get.call_args.args[0]
+        self.assertNotIn("label", requested_url)
+        self.assertEqual(
+            results,
+            {
+                "prompt-a": PromptResult(
+                    source="api",
+                    prompt="Prompt for prompt-a",
+                    name="prompt-a",
+                    version=2,
+                )
+            },
+        )
+
+        # Later unlabeled get() calls are cache hits, not new requests.
+        cached = prompts.get("prompt-a", with_metadata=True)
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(cached.source, "cache")
+        self.assertEqual(cached.version, 2)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_when_the_server_ignores_the_label(self, mock_get_session):
+        # An old server ignores ?label= and returns latest versions of every
+        # prompt, including prompts without the label. Even when some labels
+        # happen to point at latest, a partial result would hide the rest.
+        mock_get = mock_get_session.return_value.get
+        looks_resolved = self.labeled_row("prompt-a")
+        unlabeled = {**self.labeled_row("prompt-b"), "all_labels": []}
+        mock_get.return_value = self.list_response([looks_resolved, unlabeled])
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("does not carry label", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_skips_a_row_whose_label_moved_and_keeps_the_rest(self, mock_get_session):
+        # A label that moved between the query and the response leaves one stale
+        # row; the rest of the batch must still be returned and cached.
+        mock_get = mock_get_session.return_value.get
+        moved = self.labeled_row("prompt-a")
+        moved["all_labels"] = [{"name": "production", "version": 2}]
+        mock_get.return_value = self.list_response(
+            [moved, self.labeled_row("prompt-b")]
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+        results = prompts.get_all(label="production")
+
+        self.assertEqual(list(results), ["prompt-b"])
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_when_every_row_was_skipped_as_moved(self, mock_get_session):
+        # An old server can serve latest versions while every prompt's label
+        # points at an earlier version. Each row then looks like a moved label;
+        # returning {} would report no labeled prompts despite them existing.
+        mock_get = mock_get_session.return_value.get
+        row_a = {
+            **self.labeled_row("prompt-a", version=2),
+            "all_labels": [{"name": "production", "version": 1}],
+        }
+        row_b = {
+            **self.labeled_row("prompt-b", version=3),
+            "all_labels": [{"name": "production", "version": 2}],
+        }
+        mock_get.return_value = self.list_response([row_a, row_b])
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("none resolve label", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_on_a_malformed_row_and_caches_nothing(self, mock_get_session):
+        # A row failing response validation is a server error, not a moved
+        # label; returning the valid subset would hide it.
+        mock_get = mock_get_session.return_value.get
+        malformed = {**self.labeled_row("prompt-a"), "prompt": 42}
+        mock_get.return_value = self.list_response(
+            [self.labeled_row("prompt-b"), malformed]
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("Invalid response format", str(ctx.exception))
+        self.assertEqual(prompts._cache, {})
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_refuses_a_pagination_link_off_the_configured_host(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = self.list_response(
+            [self.labeled_row("prompt-a")],
+            next_url="https://attacker.example.com/collect",
+        )
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("off the configured host", str(ctx.exception))
+        self.assertEqual(mock_get.call_count, 1)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_raises_on_http_error(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(status_code=500, ok=False)
+
+        prompts = Prompts(self.create_mock_posthog())
+
+        with self.assertRaises(Exception) as ctx:
+            prompts.get_all(label="production")
+        self.assertIn("HTTP 500", str(ctx.exception))
 
 
 if __name__ == "__main__":

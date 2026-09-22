@@ -16,8 +16,11 @@ _V1_ONLY = [
     "test_fastmcp.py",
     "test_fastmcp_v2.py",
     "test_features_m4.py",
+    "test_feedback.py",
     "test_lowlevel.py",
     "test_review_fixes.py",
+    # module-level `from mcp.server.fastmcp import ...` / v1 request_handlers seams
+    "test_virtual_tools.py",
 ]
 
 _V2_ONLY = [
@@ -25,6 +28,7 @@ _V2_ONLY = [
     "test_v2_mcpserver.py",
     "test_v2_lowlevel.py",
     "test_v2_wire_dual_era.py",
+    "test_fastmcp_v4.py",
 ]
 
 collect_ignore = _V2_ONLY if MCP_MAJOR < 2 else _V1_ONLY

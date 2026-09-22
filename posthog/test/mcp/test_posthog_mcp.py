@@ -1,18 +1,22 @@
 """Tests for the PostHogMCP custom-dispatcher client (Milestone 3)."""
 
+from types import SimpleNamespace
 from unittest import mock
+
+import pytest
+from mcp.types import Tool
 
 from posthog.capture_mode import CaptureMode
 from posthog.mcp import PostHogMCP
-from posthog.mcp.version import __version__ as MCP_VERSION
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
 )
+from posthog.version import VERSION
 
 
-def make_client():
-    client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
+def make_client(**kwargs):
+    client = PostHogMCP("phc_test", host="https://us.i.posthog.com", **kwargs)
     captured = []
     # Intercept the inherited Client.capture so nothing is sent over the network.
     client.capture = lambda event, **kwargs: captured.append({"event": event, **kwargs})
@@ -73,7 +77,7 @@ async def test_mcp_events_use_mcp_library_identity():
     assert {event["event"] for event in captured} == {"$mcp_tool_call", "$exception"}
     assert all(
         event["properties"]["$lib"] == "posthog-python-mcp"
-        and event["properties"]["$lib_version"] == MCP_VERSION
+        and event["properties"]["$lib_version"] == VERSION
         for event in captured
     )
 
@@ -86,7 +90,7 @@ def test_mcp_library_identity_reaches_capture_v0_header():
         client.capture("$mcp_custom")
 
     assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
@@ -95,10 +99,10 @@ def test_mcp_library_identity_reaches_capture_v1_header():
     with mock.patch("posthog.client._send_v1_batch") as send:
         client.capture("$mcp_custom")
 
-    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{MCP_VERSION}"
+    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{VERSION}"
     event = send.call_args.args[2][0]
     assert event["properties"]["$lib"] == "posthog-python-mcp"
-    assert event["properties"]["$lib_version"] == MCP_VERSION
+    assert event["properties"]["$lib_version"] == VERSION
 
 
 def test_mcp_library_identity_reaches_feature_flag_requests():
@@ -112,7 +116,7 @@ def test_mcp_library_identity_reaches_feature_flag_requests():
         client.evaluate_flags("user_1")
 
     assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
@@ -130,7 +134,7 @@ def test_mcp_library_identity_reaches_feature_flag_definition_requests():
         client.load_feature_flags()
 
     assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
     client.shutdown()
 
@@ -144,7 +148,7 @@ def test_mcp_library_identity_reaches_remote_config_requests():
         assert client.get_remote_config_payload("flag-key") == "payload"
 
     assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{MCP_VERSION}"
+        f"posthog-python-mcp/{VERSION}"
     )
 
 
@@ -211,3 +215,117 @@ def test_prepare_tool_list_can_be_disabled():
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
     prepared = client.prepare_tool_list(tools, context=False)
     assert "context" not in prepared[0]["inputSchema"]["properties"]
+
+
+@pytest.mark.parametrize(
+    "options", [{"capture_model": True}, {"capture_model": False}, {}]
+)
+async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
+    client, captured = make_client(**options)
+    enabled = options.get("capture_model", True)
+    tools = [
+        {
+            "name": "search",
+            "inputSchema": {"type": "object", "properties": {"q": {"type": "string"}}},
+        }
+    ]
+
+    prepared_tools = client.prepare_tool_list(tools)
+    schema = prepared_tools[0]["inputSchema"]
+    assert ("llm_model" in schema["properties"]) == enabled
+    assert ("llm_model" in schema.get("required", [])) == enabled
+
+    call = client.prepare_tool_call(
+        "search",
+        {"q": "docs", "llm_model": "claude-opus-4-8"},
+        request_meta={"x-codex-turn-metadata": {"model": "gpt-5.6-sol"}},
+    )
+    assert call.args == (
+        {"q": "docs"} if enabled else {"q": "docs", "llm_model": "claude-opus-4-8"}
+    )
+    assert call.llm_model == ("gpt-5.6-sol" if enabled else None)
+    assert call.llm_model_source == ("client_metadata" if enabled else None)
+
+    client.capture_tool_call(
+        "search",
+        llm_model=call.llm_model,
+        llm_model_source=call.llm_model_source,
+    )
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props.get("$mcp_llm_model") == ("gpt-5.6-sol" if enabled else None)
+    assert props.get("$mcp_llm_model_source") == (
+        "client_metadata" if enabled else None
+    )
+
+
+@pytest.mark.parametrize("sdk_tool", [False, True])
+@pytest.mark.parametrize("pass_original_tool", [False, True])
+def test_prepare_model_preserves_object_tool_ownership(
+    sdk_tool: bool, pass_original_tool: bool
+) -> None:
+    client, _ = make_client(capture_model=True)
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tool = (
+        Tool(name="search", inputSchema=schema)
+        if sdk_tool
+        else SimpleNamespace(name="search", input_schema=schema)
+    )
+    schema_attribute = (
+        "input_schema" if hasattr(tool, "input_schema") else "inputSchema"
+    )
+    for _ in range(2):
+        prepared = client.prepare_tool_list([tool], context=False)
+        assert "llm_model" in getattr(prepared[0], schema_attribute)["properties"]
+        call = client.prepare_tool_call(
+            "search",
+            {"q": "docs", "llm_model": "example-model"},
+            original_tool=tool if pass_original_tool else None,
+        )
+        assert call.args == {"q": "docs"}
+        assert (call.llm_model, call.llm_model_source) == (
+            "example-model",
+            "self_reported",
+        )
+        assert "llm_model" not in getattr(tool, schema_attribute)["properties"]
+
+
+def test_prepare_tool_call_preserves_application_owned_model_argument():
+    client, _ = make_client(capture_model=True)
+    tool = {
+        "name": "route",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"llm_model": {"type": "string"}},
+            "required": ["llm_model"],
+        },
+    }
+    client.prepare_tool_list([tool])
+
+    call = client.prepare_tool_call(
+        "route", {"llm_model": "application-owned"}, original_tool=tool
+    )
+    assert call.args == {"llm_model": "application-owned"}
+    assert call.llm_model is None
+
+
+def test_prepare_tool_list_fails_closed_for_duplicate_tool_names():
+    client, _ = make_client(capture_model=True)
+    tools = [
+        {"name": "route", "inputSchema": {"type": "object", "properties": {}}},
+        {
+            "name": "route",
+            "inputSchema": {
+                "type": "object",
+                "properties": {"llm_model": {"type": "string"}},
+            },
+        },
+    ]
+
+    prepared = client.prepare_tool_list(tools)
+    assert "llm_model" not in prepared[0]["inputSchema"]["properties"]
+    assert prepared[1]["inputSchema"]["properties"]["llm_model"] == {"type": "string"}
+    call = client.prepare_tool_call("route", {"llm_model": "application-owned"})
+    assert call.args == {"llm_model": "application-owned"}
+    assert call.llm_model is None

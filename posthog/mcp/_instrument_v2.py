@@ -31,30 +31,44 @@ v2 models expose snake_case attributes (``is_error``, ``input_schema``,
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, Optional, Tuple
+from collections.abc import Mapping
+from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
-from ._context_parameters import schema_has_param
+from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
+from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
     _to_jsonable,
+    advertised_tool_names,
+    apply_virtual_tool_injection,
     collect_listed_tools,
+    is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
+    prepare_request,
+    raw_listing_owns_tool_name,
+    record_resource_request,
+    resource_listing_response,
     resolve_session_and_client,
+    resolve_virtual_tool_injection,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
+    warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
+from ._model_parameters import (
+    can_inject_model_parameter,
+    is_capture_model_enabled,
+    request_meta_from_context,
+)
 from ._output_instructions import mirror_instructions_into_structured_content
 from .logger import log
 from .request_headers import get_request_headers
 from .session_token import read_mcp_session_header
 from .tools import (
-    build_report_missing_descriptor,
     get_more_tools_result_text,
-    resolve_missing_capability_tool_name,
 )
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
@@ -63,6 +77,13 @@ _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 # injected `context` parameter per entry point (see _wrap_v2_list_tools).
 _CALL_METHOD = "tools/call"
 _LIST_METHOD = "tools/list"
+_RESOURCE_METHODS = {
+    "resources/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+    # Templates are listings too: the captured request method separates
+    # `resources/templates/list` from `resources/list` on the same event.
+    "resources/templates/list": MCPAnalyticsEventType.MCP_RESOURCES_LIST,
+    "resources/read": MCPAnalyticsEventType.MCP_RESOURCES_READ,
+}
 
 
 def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
@@ -81,6 +102,8 @@ def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
     )
     _wrap_tool_manager_call_v2(server, data)
     _wrap_v2_list_tools(low_level, data, context_required=True, high_level=server)
+    for method, event_type in _RESOURCE_METHODS.items():
+        _wrap_v2_resource_request(low_level, data, method, event_type)
     _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
 
 
@@ -88,11 +111,14 @@ def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
     """Instrument a raw v2 low-level ``Server``. ``context`` is injected as an
     *optional* schema property and NOT stripped — the schema doubles as the
     call's validation surface, and a typical ``(ctx, params)`` handler ignores
-    extra argument keys."""
+    extra argument keys. For standalone FastMCP, the shared tracking state supplies
+    the tool schemas so injected arguments are removed before validation."""
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
     _wrap_v2_call_tool(server, data)
     _wrap_v2_list_tools(server, data, context_required=False)
+    for method, event_type in _RESOURCE_METHODS.items():
+        _wrap_v2_resource_request(server, data, method, event_type)
     _patch_add_request_handler(server, data, wrap_call=True)
 
 
@@ -127,6 +153,8 @@ def _patch_add_request_handler(
                 context_required=high_level is not None,
                 high_level=high_level,
             )
+        elif method in _RESOURCE_METHODS:
+            _wrap_v2_resource_request(server, data, method, _RESOURCE_METHODS[method])
 
     setattr(add_request_handler, _WRAPPED_FLAG, True)
     server.add_request_handler = add_request_handler
@@ -222,6 +250,18 @@ def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
     return param in _tool_own_properties_v2(high_level, name)
 
 
+def _analytics_owns_model_v2(
+    high_level: Any, data: MCPAnalyticsData, name: str
+) -> bool:
+    if not is_capture_model_enabled(data.options.capture_model):
+        return False
+    try:
+        tool = high_level._tool_manager.get_tool(name)
+        return can_inject_model_parameter(getattr(tool, "parameters", None))
+    except Exception:  # noqa: BLE001 - model analytics must never break dispatch
+        return data.tool_model_parameter_injected.get(name, False)
+
+
 # --- high-level: ToolManager.call_tool seam --------------------------------------
 
 
@@ -249,6 +289,8 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(ctx),
+            allow_self_reported_model=_analytics_owns_model_v2(server, data, name),
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -257,15 +299,25 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             extra={"session_id": mcp_session_id, "ctx": ctx},
         )
 
-        if lifecycle.is_missing_capability:
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
-            )
+        if lifecycle.is_missing_capability and (
+            _name_owned_by_real_tool_v2(server, name) is False
+        ):
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return mcp_types.CallToolResult(content=virtual_content)
+
+        if lifecycle.is_feedback and (
+            _name_owned_by_real_tool_v2(server, name) is False
+        ):
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
+            return mcp_types.CallToolResult(content=virtual_content)
 
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never
@@ -281,6 +333,8 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 and "conversation_id" not in own_properties
             ):
                 strip_keys.add("conversation_id")
+            if _analytics_owns_model_v2(server, data, name):
+                strip_keys.add("llm_model")
             if strip_keys:
                 call_arguments = {
                     k: v for k, v in arguments.items() if k not in strip_keys
@@ -373,6 +427,59 @@ def _deliver_conversation_id(
 # --- low-level: tools/call ------------------------------------------------------
 
 
+def _requested_tool_version(ctx: Any) -> Optional[str]:
+    """The FastMCP tool version a client pinned via request ``_meta``, if any."""
+    try:
+        # Standalone FastMCP is optional even when the official MCP SDK is installed.
+        from fastmcp.server.dependencies import extract_version_spec
+
+        params = getattr(ctx, "params", None)
+        meta = params.get("_meta") if isinstance(params, Mapping) else None
+        return extract_version_spec(meta)
+    except Exception:  # noqa: BLE001 - version parsing must not prevent dispatch
+        return None
+
+
+async def _standalone_injected_parameters(
+    server: Any, data: MCPAnalyticsData, name: str, version: Optional[str]
+) -> Optional[FrozenSet[str]]:
+    """Resolve ownership in the current request, including middleware and versions.
+
+    Listings from other requests can have different application-owned parameters.
+    Without a schema, stripping could delete application arguments.
+    """
+    try:
+        from fastmcp.utilities.versions import VersionSpec, version_sort_key
+
+        version_spec = VersionSpec(eq=version) if version else None
+        # Middleware can shadow registered tools, so resolve the effective listing.
+        candidates = [
+            tool
+            for tool in await server.list_tools()
+            if tool.name == name
+            and (version_spec is None or version_spec.matches(tool.version))
+        ]
+        tool = max(candidates, key=version_sort_key, default=None)
+        if tool is None:
+            tool = await server.get_tool(name, version=version_spec)
+        schema = getattr(tool, "parameters", None)
+    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
+        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
+        return None
+    if not isinstance(schema, dict):
+        return None
+    injected = set()
+    if is_context_enabled(data.options.context):
+        injected.add("context")
+    if data.options.enable_conversation_id:
+        injected.add("conversation_id")
+    if is_capture_model_enabled(data.options.capture_model) and (
+        can_inject_model_parameter(schema)
+    ):
+        injected.add("llm_model")
+    return frozenset(key for key in injected if not schema_has_param(schema, key))
+
+
 def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     entry = server.get_request_handler(_CALL_METHOD)
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
@@ -382,6 +489,24 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     async def handler(ctx: Any, params: Any) -> Any:
         name = params.name
         arguments = dict(params.arguments or {})
+        # A raw instance that never served a listing has no ownership answer and
+        # reads the self-reported model anyway; only a listing that proved the
+        # application owns `llm_model` stops it (posthog-js ADR-0011).
+        analytics_owns_model = data.tool_model_parameter_injected.get(name) is not False
+        standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
+        if standalone is not None:
+            version = _requested_tool_version(ctx)
+            injected = await _standalone_injected_parameters(
+                standalone, data, name, version
+            )
+            if injected is not None:
+                analytics_owns_model = "llm_model" in injected
+                call_arguments = {
+                    key: value
+                    for key, value in arguments.items()
+                    if key not in injected
+                }
+                params = params.model_copy(update={"arguments": call_arguments})
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -389,6 +514,8 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             data,
             name=name,
             arguments=arguments,
+            request_meta=request_meta_from_context(ctx),
+            allow_self_reported_model=analytics_owns_model,
             mcp_session_id=mcp_session_id,
             token=token,
             client_name=client_name,
@@ -397,15 +524,27 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             extra={"session_id": mcp_session_id, "ctx": ctx},
         )
 
-        if lifecycle.is_missing_capability:
-            await lifecycle.record_missing_capability()
-            return mcp_types.CallToolResult(
-                content=[
-                    mcp_types.TextContent(
-                        type="text", text=get_more_tools_result_text()
-                    )
-                ]
-            )
+        # No tool registry on a raw low-level server, so ownership is settled
+        # by asking the host's own tools/list handler.
+        if lifecycle.is_missing_capability and (
+            await raw_listing_owns_tool_name(data, name, ctx) is False
+        ):
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(get_more_tools_result_text())
+            ]
+            await lifecycle.record_missing_capability(conversation_id_delivered=True)
+            return mcp_types.CallToolResult(content=virtual_content)
+
+        if lifecycle.is_feedback and (
+            await raw_listing_owns_tool_name(data, name, ctx) is False
+        ):
+            reply = await lifecycle.record_feedback(conversation_id_delivered=True)
+            virtual_content = [
+                mcp_types.TextContent(type="text", text=text)
+                for text in lifecycle.virtual_result_texts(reply)
+            ]
+            return mcp_types.CallToolResult(content=virtual_content)
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
@@ -440,6 +579,71 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
     _replace_handler(server, _CALL_METHOD, handler, entry.params_type)
 
 
+def _wrap_v2_resource_request(
+    server: Any, data: MCPAnalyticsData, method: str, event_type: str
+) -> None:
+    entry = server.get_request_handler(method)
+    if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
+        return
+    original = entry.handler
+
+    async def handler(ctx: Any, params: Any) -> Any:
+        token, client_name, client_version, protocol_version, mcp_session_id = (
+            _resolve_ctx(ctx)
+        )
+        request = params_to_request_dict(method, params, by_alias=True)
+        extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+        try:
+            session_id = await prepare_request(
+                data,
+                mcp_session_id=mcp_session_id,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                request=request,
+                extra=extra,
+                token=token,
+            )
+        except Exception as error:  # noqa: BLE001 - analytics must not break resources
+            log(f"Warning: could not prepare resource analytics: {error}")
+            return await original(ctx, params)
+
+        start = time.monotonic()
+        try:
+            result = await original(ctx, params)
+        except Exception as error:
+            await record_resource_request(
+                data,
+                session_id,
+                event_type=event_type,
+                request=request,
+                error=error,
+                duration_ms=(time.monotonic() - start) * 1000,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+                extra=extra,
+            )
+            raise
+
+        await record_resource_request(
+            data,
+            session_id,
+            event_type=event_type,
+            request=request,
+            response=resource_listing_response(event_type, result),
+            duration_ms=(time.monotonic() - start) * 1000,
+            client_name=client_name,
+            client_version=client_version,
+            protocol_version=protocol_version,
+            extra=extra,
+        )
+        return result
+
+    setattr(handler, _WRAPPED_FLAG, True)
+    _replace_handler(server, method, handler, entry.params_type)
+
+
 # --- tools/list -------------------------------------------------------------------
 
 
@@ -454,6 +658,14 @@ def _wrap_v2_list_tools(
     if entry is None or getattr(entry.handler, _WRAPPED_FLAG, False):
         return
     original = entry.handler
+
+    async def probe_raw_tool_names(ctx: Any = None) -> Optional[Set[str]]:
+        """The host's own first-page tool names — ``original``, not the wrapper,
+        so the probe never recurses or appends a virtual tool."""
+        result = await original(ctx, None)
+        return advertised_tool_names(list(getattr(result, "tools", []) or []))
+
+    data.raw_tool_names_probe = probe_raw_tool_names
 
     async def handler(ctx: Any, params: Any) -> Any:
         token, client_name, client_version, protocol_version, mcp_session_id = (
@@ -485,6 +697,9 @@ def _wrap_v2_list_tools(
         tools = list(getattr(result, "tools", []) or [])
         # Empty is computed before adding the virtual missing-capability tool.
         names, empty = collect_listed_tools(data, tools)
+        injection = resolve_virtual_tool_injection(
+            data, tools, is_first_page=is_first_listing_page(params)
+        )
 
         for tool in tools:
             schema = getattr(tool, "input_schema", None)
@@ -499,13 +714,12 @@ def _wrap_v2_list_tools(
                 schema_attribute="input_schema",
                 owns_context=owns_context,
                 context_required=context_required,
+                is_sdk_virtual_tool=False,
             )
 
-        if data.options.report_missing:
-            missing_name = resolve_missing_capability_tool_name(data.options)
-            if not any(t.name == missing_name for t in tools):
-                _append_get_more_tools_v2(result, missing_name)
-                names.append(missing_name)
+        result = apply_virtual_tool_injection(
+            result, injection, names, data, schema_field="input_schema"
+        )
 
         await lifecycle.record_result(
             names=names,
@@ -520,14 +734,12 @@ def _wrap_v2_list_tools(
     _replace_handler(server, _LIST_METHOD, handler, entry.params_type)
 
 
-def _append_get_more_tools_v2(result: Any, name: str) -> None:
-    descriptor = build_report_missing_descriptor(name)
-    tool = mcp_types.Tool(
-        name=descriptor["name"],
-        description=descriptor["description"],
-        input_schema=descriptor["inputSchema"],
-        annotations=descriptor["annotations"],
-    )
-    tools_list = getattr(result, "tools", None)
-    if isinstance(tools_list, list):
-        tools_list.append(tool)
+def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> Optional[bool]:
+    """Live registry probe, so a real tool by a virtual tool's name is never
+    shadowed. Tri-state like its low-level twin: ``None`` when the lookup failed
+    rather than answered, and callers must not intercept on it."""
+    try:
+        return high_level._tool_manager.get_tool(name) is not None
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        warn_ownership_lookup_failed(name, err)
+        return None

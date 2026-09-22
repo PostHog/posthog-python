@@ -115,7 +115,7 @@ def test_mirrors_into_a_fastmcp_v1_tuple_result():
 
 
 def test_mirrors_into_a_model_result_both_attr_shapes():
-    for attr in ("structuredContent", "structured_content"):
+    for attr in ("structured_content", "structuredContent"):
         result = SimpleNamespace(**{attr: {"total": 7}})
 
         _, delivered = mirror_instructions_into_structured_content(result, "conv-2")
@@ -202,7 +202,7 @@ def test_mirror_does_not_mutate_a_shared_model_result():
 
     # `structuredContent` on SDK 1.x, `structured_content` on 2.x (same wire field).
     def structured(result):
-        for attr in ("structuredContent", "structured_content"):
+        for attr in ("structured_content", "structuredContent"):
             if hasattr(result, attr):
                 return getattr(result, attr)
         raise AssertionError("no structured content attribute")

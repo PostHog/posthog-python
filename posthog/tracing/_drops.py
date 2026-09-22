@@ -1,0 +1,72 @@
+"""Dropped-span accounting shared by span creation and export."""
+
+import logging
+import threading
+import time
+from typing import Dict
+
+log = logging.getLogger("posthog")
+
+
+class DropLog:
+    """Counts dropped spans and warns at most once per interval, naming every reason.
+
+    ``record()`` never logs: its callers hold their own locks, and a logging
+    handler is application code. ``warn_if_due()`` does, with no lock held.
+    """
+
+    def __init__(self, interval: float) -> None:
+        self._interval = interval
+        self._lock = threading.Lock()
+        self._count = 0
+        # A dict for its order: reasons are named in the order they happened.
+        self._reasons: Dict[str, None] = {}
+        self._last_warning_at = 0.0
+        self._last_failure_at = 0.0
+
+    def record(self, count: int, reason: str) -> None:
+        with self._lock:
+            self._count += count
+            self._reasons[reason] = None
+
+    def warn_if_due(self, force: bool = False) -> None:
+        with self._lock:
+            now = time.monotonic()
+            if not self._count or (
+                not force and now - self._last_warning_at < self._interval
+            ):
+                return
+            message = "Dropping {} span(s): {}".format(
+                self._count, "; ".join(self._reasons)
+            )
+            self._count = 0
+            self._reasons.clear()
+            self._last_warning_at = now
+        try:
+            log.warning(message)
+        except Exception:
+            # A raising logging handler must not surface through span creation.
+            pass
+
+    def warn_failure(self, message: str) -> None:
+        """Warn with the current traceback, at most once per interval; debug otherwise.
+
+        For a failure in application code, where the aggregate count alone
+        gives nothing to act on.
+        """
+        with self._lock:
+            now = time.monotonic()
+            due = now - self._last_failure_at >= self._interval
+            if due:
+                self._last_failure_at = now
+        try:
+            log.log(logging.WARNING if due else logging.DEBUG, message, exc_info=True)
+        except Exception:
+            pass
+
+    def reinit_after_fork(self) -> None:
+        self._lock = threading.Lock()
+        self._count = 0
+        self._reasons.clear()
+        self._last_warning_at = 0.0
+        self._last_failure_at = 0.0

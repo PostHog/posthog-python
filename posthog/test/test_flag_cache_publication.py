@@ -177,7 +177,7 @@ def test_new_generation_write_finishes_after_paused_old_write(client):
 def test_queued_old_write_cannot_replace_new_generation(client):
     cache = client.flag_cache
     old_version = client.flag_definition_version
-    client._update_flag_state(definitions(2), client.feature_flags_by_key)
+    client._update_flag_state(definitions(2))
     assert evaluate(client) is False
     cache.set_cached_flag("user", "person", "old result", old_version)
     assert cache.get_stale_cached_flag("user", "person").get_value() is False
@@ -231,7 +231,7 @@ def test_standalone_cache_can_reuse_invalidated_version(client):
 
 def test_fork_replaces_held_cache_write_lock_and_preserves_fence(client):
     cache = client.flag_cache
-    client._update_flag_state(definitions(2), client.feature_flags_by_key)
+    client._update_flag_state(definitions(2))
     lock = cache._write_lock
     lock.acquire()
     try:

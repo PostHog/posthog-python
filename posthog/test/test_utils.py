@@ -66,6 +66,27 @@ class FakeRedis:
             return 1, keys[:midpoint]
         return 0, keys[midpoint:] if cursor == 1 else keys
 
+    def scan_iter(self, match=None, count=None):
+        cursor = 0
+        while True:
+            cursor, keys = self.scan(cursor, match=match, count=count)
+            yield from keys
+            if cursor == 0:
+                return
+
+    def eval(self, script, numkeys, key, expected):
+        # Model the single-key compare-and-delete script; Lua itself is checked
+        # separately against a Redis-compatible interpreter.
+        assert numkeys == 1
+        assert script == (
+            "if redis.call('get', KEYS[1]) == ARGV[1] then "
+            "return redis.call('del', KEYS[1]) end return 0"
+        )
+        if self.get(key) == expected:
+            self.delete(key)
+            return 1
+        return 0
+
     def delete(self, *keys):
         if self.fail:
             raise RuntimeError("redis unavailable")
@@ -112,8 +133,8 @@ class TestUtils(unittest.TestCase):
             utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
 
             with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
-                mock_datetime.now.side_effect = (
-                    lambda tz=None: local_now if tz is None else utc_now.astimezone(tz)
+                mock_datetime.now.side_effect = lambda tz=None: (
+                    local_now if tz is None else utc_now.astimezone(tz)
                 )
                 normalized = utils.guess_timezone(local_now)
 
@@ -588,6 +609,7 @@ class TestFlagCache(unittest.TestCase):
 
         # Standalone entries have no definition snapshot provenance.
         assert entry._snapshot_fingerprint is None
+        assert entry._is_remote is False
         assert entry.is_valid(current_time=109, ttl=10, current_flag_version=1) is True
         assert entry.is_valid(current_time=110, ttl=10, current_flag_version=1) is False
         assert entry.is_valid(current_time=111, ttl=10, current_flag_version=1) is False
@@ -613,6 +635,14 @@ class TestFlagCache(unittest.TestCase):
         result = self.cache.get_cached_flag(distinct_id, flag_key, flag_version)
         assert result is not None
         assert result.get_value()
+
+    def test_remote_result_uses_memory_generation_fence(self):
+        self.cache._advance_generation(7)
+        self.cache._set_cached_remote_flag("user", "beta", self.flag_result, 7)
+        assert self.cache.get_cached_flag("user", "beta", 7) is self.flag_result
+        self.cache._advance_generation(8)
+        self.cache._set_cached_remote_flag("user", "beta", False, 7)
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
 
     def test_generation_fences_reads_and_writes_and_prunes_reused_users(self):
         self.cache.set_cached_flag("user", "old", False, 1)
@@ -970,6 +1000,69 @@ class TestRedisFlagCache(unittest.TestCase):
         )
         assert self.cache.get_stale_cached_flag("user123", "boundary-stale") is None
 
+    def test_local_and_remote_writes_preserve_standalone_metadata(self):
+        for write in (self.cache.set_cached_flag, self.cache._set_cached_remote_flag):
+            write("user", "beta", False, 7)
+            data = json.loads(
+                self.redis.store[self.cache._get_cache_key("user", "beta")]
+            )
+            assert data["flag_result"] is False
+            assert data["flag_version"] == 7
+            assert "snapshot_fingerprint" not in data
+            assert self.redis.store[self.cache.version_key] == 7
+            if write == self.cache.set_cached_flag:
+                assert "evaluation_source" not in data
+            else:
+                assert data["evaluation_source"] == "remote"
+
+    @parameterized.expand([(6, "snapshot-a"), (8, "snapshot-a"), (7, "")])
+    def test_remote_writes_reject_wrong_generation_or_reset(self, version, fingerprint):
+        self.cache._advance_generation(7, fingerprint)
+        self.cache._set_cached_remote_flag("user", "beta", True, version)
+        assert self.redis.store == {}
+        assert self.redis.setex_calls == []
+
+    def test_remote_result_round_trip_and_cold_worker_provenance(self):
+        self.cache._advance_generation(7, "snapshot-a")
+        with mock.patch("posthog.utils.time.time", return_value=100):
+            self.cache._set_cached_remote_flag("user", "beta", False, 7)
+        key, ttl, data = self.redis.setex_calls[-1]
+        assert key == "test:flags:user:beta"
+        assert ttl == 60
+        assert json.loads(data) == {
+            "flag_result": False,
+            "flag_version": 7,
+            "timestamp": 100,
+            "snapshot_fingerprint": "snapshot-a",
+            "evaluation_source": "remote",
+        }
+        entry = self.cache._deserialize_entry(data)
+        assert entry._is_remote is True
+        assert entry._snapshot_fingerprint == "snapshot-a"
+        reader = utils.RedisFlagCache(self.redis, key_prefix="test:flags:")
+        with mock.patch("posthog.utils.time.time", return_value=101):
+            reader._advance_generation(2, "remote-only:cold-worker")
+            assert reader.get_cached_flag("user", "beta", 2) is False
+            assert reader.get_stale_cached_flag("user", "beta") is False
+            for fingerprint in ("snapshot-b", "", "not-remote-only:cold-worker"):
+                reader._advance_generation(3, fingerprint)
+                assert reader.get_stale_cached_flag("user", "beta") is None
+            reader._advance_generation(4, "snapshot-a")
+            assert reader.get_stale_cached_flag("user", "beta") is False
+
+    @parameterized.expand([(None,), ("local",), ("REMOTE",)])
+    def test_cold_worker_rejects_entries_not_explicitly_remote(self, source):
+        data = json.loads(
+            self.cache._serialize_entry(True, 7, fingerprint="snapshot-a")
+        )
+        if source is not None:
+            data["evaluation_source"] = source
+        entry = self.cache._deserialize_entry(json.dumps(data))
+        assert entry._is_remote is False
+        self.cache._advance_generation(2, "remote-only:cold-worker")
+        self.redis.store[self.cache._get_cache_key("user", "beta")] = json.dumps(data)
+        assert self.cache.get_stale_cached_flag("user", "beta") is None
+
     def test_snapshot_round_trip_reuses_matching_worker_with_different_generation(self):
         self.cache._advance_generation(7, "snapshot-a")
         with mock.patch("posthog.utils.time.time", return_value=100):
@@ -1067,6 +1160,80 @@ class TestRedisFlagCache(unittest.TestCase):
             self.redis.store[self.cache._get_cache_key("user", "beta")] = data
         assert self.cache.get_cached_flag("user", "beta", 7) is None
         assert self.cache.get_stale_cached_flag("user", "beta") is None
+
+    @parameterized.expand([(None,), ("",), ("remote-only:worker",)])
+    def test_snapshot_cleanup_skips_unbound_identity(self, fingerprint):
+        with mock.patch.object(self.redis, "scan") as scan:
+            self.cache._invalidate_snapshot(fingerprint)
+        scan.assert_not_called()
+
+    def test_snapshot_cleanup_only_deletes_matching_observed_entries(self):
+        self.redis.store[self.cache.version_key] = 7
+        for key, fingerprint in (
+            ("old", "snapshot-a"),
+            ("new", "snapshot-b"),
+            ("legacy", None),
+        ):
+            self.redis.store[self.cache._get_cache_key("user", key)] = (
+                self.cache._serialize_entry(True, 7, fingerprint=fingerprint)
+            )
+        self.redis.store[self.cache._get_cache_key("user", "corrupt")] = "not json"
+        self.redis.store["other:old"] = self.cache._serialize_entry(
+            True, 7, fingerprint="snapshot-a"
+        )
+        last_key = self.cache._get_cache_key("zzzz-user", "old")
+        self.redis.store[last_key] = self.cache._serialize_entry(
+            True, 7, fingerprint="snapshot-a"
+        )
+        original_scan = self.redis.scan
+
+        def scan_page(*args, **kwargs):
+            assert len(self.redis.scan_calls) < 2, "scan restarted after final page"
+            return original_scan(*args, **kwargs)
+
+        with (
+            mock.patch.object(self.redis, "get", wraps=self.redis.get) as get,
+            mock.patch.object(self.redis, "scan", side_effect=scan_page) as scan,
+        ):
+            self.cache._invalidate_snapshot("snapshot-a")
+        assert scan.call_count == 2
+        assert last_key not in self.redis.store
+        assert self.redis.scan_calls == [
+            (0, "test:flags:*", 100),
+            (1, "test:flags:*", 100),
+        ]
+        assert self.cache._get_cache_key("user", "old") not in self.redis.store
+        assert len(self.redis.store) == 5
+        assert mock.call(self.cache.version_key.encode()) not in get.call_args_list
+
+    def test_snapshot_cleanup_preserves_concurrent_replacement(self):
+        key = self.cache._get_cache_key("user", "beta")
+        old = self.cache._serialize_entry(True, 7, fingerprint="snapshot-a")
+        new = self.cache._serialize_entry(False, 8, fingerprint="snapshot-b")
+        self.redis.store[key] = old
+        original = self.redis.eval
+
+        def replace(*args):
+            self.redis.store[key] = new
+            return original(*args)
+
+        with mock.patch.object(self.redis, "eval", side_effect=replace) as delete:
+            self.cache._invalidate_snapshot("snapshot-a")
+        delete.assert_called_once()
+        assert delete.call_args.args[1:] == (1, key.encode(), old)
+        assert self.redis.store[key] == new
+
+    @parameterized.expand([("scan",), ("get",), ("eval",)])
+    def test_snapshot_cleanup_redis_errors_are_best_effort(self, operation):
+        self.cache._advance_generation(7, "snapshot-a")
+        self.cache.set_cached_flag("user", "beta", True, 7)
+        before = self.redis.store.copy()
+        with mock.patch.object(
+            self.redis, operation, side_effect=RuntimeError("offline")
+        ) as failed:
+            self.cache._invalidate_snapshot("snapshot-a")
+        assert failed.called
+        assert self.redis.store == before
 
     def test_redis_errors_fall_back_to_miss(self):
         failing_cache = utils.RedisFlagCache(FakeRedis(fail=True))

@@ -20,6 +20,13 @@ from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from posthog.metrics_capture import PostHogMetrics
+from posthog.tracing._config import resolve_traces_config
+from posthog.tracing._drops import DropLog
+from posthog.tracing._export import SpanExporter
+from posthog.tracing._otlp import host_resource_attributes
+from posthog.tracing._pipeline import PostHogTraces
+from posthog.tracing.span import Span
+from posthog.tracing._span import inert_span as _inert_span
 from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
@@ -127,6 +134,9 @@ _configure_posthog_logging()
 
 MAX_DICT_SIZE = 50_000
 _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
+# The final span flush shutdown() allows; a request already in flight may
+# overrun it by up to the client's request timeout.
+_TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
 
@@ -720,6 +730,7 @@ class Client(object):
         capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
+        traces: Optional[dict] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -802,6 +813,20 @@ class Client(object):
                 ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
+            traces: Config dict for distributed tracing: ``service_name``,
+                ``service_version``, ``environment``, ``resource_attributes``,
+                ``flush_interval`` (5 s), ``max_queue_size`` (2048),
+                ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
+                ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
+                ``max_events_per_span`` (128), ``max_attribute_value_length``
+                (8192). ``before_span_send`` is a callable, or a
+                list run in order, that receives each finished span as a dict
+                (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)
+                and returns it, edited, or ``None`` to drop it; a hook that
+                raises drops the span. Tracing is off until this is provided.
+                Spans export on a background timer even with ``sync_mode``;
+                serverless handlers should call ``flush()`` before returning.
+                Defaults to None.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -898,7 +923,7 @@ class Client(object):
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
-        # Without definitions, remote results have only process-local provenance.
+        # Until definitions load, only explicitly remote Redis results are shared.
         self._flag_definition_fingerprint = f"remote-only:{uuid4().hex}"
         if self.flag_cache:
             self.flag_cache._advance_generation(
@@ -920,6 +945,14 @@ class Client(object):
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
         self._metrics_lock = threading.Lock()
+        self._traces_config: Any = traces
+        self._traces: Optional[PostHogTraces] = None
+        self._traces_lock = threading.Lock()
+        # The active span, scoped to this client so two instances in one
+        # process never parent to each other's spans.
+        self._active_span_var: ContextVar[Optional[Span]] = ContextVar(
+            "posthog_active_span", default=None
+        )
         # `_use_ai_lane` / `_enable_multimodal_capture` are deprecated aliases.
         self.enable_full_ai_capture = (
             enable_full_ai_capture is True
@@ -2255,6 +2288,12 @@ class Client(object):
         self._metrics_lock = threading.Lock()
         if self._metrics is not None:
             self._metrics._reinit_after_fork()
+        self._traces_lock = threading.Lock()
+        # A fresh variable: an inherited handle resets the old one on exit,
+        # which would restore the parent process's outer span.
+        self._active_span_var = ContextVar("posthog_active_span", default=None)
+        if self._traces is not None:
+            self._traces.reinit_after_fork(self._active_span_var)
 
         # Unknown definitions cannot establish shared provenance in a new worker.
         if self._flag_definition_fingerprint.startswith("remote-only:"):
@@ -2489,6 +2528,131 @@ class Client(object):
                         self._metrics = PostHogMetrics(self, None)
         return self._metrics
 
+    @property
+    def _traces_pipeline(self) -> Optional[PostHogTraces]:
+        if (
+            self._traces_config is None
+            or self._traces_config is False
+            or self._shutdown_requested
+        ):
+            return self._traces
+        if self._traces is None:
+            with self._traces_lock:
+                # Re-checked under the lock, which shutdown takes before it
+                # reads the pipeline, so neither can miss the other.
+                if self._traces is None and not self._shutdown_requested:
+                    try:
+                        config = resolve_traces_config(
+                            self._traces_config, host_resource_attributes()
+                        )
+                        drops = DropLog(config.flush_interval)
+                        self._traces = PostHogTraces(
+                            self,
+                            config,
+                            self._tracing_context,
+                            self._active_span_var,
+                            SpanExporter(self, config, drops),
+                            drops,
+                        )
+                        # Sync mode has no exit hook for events; spans still
+                        # queue for the timer, so they need their own.
+                        if self.sync_mode and self.send:
+                            atexit.register(self._atexit_spans)
+                    except Exception:
+                        # Off rather than defaults: defaults would drop a
+                        # before_span_send hook and export unscrubbed spans.
+                        self.log.exception("Error initializing traces; tracing is off")
+                        self._traces_config = False
+        return self._traces
+
+    def _tracing_context(self) -> Dict[str, Optional[str]]:
+        # The request context's identity, which the Django middleware fills
+        # from the X-POSTHOG-* headers: the span's person/session join keys.
+        return {
+            "distinct_id": get_context_distinct_id(),
+            "session_id": get_context_session_id(),
+        }
+
+    def start_span(
+        self,
+        name: str,
+        *,
+        kind: Optional[str] = None,
+        attributes: Optional[Mapping[str, Any]] = None,
+        parent: Union[Span, str, None] = None,
+        tracestate: Optional[str] = None,
+        start_time: Union[datetime, float, None] = None,
+    ) -> Span:
+        """
+        Start a span for distributed tracing. Alpha.
+
+        Returns a span handle. Use it as a context manager to make it the active
+        span for the block and end it on exit (recording a raised exception on
+        the way out); or call ``end()`` yourself for a span that cannot wrap a
+        block. Spans started inside the block nest under it automatically.
+        Always returns a usable handle, even when tracing is off, so calling
+        code never branches.
+
+        Args:
+            name: A low-cardinality operation name, e.g. ``GET /users/:id``.
+                Variable values belong in attributes, not the name.
+            kind: ``internal`` (default), ``server``, ``client``, ``producer``
+                or ``consumer``.
+            attributes: Initial attributes.
+            parent: A span handle, or an inbound W3C ``traceparent`` header
+                value to continue a remote trace. Defaults to the active span.
+                A forked child starts with no active span; pass the parent
+                span to continue a trace across a fork.
+            tracestate: The inbound ``tracestate`` header accompanying a
+                ``traceparent`` string ``parent``; preserved and propagated.
+            start_time: A ``datetime`` or epoch seconds, to backdate the span.
+
+        Examples:
+            ```python
+            posthog = Posthog("<ph_project_api_key>", traces={"service_name": "checkout-api"})
+
+            with posthog.start_span("POST /checkout", parent=request.headers.get("traceparent")) as span:
+                span.set_attribute("plan", user.plan)
+                with posthog.start_span("db.query", kind="client"):
+                    ...
+                outgoing_headers = {"traceparent": span.traceparent()}
+            ```
+
+        Category:
+            Tracing
+        """
+        pipeline = self._traces_pipeline
+        if pipeline is None:
+            return _inert_span(parent, tracestate, self._active_span_var)
+        return pipeline.start_span(
+            name,
+            kind=kind,
+            attributes=attributes,
+            parent=parent,
+            tracestate=tracestate,
+            start_time=start_time,
+        )
+
+    def get_active_span(self) -> Optional[Span]:
+        """
+        The span that is active in the current context, or ``None``. Alpha.
+
+        Only entering a span (``with posthog.start_span(...) as span:``) makes
+        it active; a span started manually is not. Use it to propagate the
+        trace to the next service: ``span.traceparent()`` is the header value.
+
+        Examples:
+            ```python
+            span = posthog.get_active_span()
+            if span is not None:
+                headers["traceparent"] = span.traceparent()
+            ```
+
+        Category:
+            Tracing
+        """
+        return self._active_span_var.get()
+
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
         Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
@@ -2496,6 +2660,15 @@ class Client(object):
         Args:
             timeout_seconds: Maximum seconds to wait for the queue to flush.
                 Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
+                Queued spans are sent at the same time, within the same
+                budget: at least one span request is attempted even when the
+                budget is already spent, a retriable failure is retried after
+                its backoff while budget remains, no other request starts once
+                it is spent, and each request is bounded by ``timeout``. The
+                wait for the last request is not cut short, so a flush can
+                take up to ``timeout_seconds`` plus ``timeout`` in the worst
+                case. A span flush already in flight for the whole wait is
+                left to finish instead.
 
         Examples:
             ```python
@@ -2506,19 +2679,52 @@ class Client(object):
         if self._defer_flush_from_callback(timeout_seconds):
             return
         try:
+            # Spans drain with events: serverless handlers call flush(), not
+            # shutdown(), and leaving spans on their own timer would lose them.
+            span_flush = self._start_span_flush(timeout_seconds)
             if timeout_seconds is None:
                 for lane in self._lanes:
                     lane.flush(None)
-                return
-
-            # The timeout is a total budget shared by the lanes, so flush()
-            # returns within roughly `timeout_seconds` overall.
-            deadline = time.monotonic() + timeout_seconds
-            for lane in self._lanes:
-                lane.flush(max(0.0, deadline - time.monotonic()))
+            else:
+                deadline = time.monotonic() + timeout_seconds
+                for lane in self._lanes:
+                    lane.flush(max(0.0, deadline - time.monotonic()))
+            if span_flush is not None:
+                # The last span request is bounded only by the request
+                # timeout, so the wait is not.
+                span_flush(None)
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
+
+    def _start_span_flush(
+        self, timeout_seconds: Optional[float]
+    ) -> Optional[Callable[[Optional[float]], None]]:
+        """Flush spans alongside the events, so a handler waits one round trip, not two.
+
+        Returns a waiter taking the seconds to wait, or ``None`` when nothing
+        is queued. When no thread can start (interpreter shutdown), the waiter
+        runs the flush on the calling thread, after the caller has flushed the
+        event lanes.
+        """
+        traces = self._traces
+        if traces is None or not traces.has_queued_spans():
+            return None
+
+        def flush_spans() -> None:
+            try:
+                traces.flush(timeout_seconds)
+            except Exception as e:
+                self.log.exception("error flushing spans: %s", e)
+
+        flusher = threading.Thread(
+            target=flush_spans, name="posthog-span-flush", daemon=True
+        )
+        try:
+            flusher.start()
+        except RuntimeError:
+            return lambda _seconds: flush_spans()
+        return flusher.join
 
     def _is_consumer_thread(self) -> bool:
         current = threading.current_thread()
@@ -2710,6 +2916,19 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
+        with self._traces_lock:
+            traces = self._traces
+        if traces is not None:
+            self._run_lifecycle_cleanup(
+                "Failed to flush spans on shutdown",
+                lambda: traces.flush(_TRACES_SHUTDOWN_FLUSH_SECONDS),
+                errors,
+            )
+            self._run_lifecycle_cleanup(
+                "Failed to close traces on shutdown", traces.close, errors
+            )
+            # The sync-mode exit drain, so a shut-down client is collectable.
+            atexit.unregister(self._atexit_spans)
         self._join_once(errors, flush_queues=False, lanes_prepared=True)
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",
@@ -2795,8 +3014,12 @@ class Client(object):
                     lane.close()
 
                 deadline = _get_atexit_deadline()
+                span_flush = self._start_span_flush(
+                    max(0.0, deadline - time.monotonic())
+                )
                 for lane in self._lanes:
                     lane.flush(max(0.0, deadline - time.monotonic()))
+                self._join_span_flush(span_flush, deadline)
             finally:
                 # Consumers are daemon threads. Publish a non-draining stop to
                 # every consumer, but do not join in-flight requests at exit.
@@ -2807,6 +3030,22 @@ class Client(object):
             with self._lifecycle_condition:
                 self._lifecycle_owner = None
                 self._lifecycle_condition.notify_all()
+
+    @no_throw()
+    def _atexit_spans(self) -> None:
+        # The span timer is a daemon thread that dies at exit.
+        deadline = _get_atexit_deadline()
+        span_flush = self._start_span_flush(max(0.0, deadline - time.monotonic()))
+        self._join_span_flush(span_flush, deadline)
+
+    def _join_span_flush(
+        self, waiter: Optional[Callable[[Optional[float]], None]], deadline: float
+    ) -> None:
+        if waiter is not None:
+            waiter(max(0.0, deadline - time.monotonic()))
+        if self._traces is not None:
+            # Not close(): an app's own shutdown() hook may still run and send them.
+            self._traces.warn_if_queued()
 
     @no_throw()
     def join(self) -> None:
@@ -2836,7 +3075,10 @@ class Client(object):
         Normally this method blocks until queued events have been attempted and
         cleanup finishes. Failed or undrainable events may be dropped and
         reported through logging or ``on_error``; returning does not guarantee
-        server receipt. Lifecycle cleanup is attempted once, and cleanup failures
+        server receipt. Queued spans get one final flush of up to 30 s (plus a
+        request already in flight); any it cannot send are discarded with a
+        warning, as are spans still open.
+        Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
         invoked the callback. If the callback must coordinate a blocking
@@ -2910,13 +3152,13 @@ class Client(object):
     def _update_flag_state(
         self,
         data: FlagDefinitionCacheData,
-        old_flags_by_key: Optional[dict] = None,
         *,
         _fingerprint: Optional[str] = None,
-    ) -> None:
-        """Publish definitions and their result-cache identity together."""
+    ) -> Optional[str]:
+        """Publish definitions and return the old cache identity for unlocked cleanup."""
         fingerprint = _fingerprint or self._hash_flag_definitions(data)
         with self._flag_definition_publication_lock:
+            old_fingerprint = self._flag_definition_fingerprint
             self.feature_flags = data["flags"]
             self.group_type_mapping = data["group_type_mapping"]
             self.cohorts = data["cohorts"]
@@ -2935,6 +3177,8 @@ class Client(object):
                     self.flag_cache._advance_generation(
                         self.flag_definition_version, fingerprint
                     )
+                return old_fingerprint
+        return None
 
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
@@ -2973,9 +3217,9 @@ class Client(object):
                     self.log.debug(
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
-                    self._update_flag_state(
-                        cached_data, old_flags_by_key=self.feature_flags_by_key or {}
-                    )
+                    old_fingerprint = self._update_flag_state(cached_data)
+                    if isinstance(self.flag_cache, RedisFlagCache):
+                        self.flag_cache._invalidate_snapshot(old_fingerprint)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
                     return
                 else:
@@ -3009,6 +3253,7 @@ class Client(object):
             request_etag = self._flags_etag
 
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
+        old_fingerprint: Optional[str] = None
         try:
             request_get = _get_with_identity if self._request_identity_kwargs() else get
             response = request_get(
@@ -3060,11 +3305,8 @@ class Client(object):
                     )
                     return
 
-                old_flags_by_key: dict[str, dict] = self.feature_flags_by_key or {}
-                self._update_flag_state(
-                    response.data,
-                    old_flags_by_key=old_flags_by_key,
-                    _fingerprint=fingerprint,
+                old_fingerprint = self._update_flag_state(
+                    response.data, _fingerprint=fingerprint
                 )
 
                 if self._flag_definition_cache_provider:
@@ -3118,6 +3360,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
                     self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
@@ -3141,6 +3384,7 @@ class Client(object):
                     self.group_type_mapping = {}
                     self.cohorts = {}
                     self._property_matching_version = 1
+                    old_fingerprint = self._flag_definition_fingerprint
                     self._flag_definition_fingerprint = ""
                     self._flags_etag = None
                     self._flag_definition_published_generation = fetch_generation
@@ -3167,6 +3411,11 @@ class Client(object):
                 % self.poll_interval
             )
             self.log.warning(e)
+        finally:
+            # Legacy readers ignore snapshot metadata. Cleanup is best effort and
+            # must not hold the publication lock, including when debug raises.
+            if isinstance(self.flag_cache, RedisFlagCache):
+                self.flag_cache._invalidate_snapshot(old_fingerprint)
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 
@@ -3429,7 +3678,7 @@ class Client(object):
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
         )
-        flag_value, local_definition_version = self._locally_evaluate_flag(
+        flag_value, snapshot = self._locally_evaluate_flag(
             key,
             distinct_id,
             groups,
@@ -3437,6 +3686,7 @@ class Client(object):
             group_properties,
             device_id,
         )
+        local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_value is not None:
@@ -3444,7 +3694,9 @@ class Client(object):
                 override_match_value if override_match_value is not None else flag_value
             )
             payload = (
-                self._compute_payload_locally(key, lookup_match_value)
+                self._compute_payload_locally(
+                    key, lookup_match_value, _definition_snapshot=snapshot
+                )
                 if lookup_match_value is not None
                 else None
             )
@@ -3456,7 +3708,11 @@ class Client(object):
             cached_flag_result = flag_result
             if override_match_value is not None:
                 cached_flag_result = FeatureFlagResult.from_value_and_payload(
-                    key, flag_value, self._compute_payload_locally(key, flag_value)
+                    key,
+                    flag_value,
+                    self._compute_payload_locally(
+                        key, flag_value, _definition_snapshot=snapshot
+                    ),
                 )
             if self.flag_cache and cached_flag_result:
                 # The cache rejects invalidated generations, including writes
@@ -3502,7 +3758,7 @@ class Client(object):
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
                 if self.flag_cache and flag_result:
-                    self.flag_cache.set_cached_flag(
+                    self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
 
@@ -3689,8 +3945,8 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
-    ) -> tuple[Optional[FlagValue], int]:
-        """Return the local value and the generation of the evaluated snapshot."""
+    ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
+        """Return the local value and its definitions for consistent payload lookup."""
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
         response = None
@@ -3718,7 +3974,7 @@ class Client(object):
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant locally: {e}"
                     )
-        return response, snapshot["flag_definition_version"]
+        return response, snapshot
 
     def get_feature_flag_payload(
         self,
@@ -4009,14 +4265,19 @@ class Client(object):
             )
 
     def _compute_payload_locally(
-        self, key: str, match_value: FlagValue
+        self,
+        key: str,
+        match_value: FlagValue,
+        *,
+        _definition_snapshot: Optional[_LocalEvaluationSnapshot] = None,
     ) -> Optional[str]:
         payload = None
-
-        if self.feature_flags_by_key is None:
-            return payload
-
-        flag_definition = self.feature_flags_by_key.get(key)
+        snapshot = (
+            _definition_snapshot
+            if _definition_snapshot is not None
+            else self._local_evaluation_snapshot()
+        )
+        flag_definition = snapshot["flags_by_key"].get(key)
         if flag_definition:
             flag_filters = flag_definition.get("filters") or {}
             flag_payloads = flag_filters.get("payloads") or {}
@@ -4437,7 +4698,9 @@ class Client(object):
                         _definition_snapshot=snapshot,
                     )
                     matched_payload = self._compute_payload_locally(
-                        flag["key"], flags[flag["key"]]
+                        flag["key"],
+                        flags[flag["key"]],
+                        _definition_snapshot=snapshot,
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
