@@ -1330,9 +1330,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         """
-        Get feature flag payloads for a user.
+        Get decoded feature flag payloads for a user.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -1361,7 +1361,10 @@ class Client(object):
             flag_keys_to_evaluate,
             device_id=device_id,
         )
-        return to_payloads(resp_data) or {}
+        return {
+            key: _parse_flag_payload(payload)
+            for key, payload in (to_payloads(resp_data) or {}).items()
+        }
 
     def get_feature_flags_and_payloads(
         self,
@@ -1403,7 +1406,13 @@ class Client(object):
             flag_keys_to_evaluate,
             device_id=device_id,
         )
-        return to_flags_and_payloads(resp)
+        response = to_flags_and_payloads(resp)
+        payloads = response.get("featureFlagPayloads")
+        if payloads is not None:
+            response["featureFlagPayloads"] = {
+                key: _parse_flag_payload(payload) for key, payload in payloads.items()
+            }
+        return response
 
     def get_flags_decision(
         self,

@@ -6,11 +6,15 @@ from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 FlagValue = Union[bool, str]
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("Invalid JSON constant")
+
+
 def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
     if isinstance(raw_payload, str):
         try:
-            return json.loads(raw_payload)
-        except json.JSONDecodeError:
+            return json.loads(raw_payload, parse_constant=_reject_json_constant)
+        except (ValueError, RecursionError):
             logging.getLogger("posthog").warning(
                 "[FEATURE FLAGS] Unable to parse flag payload as JSON"
             )

@@ -1,3 +1,4 @@
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -6,8 +7,19 @@ from posthog.client import Client
 from posthog.types import _parse_flag_payload
 
 
-@pytest.mark.parametrize("local", [True, False])
-@pytest.mark.parametrize("api", ["payload", "snapshot", "bulk"])
+@pytest.mark.parametrize(
+    "api, local",
+    [
+        ("payload", True),
+        ("payload", False),
+        ("snapshot", True),
+        ("snapshot", False),
+        ("bulk", True),
+        ("bulk", False),
+        ("remote_bulk", False),
+        ("remote_payloads", False),
+    ],
+)
 @pytest.mark.parametrize(
     "raw, expected",
     [
@@ -15,9 +27,28 @@ from posthog.types import _parse_flag_payload
         ("not json", None),
         ("   ", None),
         ("", None),
+        ("NaN", None),
+        ("Infinity", None),
+        ("-Infinity", None),
+        ('{"nested": [NaN]}', None),
+        ("[Infinity, -Infinity]", None),
+        pytest.param("[" * 20000, None, id="decoder-recursion-limit"),
+        pytest.param(
+            "9" * (getattr(sys, "get_int_max_str_digits", lambda: 0)() + 1),
+            None,
+            id="decoder-integer-limit",
+            marks=pytest.mark.skipif(
+                not getattr(sys, "get_int_max_str_digits", lambda: 0)(),
+                reason="Integer conversion limit is unavailable or disabled",
+            ),
+        ),
         ("[1, 2]", [1, 2]),
         ('{"ok": true}', {"ok": True}),
         ('"text"', "text"),
+        ('"123"', "123"),
+        ('"true"', "true"),
+        ('"NaN"', "NaN"),
+        ('"Infinity"', "Infinity"),
         ('""', ""),
         ("false", False),
         ("0", 0),
@@ -69,29 +100,41 @@ def test_payload_parsing(local, api, raw, expected):
             patch.object(client, "load_feature_flags"),
             patch("posthog.client.flags", return_value=response) as request,
         ):
-            if api == "bulk":
-                bulk = client.get_all_flags_and_payloads(
-                    "user", only_evaluate_locally=local
+            if api in ("bulk", "remote_bulk"):
+                bulk = (
+                    client.get_all_flags_and_payloads(
+                        "user", only_evaluate_locally=local
+                    )
+                    if api == "bulk"
+                    else client.get_feature_flags_and_payloads("user")
                 )
                 assert bulk["featureFlags"] == {"test-flag": True, "healthy": True}
                 assert bulk["featureFlagPayloads"]["healthy"] == {"ok": True}
                 result = bulk["featureFlagPayloads"].get("test-flag")
+            elif api == "remote_payloads":
+                payloads = client.get_feature_payloads("user")
+                assert payloads["healthy"] == {"ok": True}
+                result = payloads.get("test-flag")
             elif api == "payload":
                 with pytest.warns(DeprecationWarning):
                     result = client.get_feature_flag_payload(
                         "test-flag", "user", only_evaluate_locally=local
                     )
             else:
-                result = client.evaluate_flags(
-                    "user", only_evaluate_locally=local
-                ).get_flag_payload("test-flag")
+                result = client.evaluate_flags("user", only_evaluate_locally=local)
+                assert result.get_flag_payload("healthy") == {"ok": True}
+                assert result.get_flag("test-flag") is True
+                result = result.get_flag_payload("test-flag")
             assert result == expected
+            assert type(result) is type(expected)
             assert request.call_count == (0 if local else 1)
     finally:
         client.shutdown()
 
 
-@pytest.mark.parametrize("raw", ['{"private":', "", "   "])
+@pytest.mark.parametrize(
+    "raw", ['{"private":', "", "   ", "NaN", "Infinity", "-Infinity"]
+)
 def test_parse_failure_logs_without_payload(raw, caplog):
     with caplog.at_level("WARNING", logger="posthog"):
         assert _parse_flag_payload(raw) is None
