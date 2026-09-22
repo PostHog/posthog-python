@@ -113,8 +113,10 @@ class RequiresServerEvaluation(Exception):
 # Given the same bucketing value and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
 # we can do _hash(key, bucketing_value) < 0.2
-def _hash(key: str, bucketing_value: str, salt: str = "") -> float:
-    hash_key = f"{key}.{bucketing_value}{salt}"
+def _hash(
+    key: str, bucketing_value: str, salt: str = "", separator: str = "."
+) -> float:
+    hash_key = f"{key}{separator}{bucketing_value}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
 
@@ -122,18 +124,11 @@ def _hash(key: str, bucketing_value: str, salt: str = "") -> float:
 def _holdout_hash(bucketing_value: str) -> float:
     """Hash a bucketing value for holdout membership, matching the server.
 
-    `_hash` can't be reused: it joins key and value with a dot, while the server hashes
-    `holdout-<value>`. Reusing it would still look uniform and deterministic while holding
-    out a different set of people than the server does.
+    The separator is the whole point: the server hashes `holdout-<value>`, while flag
+    rollout hashing joins with a dot. Taking the default separator here would still look
+    uniform and deterministic while holding out a different set of people than the server.
     """
-    hash_key = f"holdout-{bucketing_value}"
-    # SHA-1 is the bucketing algorithm the server uses, not a security control, so the
-    # digest has to stay bit-identical. usedforsecurity=False says so without changing it.
-    hash_val = int(
-        hashlib.sha1(hash_key.encode("utf-8"), usedforsecurity=False).hexdigest()[:15],
-        16,
-    )
-    return hash_val / __LONG_SCALE__
+    return _hash("holdout", bucketing_value, separator="-")
 
 
 def _get_holdout_variant(flag, bucketing_value) -> Optional[str]:
