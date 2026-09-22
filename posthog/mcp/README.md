@@ -36,21 +36,32 @@ Request headers use the same identity and package version, so SDK Health can com
 Because `$lib` is a client-level identity, `instrument()` relabels every event sent by the client passed to it.
 Use a client dedicated to MCP analytics if the application also captures unrelated events.
 
-## Capture the calling model
+## Defaults and opt-outs
 
-Model capture is off by default. Enable it for an instrumented MCP Python SDK 1.x or
-2.x server:
+A valid echoed conversation handle takes precedence over transport sessions. A request that already carries a transport session or a PostHog session token does not mint a new handle or append a prompt-back block. Requests carrying neither use the conversation fallback.
+
+
+Intent, model capture, conversation correlation, and MCP exception capture are on by default.
+Missing-capability reporting and feedback collection remain off.
 
 ```python
 from posthog.mcp import MCPAnalyticsOptions, instrument
 
-analytics = instrument(
-    server,
-    posthog,
-    MCPAnalyticsOptions(capture_model=True),
-)
+instrument(server, posthog, MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False))
 ```
 
+Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
+high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
+strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.
+Conversation correlation adds an optional `conversation_id` argument and returns a handle in
+eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
+Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
+response content. Custom `PostHogMCP` dispatchers enable model capture by default but still
+supply their own session IDs. The reasoning is recorded in posthog-js `docs/adr/0013`.
+
+## Capture the calling model
+
+Model capture is on by default for instrumented MCP Python SDK 1.x and 2.x servers.
 The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
@@ -75,13 +86,29 @@ If a tool already declares `llm_model`, or uses a root `$ref`, `oneOf`, `allOf`,
 `anyOf` schema, PostHog leaves the schema and argument untouched. Client metadata
 can still be captured in those cases.
 
-For a custom dispatcher, use the same option on `PostHogMCP` and pass request
+A raw low-level server learns ownership while serving `tools/list`. A fresh instance that never
+served one has no answer, so it records `llm_model` as the self-reported model and strips
+nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that declares its own
+`llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
+otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
+standalone `fastmcp.FastMCP` read ownership from the registered tool schema, so they are
+unaffected and need no prior listing when dispatch uses that registry.
+
+On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute a tool.
+When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
+replica cannot safely distinguish that field from a replacement tool's own argument.
+Client metadata capture remains enabled. This also applies to pass-through logging or
+authorization middleware with those hooks; argument-based model capture is skipped so an
+application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
+during a tool call.
+
+For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
 metadata through explicitly:
 
 ```python
 from posthog.mcp import PostHogMCP
 
-posthog = PostHogMCP("phc_...", capture_model=True)
+posthog = PostHogMCP("phc_...")
 tools = posthog.prepare_tool_list(server_tools)
 original_tool = next(tool for tool in server_tools if tool["name"] == tool_name)
 call = posthog.prepare_tool_call(
@@ -134,8 +161,8 @@ and adds no tools.
 The tool covers what `report_missing` covers (as feedback_type
 `missing_capability`), so new integrations should enable only one of the two.
 
-If a real tool already uses the name, the SDK logs a warning, does not inject
-the virtual tool, and never intercepts the real tool.
+See [Virtual tools on a paginated `tools/list`](#virtual-tools-on-a-paginated-toolslist)
+for name collisions and the page rule.
 
 Use the object form to rename the tool, declare host-specific fields, or route
 reports to a real backend:
@@ -184,6 +211,70 @@ if call.is_feedback:
 `on_feedback` is ignored on this path — the dispatcher routes reports itself via
 `call.feedback_report`.
 
+On this path you own the page rule, because you pass the switches per call. Pass
+them for the first page only, and pass your own tool as `original_tool` so a real
+tool by a virtual tool's name wins:
+
+```python
+first_page = request.params.get("cursor") is None
+tools = posthog.prepare_tool_list(
+    page_tools, report_missing=first_page, collect_feedback=first_page
+)
+
+call = posthog.prepare_tool_call(
+    tool_name, raw_args, original_tool=my_tools.get(tool_name)
+)
+```
+
+## Virtual tools on a paginated `tools/list`
+
+`instrument()` advertises up to two tools of its own: `get_more_tools`
+(`report_missing=True`) and `send_feedback` (`collect_feedback=True`).
+
+A client concatenates every `tools/list` page into one list, so each virtual tool
+is appended to the **first page only** — the page every client reads, including
+clients that never follow `nextCursor`. "First page" means a request with no
+cursor; an empty string is a valid opaque cursor, so `cursor: ""` is a
+continuation page.
+
+### Tool name collisions
+
+Your tools win when the SDK can see them. Rename the SDK's to keep both:
+
+```python
+MCPAnalyticsOptions(
+    report_missing=True,
+    missing_capability_tool_name="find_posthog_tools",
+    collect_feedback=CollectFeedbackOptions(tool_name="tell_posthog"),
+)
+```
+
+- A real tool using the name **on the first page** wins: the SDK warns, injects
+  nothing, and never intercepts yours.
+- A real tool that appears **only on a later page** is shadowed — page one cannot
+  see page two, so the SDK's tool is already advertised and calls to the name
+  reach it. The SDK warns when that page is served. `@posthog/mcp` is the same.
+- Configuring **both** virtual tools with one name advertises only
+  `get_more_tools`, and warns.
+
+Warnings go to the `logger` option *and* the `posthog.mcp` standard-library
+logger, so a default-configured host sees them on stderr.
+
+At call time the SDK checks ownership again, covering the process that serves a
+call without having served a listing — the ordinary multi-pod case. FastMCP and
+v2 `MCPServer` are asked via their tool registry; a raw low-level server has
+none, so the SDK calls your own `tools/list` handler, once per call to a virtual
+tool's name and never for ordinary traffic. If that check cannot answer — a
+registry lookup or a listing handler raised, or you registered `tools/list`
+after `instrument()` — the call is delegated to your server rather than
+intercepted, and the reason is logged: guessing the other way would swallow a
+real tool of yours silently.
+
+This check is the only ownership signal used at call time, so a server that
+serves **different tool sets to different callers** from one instrumented
+instance is handled correctly: nothing is carried over from whichever listing
+happened to be served last.
+
 ## Stateless / multi-pod servers
 
 A stateless MCP server issues no session id, so `$session_id` fragments across pods
@@ -229,11 +320,14 @@ sess = get_mcp_session(request)   # sess.session_id, sess.client_name, ...
 
 ### Or skip the middleware entirely: conversation ids
 
-`MCPAnalyticsOptions(enable_conversation_id=True)` derives `$session_id` from the
+`enable_conversation_id` is on by default and derives `$session_id` from the
 agent's conversation handle, deterministically and identically on every pod. That
 needs no middleware and no ordering discipline, and it is the only thing that
 correlates a session under the 2026-07-28 revision's per-request server instances.
 Prefer it if you're on a recent client.
+
+The `get_more_tools` and `send_feedback` virtual tools also use the conversation
+handle when this option is enabled.
 
 ### How the SDK tells you it's misconfigured
 

@@ -15,6 +15,7 @@ import mcp.types as mcp_types
 from mcp.server.lowlevel import Server
 
 from posthog.mcp import instrument
+from posthog.mcp.tools import get_more_tools_result_text
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     FakeClient,
@@ -453,7 +454,7 @@ async def test_late_registration_is_wrapped():
 async def test_initialize_and_session_reuse_across_calls():
     server = make_server()
     client = FakeClient()
-    instrument(server, client)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
     await _call_tool(server, "add", {"a": 1, "b": 1, "context": "first"})
     await _call_tool(server, "add", {"a": 2, "b": 2, "context": "second"})
@@ -477,11 +478,17 @@ async def test_instrument_is_idempotent():
 async def test_report_missing_appends_virtual_tool():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, enable_conversation_id=True),
+    )
 
     result = await _list_tools(server)
     names = [t.name for t in result.tools]
     assert "get_more_tools" in names
+    virtual = next(t for t in result.tools if t.name == "get_more_tools")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     call_result = await _call_tool(
         server, "get_more_tools", {"context": "need an email tool"}
@@ -491,15 +498,23 @@ async def test_report_missing_appends_virtual_tool():
     assert call_result.is_error is False
     missing = _events(client, "$mcp_missing_capability")
     assert missing and missing[0]["properties"]["$mcp_intent"] == "need an email tool"
+    handle = missing[0]["properties"]["$mcp_conversation_id"]
+    assert handle in call_result.content[1].text
 
 
 async def test_collect_feedback_appends_virtual_tool():
     server = make_server()
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, enable_conversation_id=True),
+    )
 
     result = await _list_tools(server)
     assert "send_feedback" in [t.name for t in result.tools]
+    virtual = next(t for t in result.tools if t.name == "send_feedback")
+    assert "conversation_id" in virtual.input_schema["properties"]
 
     call_result = await _call_tool(
         server,
@@ -513,6 +528,8 @@ async def test_collect_feedback_appends_virtual_tool():
     assert len(feedback) == 1
     assert feedback[0]["properties"]["$mcp_feedback_type"] == "issue"
     assert "$mcp_parameters" not in feedback[0]["properties"]
+    handle = feedback[0]["properties"]["$mcp_conversation_id"]
+    assert handle in call_result.content[1].text
     assert _events(client, "$mcp_tool_call") == []
 
 
@@ -575,3 +592,142 @@ async def test_callbacks_can_read_headers_through_the_helper():
     await _flush()
 
     assert seen["headers"] == {"authorization": "Bearer t0ken", "user-agent": "probe/1"}
+
+
+# --- virtual tools on a paginated listing ------------------------------------
+
+_REAL_GET_MORE_TOOLS_V2 = mcp_types.Tool(
+    name="get_more_tools",
+    description="A real application tool that owns the name",
+    input_schema={"type": "object", "properties": {"context": {"type": "string"}}},
+)
+_ECHO_TOOL_V2 = mcp_types.Tool(
+    name="echo",
+    description="Echo",
+    input_schema={"type": "object", "properties": {"msg": {"type": "string"}}},
+)
+
+
+def make_paged_server_v2(pages):
+    """A raw v2 low-level server serving ``pages`` one page per request, chained
+    by ``next_cursor``. The tool handler answers ``real tool ran``."""
+
+    async def on_call_tool(ctx, params):
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="real tool ran")]
+        )
+
+    async def on_list_tools(ctx, params):
+        cursor = getattr(params, "cursor", None)
+        index = int(cursor) if cursor else 0
+        return mcp_types.ListToolsResult(
+            tools=list(pages[index]),
+            next_cursor=str(index + 1) if index + 1 < len(pages) else None,
+        )
+
+    return Server(
+        "test-paged-v2",
+        on_call_tool=on_call_tool,
+        on_list_tools=on_list_tools,
+    )
+
+
+async def _list_page_v2(server, cursor=None):
+    """Request one page. ``cursor=None`` is a first page; any string -- including
+    ``""``, a valid opaque cursor -- is a continuation."""
+    entry = server.get_request_handler("tools/list")
+    params = (
+        mcp_types.PaginatedRequestParams(cursor=cursor) if cursor is not None else None
+    )
+    return await entry.handler(fake_ctx(method="tools/list"), params)
+
+
+async def test_v2_virtual_tools_appended_to_first_page_only():
+    server = make_paged_server_v2([[_ECHO_TOOL_V2], [_ECHO_TOOL_V2]])
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(report_missing=True, collect_feedback=True),
+    )
+
+    first = await _list_page_v2(server)
+    second = await _list_page_v2(server, cursor="1")
+    assert [t.name for t in first.tools] == ["echo", "get_more_tools", "send_feedback"]
+    assert [t.name for t in second.tools] == ["echo"]
+
+
+async def test_v2_empty_string_cursor_is_a_continuation_page():
+    server = make_paged_server_v2([[_ECHO_TOOL_V2]])
+    instrument(server, FakeClient(), MCPAnalyticsOptions(report_missing=True))
+
+    page = await _list_page_v2(server, cursor="")
+    assert [t.name for t in page.tools] == ["echo"]
+
+
+async def test_v2_raw_list_probe_blocks_interception_before_any_listing():
+    # A raw v2 low-level server has no tool registry, so ownership is settled by
+    # asking the host's own tools/list handler.
+    server = make_paged_server_v2([[_REAL_GET_MORE_TOOLS_V2]])
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(report_missing=True))
+
+    result = await _call_tool(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+
+    assert result.content[0].text == "real tool ran"
+    assert _events(client, "$mcp_missing_capability") == []
+
+
+async def test_v2_first_page_collision_lets_the_real_tool_win():
+    server = make_paged_server_v2([[_REAL_GET_MORE_TOOLS_V2], [_ECHO_TOOL_V2]])
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    first = await _list_page_v2(server)
+    second = await _list_page_v2(server, cursor="1")
+    listed = [t.name for t in first.tools] + [t.name for t in second.tools]
+    assert listed.count("get_more_tools") == 1  # the real tool, never appended
+    assert any("Cannot inject PostHog's" in m for m in messages)
+    assert any("missing_capability_tool_name" in m for m in messages)
+
+
+async def test_v2_cached_result_object_does_not_collide_with_itself():
+    # v2 returns ListToolsResult directly rather than wrapped in a root model,
+    # so it exercises the other branch of the non-mutating append. A host is
+    # free to hand back the same object every time; PostHog must not read its
+    # own injected tool back out of it as a real one.
+    cached = mcp_types.ListToolsResult(tools=[_ECHO_TOOL_V2])
+
+    async def on_call_tool(ctx, params):
+        raise ValueError(f"Unknown tool: {params.name}")
+
+    async def on_list_tools(ctx, params):
+        return cached
+
+    server = Server(
+        "test-cached-v2", on_call_tool=on_call_tool, on_list_tools=on_list_tools
+    )
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(report_missing=True, logger=messages.append),
+    )
+
+    first = [t.name for t in (await _list_page_v2(server)).tools]
+    second = [t.name for t in (await _list_page_v2(server)).tools]
+    assert first == ["echo", "get_more_tools"]
+    assert second == first
+    assert [t.name for t in cached.tools] == ["echo"]  # the host's object is untouched
+
+    result = await _call_tool(server, "get_more_tools", {"context": "need csv"})
+    await _flush()
+    assert result.content[0].text == get_more_tools_result_text()
+    assert _events(client, "$mcp_missing_capability")
+    assert not [m for m in messages if "Cannot inject PostHog's" in m]

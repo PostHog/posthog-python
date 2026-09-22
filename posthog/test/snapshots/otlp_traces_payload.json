@@ -1,0 +1,98 @@
+{
+  "resourceSpans": [
+    {
+      "resource": {
+        "attributes": [
+          {
+            "key": "service.name",
+            "value": {
+              "stringValue": "checkout-api"
+            }
+          },
+          {
+            "key": "telemetry.sdk.name",
+            "value": {
+              "stringValue": "posthog-python"
+            }
+          }
+        ]
+      },
+      "scopeSpans": [
+        {
+          "scope": {
+            "name": "posthog-python",
+            "version": "<SDK_VERSION>"
+          },
+          "spans": [
+            {
+              "attributes": [
+                {
+                  "key": "posthogDistinctId",
+                  "value": {
+                    "stringValue": "user-123"
+                  }
+                },
+                {
+                  "key": "sessionId",
+                  "value": {
+                    "stringValue": "session-123"
+                  }
+                },
+                {
+                  "key": "http.status_code",
+                  "value": {
+                    "intValue": "500"
+                  }
+                },
+                {
+                  "key": "http.duration_ratio",
+                  "value": {
+                    "doubleValue": 0.25
+                  }
+                },
+                {
+                  "key": "cached",
+                  "value": {
+                    "boolValue": false
+                  }
+                }
+              ],
+              "endTimeUnixNano": "1700000000080000000",
+              "events": [
+                {
+                  "attributes": [
+                    {
+                      "key": "exception.type",
+                      "value": {
+                        "stringValue": "TypeError"
+                      }
+                    },
+                    {
+                      "key": "exception.message",
+                      "value": {
+                        "stringValue": "boom"
+                      }
+                    }
+                  ],
+                  "name": "exception",
+                  "timeUnixNano": "1700000000040000000"
+                }
+              ],
+              "flags": 257,
+              "kind": 2,
+              "name": "GET /users/:id",
+              "parentSpanId": "b7ad6b7169203331",
+              "spanId": "00f067aa0ba902b7",
+              "startTimeUnixNano": "1700000000000000000",
+              "status": {
+                "code": 2,
+                "message": "boom"
+              },
+              "traceId": "4bf92f3577b34da6a3ce929d0e0e4736"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -25,6 +25,12 @@ from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
 )
+from posthog.test.mcp._helpers_lowlevel import (
+    ECHO_TOOL as _ECHO_TOOL,
+    call_request as _call_request,
+    list_page as _list_page,
+    make_paged_lowlevel,
+)
 
 _REPORT_ARGS = {
     "feedback_type": "missing_capability",
@@ -69,13 +75,6 @@ def make_lowlevel():
         return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
 
     return server
-
-
-def _call_request(name, arguments):
-    return mcp_types.CallToolRequest(
-        method="tools/call",
-        params=mcp_types.CallToolRequestParams(name=name, arguments=arguments),
-    )
 
 
 async def _list_tools_lowlevel(server):
@@ -412,7 +411,7 @@ async def test_fastmcp_advertises_and_captures_feedback():
     assert virtual
     schema_props = virtual[0].inputSchema["properties"]
     # Its intent rides its own arguments; the model argument is still advertised.
-    assert "context" not in schema_props and "conversation_id" not in schema_props
+    assert "context" not in schema_props and "conversation_id" in schema_props
     assert "llm_model" in schema_props
 
     canned = await server._tool_manager.call_tool("send_feedback", dict(_REPORT_ARGS))
@@ -704,65 +703,56 @@ async def test_lowlevel_collision_fails_open_after_listing():
     assert _events(client, "$mcp_tool_call")
 
 
-def _make_paged_lowlevel(pages):
-    """A raw low-level server whose tools/list handler serves ``pages`` (a list of
-    tool lists) one page per request, chained by ``nextCursor``. The paged handler
-    is registered directly into ``request_handlers`` so the wire pagination shape
-    is exact; the real ``send_feedback`` handler answers ``real tool ran``."""
-    server = Server("feedback-lowlevel-paged")
-
-    @server.call_tool()
-    async def call_tool(name, arguments):
-        return [mcp_types.TextContent(type="text", text="real tool ran")]
-
-    async def paged_list(req):
-        cursor = getattr(getattr(req, "params", None), "cursor", None) if req else None
-        index = int(cursor) if cursor else 0
-        next_cursor = str(index + 1) if index + 1 < len(pages) else None
-        return mcp_types.ServerResult(
-            mcp_types.ListToolsResult(tools=list(pages[index]), nextCursor=next_cursor)
-        )
-
-    server.request_handlers[mcp_types.ListToolsRequest] = paged_list
-    return server
-
-
-def _list_page(server, cursor=None):
-    handler = server.request_handlers[mcp_types.ListToolsRequest]
-    params = mcp_types.PaginatedRequestParams(cursor=cursor) if cursor else None
-    return handler(mcp_types.ListToolsRequest(method="tools/list", params=params))
-
-
 _REAL_SEND_FEEDBACK = mcp_types.Tool(
     name="send_feedback",
     description="A real application tool",
     inputSchema={"type": "object", "properties": {"note": {"type": "string"}}},
 )
-_ECHO_TOOL = mcp_types.Tool(
-    name="echo",
-    description="Echo",
-    inputSchema={"type": "object", "properties": {"msg": {"type": "string"}}},
-)
 
 
-@pytest.mark.parametrize("real_tool_page", [0, 1])
-async def test_paginated_listing_keeps_collision_across_pages(real_tool_page):
-    # A collision seen on any page must survive the other pages: recomputing the
-    # flag from one page alone would re-arm interception and swallow the real
-    # tool's calls (and an early page must not advertise the virtual tool before
-    # a later page reveals the real one).
-    pages = [[_ECHO_TOOL], [_ECHO_TOOL]]
-    pages[real_tool_page] = [_REAL_SEND_FEEDBACK]
-    server = _make_paged_lowlevel(pages)
+async def test_paginated_listing_appends_virtual_tool_on_first_page_only():
+    # A client concatenates every page into one list, so the virtual tool may
+    # appear on exactly one page -- the first, which every client reads.
+    server = make_paged_lowlevel([[_ECHO_TOOL], [_ECHO_TOOL]])
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    page_one = await _list_page(server)
+    page_two = await _list_page(server, cursor="1")
+    assert [t.name for t in page_one.root.tools] == ["echo", "send_feedback"]
+    assert [t.name for t in page_two.root.tools] == ["echo"]
+
+
+async def test_empty_string_cursor_is_a_continuation_page():
+    # `""` is a valid opaque cursor a client got from a previous page, not the
+    # absence of one, so it must not re-append the virtual tool.
+    server = make_paged_lowlevel([[_ECHO_TOOL]])
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+
+    assert [t.name for t in (await _list_page(server, cursor="")).root.tools] == [
+        "echo"
+    ]
+
+
+async def test_first_page_collision_lets_the_real_tool_win():
+    # A real tool owning the name on the first page blocks injection outright,
+    # and its calls are dispatched, not intercepted.
+    server = make_paged_lowlevel([[_REAL_SEND_FEEDBACK], [_ECHO_TOOL]])
+    client = FakeClient()
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, logger=messages.append),
+    )
 
     page_one = await _list_page(server)
     page_two = await _list_page(server, cursor="1")
     listed = [t.name for t in page_one.root.tools] + [
         t.name for t in page_two.root.tools
     ]
-    assert listed.count("send_feedback") == 1  # the real tool only, never appended
+    assert listed.count("send_feedback") == 1  # the real tool, never appended
 
     call_handler = server.request_handlers[mcp_types.CallToolRequest]
     out = await call_handler(_call_request("send_feedback", {"note": "hi"}))
@@ -771,20 +761,59 @@ async def test_paginated_listing_keeps_collision_across_pages(real_tool_page):
     assert out.root.content[0].text == "real tool ran"
     assert _events(client, "$mcp_feedback") == []
     assert _events(client, "$mcp_tool_call")
+    assert any("Cannot inject PostHog's" in m for m in messages)
+    # The warning has to name the way out, or nobody acts on it.
+    assert any("collect_feedback=CollectFeedbackOptions" in m for m in messages)
 
 
-async def test_paginated_listing_appends_virtual_tool_once_on_final_page():
-    server = _make_paged_lowlevel([[_ECHO_TOOL], [_ECHO_TOOL]])
+async def test_later_page_collision_shadows_the_real_tool():
+    # The get_more_tools twin in test_virtual_tools.py carries the reasoning:
+    # page one cannot see page two, so the real tool is shadowed and the remedy
+    # is the rename option. Do not make this fail-open without also changing the
+    # JS SDK.
+    server = make_paged_lowlevel([[_ECHO_TOOL], [_REAL_SEND_FEEDBACK]])
     client = FakeClient()
-    instrument(server, client, MCPAnalyticsOptions(collect_feedback=True))
+    messages = []
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(collect_feedback=True, logger=messages.append),
+    )
 
     page_one = await _list_page(server)
     page_two = await _list_page(server, cursor="1")
-    assert [t.name for t in page_one.root.tools] == ["echo"]  # non-final: no append
-    assert [t.name for t in page_two.root.tools] == ["echo", "send_feedback"]
+    listed = [t.name for t in page_one.root.tools] + [
+        t.name for t in page_two.root.tools
+    ]
+    assert listed.count("send_feedback") == 2  # PostHog's, then the real one
+
+    call_handler = server.request_handlers[mcp_types.CallToolRequest]
+    out = await call_handler(_call_request("send_feedback", {"summary": "shadowed"}))
+    await _flush()
+
+    assert out.root.content[0].text != "real tool ran"
+    assert _events(client, "$mcp_feedback")
+    assert any("a later tools/list page advertises a real tool" in m for m in messages)
+    assert any("collect_feedback=CollectFeedbackOptions" in m for m in messages)
 
 
-async def test_feedback_never_mints_conversation_id():
+async def test_collision_warning_is_logged_once_across_repeated_listings():
+    # A client that re-lists tools on every turn must not flood the log.
+    server = make_paged_lowlevel([[_REAL_SEND_FEEDBACK]])
+    messages = []
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(collect_feedback=True, logger=messages.append),
+    )
+
+    for _ in range(3):
+        await _list_page(server)
+
+    assert len([m for m in messages if "Cannot inject PostHog's" in m]) == 1
+
+
+async def test_feedback_mints_conversation_id():
     server = make_lowlevel()
     client = FakeClient()
     instrument(
@@ -795,15 +824,49 @@ async def test_feedback_never_mints_conversation_id():
 
     result = await _list_tools_lowlevel(server)
     virtual = [t for t in result.root.tools if t.name == "send_feedback"][0]
-    assert "conversation_id" not in virtual.inputSchema["properties"]
+    assert "conversation_id" in virtual.inputSchema["properties"]
 
     call_handler = server.request_handlers[mcp_types.CallToolRequest]
     out = await call_handler(_call_request("send_feedback", dict(_REPORT_ARGS)))
     await _flush()
 
     feedback = _events(client, "$mcp_feedback")
-    assert "$mcp_conversation_id" not in feedback[0]["properties"]
-    # No prompt-back block appended to the acknowledgement.
+    handle = feedback[0]["properties"]["$mcp_conversation_id"]
+    assert handle in out.root.content[1].text
+
+
+async def test_renamed_feedback_reuses_conversation_id():
+    server = make_lowlevel()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            collect_feedback=CollectFeedbackOptions(tool_name="report_feedback"),
+            enable_conversation_id=True,
+        ),
+    )
+
+    result = await _list_tools_lowlevel(server)
+    virtual = [t for t in result.root.tools if t.name == "report_feedback"][0]
+    assert "conversation_id" in virtual.inputSchema["properties"]
+
+    handle = "0198d3a7-1111-7222-8333-444455556666"
+    call_handler = server.request_handlers[mcp_types.CallToolRequest]
+    await call_handler(_call_request("echo", {"msg": "hi", "conversation_id": handle}))
+    out = await call_handler(
+        _call_request(
+            "report_feedback", {**dict(_REPORT_ARGS), "conversation_id": handle}
+        )
+    )
+    await _flush()
+
+    tool_call = _events(client, "$mcp_tool_call")[0]
+    feedback = _events(client, "$mcp_feedback")[0]
+    assert feedback["properties"]["$mcp_conversation_id"] == handle
+    assert (
+        tool_call["properties"]["$session_id"] == feedback["properties"]["$session_id"]
+    )
     assert len(out.root.content) == 1
 
 
@@ -850,6 +913,49 @@ async def test_posthogmcp_prepare_tool_list_appends_descriptor():
         collect_feedback=True,
     )
     assert [t["name"] for t in collided] == ["send_feedback"]
+    # ...and that real tool still gets `context`, so its intent is captured. It
+    # is only PostHog's own descriptor — recognised by already declaring
+    # `context`, not by its name alone — that is left alone.
+    assert "context" in collided[0]["inputSchema"]["properties"]
+
+
+async def test_posthogmcp_real_tool_named_get_more_tools_keeps_context():
+    # A host tool named like a virtual tool used to be mistaken for PostHog's
+    # own descriptor and skipped, silently dropping its $mcp_intent.
+    client, _ = make_client()
+    prepared = client.prepare_tool_list(
+        [
+            {
+                "name": "get_more_tools",
+                "inputSchema": {"type": "object", "properties": {}},
+            }
+        ]
+    )
+    assert "context" in prepared[0]["inputSchema"]["properties"]
+
+
+async def test_posthogmcp_repreparing_a_prepared_list_is_not_a_collision(caplog):
+    # Hosts may re-prepare an already-prepared list. PostHog's own descriptors
+    # come back in it, and mistaking them for host tools would both warn about
+    # ourselves and duplicate the tools.
+    client, _ = make_client(collect_feedback=True, capture_model=False)
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    once = client.prepare_tool_list(tools, report_missing=True, collect_feedback=True)
+    assert [t["name"] for t in once] == ["search", "get_more_tools", "send_feedback"]
+
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        twice = client.prepare_tool_list(
+            once, report_missing=True, collect_feedback=True
+        )
+
+    assert [t["name"] for t in twice] == [t["name"] for t in once]
+    assert not [r for r in caplog.records if r.name == "posthog.mcp"]
+    # The descriptors' own schemas are unchanged: get_more_tools keeps just its
+    # own `context`, and send_feedback — which states intent through `summary`
+    # and `details` instead — gains none.
+    assert list(twice[1]["inputSchema"]["properties"]) == ["context"]
+    assert "context" not in twice[2]["inputSchema"]["properties"]
 
 
 async def test_posthogmcp_prepare_tool_list_requires_constructor_option():
@@ -876,11 +982,36 @@ async def test_posthogmcp_prepare_tool_call_without_opt_in_never_flags():
     assert call.is_feedback is False and call.feedback_report is None
 
 
+async def test_posthogmcp_one_name_for_both_virtual_tools(caplog):
+    # Both virtual tools configured with the same name. Missing-capability wins
+    # every call path, so advertising the feedback tool too would dead-letter it
+    # — the stateless twin of the "duplicate" drop `instrument()` performs.
+    client, _ = make_client(
+        missing_capability_tool_name="assist",
+        collect_feedback=CollectFeedbackOptions(tool_name="assist"),
+    )
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        prepared = client.prepare_tool_list(
+            tools, report_missing=True, collect_feedback=True
+        )
+
+    assert [t["name"] for t in prepared] == ["search", "assist"]
+    assert any("both" in r.message for r in caplog.records if r.name == "posthog.mcp")
+
+    # A dispatcher testing `is_feedback` first must not swallow the call: the
+    # name belongs to missing-capability, so only that flag is set.
+    call = client.prepare_tool_call("assist", {"context": "need csv export"})
+    assert call.is_missing_capability is True
+    assert call.is_feedback is False and call.feedback_report is None
+
+
 async def test_posthogmcp_original_tool_wins_name_collision():
     # A host whose own list holds a real `send_feedback` tool passes it as
     # `original_tool`; the call then dispatches as a real tool call instead of
-    # being swallowed as feedback — the stateless twin of instrument()'s
-    # listing-derived shadow flag.
+    # being swallowed as feedback — the stateless twin of the ownership check
+    # instrument() runs.
     client, _ = make_client(collect_feedback=True)
     real_tool = {
         "name": "send_feedback",

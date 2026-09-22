@@ -26,6 +26,10 @@ def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
 # Takes an event dictionary and returns the modified event or None to drop it
 BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 
+# Type alias for the traces before_span_send callback function
+# Takes a span dictionary and returns the modified span or None to drop it
+BeforeSpanSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
+
 
 # Type alias for the send_feature_flags parameter
 class SendFeatureFlagsOptions(TypedDict, total=False):

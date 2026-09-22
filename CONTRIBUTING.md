@@ -48,3 +48,16 @@ posthoganalytics = { path = "../posthog-python-local" }
 ```
 
 This lets you test SDK changes fully locally inside the PostHog app stack. It mainly takes care of the `posthog -> posthoganalytics` module renaming. Re-run `make prep_local` each time you make a change, and then run `uv sync --active` in the PostHog app project.
+
+## Public API changes
+
+Public API is hard to change once it ships, so agree on it before writing the implementation. Our [SDK guidelines](https://posthog.com/handbook/engineering/sdks/guidelines) explain how we design it.
+
+This section is for external contributors. PostHog Client Libraries maintainers agree on API shape in the PR itself, so they don't need a separate issue.
+
+- **Before you start:** if you need something the SDK doesn't support and it would add or change a public option, method, or type, open an issue describing your use case. Wait for a maintainer to agree on the API shape there before you implement it. Context is more useful to us than code at this stage.
+- **Already have a PR open?** Don't stop or rewrite it. Call out the public API change at the top of the PR description, and link or open an issue so we can discuss the shape there.
+- Check first whether an existing option or hook, such as `before_send`, already covers the use case. We avoid offering two ways to do the same thing.
+- If a reviewer suggests a different API on your PR, confirm it with them before re-implementing. Treat it as a question, not an instruction.
+
+`make public_api_snapshot` regenerates `references/public_api_snapshot.txt`, and CI runs `make public_api_check` to catch an outdated snapshot. A diff in that file means your change touches public API.

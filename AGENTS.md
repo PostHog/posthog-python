@@ -7,6 +7,7 @@ Guidance for coding agents working in `posthog-python`.
 - This repository contains the PostHog Python SDK, published as `posthog`.
 - The main runtime package is `posthog/`; tests live under `posthog/test/`.
 - The project uses `uv` for local development. See `CONTRIBUTING.md` for setup.
+- Public API changes (a diff in `references/public_api_snapshot.txt`): if the author is a PostHog maintainer (git email ends in `@posthog.com`), the PR is the discussion, so don't open or suggest an issue. Otherwise, follow "Public API changes" in [CONTRIBUTING.md](./CONTRIBUTING.md): if there's no agreed issue, stop and tell the user. If a PR already exists, add a public-API note to its description and draft an issue body for the user to post. Never open an issue yourself. For SDK design guidance, read https://posthog.com/handbook/engineering/sdks/guidelines.md.
 - Keep edits targeted and follow existing patterns. Prefer adding or updating tests near the behavior you change.
 
 ## Capture protocol (`capture_mode`)

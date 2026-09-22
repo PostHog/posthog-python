@@ -1,5 +1,51 @@
 # posthog
 
+## 7.58.0 — 2026-09-18
+
+### Minor changes
+
+- [7abd976](https://github.com/posthog/posthog-python/commit/7abd976e27d2716903c0493987593a392c9d6135) Add distributed tracing (alpha): `start_span()` and `get_active_span()` record spans and export them to PostHog as OTLP, with no OpenTelemetry dependency, when the new `traces` client option is set. — Thanks @turnipdabeets!
+
+## 7.57.0 — 2026-09-18
+
+### Minor changes
+
+- [f69e670](https://github.com/posthog/posthog-python/commit/f69e6709e38f4e4463fc30a523fe33c2d1837f6c) After a failed prompt refetch, the SDK now serves the stale cached prompt for a cooldown period (60 seconds by default) instead of retrying the network on every `prompts.get()` call. When the failure is a 429, the cooldown follows the `Retry-After` the server sends, capped at one hour. This keeps a rate-limited client from holding itself against the limit. Matches the behavior the JavaScript SDK already has. — Thanks @jurajmajerik!
+
+## 7.56.0 — 2026-09-17
+
+### Minor changes
+
+- [8ee7ad1](https://github.com/posthog/posthog-python/commit/8ee7ad16b98427b6f3c3888668eba01f7525ba03) Enable MCP model capture and conversation correlation by default. Advertised tool schemas gain an `llm_model` argument (never enforced at dispatch) and eligible tool results gain a conversation handle; `MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False)` restores the previous shape. Fresh low-level instances now read the self-reported model instead of staying silent.
+  
+  Standalone FastMCP on MCP SDK 1.x skips `llm_model` injection when application middleware can change tool listing or dispatch. Model metadata capture remains enabled; this prevents cold replicas from rejecting injected arguments and preserves replacement tools' own arguments. — Thanks @lucasheriques!
+
+## 7.55.0 — 2026-09-17
+
+### Minor changes
+
+- [d0ecc9f](https://github.com/posthog/posthog-python/commit/d0ecc9f6edea206664af62d43c10ffb512d9fcd0) `prompts.get_all()` now works without a label. It fetches the latest version of every prompt in one request and warms the cache for plain `prompts.get(name)` calls. Previously the label was required, and passing `label=None` sent the literal string "None" as the label filter, returning an empty result. — Thanks @jurajmajerik!
+
+## 7.54.2 — 2026-09-17
+
+### Patch changes
+
+- [79fcb12](https://github.com/posthog/posthog-python/commit/79fcb12a1a7a5e4d410672eb7428c2e91682101f) MCP virtual tools now use conversation IDs when `enable_conversation_id` is enabled. — Thanks @gesh!
+
+## 7.54.1 — 2026-09-17
+
+### Patch changes
+
+- [ed02588](https://github.com/posthog/posthog-python/commit/ed02588998568ea317ff7ac60fe4dc15d7f1b74a) MCP analytics now adds its virtual tools (`get_more_tools`, `send_feedback`) to the first `tools/list` page only, rather than to every page and to the last page respectively.
+  
+  If one of your own tools already uses a virtual tool's name, PostHog warns and names the option that renames its own — `missing_capability_tool_name`, or `collect_feedback`'s `tool_name`. Warnings also reach the `posthog.mcp` logger, so you see them without setting the `logger` option. — Thanks @gesh!
+
+## 7.54.0 — 2026-09-15
+
+### Minor changes
+
+- [f07d67c](https://github.com/posthog/posthog-python/commit/f07d67c1fb18066432864bc7bbe8f8869a7b114a) Add LangChain v1 agent middleware for AI observability. — Thanks @gouveags for your first contribution 🎉!
+
 ## 7.53.0 — 2026-09-11
 
 ### Minor changes

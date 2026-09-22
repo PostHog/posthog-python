@@ -26,8 +26,11 @@ all_flags: dict[str, FlagValue] | None = posthog.get_all_flags("user", groups=gr
 enabled: bool | None = posthog.feature_enabled("flag", "user", groups=groups)
 payload: object | None = client.get_feature_flag_payload("flag", "user", groups=groups)
 evaluations: FeatureFlagEvaluations = posthog.evaluate_flags(123, groups=groups)
+span: posthog.Span = client.start_span("job")
+active: posthog.Span | None = posthog.get_active_span()
+span.end()
 
-_ = (flag_value, all_flags, enabled, payload, evaluations)
+_ = (flag_value, all_flags, enabled, payload, evaluations, active)
 PY
 
 "$tmp/.venv/bin/python" - <<'PY' > "$tmp/public_api_access.py"

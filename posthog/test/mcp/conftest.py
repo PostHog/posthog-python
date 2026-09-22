@@ -19,6 +19,8 @@ _V1_ONLY = [
     "test_feedback.py",
     "test_lowlevel.py",
     "test_review_fixes.py",
+    # module-level `from mcp.server.fastmcp import ...` / v1 request_handlers seams
+    "test_virtual_tools.py",
 ]
 
 _V2_ONLY = [
