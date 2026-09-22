@@ -83,6 +83,7 @@ from posthog.flag_definition_cache import (
     FlagDefinitionCacheProvider,
 )
 from posthog.poller import Poller
+from posthog.release_id import _resolve_release_id
 from posthog.request import (
     AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
@@ -974,6 +975,9 @@ class Client(object):
             capture_compression, gzip_fallback=gzip
         )
         self.super_properties = super_properties
+        # Release id from POSTHOG_RELEASE_ID, attached to every event. Resolved
+        # here so the env var is read once per client.
+        self._release_id = _resolve_release_id()
         self.enable_exception_autocapture = enable_exception_autocapture
         self.log_captured_exceptions = log_captured_exceptions
         self.enable_exception_autocapture_rate_limiting = (
@@ -2377,6 +2381,11 @@ class Client(object):
 
         if self.super_properties:
             msg["properties"] = {**msg["properties"], **self.super_properties}
+
+        # Set after the super_properties merge so an explicit `$release_id` from
+        # the caller's properties or the super properties wins over the env var.
+        if self._release_id is not None:
+            msg["properties"].setdefault("$release_id", self._release_id)
 
         # Set after the super_properties merge so this SDK's server classification
         # can't be silently overridden by a user-provided super property.

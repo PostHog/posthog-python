@@ -75,6 +75,7 @@ from .feature_flag_evaluations import (
     _EvaluatedFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
+from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
 from .types import FlagMetadata, FlagValue, normalize_flags_response
 from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
@@ -148,6 +149,7 @@ class AsyncClient:
         self.is_server = is_server
         self.historical_migration = historical_migration
         self.super_properties = super_properties
+        self._release_id = _resolve_release_id()
         self.capture_mode = _resolve_capture_mode(capture_mode)
         self.capture_compression = _resolve_capture_compression(
             capture_compression, gzip_fallback=gzip
@@ -431,6 +433,8 @@ class AsyncClient:
             properties["$geoip_disable"] = True
         if self.super_properties:
             msg["properties"] = {**properties, **self.super_properties}
+        if self._release_id is not None:
+            msg["properties"].setdefault("$release_id", self._release_id)
         if self.is_server:
             msg["properties"]["$is_server"] = True
         if property_allowlist is not None:

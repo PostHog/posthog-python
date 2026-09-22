@@ -870,6 +870,7 @@ attribute posthog.poller.Poller.stopped = threading.Event()
 attribute posthog.privacy_mode = False
 attribute posthog.project_api_key = None
 attribute posthog.project_root = None
+attribute posthog.release_id.RELEASE_ID_ENV_VAR = 'POSTHOG_RELEASE_ID'
 attribute posthog.request.AI_EVENTS_ENDPOINT = '/i/v0/ai/batch/'
 attribute posthog.request.APIError.message = message
 attribute posthog.request.APIError.retry_after = retry_after
@@ -1581,6 +1582,7 @@ module posthog.mcp.types
 module posthog.mcp.version
 module posthog.metrics_capture
 module posthog.poller
+module posthog.release_id
 module posthog.request
 module posthog.tracing
 module posthog.tracing.span
