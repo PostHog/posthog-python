@@ -1,5 +1,15 @@
 # posthog
 
+## 7.59.0 — 2026-09-22
+
+### Minor changes
+
+- [e6e44b9](https://github.com/posthog/posthog-python/commit/e6e44b94fd7fec51c1cb56c470a0dea94e38544e) Read the release id from the `POSTHOG_RELEASE_ID` environment variable and send it as `$release_id` on every event. On `$exception` events, error tracking uses it to link the exception to its release by a direct id lookup. Create the release and get its id with `posthog-cli release resolve`. An explicit `$release_id` in the event properties or in `super_properties` wins over the environment variable. Minimal `$feature_flag_called` events keep their strict property allowlist and do not carry it. — Thanks @ablaszkiewicz!
+
+### Patch changes
+
+- [4399d08](https://github.com/posthog/posthog-python/commit/4399d08d4bbdf884ce28b559fd669aead2dbae36) Honor the definitions snapshot's `property_matching_version` during local feature flag evaluation, including person, group, cohort, and flag dependency conditions. Version 2 uses explicit boolean equality; missing/1 retains legacy truthiness. Preserve the selector through definition caches and invalidate evaluated results on version-only refreshes. Bind Client-managed Redis results to their definitions snapshot so invalidated entries cannot revive after a worker restart. Older entries without snapshot metadata become cache misses for these clients. — Thanks @marandaneto!
+
 ## 7.58.0 — 2026-09-18
 
 ### Minor changes
