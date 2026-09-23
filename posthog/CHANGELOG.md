@@ -1,5 +1,11 @@
 # posthog
 
+## 7.59.1 — 2026-09-23
+
+### Patch changes
+
+- [9c84daa](https://github.com/posthog/posthog-python/commit/9c84daafa5194fe3340b0169452e02adb8801da5) Honor `filters.holdout` during local feature flag evaluation. A user in an experiment holdout now receives the `holdout-<id>` variant instead of being bucketed into a regular variant, matching how the server evaluates the same flag. Holdout membership is resolved before release conditions, so a held-out user never reaches the flag's targeting. — Thanks @rubychilds for your first contribution 🎉!
+
 ## 7.59.0 — 2026-09-22
 
 ### Minor changes
