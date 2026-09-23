@@ -333,8 +333,8 @@ def test_in_flight_payload_keeps_matching_snapshot(client, refresh, api, overrid
             assert result == {
                 "featureFlags": {"person": True, "second": True},
                 "featureFlagPayloads": {
-                    "person": "original-true",
-                    "second": "original-true",
+                    "person": '"original-true"',
+                    "second": '"original-true"',
                 },
             }
         else:

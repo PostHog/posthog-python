@@ -10,10 +10,13 @@ def _reject_json_constant(value: str) -> None:
     raise ValueError("Invalid JSON constant")
 
 
-def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
+def _parse_flag_payload(raw_payload: Any, *, decode: bool = True) -> Optional[Any]:
     if isinstance(raw_payload, str):
         try:
-            return json.loads(raw_payload, parse_constant=_reject_json_constant)
+            parsed = json.loads(raw_payload, parse_constant=_reject_json_constant)
+            # Legacy bulk getters validate but preserve serialized values to avoid
+            # breaking existing callers that decode payloads with json.loads().
+            return parsed if decode else raw_payload
         except (ValueError, RecursionError):
             logging.getLogger("posthog").warning(
                 "[FEATURE FLAGS] Unable to parse flag payload as JSON"

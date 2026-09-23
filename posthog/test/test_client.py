@@ -4601,7 +4601,7 @@ class TestClient(unittest.TestCase):
         self.assertIn("empty-payload-flag", result["featureFlagPayloads"])
         self.assertIsNone(result["featureFlagPayloads"]["empty-payload-flag"])
         self.assertEqual(
-            result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
+            result["featureFlagPayloads"]["normal-payload-flag"], '"normal payload"'
         )
 
     def test_context_tags_added(self):

@@ -1379,7 +1379,7 @@ class Client(object):
         device_id: Optional[str] = None,
     ) -> dict[str, Any]:
         """
-        Get decoded feature flag payloads for a user.
+        Get feature flag payloads for a user, preserving valid serialized JSON.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -1409,7 +1409,7 @@ class Client(object):
             device_id=device_id,
         )
         return {
-            key: _parse_flag_payload(payload)
+            key: _parse_flag_payload(payload, decode=False)
             for key, payload in (to_payloads(resp_data) or {}).items()
         }
 
@@ -1457,7 +1457,8 @@ class Client(object):
         payloads = response.get("featureFlagPayloads")
         if payloads is not None:
             response["featureFlagPayloads"] = {
-                key: _parse_flag_payload(payload) for key, payload in payloads.items()
+                key: _parse_flag_payload(payload, decode=False)
+                for key, payload in payloads.items()
             }
         return response
 
@@ -4415,7 +4416,8 @@ class Client(object):
         payloads = response.get("featureFlagPayloads")
         if payloads is not None:
             response["featureFlagPayloads"] = {
-                key: _parse_flag_payload(payload) for key, payload in payloads.items()
+                key: _parse_flag_payload(payload, decode=False)
+                for key, payload in payloads.items()
             }
         return response
 

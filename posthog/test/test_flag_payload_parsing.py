@@ -1,3 +1,4 @@
+import json
 import sys
 from unittest.mock import patch
 
@@ -44,6 +45,7 @@ from posthog.types import _parse_flag_payload
         ),
         ("[1, 2]", [1, 2]),
         ('{"ok": true}', {"ok": True}),
+        ('  {"ok": true}\n', {"ok": True}),
         ('"text"', "text"),
         ('"123"', "123"),
         ('"true"', "true"),
@@ -109,11 +111,11 @@ def test_payload_parsing(local, api, raw, expected):
                     else client.get_feature_flags_and_payloads("user")
                 )
                 assert bulk["featureFlags"] == {"test-flag": True, "healthy": True}
-                assert bulk["featureFlagPayloads"]["healthy"] == {"ok": True}
+                assert bulk["featureFlagPayloads"]["healthy"] == '{"ok": true}'
                 result = bulk["featureFlagPayloads"].get("test-flag")
             elif api == "remote_payloads":
                 payloads = client.get_feature_payloads("user")
-                assert payloads["healthy"] == {"ok": True}
+                assert payloads["healthy"] == '{"ok": true}'
                 result = payloads.get("test-flag")
             elif api == "payload":
                 with pytest.warns(DeprecationWarning):
@@ -125,8 +127,17 @@ def test_payload_parsing(local, api, raw, expected):
                 assert result.get_flag_payload("healthy") == {"ok": True}
                 assert result.get_flag("test-flag") is True
                 result = result.get_flag_payload("test-flag")
-            assert result == expected
-            assert type(result) is type(expected)
+            if api in ("bulk", "remote_bulk", "remote_payloads") and isinstance(
+                raw, str
+            ):
+                if expected is not None or raw == "null":
+                    assert result == raw
+                    assert json.loads(result) == expected
+                else:
+                    assert result is None
+            else:
+                assert result == expected
+                assert type(result) is type(expected)
             assert request.call_count == (0 if local else 1)
     finally:
         client.shutdown()
