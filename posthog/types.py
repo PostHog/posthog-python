@@ -18,7 +18,7 @@ def _parse_flag_payload(raw_payload: Any, *, decode: bool = True) -> Optional[An
             # breaking existing callers that decode payloads with json.loads().
             return parsed if decode else raw_payload
         except (ValueError, RecursionError):
-            logging.getLogger("posthog").warning(
+            logging.getLogger("posthog").debug(
                 "[FEATURE FLAGS] Unable to parse flag payload as JSON"
             )
             return None

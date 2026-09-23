@@ -146,10 +146,17 @@ def test_payload_parsing(local, api, raw, expected):
 @pytest.mark.parametrize(
     "raw", ['{"private":', "", "   ", "NaN", "Infinity", "-Infinity"]
 )
-def test_parse_failure_logs_without_payload(raw, caplog):
+@pytest.mark.parametrize("decode", [True, False])
+def test_parse_failure_logs_without_payload(raw, decode, caplog):
     with caplog.at_level("WARNING", logger="posthog"):
-        assert _parse_flag_payload(raw) is None
+        for _ in range(10):
+            assert _parse_flag_payload(raw, decode=decode) is None
+    assert not caplog.records
+
+    with caplog.at_level("DEBUG", logger="posthog"):
+        assert _parse_flag_payload(raw, decode=decode) is None
     assert len(caplog.records) == 1
+    assert caplog.records[0].levelname == "DEBUG"
     assert caplog.records[0].getMessage().removeprefix("[PostHog] ") == (
         "[FEATURE FLAGS] Unable to parse flag payload as JSON"
     )
