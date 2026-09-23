@@ -146,9 +146,19 @@ def _get_holdout_variant(flag, bucketing_value) -> Optional[str]:
     if exclusion_percentage is None or holdout_id is None:
         return None
 
-    # The server clamps out-of-range percentages rather than rejecting them, and treats
-    # 100 as "everyone" without hashing, so a 100% holdout can't miss on a hash boundary.
-    percentage = min(max(float(exclusion_percentage), 0.0), 100.0)
+    # An uninterpretable percentage means no holdout, not an exception: raising here would
+    # log a stack trace on every evaluation of the flag and fall back to /flags, where the
+    # server cannot deserialize the value either. Matches posthog-js.
+    try:
+        raw_percentage = float(exclusion_percentage)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(raw_percentage) or math.isinf(raw_percentage):
+        return None
+
+    # Clamped because the server clamps rather than rejects. The 100 short-circuit mirrors
+    # the server's is_in_rollout and skips a hash that cannot change the answer.
+    percentage = min(max(raw_percentage, 0.0), 100.0)
     if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
         return None
 

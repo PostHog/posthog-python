@@ -522,6 +522,30 @@ class TestLocalEvaluation(unittest.TestCase):
             "holdout-727",
         )
 
+    @parameterized.expand(
+        [
+            ("a null id", {"id": None, "exclusion_percentage": 100}),
+            ("a null percentage", {"id": 727, "exclusion_percentage": None}),
+            ("a non-numeric percentage", {"id": 727, "exclusion_percentage": "ten"}),
+            ("a missing percentage", {"id": 727}),
+        ]
+    )
+    def test_holdout_that_cannot_be_interpreted_is_ignored(self, _name, holdout):
+        # A holdout we cannot read must fall through to normal evaluation. The damaging
+        # reading is the opposite one: treating an uninterpretable percentage as a match
+        # would hold out 100% of traffic on a flag the server evaluates normally.
+        flags = self._holdout_flag(100)
+        flags[0]["filters"]["holdout"] = holdout
+        self.client.feature_flags = flags
+
+        for distinct_id in ["user_1", "user_2", "user_3"]:
+            self.assertIn(
+                self.client.get_feature_flag(
+                    "experiment-flag", distinct_id, only_evaluate_locally=True
+                ),
+                ["control", "test"],
+            )
+
     def test_holdout_membership_matches_server_bucketing(self):
         # The server hashes "holdout-<distinct_id>". Pinning the exact membership set
         # guards the string construction: reusing the flag hash helper, which joins with
