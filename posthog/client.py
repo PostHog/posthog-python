@@ -1377,7 +1377,7 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Optional[str]]:
         """
         Get feature flag payloads for a user, preserving valid serialized JSON.
 
