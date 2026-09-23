@@ -113,10 +113,46 @@ class RequiresServerEvaluation(Exception):
 # Given the same bucketing value and key, it'll always return the same float. These floats are
 # uniformly distributed between 0 and 1, so if we want to show this feature to 20% of traffic
 # we can do _hash(key, bucketing_value) < 0.2
-def _hash(key: str, bucketing_value: str, salt: str = "") -> float:
-    hash_key = f"{key}.{bucketing_value}{salt}"
+def _hash(
+    key: str, bucketing_value: str, salt: str = "", separator: str = "."
+) -> float:
+    hash_key = f"{key}{separator}{bucketing_value}{salt}"
     hash_val = int(hashlib.sha1(hash_key.encode("utf-8")).hexdigest()[:15], 16)
     return hash_val / __LONG_SCALE__
+
+
+def _holdout_hash(bucketing_value: str) -> float:
+    """Hash a bucketing value for holdout membership, matching the server.
+
+    The separator is the whole point: the server hashes `holdout-<value>`, while flag
+    rollout hashing joins with a dot. Taking the default separator here would still look
+    uniform and deterministic while holding out a different set of people than the server.
+    """
+    return _hash("holdout", bucketing_value, separator="-")
+
+
+def _get_holdout_variant(flag, bucketing_value) -> Optional[str]:
+    """The `holdout-<id>` variant this value is held out into, or None.
+
+    Mirrors the server's evaluation order: a held-out value never reaches the flag's
+    release conditions, so callers check this before matching any condition.
+    """
+    holdout = (flag.get("filters") or {}).get("holdout")
+    if not holdout:
+        return None
+
+    exclusion_percentage = holdout.get("exclusion_percentage")
+    holdout_id = holdout.get("id")
+    if exclusion_percentage is None or holdout_id is None:
+        return None
+
+    # The server clamps out-of-range percentages rather than rejecting them, and treats
+    # 100 as "everyone" without hashing, so a 100% holdout can't miss on a hash boundary.
+    percentage = min(max(float(exclusion_percentage), 0.0), 100.0)
+    if percentage != 100.0 and _holdout_hash(bucketing_value) > percentage / 100:
+        return None
+
+    return f"holdout-{holdout_id}"
 
 
 def get_matching_variant(flag, bucketing_value):
@@ -364,6 +400,13 @@ def match_feature_flag_properties(
         bucketing_value = resolve_bucketing_value(flag, distinct_id, device_id)
 
     flag_filters = flag.get("filters") or {}
+
+    # Holdouts are evaluated before release conditions, so a held-out value is excluded
+    # from the flag's targeting entirely rather than being bucketed into a variant.
+    holdout_variant = _get_holdout_variant(flag, bucketing_value)
+    if holdout_variant is not None:
+        return holdout_variant
+
     flag_conditions = flag_filters.get("groups") or []
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
     early_exit_enabled = flag_filters.get("early_exit")
