@@ -4547,7 +4547,7 @@ class TestClient(unittest.TestCase):
         self.assertIsNotNone(result)
         self.assertEqual(result.key, "test-flag")
         self.assertEqual(result.get_value(), "empty-variant")
-        self.assertEqual(result.payload, "")  # Should be empty string, not None
+        self.assertIsNone(result.payload)
 
     @mock.patch("posthog.client.batch_post")
     def test_get_all_flags_and_payloads_with_empty_string(self, patch_batch_post):
@@ -4585,7 +4585,7 @@ class TestClient(unittest.TestCase):
                     "multivariate": {
                         "variants": [{"key": "variant2", "rollout_percentage": 100}]
                     },
-                    "payloads": {"variant2": "normal payload"},
+                    "payloads": {"variant2": '"normal payload"'},
                 },
             },
         ]
@@ -4598,11 +4598,10 @@ class TestClient(unittest.TestCase):
         self.assertEqual(result["featureFlags"]["empty-payload-flag"], "variant1")
         self.assertEqual(result["featureFlags"]["normal-payload-flag"], "variant2")
 
-        # Check that empty string payload is included (not filtered out)
         self.assertIn("empty-payload-flag", result["featureFlagPayloads"])
-        self.assertEqual(result["featureFlagPayloads"]["empty-payload-flag"], "")
+        self.assertIsNone(result["featureFlagPayloads"]["empty-payload-flag"])
         self.assertEqual(
-            result["featureFlagPayloads"]["normal-payload-flag"], "normal payload"
+            result["featureFlagPayloads"]["normal-payload-flag"], '"normal payload"'
         )
 
     def test_context_tags_added(self):

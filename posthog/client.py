@@ -102,7 +102,8 @@ from posthog.request import (
     remote_config,
     reset_sessions,
 )
-from posthog.types import (
+from .types import (
+    _parse_flag_payload,
     FeatureFlag,
     FeatureFlagError,
     FeatureFlagResult,
@@ -341,20 +342,6 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
 def _parse_has_experiment(value: Any) -> Optional[bool]:
     """Server-reported experiment linkage; anything but an explicit bool means unknown."""
     return value if isinstance(value, bool) else None
-
-
-def _parse_flag_payload(raw_payload: Any) -> Optional[Any]:
-    """Flag payloads are stored as JSON strings, both in the ``/flags`` response
-    metadata and in the local-evaluation flag definitions, so decode them before
-    handing them to callers. A string that isn't valid JSON is passed through as-is."""
-    if isinstance(raw_payload, str):
-        if not raw_payload:
-            return None
-        try:
-            return json.loads(raw_payload)
-        except (json.JSONDecodeError, TypeError):
-            return raw_payload
-    return raw_payload
 
 
 def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
@@ -1394,9 +1381,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
-    ) -> dict[str, str]:
+    ) -> dict[str, Optional[str]]:
         """
-        Get feature flag payloads for a user.
+        Get feature flag payloads for a user, preserving valid serialized JSON.
 
         Args:
             distinct_id: The distinct ID of the user.
@@ -1425,7 +1412,10 @@ class Client(object):
             flag_keys_to_evaluate,
             device_id=device_id,
         )
-        return to_payloads(resp_data) or {}
+        return {
+            key: _parse_flag_payload(payload, decode=False)
+            for key, payload in (to_payloads(resp_data) or {}).items()
+        }
 
     def get_feature_flags_and_payloads(
         self,
@@ -1467,7 +1457,14 @@ class Client(object):
             flag_keys_to_evaluate,
             device_id=device_id,
         )
-        return to_flags_and_payloads(resp)
+        response = to_flags_and_payloads(resp)
+        payloads = response.get("featureFlagPayloads")
+        if payloads is not None:
+            response["featureFlagPayloads"] = {
+                key: _parse_flag_payload(payload, decode=False)
+                for key, payload in payloads.items()
+            }
+        return response
 
     def get_flags_decision(
         self,
@@ -4419,12 +4416,18 @@ class Client(object):
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                     device_id=device_id,
                 )
-                return to_flags_and_payloads(decide_response)
+                response = to_flags_and_payloads(decide_response)
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"
                 )
 
+        payloads = response.get("featureFlagPayloads")
+        if payloads is not None:
+            response["featureFlagPayloads"] = {
+                key: _parse_flag_payload(payload, decode=False)
+                for key, payload in payloads.items()
+            }
         return response
 
     def evaluate_flags(

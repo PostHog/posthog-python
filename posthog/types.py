@@ -1,8 +1,29 @@
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional, TypedDict, Union, cast
 
 FlagValue = Union[bool, str]
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError("Invalid JSON constant")
+
+
+def _parse_flag_payload(raw_payload: Any, *, decode: bool = True) -> Optional[Any]:
+    if isinstance(raw_payload, str):
+        try:
+            parsed = json.loads(raw_payload, parse_constant=_reject_json_constant)
+            # Legacy bulk getters validate but preserve serialized values to avoid
+            # breaking existing callers that decode payloads with json.loads().
+            return parsed if decode else raw_payload
+        except (ValueError, RecursionError):
+            logging.getLogger("posthog").debug(
+                "[FEATURE FLAGS] Unable to parse flag payload as JSON"
+            )
+            return None
+    return raw_payload
+
 
 # Type alias for the before_send callback function
 # Takes an event dictionary and returns the modified event or None to drop it
@@ -235,9 +256,7 @@ class FeatureFlagResult:
             key=key,
             enabled=enabled,
             variant=variant,
-            payload=json.loads(payload)
-            if isinstance(payload, str) and payload
-            else payload,
+            payload=_parse_flag_payload(payload),
             reason=None,
         )
 
@@ -275,12 +294,7 @@ class FeatureFlagResult:
             key=details.key,
             enabled=enabled,
             variant=variant,
-            payload=(
-                json.loads(details.metadata.payload)
-                if isinstance(details.metadata.payload, str)
-                and details.metadata.payload
-                else details.metadata.payload
-            ),
+            payload=_parse_flag_payload(details.metadata.payload),
             reason=details.reason.description if details.reason else None,
         )
 
