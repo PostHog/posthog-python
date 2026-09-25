@@ -73,6 +73,10 @@ def test_string_on_boolean_flag_is_type_mismatch(fake_client):
         ("resolve_integer_details", "3", 3),
         ("resolve_float_details", "3.5", 3.5),
         ("resolve_float_details", "3", 3.0),
+        ("resolve_integer_details", 42, 42),
+        ("resolve_integer_details", 3.5, 3),
+        ("resolve_float_details", 42, 42.0),
+        ("resolve_float_details", 3.5, 3.5),
     ],
 )
 def test_number_variant_parse(fake_client, resolver, variant, expected):
@@ -98,6 +102,63 @@ def test_number_variant_parse_failure(fake_client, resolver, variant):
     )
     with pytest.raises(TypeMismatchError):
         getattr(_provider(fake_client), resolver)("n", 0, EvaluationContext("u"))
+
+
+@pytest.mark.parametrize(
+    "resolver", ["resolve_integer_details", "resolve_float_details"]
+)
+@pytest.mark.parametrize(
+    ("variant", "expected"),
+    [("0x10", 16), ("0Xff", 255), (" 0xA0 ", 160), ("0x0", 0), ("042", 42)],
+)
+def test_hex_number_variant(fake_client, resolver, variant, expected):
+    fake_client.get_feature_flag_result.return_value = make_result(variant=variant)
+    details = getattr(_provider(fake_client), resolver)("n", 0, EvaluationContext("u"))
+    assert details.value == expected
+    assert type(details.value) is (
+        int if resolver == "resolve_integer_details" else float
+    )
+    assert details.variant == variant
+
+
+@pytest.mark.parametrize(
+    "resolver", ["resolve_integer_details", "resolve_float_details"]
+)
+@pytest.mark.parametrize(
+    "variant", ["0x", "0xgg", "0x1.5", "0x_10", "0x1_0", "-0x10", "+0x10"]
+)
+def test_invalid_hex_number_variant(fake_client, resolver, variant):
+    fake_client.get_feature_flag_result.return_value = make_result(variant=variant)
+    with pytest.raises(TypeMismatchError):
+        getattr(_provider(fake_client), resolver)("n", 0, EvaluationContext("u"))
+
+
+def test_hex_integer_beyond_decimal_string_limit(fake_client):
+    variant = "0x" + "f" * 4000
+    fake_client.get_feature_flag_result.return_value = make_result(variant=variant)
+    details = _provider(fake_client).resolve_integer_details(
+        "n", 0, EvaluationContext("u")
+    )
+    assert details.value == (1 << 16000) - 1
+    assert details.variant == variant
+
+
+def test_large_representable_hex_float(fake_client):
+    variant = "0x" + "f" * 255
+    fake_client.get_feature_flag_result.return_value = make_result(variant=variant)
+    details = _provider(fake_client).resolve_float_details(
+        "n", 0.0, EvaluationContext("u")
+    )
+    assert details.value == float(int(variant, 16))
+    assert isinstance(details.value, float)
+
+
+def test_hex_float_overflow_is_type_mismatch(fake_client):
+    fake_client.get_feature_flag_result.return_value = make_result(
+        variant="0x" + "f" * 4000
+    )
+    with pytest.raises(TypeMismatchError):
+        _provider(fake_client).resolve_float_details("n", 0.0, EvaluationContext("u"))
 
 
 def test_object_payload(fake_client):
