@@ -1,13 +1,22 @@
 """Tests for the PostHogMCP custom-dispatcher client (Milestone 3)."""
 
+import json
+import pickle
+import re
 from types import SimpleNamespace
 from unittest import mock
 
 import pytest
-from mcp.types import Tool
+from mcp.types import CallToolResult, ServerResult, TextContent, Tool
 
 from posthog.capture_mode import CaptureMode
-from posthog.mcp import PostHogMCP
+from posthog.mcp import (
+    PostHogMCP,
+    PreparedToolCall,
+    derive_session_id_from_conversation,
+    get_more_tools_result,
+)
+from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
@@ -329,3 +338,283 @@ def test_prepare_tool_list_fails_closed_for_duplicate_tool_names():
     call = client.prepare_tool_call("route", {"llm_model": "application-owned"})
     assert call.args == {"llm_model": "application-owned"}
     assert call.llm_model is None
+
+
+_CONVERSATION_ID = "0198ef20-1234-7abc-8def-123456789abc"
+_UUID7 = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+
+def _sql_tool() -> dict:
+    return {
+        "name": "execute-sql",
+        "inputSchema": {"type": "object", "properties": {"query": {"type": "string"}}},
+        "outputSchema": {
+            "type": "object",
+            "properties": {"rows": {"type": "array"}},
+            "additionalProperties": False,
+        },
+    }
+
+
+def _handle_block(conversation_id: str) -> dict:
+    return {"type": "text", "text": json.dumps({"conversation_id": conversation_id})}
+
+
+def test_prepare_tool_list_adds_conversation_schemas_without_mutating_source():
+    client, _ = make_client()
+    tools = [_sql_tool()]
+
+    prepared = client.prepare_tool_list(tools)
+
+    input_schema = prepared[0]["inputSchema"]
+    assert input_schema["properties"]["conversation_id"]["type"] == "string"
+    assert "conversation_id" not in input_schema.get("required", [])
+    assert prepared[0]["outputSchema"]["properties"][MCP_INSTRUCTIONS_KEY]["type"] == (
+        "object"
+    )
+    assert tools == [_sql_tool()]
+
+
+def test_conversation_disabled_leaves_schemas_arguments_and_results_unchanged():
+    client, _ = make_client(enable_conversation_id=False)
+    prepared_tools = client.prepare_tool_list([_sql_tool()])
+    assert "conversation_id" not in prepared_tools[0]["inputSchema"]["properties"]
+    assert MCP_INSTRUCTIONS_KEY not in prepared_tools[0]["outputSchema"]["properties"]
+
+    raw_args = {"query": "select 1", "conversation_id": _CONVERSATION_ID}
+    call = client.prepare_tool_call("execute-sql", raw_args)
+    tool_result = {"content": [], "structuredContent": {"rows": []}}
+    prepared = client.prepare_tool_result(tool_result, call)
+
+    assert call.args == raw_args
+    assert (call.session_id, call.conversation_id) == (None, None)
+    assert prepared.result is tool_result
+    assert (prepared.session_id, prepared.conversation_id) == (None, None)
+
+
+def test_conversation_preserves_application_fields_and_fails_closed_for_duplicates():
+    client, _ = make_client()
+    application_owned = {
+        "name": "execute-sql",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"conversation_id": {"type": "string"}},
+        },
+        "outputSchema": {
+            "type": "object",
+            "properties": {MCP_INSTRUCTIONS_KEY: {"type": "string"}},
+        },
+    }
+
+    prepared = client.prepare_tool_list([_sql_tool(), application_owned])
+
+    assert "conversation_id" not in prepared[0]["inputSchema"]["properties"]
+    assert MCP_INSTRUCTIONS_KEY not in prepared[0]["outputSchema"]["properties"]
+    assert prepared[1]["inputSchema"]["properties"]["conversation_id"] == {
+        "type": "string"
+    }
+    assert prepared[1]["outputSchema"]["properties"][MCP_INSTRUCTIONS_KEY] == {
+        "type": "string"
+    }
+    call = client.prepare_tool_call(
+        "execute-sql", {"conversation_id": _CONVERSATION_ID}
+    )
+    assert call.args == {"conversation_id": _CONVERSATION_ID}
+    assert call.conversation_id is None
+
+
+def test_prepare_tool_call_uses_original_tool_without_prior_listing():
+    client, _ = make_client()
+    call = client.prepare_tool_call(
+        "execute-sql",
+        {"query": "select 1", "conversation_id": _CONVERSATION_ID},
+        original_tool=_sql_tool(),
+    )
+
+    assert call.args == {"query": "select 1"}
+    assert call.conversation_id == _CONVERSATION_ID
+    assert call.session_id == derive_session_id_from_conversation(_CONVERSATION_ID)
+
+
+def test_prepare_tool_call_mints_handles_and_derives_stable_sessions_across_clients():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    minted = client.prepare_tool_call(
+        "execute-sql", {"query": "select 1", "conversation_id": "invalid"}
+    )
+    assert _UUID7.match(minted.conversation_id)
+    assert minted.args == {"query": "select 1"}
+    assert minted.session_id == derive_session_id_from_conversation(
+        minted.conversation_id
+    )
+
+    other_replica, _ = make_client()
+    first = client.prepare_tool_call(
+        "execute-sql", {"conversation_id": _CONVERSATION_ID}
+    )
+    echoed = other_replica.prepare_tool_call(
+        "execute-sql",
+        {"conversation_id": _CONVERSATION_ID.upper()},
+        original_tool=_sql_tool(),
+    )
+    assert echoed.conversation_id == _CONVERSATION_ID
+    assert echoed.session_id == first.session_id
+
+
+def test_prepare_tool_call_keeps_carried_session_unless_a_handle_is_echoed():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+
+    carried = client.prepare_tool_call("execute-sql", {}, session_id="ses_carried")
+    assert (carried.session_id, carried.conversation_id) == ("ses_carried", None)
+
+    echoed = client.prepare_tool_call(
+        "execute-sql",
+        {"conversation_id": _CONVERSATION_ID},
+        session_id="ses_carried",
+    )
+    assert echoed.conversation_id == _CONVERSATION_ID
+    assert echoed.session_id == derive_session_id_from_conversation(_CONVERSATION_ID)
+
+
+@pytest.mark.parametrize(
+    "transport",
+    [lambda call: call, lambda call: pickle.loads(pickle.dumps(call))],
+    ids=["same-process", "pickled"],
+)
+def test_prepare_tool_result_delivers_minted_handle_without_mutation(transport):
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {"query": "select 1"})
+    tool_result = {
+        "content": [{"type": "text", "text": "done"}],
+        "structuredContent": {"rows": []},
+    }
+
+    prepared = client.prepare_tool_result(tool_result, transport(call))
+
+    assert tool_result == {
+        "content": [{"type": "text", "text": "done"}],
+        "structuredContent": {"rows": []},
+    }
+    assert prepared.result["content"][-1] == _handle_block(call.conversation_id)
+    assert prepared.result["structuredContent"][MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": call.conversation_id
+    }
+    assert prepared.conversation_id == call.conversation_id
+
+
+@pytest.mark.parametrize("wrapped", [False, True], ids=["bare", "server-result"])
+def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
+    if wrapped and not isinstance(ServerResult, type):
+        pytest.skip("MCP SDK 2.x has no ServerResult wrapper")
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    call_result = CallToolResult(
+        content=[TextContent(type="text", text="done")],
+        structuredContent={"rows": []},
+    )
+    tool_result = ServerResult(call_result) if wrapped else call_result
+
+    prepared = client.prepare_tool_result(tool_result, call)
+
+    delivered = prepared.result.root if wrapped else prepared.result
+    assert len(call_result.content) == 1
+    assert delivered.content[-1].text == _handle_block(call.conversation_id)["text"]
+    assert delivered.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": call.conversation_id
+    }
+    assert prepared.conversation_id == call.conversation_id
+
+
+def test_prepare_tool_result_omits_conversation_without_delivery_state():
+    client, _ = make_client()
+    tool_result = {"content": []}
+    call = PreparedToolCall(session_id="ses_123", conversation_id=_CONVERSATION_ID)
+
+    prepared = client.prepare_tool_result(tool_result, call)
+
+    assert prepared.result is tool_result
+    assert (prepared.session_id, prepared.conversation_id) == ("ses_123", None)
+
+
+def test_prepare_tool_result_preserves_application_structured_instructions():
+    client, _ = make_client()
+    tool = {
+        **_sql_tool(),
+        "outputSchema": {
+            "type": "object",
+            "properties": {MCP_INSTRUCTIONS_KEY: {"type": "string"}},
+        },
+    }
+    client.prepare_tool_list([tool])
+    call = client.prepare_tool_call("execute-sql", {})
+
+    prepared = client.prepare_tool_result(
+        {"content": [], "structuredContent": {MCP_INSTRUCTIONS_KEY: "app-value"}},
+        call,
+    )
+
+    assert prepared.result["structuredContent"][MCP_INSTRUCTIONS_KEY] == "app-value"
+    assert prepared.conversation_id == call.conversation_id
+
+
+def test_prepare_tool_result_delivers_minted_handle_on_error_results():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+
+    prepared = client.prepare_tool_result({"content": [], "isError": True}, call)
+
+    assert prepared.result["isError"] is True
+    assert _handle_block(call.conversation_id) in prepared.result["content"]
+    assert prepared.conversation_id == call.conversation_id
+
+
+def test_prepare_tool_result_omits_undelivered_minted_handle_but_keeps_session():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    tool_result = {"value": 1}
+
+    prepared = client.prepare_tool_result(tool_result, call)
+
+    assert prepared.result is tool_result
+    assert prepared.conversation_id is None
+    assert prepared.session_id == call.session_id
+
+
+def test_prepare_tool_list_adds_conversation_to_virtual_tools():
+    client, _ = make_client()
+    prepared = client.prepare_tool_list([], report_missing=True)
+    virtual_tool = next(t for t in prepared if t["name"] == "get_more_tools")
+    call = client.prepare_tool_call("get_more_tools", {"context": "Find a tool"})
+
+    result = client.prepare_tool_result(get_more_tools_result(), call)
+
+    assert virtual_tool["inputSchema"]["properties"]["conversation_id"]["type"] == (
+        "string"
+    )
+    assert result.result["content"][-1] == _handle_block(call.conversation_id)
+
+
+async def test_capture_tool_call_records_prepared_conversation_and_session():
+    client, captured = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    prepared = client.prepare_tool_result({"content": []}, call)
+
+    client.capture_tool_call(
+        "execute-sql",
+        distinct_id="user-123",
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+    )
+    await _flush()
+
+    props = _events(captured, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_conversation_id"] == prepared.conversation_id
+    assert props["$session_id"] == prepared.session_id

@@ -64,6 +64,18 @@ def add_conversation_id_to_schema(
     return schema
 
 
+def can_inject_conversation_id(input_schema: Any) -> bool:
+    """Whether the SDK can own ``conversation_id`` on this input schema. An
+    application-declared field or a composed schema stays the application's,
+    so its value is never read as a handle or stripped before dispatch."""
+    if not isinstance(input_schema, dict):
+        return True
+    properties = input_schema.get("properties")
+    if isinstance(properties, dict) and CONVERSATION_ID_PARAM_NAME in properties:
+        return False
+    return not any(input_schema.get(key) for key in ("$ref", "oneOf", "allOf", "anyOf"))
+
+
 def extract_conversation_id(args: Any) -> Optional[str]:
     if not isinstance(args, dict):
         return None

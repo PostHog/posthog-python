@@ -22,10 +22,12 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Generic,
     List,
     Literal,
     Optional,
     TypedDict,
+    TypeVar,
     Union,
 )
 
@@ -242,6 +244,40 @@ class PreparedToolCall:
     # ``PostHogMCP.capture_feedback`` and to your own feedback backend, then
     # reply with ``send_feedback_result()`` or a custom text.
     feedback_report: Optional[FeedbackReport] = None
+    # The resolved session id to use when capturing this call.
+    session_id: Optional[str] = None
+    # The resolved conversation handle. Capture the value from
+    # ``PostHogMCP.prepare_tool_result`` instead: a newly minted handle that
+    # could not reach the client is removed there.
+    conversation_id: Optional[str] = None
+    # Delivery state for ``prepare_tool_result``. Plain data, so a prepared call
+    # survives a copy or pickle across workers.
+    _conversation_state: Optional[PreparedConversationState] = field(
+        default=None, repr=False
+    )
+
+
+@dataclass(frozen=True)
+class PreparedConversationState:
+    """How :meth:`PostHogMCP.prepare_tool_result` may deliver the handle."""
+
+    minted: bool = False
+    output_instructions: bool = False
+
+
+TResult = TypeVar("TResult")
+
+
+@dataclass
+class PreparedToolResult(Generic[TResult]):
+    """Result of :meth:`PostHogMCP.prepare_tool_result`."""
+
+    # The result to return to the MCP client.
+    result: TResult
+    # The resolved session id to use when capturing this call.
+    session_id: Optional[str] = None
+    # The conversation handle to capture, set only if it reached the client.
+    conversation_id: Optional[str] = None
 
 
 @dataclass
