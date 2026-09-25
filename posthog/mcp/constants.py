@@ -28,8 +28,11 @@ DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
 )
 
 DEFAULT_CONVERSATION_ID_DESCRIPTION = (
-    "Echo the conversation_id from the server's previous response. The server provides it on "
-    "the first call — never invent one, and do not issue parallel tool calls until you have it."
+    "Pass the exact conversation_id from the server's previous response, unchanged. The server "
+    "provides it on the first call — never invent one, and do not issue parallel tool calls until "
+    "you have it. Keep passing the same conversation_id for the rest of the conversation, including "
+    "after later user messages or on a different task; do not reset it when the user starts a new "
+    "request."
 )
 
 DEFAULT_MODEL_PARAMETER_DESCRIPTION = (
