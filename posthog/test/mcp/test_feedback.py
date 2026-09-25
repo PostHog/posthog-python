@@ -938,7 +938,9 @@ async def test_posthogmcp_repreparing_a_prepared_list_is_not_a_collision(caplog)
     # Hosts may re-prepare an already-prepared list. PostHog's own descriptors
     # come back in it, and mistaking them for host tools would both warn about
     # ourselves and duplicate the tools.
-    client, _ = make_client(collect_feedback=True, capture_model=False)
+    client, _ = make_client(
+        collect_feedback=True, capture_model=False, enable_conversation_id=False
+    )
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
 
     once = client.prepare_tool_list(tools, report_missing=True, collect_feedback=True)

@@ -56,8 +56,8 @@ strict-schema clients see the new field. Set `capture_model=False` to leave sche
 Conversation correlation adds an optional `conversation_id` argument and returns a handle in
 eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
 Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
-response content. Custom `PostHogMCP` dispatchers enable model capture by default but still
-supply their own session IDs. The reasoning is recorded in posthog-js `docs/adr/0013`.
+response content. Custom `PostHogMCP` dispatchers also enable model capture and conversation
+correlation by default. The reasoning is recorded in posthog-js `docs/adr/0013`.
 
 ## Capture the calling model
 
@@ -102,8 +102,10 @@ authorization middleware with those hooks; argument-based model capture is skipp
 application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
 during a tool call.
 
-For a custom dispatcher, `PostHogMCP` enables the same option by default; pass request
-metadata through explicitly:
+For a custom dispatcher, `PostHogMCP` enables model capture and conversation correlation
+by default. `prepare_tool_list()` injects the analytics fields and records ownership by tool
+name. `prepare_tool_call()` removes SDK-owned arguments and resolves the conversation and
+session. `prepare_tool_result()` returns the result to send and the final values to capture:
 
 ```python
 from posthog.mcp import PostHogMCP
@@ -116,21 +118,33 @@ call = posthog.prepare_tool_call(
     raw_args,
     request_meta=request.get("params", {}).get("_meta"),
     original_tool=original_tool,
+    session_id=transport_session_id,
 )
-result = dispatch(tool_name, call.args)
+prepared = posthog.prepare_tool_result(dispatch(tool_name, call.args), call)
 posthog.capture_tool_call(
     tool_name,
     llm_model=call.llm_model,
     llm_model_source=call.llm_model_source,
+    session_id=prepared.session_id,
+    conversation_id=prepared.conversation_id,
 )
+return prepared.result
 ```
 
 Passing `original_tool` keeps ownership accurate when `tools/list` and
 `tools/call` reach different server replicas. A persistent single-process
 dispatcher can omit it after calling `prepare_tool_list()`.
-Model injection copies tool objects instead of changing their original schemas.
+Model and conversation injection copy tool objects instead of changing their original schemas.
 Always advertise the returned list and pass the original application tool to
 `prepare_tool_call()`. Repeatedly preparing the original list preserves ownership.
+
+Pass an existing transport or request session as `session_id`. A valid echoed
+`conversation_id` takes precedence. Otherwise the existing session stays, and no new handle is
+minted. `prepare_tool_result()` appends a new handle to the result's `content` and mirrors it
+into `structuredContent` when the tool declares an output schema. If the result has no channel
+that can carry a new handle, `conversation_id` is `None` and the derived `session_id` is kept.
+Set `enable_conversation_id=False` on `PostHogMCP` to keep the previous custom-dispatcher
+behavior.
 
 ## Collect agent feedback
 
@@ -204,8 +218,14 @@ tools = posthog.prepare_tool_list(server_tools, collect_feedback=True)
 # tools/call dispatcher
 call = posthog.prepare_tool_call(tool_name, raw_args)
 if call.is_feedback:
-    posthog.capture_feedback(report=call.feedback_report)  # emits $mcp_feedback
-    return send_feedback_result()  # replies to the agent and stops dispatch
+    # Replies to the agent and stops dispatch.
+    prepared = posthog.prepare_tool_result(send_feedback_result(), call)
+    posthog.capture_feedback(  # emits $mcp_feedback
+        report=call.feedback_report,
+        session_id=prepared.session_id,
+        conversation_id=prepared.conversation_id,
+    )
+    return prepared.result
 ```
 
 `on_feedback` is ignored on this path — the dispatcher routes reports itself via
