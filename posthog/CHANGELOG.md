@@ -1,5 +1,11 @@
 # posthog
 
+## 7.60.1 — 2026-09-25
+
+### Patch changes
+
+- [b804ea1](https://github.com/posthog/posthog-python/commit/b804ea1ad23590f185abc9b555e6e196948a870e) Keep MCP conversation sessions consistent across user messages. — Thanks @gesh!
+
 ## 7.60.0 — 2026-09-23
 
 ### Minor changes
