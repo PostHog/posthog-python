@@ -4,6 +4,12 @@ All notable changes to `openfeature-provider-posthog` are documented here. This
 file is maintained by [Sampo](https://github.com/bruits/sampo) from changesets in
 `.sampo/changesets/` that target `pypi/openfeature-provider-posthog`.
 
+## 0.1.88 — 2026-09-25
+
+### Patch changes
+
+- [ba2ac86](https://github.com/posthog/posthog-python/commit/ba2ac86fc6d01dbf93fbd849086ef684be780b0c) Support hexadecimal numeric variants in the OpenFeature provider. — Thanks @marandaneto!
+
 ## 0.1.87 — 2026-09-23
 
 ### Patch changes
