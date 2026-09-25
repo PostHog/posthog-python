@@ -8,6 +8,7 @@ contract, using the modern, single-call ``Client.get_feature_flag_result`` API.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Callable, Mapping, Optional, Sequence, TypeVar, Union
 
 from openfeature.evaluation_context import EvaluationContext
@@ -53,7 +54,9 @@ class PostHogProvider(AbstractProvider):
     Flag-type mapping (all via ``get_feature_flag_result``):
         * boolean -> ``enabled``
         * string  -> the multivariate ``variant`` key
-        * int/float -> the ``variant`` parsed to a number
+        * int/float -> the ``variant`` parsed to a number, including unsigned
+          hexadecimal integers such as ``0x10`` (returned as int or float,
+          respectively)
         * object  -> the flag's JSON ``payload``
 
     Args:
@@ -213,7 +216,10 @@ class PostHogProvider(AbstractProvider):
                 f"Flag '{flag_key}' has no variant to parse as {ctor.__name__}."
             )
         try:
-            value = ctor(result.variant)
+            variant = result.variant
+            if re.fullmatch(r"0[xX][0-9a-fA-F]+", variant.strip()):
+                variant = str(int(variant, 16))
+            value = ctor(variant)
         except (TypeError, ValueError) as exc:
             raise TypeMismatchError(
                 f"Flag '{flag_key}' variant '{result.variant}' is not a valid "
