@@ -1212,6 +1212,88 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         assert "output_tokens" in props["$ai_usage"]
 
 
+def test_streaming_tool_call_after_server_tool_blocks(mock_client):
+    """Stream events address content blocks by their index in the message. Blocks the
+    wrapper does not format (server_tool_use, web_search_tool_result) still take an
+    index, so a later client tool call must keep its streamed arguments."""
+    from anthropic.types import (
+        InputJSONDelta,
+        ServerToolUseBlock,
+        ToolUseBlock,
+        WebSearchToolResultBlock,
+    )
+
+    def content_block(index, block, deltas=()):
+        yield RawContentBlockStartEvent(
+            type="content_block_start", index=index, content_block=block
+        )
+        for delta in deltas:
+            yield RawContentBlockDeltaEvent(
+                type="content_block_delta", index=index, delta=delta
+            )
+        yield RawContentBlockStopEvent(type="content_block_stop", index=index)
+
+    def stream_generator():
+        yield from content_block(
+            0,
+            ServerToolUseBlock(
+                type="server_tool_use", id="srvtoolu_1", name="web_search", input={}
+            ),
+            [
+                InputJSONDelta(
+                    type="input_json_delta", partial_json='{"query": "weather sf"}'
+                )
+            ],
+        )
+        yield from content_block(
+            1,
+            WebSearchToolResultBlock(
+                type="web_search_tool_result", tool_use_id="srvtoolu_1", content=[]
+            ),
+        )
+        yield from content_block(
+            2,
+            TextBlock(type="text", text=""),
+            [TextDelta(type="text_delta", text="Booking a table.")],
+        )
+        yield from content_block(
+            3,
+            ToolUseBlock(type="tool_use", id="toolu_1", name="book_table", input={}),
+            [
+                InputJSONDelta(type="input_json_delta", partial_json='{"city": '),
+                InputJSONDelta(type="input_json_delta", partial_json='"SF"}'),
+            ],
+        )
+
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=stream_generator(),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            messages=[{"role": "user", "content": "Book dinner if it's sunny"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+        list(response)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Booking a table."},
+                {
+                    "type": "function",
+                    "id": "toolu_1",
+                    "function": {"name": "book_table", "arguments": {"city": "SF"}},
+                },
+            ],
+        }
+    ]
+
+
 def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools):
     """Test that tool calls are properly captured in async streaming mode."""
     import asyncio
