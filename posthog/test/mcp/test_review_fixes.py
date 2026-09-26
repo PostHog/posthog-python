@@ -325,6 +325,7 @@ def test_posthogmcp_can_disable_exception_fanout():
 def test_version_warning_uses_supplied_logger(monkeypatch):
     # #6: the mcp-version advisory goes to the supplied logger, not the no-op default.
     logs = []
+    monkeypatch.setattr("posthog.mcp.logger._active_logger", None)
     monkeypatch.setattr("importlib.metadata.version", lambda name: "1.20.0")
 
     server = Server("ver-warn")

@@ -120,7 +120,7 @@ def test_truncate_event_caps_exception_value_and_frames():
     )
     exc = out["error"]["$exception_list"][0]
     assert len(exc["value"]) == 2048 + 3
-    assert len(exc["stacktrace"]["frames"]) == 50  # head + tail
+    assert exc["stacktrace"]["frames"] == frames[:25] + frames[-25:]
 
 
 def test_truncate_event_caps_response_text_block():

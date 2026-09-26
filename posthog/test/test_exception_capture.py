@@ -278,6 +278,15 @@ def test_excepthook(tmpdir):
         dedent(
             """
     from posthog import Posthog
+    from requests import Response
+    import posthog.request
+
+    def offline_post(url, **kwargs):
+        response = Response()
+        response.status_code = 200
+        return response
+
+    posthog.request._session.post = offline_post
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
     # frame_value = "LOL"
@@ -288,7 +297,9 @@ def test_excepthook(tmpdir):
     )
 
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
-        subprocess.check_output([sys.executable, str(app)], stderr=subprocess.STDOUT)
+        subprocess.check_output(
+            [sys.executable, str(app)], stderr=subprocess.STDOUT, timeout=15
+        )
 
     output = excinfo.value.output
 

@@ -2,6 +2,7 @@ from posthog.contexts import (
     new_context,
     get_context_session_id,
     get_context_distinct_id,
+    get_tags,
 )
 import unittest
 from unittest.mock import Mock, patch
@@ -509,12 +510,13 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
             # Override request filter after initialization
             middleware.request_filter = lambda req: False
 
-            request = MockRequest()
+            request = MockRequest(headers={"X-POSTHOG-SESSION-ID": "filtered"})
 
-            # Should skip context creation and return response directly
-            result = middleware(request)
-            response = await result
-            self.assertEqual(response, mock_response)
+            with patch.object(middleware, "aextract_tags") as extract:
+                result = middleware(request)
+                response = await result
+                self.assertEqual(response, mock_response)
+                extract.assert_not_awaited()
 
         asyncio.run(run_test())
 
@@ -690,6 +692,7 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
                 return {"custom_tag": "custom_value"}
 
             async def async_get_response(request):
+                self.assertEqual(get_tags()["custom_tag"], "custom_value")
                 return mock_response
 
             middleware = PosthogContextMiddleware(async_get_response)
@@ -727,6 +730,7 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
                 return tags
 
             async def async_get_response(request):
+                self.assertEqual(get_tags()["mapped"], "yes")
                 return mock_response
 
             middleware = PosthogContextMiddleware(async_get_response)

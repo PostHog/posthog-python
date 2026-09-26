@@ -1,3 +1,4 @@
+import gzip
 import json
 import unittest
 import zlib
@@ -132,22 +133,44 @@ def test_message_only_debug_logs_include_posthog_prefix():
 
 class TestRequests(unittest.TestCase):
     def test_valid_request(self):
-        res = batch_post(
-            TEST_API_KEY,
-            batch=[
-                {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
-            ],
-        )
-        self.assertEqual(res.status_code, 200)
+        response = requests.Response()
+        response.status_code = 200
+        session = mock.Mock()
+        session.post.return_value = response
+        batch = [
+            {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
+        ]
+
+        res = batch_post(TEST_API_KEY, batch=batch, session=session)
+
+        self.assertIs(res, response)
+        session.post.assert_called_once()
+        self.assertTrue(session.post.call_args.args[0].endswith("/batch/"))
+        body = json.loads(session.post.call_args.kwargs["data"])
+        self.assertEqual(body["batch"], batch)
+        self.assertEqual(body["api_key"], TEST_API_KEY)
 
     def test_invalid_request_error(self):
-        self.assertRaises(
-            Exception, batch_post, "testsecret", "https://t.posthog.com", False, "[{]"
-        )
+        response = requests.Response()
+        response.status_code = 400
+        response._content = b'{"detail": "Invalid batch"}'
+        session = mock.Mock()
+        session.post.return_value = response
+
+        with self.assertRaises(APIError) as raised:
+            batch_post("testsecret", batch=[], session=session)
+
+        self.assertEqual(raised.exception.status, 400)
+        self.assertEqual(raised.exception.message, "Invalid batch")
+        session.post.assert_called_once()
 
     def test_invalid_host(self):
         self.assertRaises(
-            Exception, batch_post, "testsecret", "t.posthog.com/", batch=[]
+            requests.exceptions.MissingSchema,
+            batch_post,
+            "testsecret",
+            "t.posthog.com/",
+            batch=[],
         )
 
     def test_post_without_path_preserves_type_error(self):
@@ -201,6 +224,9 @@ class TestRequests(unittest.TestCase):
         headers = mock_session.post.call_args.kwargs["headers"]
         self.assertIsInstance(data, bytes)
         self.assertEqual(headers["Content-Encoding"], "gzip")
+        body = json.loads(gzip.decompress(data))
+        self.assertEqual(body["batch"], [])
+        self.assertEqual(body["api_key"], TEST_API_KEY)
 
     def test_post_falls_back_to_uncompressed_payload_when_gzip_fails(self):
         for compression_error in [OSError("boom"), zlib.error("boom")]:
@@ -240,28 +266,28 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(result, expected)
 
     def test_should_not_timeout(self):
-        res = batch_post(
-            TEST_API_KEY,
-            batch=[
-                {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
-            ],
-            timeout=15,
+        response = requests.Response()
+        response.status_code = 200
+        session = mock.Mock()
+        session.post.return_value = response
+
+        self.assertIs(
+            batch_post(TEST_API_KEY, batch=[], timeout=7, session=session), response
         )
-        self.assertEqual(res.status_code, 200)
+        session.post.assert_called_once()
+        self.assertEqual(session.post.call_args.kwargs["timeout"], 7)
 
     def test_should_timeout(self):
-        with self.assertRaises(requests.ReadTimeout):
-            batch_post(
-                "key",
-                batch=[
-                    {
-                        "distinct_id": "distinct_id",
-                        "event": "python event",
-                        "type": "track",
-                    }
-                ],
-                timeout=0.0001,
-            )
+        error = requests.ReadTimeout("response deadline exceeded")
+        session = mock.Mock()
+        session.post.side_effect = error
+
+        with self.assertRaises(requests.ReadTimeout) as raised:
+            batch_post("key", batch=[], timeout=1, session=session)
+
+        self.assertIs(raised.exception, error)
+        session.post.assert_called_once()
+        self.assertEqual(session.post.call_args.kwargs["timeout"], 1)
 
     def test_quota_limited_flags_response(self):
         mock_response = requests.Response()

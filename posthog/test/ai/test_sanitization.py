@@ -373,7 +373,7 @@ class TestClientMultimodalPassthrough(unittest.TestCase):
                                 "source": {
                                     "type": "base64",
                                     "media_type": "image/jpeg",
-                                    "data": "A" * 64,
+                                    "data": LONG_RAW_BASE64,
                                 },
                             }
                         ]
@@ -388,7 +388,7 @@ class TestClientMultimodalPassthrough(unittest.TestCase):
                             {
                                 "inline_data": {
                                     "mime_type": "image/jpeg",
-                                    "data": "A" * 64,
+                                    "data": LONG_RAW_BASE64,
                                 }
                             }
                         ]
@@ -406,7 +406,9 @@ class TestClientMultimodalPassthrough(unittest.TestCase):
                 ],
             ),
         ]:
-            self.assertEqual(fn(data, ph_client=client), data)
+            with self.subTest(entry_point=fn.__name__):
+                self.assertNotEqual(fn(data, ph_client=self._client(False)), data)
+                self.assertEqual(fn(data, ph_client=client), data)
 
     def test_flag_off_still_redacts(self):
         result = sanitize_openai(self.openai_input, ph_client=self._client(False))
@@ -452,13 +454,13 @@ class TestAudioRedaction(unittest.TestCase):
             {
                 "role": "assistant",
                 "content": [
-                    {"type": "audio", "data": "base64audiodata", "id": "audio_123"}
+                    {"type": "audio", "data": LONG_RAW_BASE64, "id": "audio_123"}
                 ],
             }
         ]
 
         result = sanitize_openai(input_data, ph_client=self._client(True))
-        self.assertEqual(result[0]["content"][0]["data"], "base64audiodata")
+        self.assertEqual(result[0]["content"][0]["data"], LONG_RAW_BASE64)
 
     def test_gemini_audio_redacted_by_default(self):
         input_data = [
@@ -487,7 +489,7 @@ class TestAudioRedaction(unittest.TestCase):
                     {
                         "inline_data": {
                             "mime_type": "audio/L16;codec=pcm;rate=24000",
-                            "data": "base64audiodata",
+                            "data": LONG_RAW_BASE64,
                         }
                     }
                 ]
@@ -495,9 +497,7 @@ class TestAudioRedaction(unittest.TestCase):
         ]
 
         result = sanitize_gemini(input_data, ph_client=self._client(True))
-        self.assertEqual(
-            result[0]["parts"][0]["inline_data"]["data"], "base64audiodata"
-        )
+        self.assertEqual(result[0]["parts"][0]["inline_data"]["data"], LONG_RAW_BASE64)
 
 
 PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 400).decode()
