@@ -363,8 +363,11 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         )
         task = SimpleNamespace(name="app.tasks.timed", request=request)
 
-        integration._on_task_prerun(sender=task, task_id="task-t")
-        integration._on_task_success(sender=task)
+        with patch(
+            "posthog.integrations.celery.time.monotonic", side_effect=[100, 100.125]
+        ):
+            integration._on_task_prerun(sender=task, task_id="task-t")
+            integration._on_task_success(sender=task)
 
         completed_call = [
             c
@@ -372,7 +375,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             if c.args[0] == "celery task success"
         ]
         self.assertEqual(len(completed_call), 1)
-        self.assertIn("celery_task_duration_ms", completed_call[0].kwargs["properties"])
+        self.assertEqual(
+            completed_call[0].kwargs["properties"]["celery_task_duration_ms"], 125.0
+        )
 
     def test_failure_includes_duration(self):
         mock_client = Mock()
@@ -386,10 +391,13 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         )
         task = SimpleNamespace(name="app.tasks.failing_timed", request=request)
 
-        integration._on_task_prerun(sender=task, task_id="task-f")
-        integration._on_task_failure(
-            sender=task, task_id="task-f", exception=ValueError("boom")
-        )
+        with patch(
+            "posthog.integrations.celery.time.monotonic", side_effect=[100, 100.125]
+        ):
+            integration._on_task_prerun(sender=task, task_id="task-f")
+            integration._on_task_failure(
+                sender=task, task_id="task-f", exception=ValueError("boom")
+            )
 
         failed_call = [
             c
@@ -397,7 +405,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             if c.args[0] == "celery task failure"
         ]
         self.assertEqual(len(failed_call), 1)
-        self.assertIn("celery_task_duration_ms", failed_call[0].kwargs["properties"])
+        self.assertEqual(
+            failed_call[0].kwargs["properties"]["celery_task_duration_ms"], 125.0
+        )
 
     def test_task_failure_captures_exception_and_failure_event(self):
         mock_client = Mock()

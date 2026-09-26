@@ -89,8 +89,12 @@ class TestPostHogSpanProcessor(unittest.TestCase):
         processor = PostHogSpanProcessor(api_key="phc_test")
         inner = mock_batch_cls.return_value
 
-        processor.force_flush(timeout_millis=5000)
-        inner.force_flush.assert_called_once_with(5000)
+        for result in (True, False):
+            with self.subTest(result=result):
+                inner.force_flush.reset_mock()
+                inner.force_flush.return_value = result
+                self.assertIs(processor.force_flush(timeout_millis=5000), result)
+                inner.force_flush.assert_called_once_with(5000)
 
     @patch("posthog.ai.otel.processor.OTLPSpanExporter")
     @patch("posthog.ai.otel.processor.BatchSpanProcessor")
@@ -98,5 +102,9 @@ class TestPostHogSpanProcessor(unittest.TestCase):
         processor = PostHogSpanProcessor(api_key="phc_test")
         inner = mock_batch_cls.return_value
 
-        processor.force_flush()
-        inner.force_flush.assert_called_once_with()
+        for result in (True, False):
+            with self.subTest(result=result):
+                inner.force_flush.reset_mock()
+                inner.force_flush.return_value = result
+                self.assertIs(processor.force_flush(), result)
+                inner.force_flush.assert_called_once_with()

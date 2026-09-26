@@ -13,26 +13,40 @@ class TestModule(unittest.TestCase):
     posthog = None
 
     def _assert_enqueue_result(self, result):
-        self.assertEqual(type(result[0]), str)
-
-    def failed(self):
-        self.failed = True
+        self.assertIsInstance(result, str)
+        self.assertTrue(result)
 
     def setUp(self):
-        self.failed = False
-        self.posthog = Posthog(
-            "testsecret", host="http://localhost:8000", on_error=self.failed
-        )
+        patcher = mock.patch("posthog.consumer.batch_post")
+        self.transport = patcher.start()
+        self.addCleanup(patcher.stop)
+        self.on_error = mock.Mock()
+        self.posthog = Posthog("testsecret", on_error=self.on_error)
+        self.addCleanup(self.posthog.shutdown)
+
+    def tearDown(self):
+        self.on_error.assert_not_called()
 
     def test_track(self):
         res = self.posthog.capture("python module event", distinct_id="distinct_id")
         self._assert_enqueue_result(res)
         self.posthog.flush()
+        self.transport.assert_called_once()
+        event = self.transport.call_args.kwargs["batch"][0]
+        self.assertEqual(event["event"], "python module event")
+        self.assertEqual(event["distinct_id"], "distinct_id")
+        self.assertEqual(event["uuid"], res)
 
     def test_alias(self):
         res = self.posthog.alias("previousId", "distinct_id")
         self._assert_enqueue_result(res)
         self.posthog.flush()
+        self.transport.assert_called_once()
+        event = self.transport.call_args.kwargs["batch"][0]
+        self.assertEqual(event["event"], "$create_alias")
+        self.assertEqual(event["distinct_id"], "previousId")
+        self.assertEqual(event["properties"]["alias"], "distinct_id")
+        self.assertEqual(event["uuid"], res)
 
     def test_flush(self):
         self.posthog.flush()

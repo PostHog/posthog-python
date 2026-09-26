@@ -209,10 +209,16 @@ class TestConsumer(unittest.TestCase):
 
     def test_upload(self) -> None:
         q = Queue()
-        consumer = Consumer(q, TEST_API_KEY)
-        q.put(_track_event())
-        success = consumer.upload()
+        consumer = Consumer(q, TEST_API_KEY, flush_at=1)
+        event = _track_event()
+        q.put(event)
+        with mock.patch("posthog.consumer.batch_post") as post:
+            success = consumer.upload()
         self.assertTrue(success)
+        post.assert_called_once()
+        self.assertEqual(post.call_args.kwargs["batch"], [event])
+        self.assertEqual(q.unfinished_tasks, 0)
+        self.assertTrue(q.empty())
 
     def test_message_only_error_logs_include_posthog_prefix(self) -> None:
         q = Queue()
@@ -237,41 +243,79 @@ class TestConsumer(unittest.TestCase):
         )
 
     def test_flush_interval(self) -> None:
-        # Put _n_ items in the queue, pausing a little bit more than
-        # _flush_interval_ after each one.
-        # The consumer should upload _n_ times.
         q = Queue()
         flush_interval = 0.3
         consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=flush_interval)
-        with mock.patch.object(consumer, "request") as mock_request:
+        delivered = threading.Event()
+        with mock.patch.object(
+            consumer, "request", side_effect=lambda batch: delivered.set()
+        ) as mock_request:
             consumer.start()
-            for i in range(3):
-                q.put(_track_event("python event %d" % i))
-                time.sleep(flush_interval * 1.1)
-            self.assertEqual(mock_request.call_count, 3)
+            try:
+                for i in range(3):
+                    delivered.clear()
+                    event = _track_event("python event %d" % i)
+                    q.put(event)
+                    self.assertTrue(delivered.wait(5))
+                    self.assertEqual(mock_request.call_args.args[0], [event])
+                self.assertEqual(mock_request.call_count, 3)
+            finally:
+                consumer.pause()
+                consumer.join(5)
+            self.assertFalse(consumer.is_alive())
 
     def test_multiple_uploads_per_interval(self) -> None:
-        # Put _flush_at*2_ items in the queue at once, then pause for
-        # _flush_interval_. The consumer should upload 2 times.
         q = Queue()
-        flush_interval = 0.5
+        flush_interval = 10
         flush_at = 10
         consumer = Consumer(
             q, TEST_API_KEY, flush_at=flush_at, flush_interval=flush_interval
         )
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        delivered = threading.Event()
+        batches = []
+
+        def record_batch(*args, **kwargs):
+            batches.append(kwargs["batch"])
+            if len(batches) == 2:
+                delivered.set()
+
+        with mock.patch("posthog.consumer.batch_post", side_effect=record_batch):
             consumer.start()
-            for i in range(flush_at * 2):
-                q.put(_track_event("python event %d" % i))
-            time.sleep(flush_interval * 1.1)
-            self.assertEqual(mock_post.call_count, 2)
+            try:
+                events = [
+                    _track_event("python event %d" % i) for i in range(flush_at * 2)
+                ]
+                for event in events:
+                    q.put(event)
+                self.assertTrue(delivered.wait(5))
+                self.assertEqual(batches, [events[:10], events[10:]])
+            finally:
+                consumer.pause()
+                consumer.join(15)
+            self.assertFalse(consumer.is_alive())
 
     def test_request(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
-        consumer.request([_track_event()])
+        batch = [_track_event()]
+        with mock.patch("posthog.consumer.batch_post") as post:
+            consumer.request(batch)
+        post.assert_called_once_with(
+            TEST_API_KEY,
+            None,
+            gzip=False,
+            timeout=15,
+            batch=batch,
+            historical_migration=False,
+            path="/batch/",
+        )
 
     def _run_retry_test(
-        self, exception: Exception, exception_count: int, retries: int = 10
+        self,
+        exception: Exception,
+        exception_count: int,
+        retries: int = 10,
+        expected_attempts: int = 3,
+        raises: bool = False,
     ) -> None:
         call_count = [0]
 
@@ -281,14 +325,20 @@ class TestConsumer(unittest.TestCase):
                 raise exception
 
         consumer = Consumer(None, TEST_API_KEY, retries=retries)
-        with mock.patch(
-            "posthog.consumer.batch_post", mock.Mock(side_effect=mock_post)
+        batch = [_track_event()]
+        with (
+            mock.patch("posthog.consumer.batch_post", side_effect=mock_post) as post,
+            mock.patch("posthog.consumer.time.sleep"),
         ):
-            if exception_count <= retries:
-                consumer.request([_track_event()])
+            if raises:
+                with self.assertRaises(type(exception)) as raised:
+                    consumer.request(batch)
+                self.assertIs(raised.exception, exception)
             else:
-                with self.assertRaises(type(exception)):
-                    consumer.request([_track_event()])
+                consumer.request(batch)
+        self.assertEqual(post.call_count, expected_attempts)
+        for call in post.call_args_list:
+            self.assertEqual(call.kwargs["batch"], batch)
 
     @parameterized.expand(
         [
@@ -303,11 +353,18 @@ class TestConsumer(unittest.TestCase):
         self._run_retry_test(exception, exception_count)
 
     def test_request_does_not_retry_client_errors(self) -> None:
-        with self.assertRaises(APIError):
-            self._run_retry_test(APIError(400, "Client Errors"), 1)
+        self._run_retry_test(
+            APIError(400, "Client Errors"), 1, expected_attempts=1, raises=True
+        )
 
     def test_request_fails_when_exceptions_exceed_retries(self) -> None:
-        self._run_retry_test(APIError(500, "Internal Server Error"), 4, retries=3)
+        self._run_retry_test(
+            APIError(500, "Internal Server Error"),
+            4,
+            retries=3,
+            expected_attempts=4,
+            raises=True,
+        )
 
     def test_negative_retries_still_attempts_delivery_once(self) -> None:
         consumer = Consumer(None, TEST_API_KEY, retries=-1)
@@ -512,22 +569,23 @@ class TestConsumer(unittest.TestCase):
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
 
-        def mock_send_fn(batch: list[dict[str, Any]], _path: str) -> None:
-            request_size = len(json.dumps({"batch": batch}).encode())
-            # Batches close after the first message bringing it bigger than BATCH_SIZE_LIMIT, let's add 10% of margin
-            self.assertTrue(
-                request_size < (5 * 1024 * 1024) * 1.1,
-                "batch size (%d) higher than limit" % request_size,
-            )
-
-        with mock.patch.object(
-            consumer, "_send", side_effect=mock_send_fn
-        ) as mock_send:
+        with mock.patch.object(consumer, "_send") as mock_send:
             consumer.start()
-            for _ in range(0, n_msgs + 2):
-                q.put(track)
-            q.join()
-            self.assertEqual(mock_send.call_count, 2)
+            try:
+                for _ in range(0, n_msgs + 2):
+                    q.put(track)
+                q.join()
+                self.assertEqual(mock_send.call_count, 2)
+                batches = [call.args[0] for call in mock_send.call_args_list]
+                self.assertEqual(sum(map(len, batches)), n_msgs + 2)
+                for batch in batches:
+                    request_size = len(json.dumps({"batch": batch}).encode())
+                    # The event crossing the byte limit is included in the batch.
+                    self.assertLess(request_size, (5 * 1024 * 1024) * 1.1)
+            finally:
+                consumer.pause()
+                consumer.join(5)
+            self.assertFalse(consumer.is_alive())
 
     def test_request_sleeps_with_retry_after(self) -> None:
         error = APIError(429, "Too Many Requests", retry_after=5.0)
