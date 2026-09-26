@@ -520,6 +520,15 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     return result
 
 
+# Stream events that carry the final Responses API response, with its usage and
+# output. Exactly one of them ends a stream.
+_RESPONSES_TERMINAL_EVENT_TYPES = (
+    "response.completed",
+    "response.incomplete",
+    "response.failed",
+)
+
+
 def extract_openai_usage_from_chunk(
     chunk: Any, provider_type: str = "chat"
 ) -> TokenUsage:
@@ -577,8 +586,10 @@ def extract_openai_usage_from_chunk(
             usage["raw_usage"] = serialized
 
     elif provider_type == "responses":
-        # For Responses API, usage is only in chunk.response.usage for completed events
-        if hasattr(chunk, "type") and chunk.type == "response.completed":
+        # For Responses API, usage is only in chunk.response.usage on the terminal
+        # event. A run cut short (e.g. by max_output_tokens) ends on
+        # response.incomplete instead of response.completed, and is still billed.
+        if getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
             if (
                 hasattr(chunk, "response")
                 and hasattr(chunk.response, "usage")
@@ -634,7 +645,8 @@ def extract_openai_content_from_chunk(
     Returns:
         For "chat": text content (str), or an audio/refusal delta block (dict),
         if present. For "responses": the full `response.output` list on the
-        `response.completed` event. None otherwise.
+        terminal (`response.completed`, `response.incomplete` or
+        `response.failed`) event. None otherwise.
     """
 
     if provider_type == "chat":
@@ -663,7 +675,7 @@ def extract_openai_content_from_chunk(
 
     elif provider_type == "responses":
         # Responses API format
-        if hasattr(chunk, "type") and chunk.type == "response.completed":
+        if getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
             if hasattr(chunk, "response") and chunk.response:
                 res = chunk.response
                 if res.output:
