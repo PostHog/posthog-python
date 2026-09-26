@@ -21,6 +21,10 @@ class _AnthropicStreamAccumulator:
         self.tools_in_progress: Dict[str, ToolInProgress] = {}
         self.current_text_block: Optional[StreamingContentBlock] = None
         self.stop_reason: Optional[str] = None
+        # Delta and stop events address blocks by their index in the message. That
+        # index also counts blocks content_blocks leaves out (server_tool_use,
+        # web_search_tool_result, ...), so keep a list that lines up with it.
+        self._blocks_by_index: List[StreamingContentBlock] = []
 
     def consume(self, event: Any) -> None:
         event_usage = extract_anthropic_usage_from_event(event)
@@ -28,6 +32,8 @@ class _AnthropicStreamAccumulator:
 
         if getattr(event, "type", None) == "content_block_start":
             block, tool = handle_anthropic_content_block_start(event)
+
+            self._blocks_by_index.append(block or {})
 
             if block:
                 self.content_blocks.append(block)
@@ -45,12 +51,14 @@ class _AnthropicStreamAccumulator:
         if delta_text:
             self.accumulated_content += delta_text
 
-        handle_anthropic_tool_delta(event, self.content_blocks, self.tools_in_progress)
+        handle_anthropic_tool_delta(
+            event, self._blocks_by_index, self.tools_in_progress
+        )
 
         if getattr(event, "type", None) == "content_block_stop":
             self.current_text_block = None
             finalize_anthropic_tool_input(
-                event, self.content_blocks, self.tools_in_progress
+                event, self._blocks_by_index, self.tools_in_progress
             )
 
         if getattr(event, "type", None) == "message_delta":
