@@ -264,6 +264,39 @@ class TestConsumer(unittest.TestCase):
                 consumer.join(5)
             self.assertFalse(consumer.is_alive())
 
+    def test_partial_batch_waits_for_remaining_flush_interval(self) -> None:
+        from queue import Empty
+
+        q = Queue()
+        event = _track_event()
+        q.put(event)
+        consumer = Consumer(q, TEST_API_KEY, flush_at=10, flush_interval=0.3)
+        now = [100.0]
+        waits = []
+        original_get = q.get
+
+        def timed_get(*, block, timeout):
+            waits.append(timeout)
+            if len(waits) == 1:
+                now[0] += 0.125
+                return original_get(block=False)
+            now[0] += timeout
+            raise Empty
+
+        with (
+            mock.patch("posthog.consumer.time.monotonic", side_effect=lambda: now[0]),
+            mock.patch.object(q, "get", side_effect=timed_get),
+            mock.patch.object(consumer, "request") as request,
+        ):
+            self.assertTrue(consumer.upload())
+
+        self.assertEqual(len(waits), 2)
+        self.assertAlmostEqual(waits[0], 0.3)
+        self.assertAlmostEqual(waits[1], 0.175)
+        self.assertAlmostEqual(now[0], 100.3)
+        request.assert_called_once_with([event])
+        self.assertEqual(q.unfinished_tasks, 0)
+
     def test_multiple_uploads_per_interval(self) -> None:
         q = Queue()
         flush_interval = 10

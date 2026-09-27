@@ -32,6 +32,10 @@ def test_attribute_details_uses_placeholder_values() -> None:
         == "posthog.version.VERSION = <version>"
     )
 
+    for path, placeholder in check_public_api.ATTRIBUTE_VALUE_PLACEHOLDERS.items():
+        entry = SimpleNamespace(path=path, annotation=None, value='"7.19.1"')
+        assert check_public_api._attribute_details(entry) == f"{path} = {placeholder}"
+
     obj.path = "posthog.other.CONSTANT"
     assert (
         check_public_api._attribute_details(obj) == 'posthog.other.CONSTANT = "7.19.1"'
