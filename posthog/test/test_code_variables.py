@@ -534,6 +534,18 @@ class TestCollectionMasking:
             redacted_key(i): i for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN)
         }
 
+    def test_key_probe_does_not_hide_a_value_the_key_shares(self):
+        # probing the key must not mark its parts visited for the value traversal, which
+        # would render the value as a circular ref
+        login = _Login("admin", "1234")
+        assert mask({(login,): login}) == {
+            "(_Login(user='admin', code='1234'),)": {
+                "user": "admin",
+                "code": "1234",
+                "__class__": "_Login",
+            }
+        }
+
 
 # --- 6. object traversal -------------------------------------------------------------
 

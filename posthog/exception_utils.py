@@ -1411,16 +1411,35 @@ def _is_field_name(key, key_is_json_safe):
     return True
 
 
+class _KeyProbeSeen:
+    """The ``seen`` set for a key probe. The probe stops at every object that the
+    traversal or an earlier probe visited, and its visits count against the same node
+    budget. It records its visits under a separate tag, so an object that a key shares
+    with a value is still masked in full where the value holds it."""
+
+    _TAG = "key_probe"
+
+    def __init__(self, seen):
+        self._seen = seen
+
+    def __contains__(self, obj_id):
+        return obj_id in self._seen or (self._TAG, obj_id) in self._seen
+
+    def add(self, obj_id):
+        self._seen.add((self._TAG, obj_id))
+
+    def __len__(self):
+        return len(self._seen)
+
+
 def _key_parts_fail_masking(key, config, seen, depth):
     """True when masking ``key`` as a value redacts any part of it, reaches an object
     that the traversal already visited, or raises. The quotes and brackets of a repr turn
-    off the entropy check, so the parts are checked one by one.
-
-    The probe shares ``seen`` with the rest of the traversal, so every key probe counts
-    against the same node budget and cycle guard. A part that was already visited is not
-    checked again, so its text in the key's repr can't be vouched for."""
+    off the entropy check, so the parts are checked one by one. A part that was already
+    visited is not checked again, so its text in the key's repr can't be vouched for."""
+    probe_seen = seen if isinstance(seen, _KeyProbeSeen) else _KeyProbeSeen(seen)
     try:
-        rendered = str(_mask_value(key, config, seen, depth + 1))
+        rendered = str(_mask_value(key, config, probe_seen, depth + 1))
     except Exception:
         return True
     return any(marker in rendered for marker in _KEY_PROBE_MARKERS)
