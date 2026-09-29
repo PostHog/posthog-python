@@ -1185,7 +1185,9 @@ _KNOWN_SECRET_PATTERNS = [
 _KNOWN_SECRET_RE = re.compile("|".join(_KNOWN_SECRET_PATTERNS))
 
 _PEM_PRIVATE_KEY_MARKER = "PRIVATE KEY-----"  # covers RSA/EC/OpenSSH/PKCS8
-_KNOWN_SECRET_MAX_SCAN_LENGTH = 200
+# Same cap as the other pattern checks, so a key embedded in a longer string (a SQL query
+# with credentials, a config dump) is still found.
+_KNOWN_SECRET_MAX_SCAN_LENGTH = _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH
 
 
 def _looks_like_path_or_url(value):
@@ -1370,27 +1372,54 @@ def _masked_type_members(value, config):
     return masked
 
 
+# A mapping can have several redacted keys, so each placeholder carries a number to
+# keep the keys unique.
+_REDACTED_KEY_TEMPLATE = "$$_posthog_redacted_key_{}_$$"
+
+
+def _redacted_key(result):
+    """Return a placeholder key that no key already in ``result`` uses."""
+    n = 0
+    while (candidate := _REDACTED_KEY_TEMPLATE.format(n)) in result:
+        n += 1
+    return candidate
+
+
 def _mask_mapping(items, config, seen, depth):
     """Mask a sequence of ``(key, value)`` pairs into a dict. A key matching the mask
     redacts its value; surviving values recurse through ``_mask_value``. Keys are kept
-    JSON-serializable."""
-    result = {}
+    JSON-serializable, and a key whose own text can hold a secret is replaced by a
+    placeholder, because the key text reaches the output as-is."""
+    result: Dict[Any, Any] = {}
     for key, value in items:
         if type(key) is str:
             out_key = key_str = key
+            key_is_name = True
         else:
             key_str = key if isinstance(key, str) else str(key)
             # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
-            # its string form so one exotic key can't make json.dumps fail.
-            key_is_json_safe = (
+            # its string form so one exotic key can't make json.dumps fail. That string form
+            # is a repr, which can embed field values, not only a name.
+            key_is_name = (
                 key is None
                 or isinstance(key, (str, int))  # bool is an int subclass
                 or (isinstance(key, float) and math.isfinite(key))
             )
-            out_key = key if key_is_json_safe else key_str
+            out_key = key if key_is_name else key_str
         if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
-            result[out_key] = CODE_VARIABLES_TOO_LONG_VALUE
-        elif _matcher_matches(key_str, config.mask):
+            # Too long to scan, so the key text can't be vouched for either.
+            result[_redacted_key(result)] = CODE_VARIABLES_TOO_LONG_VALUE
+            continue
+        key_matches_mask = _matcher_matches(key_str, config.mask)
+        if key_matches_mask and not key_is_name:
+            # A name such as `password` is safe to keep, but a repr that matches can hold
+            # the value itself, e.g. `BasicAuth(login='u', password='...')`.
+            out_key = _redacted_key(result)
+        elif config.detect_secrets and _looks_like_secret(key_str):
+            out_key = _redacted_key(result)
+        elif config.mask_url_credentials and isinstance(out_key, str):
+            out_key = _redact_url_credentials(out_key)
+        if key_matches_mask:
             result[out_key] = CODE_VARIABLES_REDACTED_VALUE
         else:
             result[out_key] = _mask_value(value, config, seen, depth + 1)

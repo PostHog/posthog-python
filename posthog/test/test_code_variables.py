@@ -40,6 +40,17 @@ from posthog.exception_utils import (
 # --- shared helpers ------------------------------------------------------------------
 
 
+# Synthetic, format-correct fakes (no real credentials). Vendor keys are assembled from
+# prefix + body so no complete secret literal lives in source (which trips secret scanners).
+def _key(prefix, body):
+    return prefix + body
+
+
+def redacted_key(n):
+    """The placeholder that replaces the n-th redacted key of one mapping."""
+    return f"$$_posthog_redacted_key_{n}_$$"
+
+
 def make_config(
     *, patterns=DEFAULT_CODE_VARIABLES_MASK_PATTERNS, ignore=(), mask_urls=True
 ):
@@ -298,12 +309,15 @@ class TestCollectionMasking:
         assert out == [{"id": 1, "password": REDACTED}, {"id": 2, "value": "ok"}]
 
     def test_overly_long_dict_key_replaces_only_that_entry(self):
-        # {"short": "ok", <very long key>: ..., "password": ...}
+        # {"short": "ok", <very long key>: ..., "password": ...}  ->  the long key is too
+        # long to scan, so the key itself is replaced along with its value
         long_key = "k" * 20000
         out = mask({"short": "ok", long_key: "v", "password": "x"})
-        assert out["short"] == "ok"
-        assert out[long_key] == TOO_LONG
-        assert out["password"] == REDACTED
+        assert out == {
+            "short": "ok",
+            redacted_key(0): TOO_LONG,
+            "password": REDACTED,
+        }
 
     @pytest.mark.parametrize(
         "build",
@@ -339,9 +353,41 @@ class TestCollectionMasking:
         # {(1, 2): "ok"}  ->  key stringified so the masked dict is always JSON-safe
         assert mask({(1, 2): "ok"}) == {"(1, 2)": "ok"}
 
-    def test_non_string_dict_key_still_redacts_on_its_name(self):
-        # a key whose text matches a pattern redacts its value, just like a string key
-        assert mask({("db", "password"): "x"}) == {"('db', 'password')": REDACTED}
+    def test_non_string_dict_key_matching_a_pattern_is_replaced_with_its_value(self):
+        # a stringified key is a repr, so a pattern match can mean the key text holds the
+        # secret itself: the key is replaced, not only its value
+        assert mask({("db", "password"): "x"}) == {redacted_key(0): REDACTED}
+
+    def test_credentials_inside_a_namedtuple_key_do_not_leak(self):
+        # a connection pool keyed by a namedtuple that embeds proxy credentials, like
+        # aiohttp's ConnectionKey(..., proxy_auth=BasicAuth(login, password))
+        Auth = collections.namedtuple("Auth", "login password")
+        PoolKey = collections.namedtuple("PoolKey", "host port proxy_auth")
+        key = PoolKey("api.example.com", 443, Auth("proxy-user", "hunter2-proxy-pw"))
+        out = mask({"_conns": {key: ["conn"]}, "_limit": 100})
+        assert out == {"_conns": {redacted_key(0): REDACTED}, "_limit": 100}
+        assert "hunter2-proxy-pw" not in json.dumps(out)
+
+    def test_each_replaced_key_keeps_its_own_entry(self):
+        out = mask({("a", "password"): 1, ("b", "password"): 2, "ok": 3})
+        assert out == {redacted_key(0): REDACTED, redacted_key(1): REDACTED, "ok": 3}
+
+    @pytest.mark.parametrize(
+        "secret_key, expected_value",
+        [
+            # no pattern matches, so only the key is replaced and the value is kept
+            (_key("AKIA", "IOSFODNN7EXAMPLE"), "customer-1"),
+            # `sk_` also matches a pattern, which must not keep the key as a name
+            (_key("sk_live_", "4eC39HqLyjWDarjtT1zdp7dc"), REDACTED),
+        ],
+        ids=["aws-key-id", "stripe-key"],
+    )
+    def test_string_key_that_is_a_secret_is_replaced(self, secret_key, expected_value):
+        assert mask({secret_key: "customer-1"}) == {redacted_key(0): expected_value}
+
+    def test_url_credentials_are_scrubbed_from_a_string_key(self):
+        out = mask({"postgres://app:hunter2@db.example.com/prod": "pool"})
+        assert out == {f"postgres://{REDACTED}@db.example.com/prod": "pool"}
 
     def test_non_string_dict_key_does_not_defeat_value_masking(self):
         # a tuple key used to break json.dumps and fall back to a repr of the *original*
@@ -929,12 +975,6 @@ class TestEndToEnd:
 # --- entropy-based secret detection (last resort) ------------------------------------
 
 
-# Synthetic, format-correct fakes (no real credentials). Vendor keys are assembled from
-# prefix + body so no complete secret literal lives in source (which trips secret scanners).
-def _key(prefix, body):
-    return prefix + body
-
-
 KNOWN_FORMAT_SECRETS = [
     _key("sk-proj-", "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz"),  # OpenAI
     _key(
@@ -1051,6 +1091,18 @@ class TestSecretDetection:
         assert _is_high_entropy_secret("d41d8cd98f00b204e9800998ecf8427e") is False
 
     # -- integration with the masking pipeline --------------------------------------
+
+    @pytest.mark.parametrize("statements", [3, 60], ids=["just-over-200", "near-2048"])
+    def test_known_format_inside_a_long_string_is_detected(self, statements):
+        # a key embedded in a longer string, e.g. a SQL query that inlines credentials
+        query = "SET max_execution_time = 30; " * statements + (
+            "DESCRIBE TABLE s3('https://bucket.example.com/data/', "
+            f"'{_key('AKIA', 'IOSFODNN7EXAMPLE')}', "
+            f"'{_key('wJalrXUtnFEMI/K7MDENG', '/bPxRfiCYEXAMPLEKEY')}', 'Parquet')"
+        )
+        assert 200 < len(query) <= _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH
+        assert _looks_like_secret(query) is True
+        assert extract(query=query) == {"query": REDACTED}
 
     def test_high_entropy_value_in_a_neutral_variable_is_redacted(self):
         result = extract(api_response="n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH")
