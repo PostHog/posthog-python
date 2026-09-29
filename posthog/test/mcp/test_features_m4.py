@@ -127,11 +127,13 @@ async def test_fastmcp_conversation_id_captured():
 async def test_fastmcp_captures_server_build_on_all_events():
     server = make_fastmcp()
     client = FakeClient()
+    options = MCPAnalyticsOptions(server_build="sha-abc123")
     instrument(
         server,
         client,
-        MCPAnalyticsOptions(server_build="sha-abc123"),
+        options,
     )
+    options.server_build = "changed-after-setup"
 
     list_handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
     await list_handler(mcp_types.ListToolsRequest(method="tools/list"))

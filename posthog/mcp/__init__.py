@@ -249,7 +249,7 @@ def instrument(
     :param options: Optional :class:`MCPAnalyticsOptions`.
     """
     opts = options or MCPAnalyticsOptions()
-    validate_server_build(opts.server_build)
+    server_build = validate_server_build(opts.server_build)
 
     # Install the logger first so the version advisory below (and any warning) is
     # actually visible rather than going to the default no-op sink.
@@ -301,7 +301,10 @@ def instrument(
         if data is None:
             sink = McpEventSink(client) if client is not None else None
             data = MCPAnalyticsData(
-                options=opts, sink=sink, session_id=new_session_id()
+                options=opts,
+                sink=sink,
+                session_id=new_session_id(),
+                server_build=server_build,
             )
 
         if is_fastmcp_v2(server) and uses_v2_handler_registry(key):

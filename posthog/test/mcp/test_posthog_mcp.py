@@ -49,7 +49,11 @@ async def test_capture_tool_call_success():
 async def test_capture_tool_call_error_fans_out_exception():
     client, captured = make_client(server_build="sha-abc123")
     client.capture_tool_call(
-        "broken", is_error=True, error=RuntimeError("kaboom"), distinct_id="u"
+        "broken",
+        is_error=True,
+        error=RuntimeError("kaboom"),
+        distinct_id="u",
+        properties={"$mcp_server_build": "custom-value"},
     )
     await _flush()
 

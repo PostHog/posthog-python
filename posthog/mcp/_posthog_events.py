@@ -66,6 +66,7 @@ def _build_capture_event(event: Event) -> PostHogCaptureEvent:
     _add_groups(event, properties)
     _add_common_properties(event, properties)
     _add_custom_properties(event, properties)
+    _add_server_build(event, properties)
 
     event_name = (
         event.get("event_name") or _BUILT_IN_EVENT_NAME_BY_TYPE[event["event_type"]]
@@ -126,8 +127,6 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.DURATION_MS] = event["duration"]
     if event.get("server_name"):
         properties[_P.SERVER_NAME] = event["server_name"]
-    if event.get("server_build"):
-        properties[_P.SERVER_BUILD] = event["server_build"]
     if event.get("server_version"):
         properties[_P.SERVER_VERSION] = event["server_version"]
     if event.get("client_name"):
@@ -254,6 +253,12 @@ def _add_custom_properties(event: Event, properties: Dict[str, Any]) -> None:
             properties[key] = value
 
 
+def _add_server_build(event: Event, properties: Dict[str, Any]) -> None:
+    """Apply the validated build after custom properties so it cannot be replaced."""
+    if event.get("server_build"):
+        properties[_P.SERVER_BUILD] = event["server_build"]
+
+
 def _build_exception_event(event: Event) -> PostHogCaptureEvent:
     properties: Dict[str, Any] = {}
     _add_session_id(event, properties)
@@ -277,8 +282,6 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.TOOL_CATEGORY] = event["tool_category"]
     if event.get("server_name"):
         properties[_P.SERVER_NAME] = event["server_name"]
-    if event.get("server_build"):
-        properties[_P.SERVER_BUILD] = event["server_build"]
     if event.get("server_version"):
         properties[_P.SERVER_VERSION] = event["server_version"]
     if event.get("client_name"):
@@ -289,6 +292,7 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
 
     _add_custom_properties(event, properties)
+    _add_server_build(event, properties)
 
     return {
         "event": PostHogMCPAnalyticsEvent.EXCEPTION,

@@ -20,6 +20,8 @@ import math
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from ._server_build import MAX_SERVER_BUILD_LENGTH
+
 MAX_DEPTH = 10
 MAX_BREADTH = 100
 MAX_STRING_LENGTH = 32_768  # 32KB
@@ -250,6 +252,13 @@ def _collect_string_paths(
         return
     if isinstance(obj, dict):
         for key, value in obj.items():
+            if (
+                not current_path
+                and key == "server_build"
+                and isinstance(value, str)
+                and len(value) <= MAX_SERVER_BUILD_LENGTH
+            ):
+                continue
             _collect_string_paths(value, current_path + [str(key)], results)
 
 
