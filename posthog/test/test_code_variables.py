@@ -51,6 +51,12 @@ def redacted_key(n):
     return f"$$_posthog_redacted_key_{n}_$$"
 
 
+@dataclass(frozen=True)
+class _Login:
+    user: str
+    code: str
+
+
 def make_config(
     *, patterns=DEFAULT_CODE_VARIABLES_MASK_PATTERNS, ignore=(), mask_urls=True
 ):
@@ -275,9 +281,10 @@ class TestCollectionMasking:
         # {"name": "test", "value": 123}  ->  unchanged
         assert mask({"name": "test", "value": 123}) == {"name": "test", "value": 123}
 
-    def test_dict_key_matching_a_pattern_redacts_its_value(self):
+    @pytest.mark.parametrize("name", ["password", "Proxy-Authorization", "db.password"])
+    def test_dict_key_matching_a_pattern_redacts_its_value(self, name):
         # {"password": ...}  ->  value redacted on the strength of the key name alone
-        assert mask({"password": "anything"}) == {"password": REDACTED}
+        assert mask({name: "anything"}) == {name: REDACTED}
 
     def test_dict_value_matching_a_pattern_is_redacted(self):
         # {"note": "...password..."}  ->  value redacted because the value matches
@@ -368,9 +375,38 @@ class TestCollectionMasking:
         assert out == {"_conns": {redacted_key(0): REDACTED}, "_limit": 100}
         assert "hunter2-proxy-pw" not in json.dumps(out)
 
-    def test_each_replaced_key_keeps_its_own_entry(self):
-        out = mask({("a", "password"): 1, ("b", "password"): 2, "ok": 3})
-        assert out == {redacted_key(0): REDACTED, redacted_key(1): REDACTED, "ok": 3}
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (
+                {("a", "password"): 1, ("b", "password"): 2, "ok": 3},
+                {redacted_key(0): REDACTED, redacted_key(1): REDACTED, "ok": 3},
+            ),
+            (
+                {
+                    "postgres://alice:p1@db.example.com/prod": "A",
+                    "postgres://bob:p2@db.example.com/prod": "B",
+                },
+                {
+                    f"postgres://{REDACTED}@db.example.com/prod": "A",
+                    redacted_key(0): "B",
+                },
+            ),
+            (
+                {("a", "password"): 1, redacted_key(0): 2},
+                {redacted_key(0): REDACTED, redacted_key(1): 2},
+            ),
+        ],
+        ids=[
+            "two-replaced-keys",
+            "urls-differing-in-credentials",
+            "literal-placeholder",
+        ],
+    )
+    def test_keys_that_end_up_with_the_same_text_keep_their_own_entries(
+        self, value, expected
+    ):
+        assert mask(value) == expected
 
     @pytest.mark.parametrize(
         "secret_key, expected_value",
@@ -379,11 +415,40 @@ class TestCollectionMasking:
             (_key("AKIA", "IOSFODNN7EXAMPLE"), "customer-1"),
             # `sk_` also matches a pattern, which must not keep the key as a name
             (_key("sk_live_", "4eC39HqLyjWDarjtT1zdp7dc"), REDACTED),
+            # a query cache keyed by SQL: the text matches a pattern but is not a name
+            ("SELECT * FROM users WHERE auth_token = 'abc123'", REDACTED),
         ],
-        ids=["aws-key-id", "stripe-key"],
+        ids=["aws-key-id", "stripe-key", "sql-with-a-token"],
     )
-    def test_string_key_that_is_a_secret_is_replaced(self, secret_key, expected_value):
+    def test_string_key_that_holds_a_secret_is_replaced(
+        self, secret_key, expected_value
+    ):
         assert mask({secret_key: "customer-1"}) == {redacted_key(0): expected_value}
+
+    @pytest.mark.parametrize(
+        "build_key",
+        [
+            lambda secret: ("admin", secret),
+            lambda secret: _Login("admin", secret),
+        ],
+        ids=["tuple", "frozen-dataclass"],
+    )
+    def test_non_string_key_holding_an_unnamed_secret_is_replaced(self, build_key):
+        # the key's repr has quotes and brackets, which turn off the entropy check, so
+        # the parts of the key are masked one by one
+        secret = "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH"
+        out = mask({build_key(secret): "client"})
+        assert out == {redacted_key(0): "client"}
+
+    def test_key_whose_text_cannot_be_read_does_not_stop_masking(self):
+        # a raising __str__ must not abort masking, because the fallback repr of the
+        # whole dict skips the entropy check for every other entry
+        class UnprintableKey:
+            def __str__(self):
+                raise RuntimeError("no text")
+
+        out = mask({"note": "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH", UnprintableKey(): 1})
+        assert out == {"note": REDACTED, redacted_key(0): 1}
 
     def test_url_credentials_are_scrubbed_from_a_string_key(self):
         out = mask({"postgres://app:hunter2@db.example.com/prod": "pool"})
@@ -1049,6 +1114,7 @@ NON_SECRETS = [
     "ApplicationConfigurationManager",  # PascalCase class name
     "PENDING_APPROVAL",  # SCREAMING_CASE enum
     "created-at-descending",  # dashed slug
+    "disk-usage-monitoring-daemon-config",  # slug whose `disk-` ends in the `sk-` prefix
     "application/json",  # mime type
     "alice.smith@example.com",  # email
     "the quick brown fox jumps over",  # prose (has spaces)

@@ -1144,9 +1144,12 @@ _PATH_WORD_RE = re.compile(r"\A[a-z][a-z.]*\Z")
 # Well-known credential formats, matched regardless of entropy. High-confidence,
 # distinctive-prefix patterns adapted from the gitleaks / detect-secrets rule sets.
 _KNOWN_SECRET_PATTERNS = [
-    # AI / LLM providers
-    r"sk-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
-    r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
+    # AI / LLM providers. Words such as `disk-` and `task-` end in `sk-`, so the prefix
+    # must not follow a letter or digit. The lookbehind comes after the literal `s`,
+    # because a pattern that starts with a lookbehind stops `re` from skipping ahead to
+    # candidate first characters, which slows the whole alternation.
+    r"s(?<![A-Za-z0-9]s)k-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
+    r"s(?<![A-Za-z0-9]s)k-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
     r"hf_[A-Za-z0-9]{34}",  # Hugging Face
     # Cloud providers
     r"AKIA[0-9A-Z]{16}",  # AWS access key id
@@ -1376,6 +1379,12 @@ def _masked_type_members(value, config):
 # keep the keys unique.
 _REDACTED_KEY_TEMPLATE = "$$_posthog_redacted_key_{}_$$"
 
+# A string key that matches a mask pattern is kept only when it has this shape. Text with
+# other characters, such as `password=hunter2` or a SQL query, can hold the value itself.
+_FIELD_NAME_RE = re.compile(r"[\w.\-]+")
+
+_REDACTION_MARKERS = (CODE_VARIABLES_REDACTED_VALUE, CODE_VARIABLES_TOO_LONG_VALUE)
+
 
 def _redacted_key(result):
     """Return a placeholder key that no key already in ``result`` uses."""
@@ -1383,6 +1392,24 @@ def _redacted_key(result):
     while (candidate := _REDACTED_KEY_TEMPLATE.format(n)) in result:
         n += 1
     return candidate
+
+
+def _is_field_name(key, key_is_json_safe):
+    """True when a key that matches a mask pattern names a field, so it is safe to keep.
+    A number or None can't hold a credential, and a string must look like an identifier.
+    Any other key reaches the output as a repr, which can embed field values."""
+    if not key_is_json_safe:
+        return False
+    if isinstance(key, str):
+        return _FIELD_NAME_RE.fullmatch(key) is not None
+    return True
+
+
+def _masking_redacts_part_of(key, config, depth):
+    """True when masking ``key`` as a value redacts any part of it. The quotes and
+    brackets of a repr turn off the entropy check, so the parts are checked one by one."""
+    rendered = str(_mask_value(key, config, None, depth + 1))
+    return any(marker in rendered for marker in _REDACTION_MARKERS)
 
 
 def _mask_mapping(items, config, seen, depth):
@@ -1394,31 +1421,44 @@ def _mask_mapping(items, config, seen, depth):
     for key, value in items:
         if type(key) is str:
             out_key = key_str = key
-            key_is_name = True
+            key_is_json_safe = True
         else:
-            key_str = key if isinstance(key, str) else str(key)
+            try:
+                key_str = key if isinstance(key, str) else str(key)
+            except Exception:
+                # There is no key text to scan, so keep only the masked value.
+                result[_redacted_key(result)] = _mask_value(
+                    value, config, seen, depth + 1
+                )
+                continue
             # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
             # its string form so one exotic key can't make json.dumps fail. That string form
             # is a repr, which can embed field values, not only a name.
-            key_is_name = (
+            key_is_json_safe = (
                 key is None
                 or isinstance(key, (str, int))  # bool is an int subclass
                 or (isinstance(key, float) and math.isfinite(key))
             )
-            out_key = key if key_is_name else key_str
+            out_key = key if key_is_json_safe else key_str
         if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
             # Too long to scan, so the key text can't be vouched for either.
             result[_redacted_key(result)] = CODE_VARIABLES_TOO_LONG_VALUE
             continue
         key_matches_mask = _matcher_matches(key_str, config.mask)
-        if key_matches_mask and not key_is_name:
-            # A name such as `password` is safe to keep, but a repr that matches can hold
-            # the value itself, e.g. `BasicAuth(login='u', password='...')`.
+        if key_matches_mask and not _is_field_name(key, key_is_json_safe):
+            # A name such as `password` is safe to keep, but other text that matches can
+            # hold the value itself, e.g. `BasicAuth(login='u', password='...')`.
             out_key = _redacted_key(result)
         elif config.detect_secrets and _looks_like_secret(key_str):
             out_key = _redacted_key(result)
+        elif not key_is_json_safe and _masking_redacts_part_of(key, config, depth):
+            out_key = _redacted_key(result)
         elif config.mask_url_credentials and isinstance(out_key, str):
             out_key = _redact_url_credentials(out_key)
+        if out_key in result:
+            # Two keys can end up with the same text, for example URLs that differ only in
+            # their credentials. A placeholder keeps the later entry from overwriting.
+            out_key = _redacted_key(result)
         if key_matches_mask:
             result[out_key] = CODE_VARIABLES_REDACTED_VALUE
         else:
