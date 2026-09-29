@@ -140,4 +140,6 @@ async def test_getattr_does_not_proxy_private_names():
             yield
 
     wrapper = AsyncStreamWrapper(gen(), source)
-    assert not hasattr(wrapper, "_nonexistent_private")
+    source._private = object()
+    with pytest.raises(AttributeError):
+        _ = wrapper._private

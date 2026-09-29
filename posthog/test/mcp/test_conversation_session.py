@@ -246,9 +246,11 @@ async def test_v1_feature_off_keeps_transport_sessions():
         return msg
 
     client = FakeClient()
-    instrument(server, client)  # enable_conversation_id defaults off
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
-    await server._tool_manager.call_tool("echo", {"msg": "a", "context": "x"})
+    await server._tool_manager.call_tool(
+        "echo", {"msg": "a", "context": "x"}, convert_result=True
+    )
     await _flush()
 
     props = _events(client, "$mcp_tool_call")[0]["properties"]

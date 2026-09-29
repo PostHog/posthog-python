@@ -56,9 +56,11 @@ _AZURE_KWARGS = {
 def test_client_resources_are_discovered_and_wrapped(
     client_type, client_kwargs, wrappers, resource_types
 ):
+    assert wrappers.keys() == resource_types.keys()
     client = client_type(posthog_client=MagicMock(), **client_kwargs)
 
-    for resource_name, wrapper_type in wrappers.items():
+    for resource_name in resource_types:
+        wrapper_type = wrappers[resource_name]
         wrapped = getattr(client, resource_name)
         original = getattr(client, f"_original_{resource_name}")
 

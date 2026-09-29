@@ -378,12 +378,11 @@ class TestExportFailures:
         assert queued(pipeline) == []
 
     def test_does_not_surface_a_transport_failure_through_span_end(self):
-        def explode(client, payload):
-            raise RuntimeError("transport broke")
-
-        pipeline, _, _ = make_traces(sender=explode, max_export_batch_size=1)
+        sender = mock.Mock(side_effect=RuntimeError("transport broke"))
+        pipeline, _, _ = make_traces(sender=sender, max_export_batch_size=1)
         pipeline.start_span("a").end()
         FakeTimer.instances[-1].fire()
+        sender.assert_called_once()
 
     def test_never_returns_a_span_it_failed_to_encode(self):
         pipeline, sender, _ = make_traces()

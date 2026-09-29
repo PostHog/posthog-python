@@ -61,9 +61,8 @@ async def test_async_exception_is_captured(asgi_app):
         assert response.status_code == 500
 
         # CRITICAL: Verify PostHog captured the exception
-        assert len(captured) > 0, "Exception was NOT captured to PostHog!"
+        assert len(captured) == 1
 
-        # Verify it's the right exception
         exception_data = captured[0]
         assert exception_data["type"] == "ValueError"
         assert "Test exception from Django 5 async view" in exception_data["message"]
@@ -103,9 +102,8 @@ async def test_sync_exception_is_captured(asgi_app):
         assert response.status_code == 500
 
         # CRITICAL: Verify PostHog captured the exception
-        assert len(captured) > 0, "Exception was NOT captured to PostHog!"
+        assert len(captured) == 1
 
-        # Verify it's the right exception
         exception_data = captured[0]
         assert exception_data["type"] == "ValueError"
         assert "Test exception from Django 5 sync view" in exception_data["message"]

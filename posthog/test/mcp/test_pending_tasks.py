@@ -9,6 +9,7 @@ async def test_async_drain_is_scoped_to_owner():
     first_owner = object()
     second_owner = object()
     first_done = []
+    second_done = []
     second_started = asyncio.Event()
     release_second = asyncio.Event()
 
@@ -19,18 +20,20 @@ async def test_async_drain_is_scoped_to_owner():
     async def second_capture():
         second_started.set()
         await release_second.wait()
+        second_done.append(True)
 
     instrumentation.fire_and_forget(first_capture(), first_owner)
     instrumentation.fire_and_forget(second_capture(), second_owner)
     await second_started.wait()
 
-    await asyncio.wait_for(instrumentation.drain_pending(first_owner), timeout=1)
-
-    assert first_done == [True]
-    assert not release_second.is_set()
-
-    release_second.set()
-    await instrumentation.drain_pending(second_owner)
+    try:
+        await asyncio.wait_for(instrumentation.drain_pending(first_owner), timeout=1)
+        assert first_done == [True]
+        assert second_done == []
+    finally:
+        release_second.set()
+        await asyncio.wait_for(instrumentation.drain_pending(second_owner), timeout=1)
+    assert second_done == [True]
 
 
 async def test_async_drain_ignores_same_owner_tasks_on_another_loop():

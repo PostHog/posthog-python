@@ -7,7 +7,6 @@ from posthog.tracing._config import (
     DEFAULT_FLUSH_INTERVAL_SECONDS,
     DEFAULT_MAX_EXPORT_BATCH_SIZE,
     DEFAULT_MAX_LIVE_SPANS,
-    DEFAULT_MAX_QUEUE_SIZE,
     DEFAULT_MAX_SPAN_AGE_SECONDS,
     ResolvedTracesConfig,
     resolve_traces_config,
@@ -17,11 +16,11 @@ from posthog.tracing._config import (
 class TestDefaults:
     def test_applies_the_documented_defaults(self):
         assert resolve_traces_config({}) == ResolvedTracesConfig(
-            flush_interval=DEFAULT_FLUSH_INTERVAL_SECONDS,
-            max_export_batch_size=DEFAULT_MAX_EXPORT_BATCH_SIZE,
-            max_queue_size=DEFAULT_MAX_QUEUE_SIZE,
-            max_live_spans=DEFAULT_MAX_LIVE_SPANS,
-            max_span_age=DEFAULT_MAX_SPAN_AGE_SECONDS,
+            flush_interval=5.0,
+            max_export_batch_size=512,
+            max_queue_size=2048,
+            max_live_spans=10000,
+            max_span_age=3600.0,
         )
 
     def test_leaves_service_name_unset_so_the_encoder_supplies_unknown_service(self):

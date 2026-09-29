@@ -571,11 +571,29 @@ def test_personless_mode(mock_client):
     assert trace_args["distinct_id"] == id
 
 
-def test_personless_mode_exception(mock_client):
+@pytest.fixture
+def unauthorized_http_client():
+    import httpx
+
+    def unauthorized(request):
+        return httpx.Response(401, json={"error": {"message": "Invalid API key"}})
+
+    with httpx.Client(transport=httpx.MockTransport(unauthorized)) as client:
+        yield client
+
+
+def test_personless_mode_exception(mock_client, unauthorized_http_client):
+    from openai import AuthenticationError
+
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
-    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
+    chain = prompt | ChatOpenAI(
+        api_key="test",
+        model="gpt-4o-mini",
+        http_client=unauthorized_http_client,
+        max_retries=0,
+    )
     callbacks = CallbackHandler(mock_client)
-    with pytest.raises(Exception):
+    with pytest.raises(AuthenticationError):
         chain.invoke({}, config={"callbacks": [callbacks]})
     assert mock_client.capture.call_count == 3
     span_args = mock_client.capture.call_args_list[0][1]
@@ -593,7 +611,7 @@ def test_personless_mode_exception(mock_client):
     assert trace_args["properties"]["$process_person_profile"] is False
 
     id = uuid.uuid4()
-    with pytest.raises(Exception):
+    with pytest.raises(AuthenticationError):
         chain.invoke(
             {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
         )
@@ -856,13 +874,24 @@ def test_exception_in_chain(mock_client):
 
 
 def test_openai_error(mock_client):
-    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
-    chain = prompt | ChatOpenAI(api_key="test", model="gpt-4o-mini")
-    callbacks = CallbackHandler(mock_client)
+    import httpx
+    from openai import AuthenticationError
 
-    # 401
-    with pytest.raises(Exception):
-        chain.invoke({}, config={"callbacks": [callbacks]})
+    requests = []
+
+    def unauthorized(request):
+        requests.append(request)
+        return httpx.Response(401, json={"error": {"message": "Invalid API key"}})
+
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    callbacks = CallbackHandler(mock_client)
+    with httpx.Client(transport=httpx.MockTransport(unauthorized)) as http_client:
+        chain = prompt | ChatOpenAI(
+            api_key="test", model="gpt-4o-mini", http_client=http_client, max_retries=0
+        )
+        with pytest.raises(AuthenticationError):
+            chain.invoke({}, config={"callbacks": [callbacks]})
+    assert len(requests) == 1
 
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
@@ -1091,15 +1120,19 @@ async def test_async_openai_streaming(mock_client):
     assert isinstance(trace_props["$ai_output_state"], AIMessage)
 
 
-def test_base_url_retrieval(mock_client):
+def test_base_url_retrieval(mock_client, unauthorized_http_client):
+    from openai import AuthenticationError
+
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | ChatOpenAI(
         api_key="test",
         model="posthog-mini",
         base_url="https://test.posthog.com",
+        http_client=unauthorized_http_client,
+        max_retries=0,
     )
     callbacks = CallbackHandler(mock_client)
-    with pytest.raises(Exception):
+    with pytest.raises(AuthenticationError):
         chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert mock_client.capture.call_count == 3

@@ -132,6 +132,7 @@ def test_descriptor_deep_copies_host_fragments():
     options = CollectFeedbackOptions(extra_properties={"area": fragment})
     descriptor = get_feedback_tool_descriptor(options)
     fragment["enum"].append("mutated")
+    assert descriptor["inputSchema"]["properties"]["area"]["enum"] == ["a", "b"]
     descriptor["inputSchema"]["properties"]["feedback_type"]["enum"].append("bogus")
     assert get_feedback_tool_descriptor(options)["inputSchema"]["properties"]["area"][
         "enum"

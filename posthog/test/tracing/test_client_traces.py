@@ -349,11 +349,10 @@ class TestDistributedTracing:
     def test_records_a_raised_error_and_rethrows_it_unchanged(self):
         client = make_client(traces={})
         error = RuntimeError("boom")
-        try:
+        with pytest.raises(RuntimeError) as raised:
             with client.start_span("x"):
                 raise error
-        except RuntimeError as raised:
-            assert raised is error
+        assert raised.value is error
         payload, _, _ = flush_and_capture(client)
         (record,) = spans_from(payload)
         assert record["status"] == {"code": 2, "message": "boom"}

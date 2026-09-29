@@ -150,10 +150,12 @@ class TestOutcomes:
         assert outcome == SendOutcome("retry-later", 120.0)
 
     def test_reads_retry_after_http_date(self):
-        when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120))
-        outcome, _ = send(session=mock_session(503, {"Retry-After": when}))
-        assert outcome.kind == "retry-later"
-        assert outcome.retry_after is not None and 100 < outcome.retry_after <= 120
+        from freezegun import freeze_time
+
+        with freeze_time("2026-09-10T12:00:00Z"):
+            when = format_datetime(datetime.now(timezone.utc) + timedelta(seconds=120))
+            outcome, _ = send(session=mock_session(503, {"Retry-After": when}))
+        assert outcome == SendOutcome("retry-later", 120.0)
 
 
 NOW = datetime(2026, 9, 10, 12, 0, 0, tzinfo=timezone.utc)

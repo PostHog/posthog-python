@@ -77,6 +77,17 @@ _APP_HEADER = """\
 import os
 import posthog
 from posthog import Posthog
+from requests import Response
+import posthog.request
+
+
+def offline_post(url, **kwargs):
+    response = Response()
+    response.status_code = 200
+    return response
+
+
+posthog.request._session.post = offline_post
 
 
 def make_client(**options):
@@ -104,7 +115,10 @@ def run_app(tmpdir, body, *, env=None):
     run_env = {**os.environ, **(env or {})}
     with pytest.raises(subprocess.CalledProcessError) as excinfo:
         subprocess.check_output(
-            [sys.executable, str(app)], stderr=subprocess.STDOUT, env=run_env
+            [sys.executable, str(app)],
+            stderr=subprocess.STDOUT,
+            env=run_env,
+            timeout=15,
         )
     return excinfo.value.output.decode("utf-8")
 

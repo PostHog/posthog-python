@@ -94,5 +94,9 @@ class TestPostHogTraceExporter(unittest.TestCase):
         exporter = PostHogTraceExporter(api_key="phc_test")
         inner = mock_otlp_cls.return_value
 
-        exporter.force_flush(timeout_millis=5000)
-        inner.force_flush.assert_called_once_with(5000)
+        for result in (True, False):
+            with self.subTest(result=result):
+                inner.force_flush.reset_mock()
+                inner.force_flush.return_value = result
+                self.assertIs(exporter.force_flush(timeout_millis=5000), result)
+                inner.force_flush.assert_called_once_with(5000)

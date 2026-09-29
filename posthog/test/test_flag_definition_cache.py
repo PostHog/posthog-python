@@ -622,9 +622,7 @@ class TestShutdownLifecycle(TestFlagDefinitionCacheProvider):
         client.join()
         client.join()
 
-        # Shutdown should be called each time (current behavior - no guard)
-        # This test documents the current behavior
-        self.assertGreaterEqual(self.cache_provider.shutdown_call_count, 1)
+        self.assertEqual(self.cache_provider.shutdown_call_count, 1)
 
 
 class TestBackwardCompatibility(TestFlagDefinitionCacheProvider):

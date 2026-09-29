@@ -839,10 +839,7 @@ def test_normalize_detects_cycles():
 def test_normalize_limits_depth():
     deep = {"a": {"b": {"c": {"d": {"e": {"f": "deep"}}}}}}
     out = normalize(deep, depth=2)
-    # at depth 2 the nested object should be collapsed to a marker
-    assert out["a"]["b"] in ("[Object]", {"c": "[Object]"}) or isinstance(
-        out["a"]["b"], (dict, str)
-    )
+    assert out == {"a": {"b": "[Object]"}}
 
 
 def test_normalize_handles_nan_and_infinity():
