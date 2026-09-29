@@ -57,6 +57,24 @@ class _Login:
     code: str
 
 
+class _UnprintableKey:
+    def __str__(self):
+        raise RuntimeError("no text")
+
+
+class _BrokenDict(dict):
+    def __len__(self):
+        raise RuntimeError("no length")
+
+
+class _KeyWithBrokenField:
+    def __init__(self):
+        self.index = _BrokenDict()
+
+    def __repr__(self):
+        return "KeyWithBrokenField()"
+
+
 def make_config(
     *, patterns=DEFAULT_CODE_VARIABLES_MASK_PATTERNS, ignore=(), mask_urls=True
 ):
@@ -440,15 +458,21 @@ class TestCollectionMasking:
         out = mask({build_key(secret): "client"})
         assert out == {redacted_key(0): "client"}
 
-    def test_key_whose_text_cannot_be_read_does_not_stop_masking(self):
-        # a raising __str__ must not abort masking, because the fallback repr of the
-        # whole dict skips the entropy check for every other entry
-        class UnprintableKey:
-            def __str__(self):
-                raise RuntimeError("no text")
-
-        out = mask({"note": "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH", UnprintableKey(): 1})
-        assert out == {"note": REDACTED, redacted_key(0): 1}
+    @pytest.mark.parametrize(
+        "key, expected_value",
+        [
+            # no key text, so nothing shows whether the key names a secret
+            (_UnprintableKey(), REDACTED),
+            # the key text is known, but masking the parts of the key raises
+            (_KeyWithBrokenField(), "hunter2"),
+        ],
+        ids=["str-raises", "key-probe-raises"],
+    )
+    def test_key_that_cannot_be_read_does_not_stop_masking(self, key, expected_value):
+        # a raise must not abort masking, because the fallback repr of the whole dict
+        # skips the entropy check for every other entry
+        out = mask({"note": "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH", key: "hunter2"})
+        assert out == {"note": REDACTED, redacted_key(0): expected_value}
 
     def test_url_credentials_are_scrubbed_from_a_string_key(self):
         out = mask({"postgres://app:hunter2@db.example.com/prod": "pool"})
@@ -489,6 +513,26 @@ class TestCollectionMasking:
 
         assert TOO_LONG in json.dumps(mask(tree(8, 3)))  # ~580 nodes, over the budget
         assert TOO_LONG not in json.dumps(mask(tree(4, 2)))  # ~20 nodes, well under
+
+    def test_key_probes_share_the_node_budget(self):
+        # object keys that point back to their dict must not make each key probe walk
+        # the whole graph again, which grows exponentially with the number of keys
+        class Tree:
+            def __init__(self):
+                self.children = {}
+
+        class Node:
+            def __init__(self, parent):
+                self.parent = parent
+
+        root = Tree()
+        for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN):
+            root.children[Node(root)] = i
+
+        out = mask(root)
+        assert out["children"] == {
+            redacted_key(i): i for i in range(_MAX_COLLECTION_ITEMS_TO_SCAN)
+        }
 
 
 # --- 6. object traversal -------------------------------------------------------------
@@ -1114,7 +1158,6 @@ NON_SECRETS = [
     "ApplicationConfigurationManager",  # PascalCase class name
     "PENDING_APPROVAL",  # SCREAMING_CASE enum
     "created-at-descending",  # dashed slug
-    "disk-usage-monitoring-daemon-config",  # slug whose `disk-` ends in the `sk-` prefix
     "application/json",  # mime type
     "alice.smith@example.com",  # email
     "the quick brown fox jumps over",  # prose (has spaces)
@@ -1169,6 +1212,20 @@ class TestSecretDetection:
         assert 200 < len(query) <= _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH
         assert _looks_like_secret(query) is True
         assert extract(query=query) == {"query": REDACTED}
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "https://example.com/login?next=https%3A%2F%2Fapi.example.com%2Fv1%3Fkey%3D",
+            'config dump: {"keys": "old\\n',
+        ],
+        ids=["percent-encoded-url", "escaped-newline"],
+    )
+    def test_known_format_after_a_letter_or_digit_is_redacted(self, text):
+        # `%3D` and `\n` end in a letter or digit, and a URL or a space turns off the
+        # entropy check, so a word boundary before `sk-` would let the key through
+        key = _key("sk-proj-", "T3BlbkFJabcd1234efgh5678ijkl9012mnop3456qrst7890wxyz")
+        assert mask(text + key) == REDACTED
 
     def test_high_entropy_value_in_a_neutral_variable_is_redacted(self):
         result = extract(api_response="n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH")

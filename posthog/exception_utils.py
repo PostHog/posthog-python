@@ -1144,12 +1144,11 @@ _PATH_WORD_RE = re.compile(r"\A[a-z][a-z.]*\Z")
 # Well-known credential formats, matched regardless of entropy. High-confidence,
 # distinctive-prefix patterns adapted from the gitleaks / detect-secrets rule sets.
 _KNOWN_SECRET_PATTERNS = [
-    # AI / LLM providers. Words such as `disk-` and `task-` end in `sk-`, so the prefix
-    # must not follow a letter or digit. The lookbehind comes after the literal `s`,
-    # because a pattern that starts with a lookbehind stops `re` from skipping ahead to
-    # candidate first characters, which slows the whole alternation.
-    r"s(?<![A-Za-z0-9]s)k-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
-    r"s(?<![A-Za-z0-9]s)k-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
+    # AI / LLM providers. The `sk-` prefix is not anchored to a word boundary, because a
+    # key often follows a letter or digit, e.g. `%3Dsk-...` in a percent-encoded URL or
+    # `\nsk-...` in escaped text. This over-redacts words such as `disk-usage-...`.
+    r"sk-ant-[A-Za-z0-9_-]{16,}",  # Anthropic
+    r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}",  # OpenAI
     r"hf_[A-Za-z0-9]{34}",  # Hugging Face
     # Cloud providers
     r"AKIA[0-9A-Z]{16}",  # AWS access key id
@@ -1383,7 +1382,14 @@ _REDACTED_KEY_TEMPLATE = "$$_posthog_redacted_key_{}_$$"
 # other characters, such as `password=hunter2` or a SQL query, can hold the value itself.
 _FIELD_NAME_RE = re.compile(r"[\w.\-]+")
 
-_REDACTION_MARKERS = (CODE_VARIABLES_REDACTED_VALUE, CODE_VARIABLES_TOO_LONG_VALUE)
+_CIRCULAR_REF_VALUE = "<circular ref>"
+
+# Markers that show a key probe could not vouch for every part of the key.
+_KEY_PROBE_MARKERS = (
+    CODE_VARIABLES_REDACTED_VALUE,
+    CODE_VARIABLES_TOO_LONG_VALUE,
+    _CIRCULAR_REF_VALUE,
+)
 
 
 def _redacted_key(result):
@@ -1405,11 +1411,19 @@ def _is_field_name(key, key_is_json_safe):
     return True
 
 
-def _masking_redacts_part_of(key, config, depth):
-    """True when masking ``key`` as a value redacts any part of it. The quotes and
-    brackets of a repr turn off the entropy check, so the parts are checked one by one."""
-    rendered = str(_mask_value(key, config, None, depth + 1))
-    return any(marker in rendered for marker in _REDACTION_MARKERS)
+def _key_parts_fail_masking(key, config, seen, depth):
+    """True when masking ``key`` as a value redacts any part of it, reaches an object
+    that the traversal already visited, or raises. The quotes and brackets of a repr turn
+    off the entropy check, so the parts are checked one by one.
+
+    The probe shares ``seen`` with the rest of the traversal, so every key probe counts
+    against the same node budget and cycle guard. A part that was already visited is not
+    checked again, so its text in the key's repr can't be vouched for."""
+    try:
+        rendered = str(_mask_value(key, config, seen, depth + 1))
+    except Exception:
+        return True
+    return any(marker in rendered for marker in _KEY_PROBE_MARKERS)
 
 
 def _mask_mapping(items, config, seen, depth):
@@ -1426,10 +1440,9 @@ def _mask_mapping(items, config, seen, depth):
             try:
                 key_str = key if isinstance(key, str) else str(key)
             except Exception:
-                # There is no key text to scan, so keep only the masked value.
-                result[_redacted_key(result)] = _mask_value(
-                    value, config, seen, depth + 1
-                )
+                # Without the key text, nothing shows whether the key names a secret, so
+                # the value is redacted too.
+                result[_redacted_key(result)] = CODE_VARIABLES_REDACTED_VALUE
                 continue
             # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
             # its string form so one exotic key can't make json.dumps fail. That string form
@@ -1451,7 +1464,7 @@ def _mask_mapping(items, config, seen, depth):
             out_key = _redacted_key(result)
         elif config.detect_secrets and _looks_like_secret(key_str):
             out_key = _redacted_key(result)
-        elif not key_is_json_safe and _masking_redacts_part_of(key, config, depth):
+        elif not key_is_json_safe and _key_parts_fail_masking(key, config, seen, depth):
             out_key = _redacted_key(result)
         elif config.mask_url_credentials and isinstance(out_key, str):
             out_key = _redact_url_credentials(out_key)
@@ -1508,7 +1521,7 @@ def _mask_value(value, config, seen=None, depth=0):
         seen = set()
     obj_id = id(value)
     if obj_id in seen:
-        return "<circular ref>"
+        return _CIRCULAR_REF_VALUE
     seen.add(obj_id)
 
     if len(seen) > _MAX_TOTAL_NODES_TO_MASK:
