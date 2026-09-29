@@ -371,6 +371,7 @@ alias posthog.mcp.get_more_tools_result -> posthog.mcp.tools.get_more_tools_resu
 alias posthog.mcp.get_request_headers -> posthog.mcp.request_headers.get_request_headers
 alias posthog.mcp.send_feedback_result -> posthog.mcp.feedback.send_feedback_result
 alias posthog.mcp.set_logger -> posthog.mcp.logger.set_logger
+alias posthog.metrics_autocapture.VERSION -> posthog.version.VERSION
 alias posthog.metrics_capture.VERSION -> posthog.version.VERSION
 alias posthog.metrics_capture.remove_trailing_slash -> posthog.utils.remove_trailing_slash
 alias posthog.request.VERSION -> posthog.version.VERSION
@@ -857,6 +858,7 @@ attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
 attribute posthog.mcp.version.__version__ = '0.3.0'
 attribute posthog.metrics = None
+attribute posthog.metrics_autocapture.log = logging.getLogger('posthog')
 attribute posthog.metrics_capture.DEFAULT_HISTOGRAM_BOUNDS = [0, 5, 10, 25, 50, 75, 100, 250, 500, 750, 1000, 2500, 5000, 7500, 10000]
 attribute posthog.metrics_capture.MetricAttributeValue = Union[str, int, float, bool]
 attribute posthog.metrics_capture.log = logging.getLogger('posthog')
@@ -1054,6 +1056,8 @@ class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = No
 class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
+class posthog.metrics_autocapture.DbSpanMetricsProcessor(meter)
+class posthog.metrics_autocapture.MetricsAutocapture(meter_provider, tracer_provider, instrumentors)
 class posthog.metrics_capture.PostHogMetrics(client, config: Optional[dict] = None)
 class posthog.poller.Poller(interval, execute, *args, **kwargs)
 class posthog.request.APIError(status: Union[int, str], message: str, retry_after: Optional[float] = None)
@@ -1257,6 +1261,7 @@ function posthog.mcp.session_token.decode_session_id(value: Any) -> Optional[Ses
 function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayload) -> str
 function posthog.mcp.session_token.read_mcp_session_header(headers: Any) -> Optional[str]
 function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
+function posthog.metrics_autocapture.start_metrics_autocapture(*, host: str, api_key: str, areas: Dict[str, bool], service_name: Optional[str], resource_attributes: Dict[str, Any], is_enabled: Callable[[], bool], export_interval_seconds: Optional[float] = None, _metric_reader: Any = None) -> Optional[MetricsAutocapture]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_server_host(host: Optional[str]) -> str
@@ -1485,6 +1490,12 @@ method posthog.mcp.posthog_mcp.PostHogMCP.flush(timeout_seconds: Optional[float]
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_call(name: str, args: Optional[JsonRecord] = None, *, request_meta: Optional[JsonRecord] = None, original_tool: Any = None) -> PreparedToolCall
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_list(tools: List[Any], context: Union[bool, MCPAnalyticsContextOptions] = True, report_missing: bool = False, collect_feedback: bool = False) -> List[Any]
 method posthog.mcp.posthog_mcp.PostHogMCP.shutdown() -> None
+method posthog.metrics_autocapture.DbSpanMetricsProcessor.force_flush(timeout_millis=30000)
+method posthog.metrics_autocapture.DbSpanMetricsProcessor.on_end(span)
+method posthog.metrics_autocapture.DbSpanMetricsProcessor.on_start(span, parent_context=None)
+method posthog.metrics_autocapture.DbSpanMetricsProcessor.shutdown()
+method posthog.metrics_autocapture.MetricsAutocapture.force_flush(timeout_millis: int = 10000) -> None
+method posthog.metrics_autocapture.MetricsAutocapture.shutdown() -> None
 method posthog.metrics_capture.PostHogMetrics.count(name: str, value: float = 1, unit: Optional[str] = None, attributes: Optional[dict] = None) -> None
 method posthog.metrics_capture.PostHogMetrics.flush() -> None
 method posthog.metrics_capture.PostHogMetrics.gauge(name: str, value: float, unit: Optional[str] = None, attributes: Optional[dict] = None) -> None
@@ -1592,6 +1603,7 @@ module posthog.mcp.session_token
 module posthog.mcp.tools
 module posthog.mcp.types
 module posthog.mcp.version
+module posthog.metrics_autocapture
 module posthog.metrics_capture
 module posthog.poller
 module posthog.release_id
