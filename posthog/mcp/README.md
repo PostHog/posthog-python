@@ -50,6 +50,22 @@ from posthog.mcp import MCPAnalyticsOptions, instrument
 instrument(server, posthog, MCPAnalyticsOptions(capture_model=False, enable_conversation_id=False))
 ```
 
+Set `server_build` to connect each MCP event to the exact deployed code. Use an
+immutable value such as a Git commit SHA or a container image digest.
+
+```python
+import os
+
+instrument(
+    server,
+    posthog,
+    MCPAnalyticsOptions(server_build=os.environ.get("GIT_SHA")),
+)
+```
+
+The value must contain 1 to 256 characters. The SDK records it as
+`$mcp_server_build` on all MCP events.
+
 Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
 high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
 strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.

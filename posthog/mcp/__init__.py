@@ -38,6 +38,7 @@ from typing import Any, Optional
 from posthog.client import Client
 
 from ._capture import capture_event
+from ._server_build import validate_server_build
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
@@ -248,6 +249,7 @@ def instrument(
     :param options: Optional :class:`MCPAnalyticsOptions`.
     """
     opts = options or MCPAnalyticsOptions()
+    validate_server_build(opts.server_build)
 
     # Install the logger first so the version advisory below (and any warning) is
     # actually visible rather than going to the default no-op sink.

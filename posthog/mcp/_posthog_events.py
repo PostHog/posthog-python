@@ -126,6 +126,8 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.DURATION_MS] = event["duration"]
     if event.get("server_name"):
         properties[_P.SERVER_NAME] = event["server_name"]
+    if event.get("server_build"):
+        properties[_P.SERVER_BUILD] = event["server_build"]
     if event.get("server_version"):
         properties[_P.SERVER_VERSION] = event["server_version"]
     if event.get("client_name"):
@@ -275,6 +277,8 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.TOOL_CATEGORY] = event["tool_category"]
     if event.get("server_name"):
         properties[_P.SERVER_NAME] = event["server_name"]
+    if event.get("server_build"):
+        properties[_P.SERVER_BUILD] = event["server_build"]
     if event.get("server_version"):
         properties[_P.SERVER_VERSION] = event["server_version"]
     if event.get("client_name"):

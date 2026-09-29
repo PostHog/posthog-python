@@ -94,6 +94,7 @@ class PostHogMCPAnalyticsProperty:
     RESOURCE_NAME = "$mcp_resource_name"
     RESPONSE = "$mcp_response"
     SERVER_NAME = "$mcp_server_name"
+    SERVER_BUILD = "$mcp_server_build"
     SERVER_VERSION = "$mcp_server_version"
     SESSION_ID = "$session_id"
     SOURCE = "$mcp_source"

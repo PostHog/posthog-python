@@ -43,6 +43,7 @@ from ._model_parameters import (
     resolve_model,
 )
 from ._sink import McpCaptureOptions, McpEventSink
+from ._server_build import validate_server_build
 from .feedback import (
     build_feedback_event_properties,
     build_feedback_intent,
@@ -80,8 +81,10 @@ class PostHogMCP(Client):
         mcp_exception_autocapture: bool = True,
         capture_model: Union[bool, MCPAnalyticsModelOptions] = True,
         collect_feedback: Union[bool, CollectFeedbackOptions] = False,
+        server_build: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
+        self._server_build = validate_server_build(server_build)
         super().__init__(api_key, **kwargs)
         apply_mcp_lib_identity(self)
         self._mcp_sink = McpEventSink(self)
@@ -549,6 +552,7 @@ class PostHogMCP(Client):
             # off the request automatically.
             "client_user_agent": client_user_agent,
             "vendor_client": vendor_client,
+            "server_build": self._server_build,
         }
         if distinct_id:
             event["identify_actor_given_id"] = distinct_id
