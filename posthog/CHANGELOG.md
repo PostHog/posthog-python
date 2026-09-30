@@ -1,5 +1,11 @@
 # posthog
 
+## 7.61.0 — 2026-09-30
+
+### Minor changes
+
+- [299906b](https://github.com/posthog/posthog-python/commit/299906b8cb25e0e3063458ff42e93c116f300d5e) Add optional MCP server build metadata. Set `server_build` to record an immutable deployment identifier as `$mcp_server_build` on MCP events from automatic instrumentation, custom dispatchers, and custom events captured through `PostHogMCP`. — Thanks @gesh!
+
 ## 7.60.2 — 2026-09-29
 
 ### Patch changes
