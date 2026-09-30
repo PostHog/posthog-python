@@ -87,6 +87,7 @@ from .types import (
     MCPAnalyticsModelSource,
     MCPAnalyticsOptions,
     PreparedToolCall,
+    PreparedToolResult,
     UserIdentity,
 )
 from .version import __version__
@@ -104,6 +105,7 @@ __all__ = [
     "CollectFeedbackOptions",
     "FeedbackReport",
     "PreparedToolCall",
+    "PreparedToolResult",
     "get_more_tools_result",
     "send_feedback_result",
     "SEND_FEEDBACK_TOOL_NAME",

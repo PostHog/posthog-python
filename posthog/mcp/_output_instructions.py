@@ -123,8 +123,19 @@ def add_instructions_to_output_schema(tool: Any) -> bool:
             )
         return False
 
+    try:
+        setattr(tool, attr, declare_output_instructions(original))
+    except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+        log(f"WARN: could not set {attr} on tool {name}")
+        return False
+    return True
+
+
+def declare_output_instructions(output_schema: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of ``output_schema`` with the optional :data:`MCP_INSTRUCTIONS_KEY`
+    declared. Callers check :func:`can_declare_output_instructions` first."""
     # Deep copy: the server may reuse or freeze the schema object it handed us.
-    schema = copy.deepcopy(original)
+    schema = copy.deepcopy(output_schema)
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
     schema["properties"][MCP_INSTRUCTIONS_KEY] = {
@@ -137,12 +148,14 @@ def add_instructions_to_output_schema(tool: Any) -> bool:
             }
         },
     }
-    try:
-        setattr(tool, attr, schema)
-    except Exception:  # noqa: BLE001 - some schema attrs may be read-only
-        log(f"WARN: could not set {attr} on tool {name}")
-        return False
-    return True
+    return schema
+
+
+def tool_output_schema(tool: Any) -> Any:
+    """A tool's advertised output schema, whether it is a dict or an SDK model."""
+    if isinstance(tool, dict):
+        return tool.get("outputSchema")
+    return _read_attr(tool, _OUTPUT_SCHEMA_ATTRS)[1]
 
 
 def build_conversation_instructions(conversation_id: str) -> Dict[str, Any]:
