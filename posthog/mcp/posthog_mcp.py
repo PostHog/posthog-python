@@ -945,12 +945,7 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     append to."""
     if isinstance(result, dict):
         return inject_prompt_back(result, conversation_id)
-    # A model result means the MCP SDK is installed; it stays a peer dependency.
-    import mcp.types as mcp_types  # noqa: PLC0415
-
-    block = mcp_types.TextContent(
-        type="text", text=build_prompt_back(conversation_id)["text"]
-    )
+    block: Any = build_prompt_back(conversation_id)
     if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], list):
         return ([*result[0], block], result[1])
     if isinstance(result, list):
@@ -960,6 +955,14 @@ def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
     copy_model = getattr(target, "model_copy", None)
     if not isinstance(content, list) or not callable(copy_model):
         return result
+    # SDK model results use TextContent when the peer dependency is present.
+    # A custom model can still work without it and receives plain wire data.
+    try:
+        import mcp.types as mcp_types  # noqa: PLC0415
+
+        block = mcp_types.TextContent(type="text", text=block["text"])
+    except ImportError:
+        pass
     try:
         updated = copy_model(update={"content": [*content, block]})
         if target is result:

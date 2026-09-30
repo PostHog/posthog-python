@@ -583,7 +583,7 @@ def test_prepare_tool_result_delivers_minted_handle_into_tuple_content():
     prepared = client.prepare_tool_result(tool_result, call)
 
     assert len(content) == 1
-    assert prepared.result[0][-1].text == _handle_block(call.conversation_id)["text"]
+    assert prepared.result[0][-1] == _handle_block(call.conversation_id)
     assert prepared.conversation_id == call.conversation_id
 
 

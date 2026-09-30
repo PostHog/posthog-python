@@ -225,6 +225,14 @@ def test_posthogmcp_usable_without_mcp_sdk():
         "from posthog.mcp import PostHogMCP, instrument\n"
         "c = PostHogMCP('phc_test')\n"
         "print('IMPORT_OK')\n"
+        "tool = {'name': 'search', 'inputSchema': {'type': 'object', 'properties': {}}}\n"
+        "c.prepare_tool_list([tool], context=False)\n"
+        "for raw in (([], None), []):\n"
+        "    call = c.prepare_tool_call('search', {})\n"
+        "    prepared = c.prepare_tool_result(raw, call)\n"
+        "    content = prepared.result[0] if isinstance(prepared.result, tuple) else prepared.result\n"
+        "    assert content[-1] == {'type': 'text', 'text': '{\"conversation_id\": \"' + call.conversation_id + '\"}'}\n"
+        "print('RESULT_OK')\n"
         "try:\n"
         "    instrument(object(), c)\n"
         "    print('NO_RAISE')\n"
@@ -233,6 +241,7 @@ def test_posthogmcp_usable_without_mcp_sdk():
     )
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
     assert "IMPORT_OK" in out.stdout, out.stderr
+    assert "RESULT_OK" in out.stdout, out.stdout + out.stderr
     assert "RAISED" in out.stdout, out.stdout + out.stderr
 
 
