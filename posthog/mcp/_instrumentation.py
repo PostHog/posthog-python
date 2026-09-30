@@ -692,6 +692,25 @@ def extract_tools(result: Any) -> list:
     return list(getattr(root, "tools", []) or [])
 
 
+def tools_list_envelope(result: Any) -> Optional[Dict[str, Any]]:
+    """The ``tools/list`` result minus its tools, or None when nothing else is set.
+
+    The names already ride ``listed_tool_names``, and a descriptor copy would be
+    sanitized and truncated on the request path."""
+    root = getattr(result, "root", result)
+    if isinstance(root, dict):
+        envelope = {k: v for k, v in root.items() if k != "tools" and v is not None}
+    else:
+        envelope = root.model_dump(
+            mode="json",
+            by_alias=True,
+            exclude={"tools"},
+            exclude_unset=True,
+            exclude_none=True,
+        )
+    return envelope or None
+
+
 def append_virtual_tool(result: Any, tool: Any) -> Any:
     """Return a copy of a ``tools/list`` result with ``tool`` added.
 
