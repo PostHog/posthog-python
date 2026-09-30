@@ -2,7 +2,7 @@
 
 - B: a tool that declares its own ``context`` keeps it while an injected
   ``conversation_id`` is stripped (the two are decoupled).
-- E: ``tools/list`` captures ``$mcp_response`` + ``$mcp_duration_ms``, and a
+- E: ``tools/list`` captures ``$mcp_duration_ms`` (not the listing), and a
   list handler that raises is captured as an errored ``$mcp_tools_list``.
 - F: ``$mcp_initialize`` is emitted on a ``tools/list`` (a client may list but
   never call a tool).
@@ -104,7 +104,7 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
 # --- E: tools/list response + duration, and failure capture -------------------
 
 
-async def test_tools_list_captures_response_and_duration():
+async def test_tools_list_captures_duration_without_response():
     server = make_lowlevel()
     client = FakeClient()
     instrument(server, client)

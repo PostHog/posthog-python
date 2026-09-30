@@ -39,7 +39,6 @@ from ._instrumentation import (
     resolve_session_and_client,
     start_tool_call_lifecycle,
     start_tools_list_lifecycle,
-    tools_list_envelope,
     warn_ownership_lookup_failed,
 )
 from ._internal import MCPAnalyticsData
@@ -288,7 +287,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
         await lifecycle.record_result(
             names=names,
-            response=tools_list_envelope(result),
+            result=result,
             duration_ms=duration_ms,
             is_empty=empty,
         )
