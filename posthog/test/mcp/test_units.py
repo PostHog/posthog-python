@@ -424,11 +424,17 @@ def test_identity_cache_evicts_least_recently_used():
             ),
             {"nextCursor": "2"},
         ),
+        (
+            mcp_types.ListToolsResult.model_validate(
+                {"tools": [], "nextCursor": "2", "_meta": {"trace": "t"}}
+            ),
+            {"nextCursor": "2", "_meta": {"trace": "t"}},
+        ),
         (mcp_types.ListToolsResult(tools=[]), None),
         (None, None),
         ([mcp_types.Tool(name="a", inputSchema={"type": "object"})], None),
     ],
-    ids=["paginated", "tools-only", "none", "bare-list"],
+    ids=["paginated", "meta", "tools-only", "none", "bare-list"],
 )
 def test_tools_list_envelope(result, expected):
     assert tools_list_envelope(result) == expected
