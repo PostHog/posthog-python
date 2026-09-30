@@ -64,7 +64,8 @@ instrument(
 ```
 
 The value must contain 1 to 256 characters. The SDK records it as
-`$mcp_server_build` on all MCP events.
+`$mcp_server_build` on all MCP events. `PostHogMCP.capture()` also adds it to
+custom events unless the event provides its own value.
 
 Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
 high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;

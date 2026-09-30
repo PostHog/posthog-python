@@ -72,6 +72,35 @@ def test_server_build_validation(server_build):
         make_client(server_build=server_build)
 
 
+def test_capture_adds_server_build_to_custom_events():
+    captured = []
+
+    def before_send(event):
+        captured.append(event)
+        return event
+
+    client = PostHogMCP(
+        "phc_test",
+        send=False,
+        before_send=before_send,
+        server_build="default-build",
+    )
+    client.capture("custom event", properties={"existing": True})
+    client.capture(
+        "event build",
+        properties={"$mcp_server_build": "event-build"},
+    )
+    client.capture(
+        "null build",
+        properties={"$mcp_server_build": None},
+    )
+
+    assert captured[0]["properties"]["existing"] is True
+    assert captured[0]["properties"]["$mcp_server_build"] == "default-build"
+    assert captured[1]["properties"]["$mcp_server_build"] == "event-build"
+    assert captured[2]["properties"]["$mcp_server_build"] == "default-build"
+
+
 async def test_mcp_events_use_mcp_library_identity():
     captured = []
 
