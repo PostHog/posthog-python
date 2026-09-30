@@ -47,15 +47,58 @@ async def test_capture_tool_call_success():
 
 
 async def test_capture_tool_call_error_fans_out_exception():
-    client, captured = make_client()
+    client, captured = make_client(server_build="sha-abc123")
     client.capture_tool_call(
-        "broken", is_error=True, error=RuntimeError("kaboom"), distinct_id="u"
+        "broken",
+        is_error=True,
+        error=RuntimeError("kaboom"),
+        distinct_id="u",
+        properties={"$mcp_server_build": "custom-value"},
     )
     await _flush()
 
     assert _events(captured, "$mcp_tool_call")[0]["properties"]["$mcp_is_error"] is True
     exc = _events(captured, "$exception")
     assert exc and exc[0]["properties"]["$exception_list"][0]["value"] == "kaboom"
+    assert all(
+        event["properties"]["$mcp_server_build"] == "sha-abc123"
+        for event in [*_events(captured, "$mcp_tool_call"), *exc]
+    )
+
+
+@pytest.mark.parametrize("server_build", ["", 123, "x" * 257])
+def test_server_build_validation(server_build):
+    with pytest.raises((TypeError, ValueError)):
+        make_client(server_build=server_build)
+
+
+def test_capture_adds_server_build_to_custom_events():
+    captured = []
+
+    def before_send(event):
+        captured.append(event)
+        return event
+
+    client = PostHogMCP(
+        "phc_test",
+        send=False,
+        before_send=before_send,
+        server_build="default-build",
+    )
+    client.capture("custom event", properties={"existing": True})
+    client.capture(
+        "event build",
+        properties={"$mcp_server_build": "event-build"},
+    )
+    client.capture(
+        "null build",
+        properties={"$mcp_server_build": None},
+    )
+
+    assert captured[0]["properties"]["existing"] is True
+    assert captured[0]["properties"]["$mcp_server_build"] == "default-build"
+    assert captured[1]["properties"]["$mcp_server_build"] == "event-build"
+    assert captured[2]["properties"]["$mcp_server_build"] == "default-build"
 
 
 async def test_mcp_events_use_mcp_library_identity():

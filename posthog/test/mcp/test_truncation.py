@@ -145,6 +145,20 @@ def test_truncate_event_enforces_byte_budget_with_many_strings():
     assert _json_byte_size(out) <= MAX_EVENT_BYTES
 
 
+def test_truncate_event_preserves_valid_server_build():
+    server_build = "b" * 256
+    event = {
+        "event_type": "$mcp_tool_call",
+        "server_build": server_build,
+        "parameters": {f"field_{i}": "z" * 5000 for i in range(60)},
+    }
+
+    out = truncate_event(event)
+
+    assert _json_byte_size(out) <= MAX_EVENT_BYTES
+    assert out["server_build"] == server_build
+
+
 def test_truncate_event_caps_single_huge_string_under_budget():
     out = truncate_event({"parameters": {"blob": "z" * 300_000}})
     assert _json_byte_size(out) <= MAX_EVENT_BYTES

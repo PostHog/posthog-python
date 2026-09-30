@@ -124,6 +124,29 @@ async def test_fastmcp_conversation_id_captured():
     assert calls and calls[0]["properties"].get("$mcp_conversation_id")  # minted
 
 
+async def test_fastmcp_captures_server_build_on_all_events():
+    server = make_fastmcp()
+    client = FakeClient()
+    options = MCPAnalyticsOptions(server_build="sha-abc123")
+    instrument(
+        server,
+        client,
+        options,
+    )
+    options.server_build = "changed-after-setup"
+
+    list_handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    await list_handler(mcp_types.ListToolsRequest(method="tools/list"))
+    await server._tool_manager.call_tool("add", {"a": 1, "b": 2}, convert_result=True)
+    await _flush()
+
+    assert client.events
+    assert all(
+        event["properties"]["$mcp_server_build"] == "sha-abc123"
+        for event in client.events
+    )
+
+
 async def test_lowlevel_conversation_id_captured_and_prompt_back():
     server = make_lowlevel()
     client = FakeClient()

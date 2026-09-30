@@ -15,7 +15,10 @@ import copy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
-from posthog.client import Client
+from typing_extensions import Unpack
+
+from ..args import OptionalCaptureArgs
+from ..client import Client
 
 from ._context_parameters import (
     add_context_parameter_to_schema,
@@ -43,6 +46,8 @@ from ._model_parameters import (
     resolve_model,
 )
 from ._sink import McpCaptureOptions, McpEventSink
+from ._server_build import validate_server_build
+from .constants import PostHogMCPAnalyticsProperty
 from .feedback import (
     build_feedback_event_properties,
     build_feedback_intent,
@@ -70,8 +75,9 @@ _GET_MORE_TOOLS_NAME = "get_more_tools"
 class PostHogMCP(Client):
     """A drop-in posthog ``Client`` with ``capture_tool_call`` / ``capture_initialize``
     / ``capture_tools_list`` / ``capture_missing_capability`` / ``capture_feedback``
-    plus ``prepare_tool_list`` and ``prepare_tool_call`` helpers. ``capture``,
-    ``flush``, ``shutdown``, feature flags, etc. all work unchanged."""
+    plus ``prepare_tool_list`` and ``prepare_tool_call`` helpers. ``capture`` adds
+    the configured server build to custom events. Other inherited methods work
+    unchanged."""
 
     def __init__(
         self,
@@ -80,8 +86,10 @@ class PostHogMCP(Client):
         mcp_exception_autocapture: bool = True,
         capture_model: Union[bool, MCPAnalyticsModelOptions] = True,
         collect_feedback: Union[bool, CollectFeedbackOptions] = False,
+        server_build: Optional[str] = None,
         **kwargs: Any,
     ) -> None:
+        self._server_build = validate_server_build(server_build)
         super().__init__(api_key, **kwargs)
         apply_mcp_lib_identity(self)
         self._mcp_sink = McpEventSink(self)
@@ -132,6 +140,19 @@ class PostHogMCP(Client):
         return super().shutdown()
 
     # --- capture methods -----------------------------------------------------
+
+    def capture(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Capture a custom event with the configured server build as a default."""
+        if self._server_build is not None:
+            properties = dict(kwargs.get("properties") or {})
+            if properties.get(PostHogMCPAnalyticsProperty.SERVER_BUILD) is None:
+                properties[PostHogMCPAnalyticsProperty.SERVER_BUILD] = (
+                    self._server_build
+                )
+            kwargs["properties"] = properties
+        return super().capture(event, **kwargs)
 
     def capture_tool_call(
         self,
@@ -549,6 +570,7 @@ class PostHogMCP(Client):
             # off the request automatically.
             "client_user_agent": client_user_agent,
             "vendor_client": vendor_client,
+            "server_build": self._server_build,
         }
         if distinct_id:
             event["identify_actor_given_id"] = distinct_id

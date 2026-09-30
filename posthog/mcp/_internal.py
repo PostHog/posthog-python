@@ -101,6 +101,9 @@ class MCPAnalyticsData:
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
     server_name: Optional[str] = None
+    # Validated once during setup. Keep it separate from the caller-owned
+    # options object so later option changes cannot alter event attribution.
+    server_build: Optional[str] = None
     server_version: Optional[str] = None
     # A strong wrapper reference would retain the low-level WeakKeyDictionary key.
     standalone_fastmcp: Optional["weakref.ReferenceType[Any]"] = None

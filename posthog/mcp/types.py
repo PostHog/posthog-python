@@ -209,9 +209,11 @@ class MCPAnalyticsOptions:
     # defaults; the object form renames the tool, replaces its description,
     # declares host-specific extra_properties, or wires an on_feedback handler.
     # Covers what `report_missing` covers (as feedback_type "missing_capability"),
-    # so new integrations should enable only one of the two. New field appended
-    # last: positional construction of the earlier fields must keep working.
+    # so new integrations should enable only one of the two.
     collect_feedback: Union[bool, CollectFeedbackOptions] = False
+    # Exact deployment identifier recorded as `$mcp_server_build`. Use an
+    # immutable value such as a Git commit SHA or a container image digest.
+    server_build: Optional[str] = None
 
 
 @dataclass
