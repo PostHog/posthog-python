@@ -573,6 +573,42 @@ def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
     assert prepared.conversation_id == call.conversation_id
 
 
+def test_prepare_tool_result_delivers_minted_handle_into_tuple_content():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    content = [TextContent(type="text", text="done")]
+    tool_result = (content, None)
+
+    prepared = client.prepare_tool_result(tool_result, call)
+
+    assert len(content) == 1
+    assert prepared.result[0][-1].text == _handle_block(call.conversation_id)["text"]
+    assert prepared.conversation_id == call.conversation_id
+
+
+def test_prepare_tool_result_copies_shared_custom_result_objects():
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    shared_result = SimpleNamespace(content=[], structuredContent={"rows": []})
+
+    first_call = client.prepare_tool_call("execute-sql", {})
+    first = client.prepare_tool_result(shared_result, first_call)
+    second_call = client.prepare_tool_call("execute-sql", {})
+    second = client.prepare_tool_result(shared_result, second_call)
+
+    assert shared_result.structuredContent == {"rows": []}
+    assert first.result is not shared_result
+    assert second.result is not shared_result
+    assert first.result.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": first_call.conversation_id
+    }
+    assert second.result.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": second_call.conversation_id
+    }
+    assert first_call.conversation_id != second_call.conversation_id
+
+
 def test_prepare_tool_result_omits_conversation_without_delivery_state():
     client, _ = make_client()
     tool_result = {"content": []}

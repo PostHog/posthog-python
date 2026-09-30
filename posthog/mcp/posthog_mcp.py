@@ -939,22 +939,27 @@ def _collect_conversation_ownership(
 
 
 def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
-    """Append the handle to a dict or ``CallToolResult`` result's ``content``,
-    including a ``CallToolResult`` inside an MCP SDK 1.x ``ServerResult``.
-    Returns ``result`` itself when there is no content list to append to."""
+    """Append the handle to a tuple, list, dict, or ``CallToolResult`` result's
+    ``content``, including a ``CallToolResult`` inside an MCP SDK 1.x
+    ``ServerResult``. Returns ``result`` itself when there is no content list to
+    append to."""
     if isinstance(result, dict):
         return inject_prompt_back(result, conversation_id)
-    target = getattr(result, "root", result)
-    content = getattr(target, "content", None)
-    copy_model = getattr(target, "model_copy", None)
-    if not isinstance(content, list) or not callable(copy_model):
-        return result
     # A model result means the MCP SDK is installed; it stays a peer dependency.
     import mcp.types as mcp_types  # noqa: PLC0415
 
     block = mcp_types.TextContent(
         type="text", text=build_prompt_back(conversation_id)["text"]
     )
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], list):
+        return ([*result[0], block], result[1])
+    if isinstance(result, list):
+        return [*result, block]
+    target = getattr(result, "root", result)
+    content = getattr(target, "content", None)
+    copy_model = getattr(target, "model_copy", None)
+    if not isinstance(content, list) or not callable(copy_model):
+        return result
     try:
         updated = copy_model(update={"content": [*content, block]})
         if target is result:

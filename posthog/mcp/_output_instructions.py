@@ -218,17 +218,35 @@ def mirror_instructions_into_structured_content(
             new_target = copy_model(update={attr: updated})
         except Exception:  # noqa: BLE001 - never let delivery break the tool path
             return result, False
-        if target is result:
-            return new_target, True
-        rewrap = getattr(result, "model_copy", None)
-        if callable(rewrap):
-            try:
-                return rewrap(update={"root": new_target}), True
-            except Exception:  # noqa: BLE001
-                return result, False
+    else:
+        new_target = _copy_with_attr(target, attr, updated)
+        if new_target is None:
+            return result, False
+    if target is result:
+        return new_target, True
+    rewrap = getattr(result, "model_copy", None)
+    if callable(rewrap):
+        try:
+            return rewrap(update={"root": new_target}), True
+        except Exception:  # noqa: BLE001
+            return result, False
+    new_result = _copy_with_attr(result, "root", new_target)
+    if new_result is None:
         return result, False
+    return new_result, True
+
+
+def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
+    """Return a shallow copy with one changed attribute, or ``None`` when the
+    object cannot be copied safely."""
     try:
-        setattr(target, attr, updated)
-    except Exception:  # noqa: BLE001 - never let delivery break the tool path
-        return result, False
-    return result, True
+        copied = copy.copy(value)
+    except Exception:  # noqa: BLE001 - analytics must not break tool results
+        return None
+    if copied is value:
+        return None
+    try:
+        setattr(copied, attr, updated)
+    except Exception:  # noqa: BLE001 - read-only result objects fail closed
+        return None
+    return copied
