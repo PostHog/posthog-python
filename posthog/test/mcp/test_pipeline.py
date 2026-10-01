@@ -1,5 +1,6 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import base64
 from datetime import datetime, timezone
 
 import pytest
@@ -18,6 +19,7 @@ from posthog.mcp._sanitization import (
     redact_pii,
     sanitize_captured_value,
     sanitize_event,
+    sanitize_free_text_value,
 )
 from posthog.mcp._sink import McpCaptureOptions, process_mcp_event
 from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
@@ -462,6 +464,93 @@ def test_sanitize_url_bounds(uri: str, oversized: bool) -> None:
     expected = "[redacted]" if oversized else uri
     assert sanitize_captured_value(uri) == expected
     assert sanitize_captured_value(f"Cannot read {uri}") == f"Cannot read {expected}"
+
+
+_WINDOW = 131_072
+_TOKEN = "phc_123456789012345678901234567890"
+
+
+def _filler(length: int) -> str:
+    return ("lorem ipsum " * (length // 12 + 1))[:length]
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(_filler(5_000_000), _filler(_WINDOW - 2) + "...", id="plain text"),
+        pytest.param(
+            _filler(_WINDOW - 32) + _TOKEN,
+            _filler(_WINDOW - 32) + "...",
+            id="a token cut at the window edge",
+        ),
+        pytest.param(
+            _filler(_WINDOW - 44)
+            + "https://example.com/?api_key=secretsecretsecretsecret more",
+            _filler(_WINDOW - 44) + "...",
+            id="a credential URL cut at the window edge",
+        ),
+        pytest.param(
+            base64.b64encode(bytes([7]) * 3_000_000).decode(),
+            "[binary data redacted - not supported by PostHog MCP analytics]",
+            id="an attachment",
+        ),
+        # Redacting shrinks this head below the window, so it falls back to the
+        # whole string.
+        pytest.param(
+            f"{_filler(12)}a. {f'{_TOKEN} ' * 4_000}and more",
+            f"{_filler(12)}a. {'[redacted] ' * 4_000}and more",
+            id="tokens with one cut at the window edge",
+        ),
+        pytest.param(
+            _filler(_WINDOW - 4_004)
+            + "https://secretuser"
+            + "a" * 6_000
+            + "@localhost/path",
+            _filler(_WINDOW - 4_004) + "...",
+            id="a URL whose credentials sit past the head",
+        ),
+        pytest.param(
+            _filler(996) + "resource:private/" + "p" * _WINDOW + "?" + "a=1&" * 200,
+            _filler(996) + "[redacted]",
+            id="a URI whose field count passes the limit past the head",
+        ),
+        pytest.param(
+            (
+                "https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Security-Token="
+                + "Z" * 1_200
+                + "&X-Amz-Signature="
+                + "a" * 64
+                + "\n"
+            )
+            * 200,
+            "https://bucket.s3.amazonaws.com/a.pdf?X-Amz-Security-Token=%5Bredacted%5D"
+            "&X-Amz-Signature=%5Bredacted%5D\n" * 200,
+            id="pre-signed URLs",
+        ),
+    ],
+)
+def test_sanitize_scans_only_the_head_truncation_can_keep(
+    value: str, expected: str
+) -> None:
+    assert sanitize_captured_value(value) == expected
+    assert sanitize_free_text_value(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(_filler(5_000_000), _filler(_WINDOW - 2) + "...", id="plain text"),
+        pytest.param(
+            _filler(996) + "resource:private/" + "p" * _WINDOW + "?" + "a=1&" * 200,
+            _filler(996) + "[redacted]",
+            id="a URI whose field count passes the limit past the head",
+        ),
+    ],
+)
+def test_sanitize_resource_name_scans_only_the_head_truncation_can_keep(
+    value: str, expected: str
+) -> None:
+    assert sanitize_event({"resource_name": value})["resource_name"] == expected
 
 
 def test_sanitize_event_replaces_image_and_audio_blocks():

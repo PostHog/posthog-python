@@ -11,8 +11,10 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
+
+from ._truncation import _TRUNCATION_SUFFIX, MAX_STRING_LENGTH
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
@@ -22,6 +24,10 @@ _BINARY_DATA_MARKER = "[binary data redacted - not supported by PostHog MCP anal
 _ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
 _SIZE_GATE = 10_240
+_SCANNED_HEAD_LENGTH = 4 * MAX_STRING_LENGTH
+# Twice what truncation keeps, so a match that crosses spaces (a card candidate)
+# and was cut where the head ends sits past the part truncation keeps.
+_MIN_REDACTED_HEAD_LENGTH = 2 * MAX_STRING_LENGTH
 _POSTHOG_TOKEN_PATTERN = re.compile(r"\bph[a-z]_[A-Za-z0-9_-]{20,}\b")
 _SENSITIVE_KEY_PATTERN = re.compile(
     r"^(authorization|cookie|set-cookie|x-api-key|api[-_]?key|api[-_]?token|"
@@ -420,7 +426,25 @@ def _should_redact_key(key: str) -> bool:
 def _sanitize_string(value: str) -> str:
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    return _sanitize_text(value)
+    return _sanitize_captured_head(value, _sanitize_text)
+
+
+def _sanitize_captured_head(value: str, sanitize: Callable[[str], str]) -> str:
+    """Run ``sanitize`` over only the head of ``value`` that truncation can keep,
+    so a multi-megabyte tool result costs about what the captured part costs.
+
+    The head ends just after a space: the word pass splits on spaces alone and no
+    URL match contains one, so the cut splits neither. A value with no space in
+    the window gets an empty head. Redaction shrinks text, and a head that ends up
+    too short to cover truncation's cut falls back to the whole value. Either way
+    the part truncation keeps reads exactly as if the whole value were sanitized.
+    """
+    if len(value) > _SCANNED_HEAD_LENGTH:
+        head_end = value.rfind(" ", 0, _SCANNED_HEAD_LENGTH) + 1
+        head = sanitize(value[:head_end])
+        if len(head) >= _MIN_REDACTED_HEAD_LENGTH:
+            return head + _TRUNCATION_SUFFIX
+    return sanitize(value)
 
 
 def _is_binary_blob(value: str) -> bool:
@@ -459,7 +483,9 @@ def sanitize_free_text(value: Any) -> Any:
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    return _sanitize_urls(redact_pii(_redact_credentials(value)))
+    return _sanitize_captured_head(
+        value, lambda head: _sanitize_urls(redact_pii(_redact_credentials(head)))
+    )
 
 
 def _sanitize_resource_name(value: Any) -> Any:
@@ -471,7 +497,10 @@ def _sanitize_resource_name(value: Any) -> Any:
     with no url in it comes back untouched."""
     if not isinstance(value, str):
         return value
-    return _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+    return _sanitize_captured_head(
+        value,
+        lambda head: _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, head)),
+    )
 
 
 def _redact_secret_tokens(value: str) -> str:
