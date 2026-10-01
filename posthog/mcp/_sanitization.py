@@ -709,34 +709,22 @@ def _sanitize_exception_values(error: Any) -> Any:
 
 
 def _sanitize_response(response: Any) -> Any:
-    if response is None or not isinstance(response, (dict, list, str)):
+    if not _is_record(response) or not isinstance(response.get("content"), list):
         return sanitize_captured_value(response)
-
-    sanitized = sanitize_captured_value(response)
-    if not _is_record(sanitized):
-        return sanitized
-
-    result = {**sanitized}
-    content = result.get("content")
-    if isinstance(content, list):
-        result["content"] = [_sanitize_content_block(block) for block in content]
-
-    if result.get("structuredContent") is not None and isinstance(
-        result["structuredContent"], (dict, list)
-    ):
-        result["structuredContent"] = sanitize_captured_value(
-            result["structuredContent"]
-        )
-
-    return result
+    # Content blocks are sanitized one by one, so an image or blob is replaced
+    # before anything reads its payload. The placeholder keeps the key order.
+    return {
+        **sanitize_captured_value({**response, "content": None}),
+        "content": [_sanitize_content_block(block) for block in response["content"]],
+    }
 
 
 def _sanitize_content_block(block: Any) -> Any:
     if not _is_record(block):
-        return block
+        return sanitize_captured_value(block)
 
     block_type = block.get("type")
-    if block_type == "text":
+    if block_type in ("text", "resource_link"):
         return sanitize_captured_value(block)
     if block_type == "image":
         return {
@@ -750,11 +738,9 @@ def _sanitize_content_block(block: Any) -> Any:
         }
     if block_type == "resource":
         return _sanitize_resource_block(block)
-    if block_type == "resource_link":
-        return sanitize_captured_value(block)
     return {
         "type": "text",
-        "text": f'[unsupported content type "{block_type}" redacted - not supported by PostHog MCP analytics]',
+        "text": f'[unsupported content type "{sanitize_captured_value(block_type)}" redacted - not supported by PostHog MCP analytics]',
     }
 
 
