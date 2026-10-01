@@ -1,5 +1,11 @@
 # posthog
 
+## 7.62.0 — 2026-10-01
+
+### Minor changes
+
+- [3eb3861](https://github.com/posthog/posthog-python/commit/3eb3861176d1c0e521ad42cd6fd1ac12f9164650) Add conversation and session correlation to custom `PostHogMCP` dispatchers, matching `@posthog/mcp`. `prepare_tool_list()` adds an optional `conversation_id` field to each compatible tool input schema and a compatible `_mcp_instructions` output field. `prepare_tool_call()` accepts a carried `session_id`. The new `prepare_tool_result()` delivers a minted handle without changing the original result. Tool and report capture methods accept `conversation_id`. Existing dispatchers must call `prepare_tool_result()` to deliver new handles. Set `PostHogMCP(enable_conversation_id=False)` to keep the previous behavior. — Thanks @gesh!
+
 ## 7.61.1 — 2026-09-30
 
 ### Patch changes
