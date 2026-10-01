@@ -692,6 +692,24 @@ def extract_tools(result: Any) -> list:
     return list(getattr(root, "tools", []) or [])
 
 
+def tools_list_envelope(result: Any) -> Optional[Dict[str, Any]]:
+    """The ``tools/list`` result minus its tools, or None when nothing else is set.
+
+    The names already ride ``listed_tool_names``, and a descriptor copy would be
+    sanitized and truncated on the request path."""
+    root = getattr(result, "root", result)
+    if not hasattr(root, "model_dump"):
+        return None
+    envelope = root.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude={"tools"},
+        exclude_unset=True,
+        exclude_none=True,
+    )
+    return envelope or None
+
+
 def append_virtual_tool(result: Any, tool: Any) -> Any:
     """Return a copy of a ``tools/list`` result with ``tool`` added.
 
@@ -1113,7 +1131,7 @@ class ToolsListLifecycle:
         self,
         *,
         names: List[str],
-        response: Any,
+        result: Any,
         duration_ms: float,
         is_empty: bool,
     ) -> None:
@@ -1122,7 +1140,7 @@ class ToolsListLifecycle:
             self.session_id,
             names=names,
             request=self.request,
-            response=response,
+            result=result,
             duration_ms=duration_ms,
             is_error=is_empty,
             error="tools/list returned no tools" if is_empty else None,
@@ -1276,7 +1294,7 @@ async def record_tools_list(
     *,
     names: List[str],
     request: Dict[str, Any],
-    response: Any = None,
+    result: Any = None,
     duration_ms: Optional[float] = None,
     is_error: bool = False,
     error: Any = None,
@@ -1291,7 +1309,7 @@ async def record_tools_list(
             "session_id": session_id,
             "listed_tool_names": names,
             "parameters": build_captured_mcp_parameters(request),
-            "response": _wrap_response(response) if response is not None else None,
+            "response": tools_list_envelope(result),
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,

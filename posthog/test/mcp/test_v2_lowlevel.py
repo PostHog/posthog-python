@@ -160,6 +160,36 @@ async def test_list_tools_injects_optional_context_and_captures():
 
 
 @pytest.mark.parametrize(
+    "next_cursor, expected_response",
+    [("page-2", {"nextCursor": "page-2"}), (None, None)],
+    ids=["paginated", "single-page"],
+)
+async def test_list_tools_response_is_the_envelope_without_tools(
+    next_cursor, expected_response
+):
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(name=name, input_schema={"type": "object"})
+                for name in ("alpha", "beta")
+            ],
+            next_cursor=next_cursor,
+        )
+
+    server = Server("envelope-v2", on_list_tools=on_list_tools)
+    client = FakeClient()
+    instrument(server, client)
+
+    result = await _list_tools(server)
+    await _flush()
+
+    assert [t.name for t in result.tools][:2] == ["alpha", "beta"]
+    props = _events(client, "$mcp_tools_list")[0]["properties"]
+    assert props["$mcp_listed_tool_names"] == ["alpha", "beta"]
+    assert props.get("$mcp_response") == expected_response
+
+
+@pytest.mark.parametrize(
     "uri, captured_uri, resource_error",
     [
         ("file:///guide.md", "file:///guide.md", False),

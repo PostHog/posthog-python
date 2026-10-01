@@ -26,7 +26,6 @@ from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
-    _to_jsonable,
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
@@ -490,7 +489,7 @@ def _wrap_list_tools(
 
         await lifecycle.record_result(
             names=names,
-            response=_to_jsonable(result),
+            result=result,
             duration_ms=duration_ms,
             is_empty=empty,
         )

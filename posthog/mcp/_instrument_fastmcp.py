@@ -29,7 +29,6 @@ import mcp.types as mcp_types
 from ._conversation_id import build_prompt_back
 from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
-    _to_jsonable,
     apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
@@ -288,7 +287,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
         await lifecycle.record_result(
             names=names,
-            response=_to_jsonable(result),
+            result=result,
             duration_ms=duration_ms,
             is_empty=empty,
         )

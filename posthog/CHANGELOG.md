@@ -1,5 +1,11 @@
 # posthog
 
+## 7.61.1 — 2026-09-30
+
+### Patch changes
+
+- [bcf9d34](https://github.com/posthog/posthog-python/commit/bcf9d3426d1c2a6dc1966338e0d5409906387875) `$mcp_tools_list` events no longer copy the tool descriptors into `$mcp_response`, which keeps only the response envelope such as `nextCursor`. The tool names stay in `$mcp_listed_tool_names`. — Thanks @lucasheriques!
+
 ## 7.61.0 — 2026-09-30
 
 ### Minor changes

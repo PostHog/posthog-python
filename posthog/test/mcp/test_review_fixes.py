@@ -2,7 +2,7 @@
 
 - B: a tool that declares its own ``context`` keeps it while an injected
   ``conversation_id`` is stripped (the two are decoupled).
-- E: ``tools/list`` captures ``$mcp_response`` + ``$mcp_duration_ms``, and a
+- E: ``tools/list`` captures ``$mcp_duration_ms`` (not the listing), and a
   list handler that raises is captured as an errored ``$mcp_tools_list``.
 - F: ``$mcp_initialize`` is emitted on a ``tools/list`` (a client may list but
   never call a tool).
@@ -21,6 +21,11 @@ from mcp.server.lowlevel import Server
 
 from posthog.mcp import PostHogMCP, instrument
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
+from posthog.test.mcp._helpers_lowlevel import (
+    list_page,
+    make_paged_lowlevel,
+    tool_names,
+)
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -99,7 +104,7 @@ async def test_tool_owning_context_keeps_it_and_strips_conversation_id():
 # --- E: tools/list response + duration, and failure capture -------------------
 
 
-async def test_tools_list_captures_response_and_duration():
+async def test_tools_list_captures_duration_without_response():
     server = make_lowlevel()
     client = FakeClient()
     instrument(server, client)
@@ -110,9 +115,38 @@ async def test_tools_list_captures_response_and_duration():
     listed = _events(client, "$mcp_tools_list")
     assert listed
     props = listed[0]["properties"]
-    assert props["$mcp_response"] is not None
+    assert "$mcp_response" not in props
     assert "$mcp_duration_ms" in props
     assert props["$mcp_is_error"] is False
+
+
+@pytest.mark.parametrize(
+    "pages, expected_response",
+    [
+        ([["alpha", "beta"], ["gamma"]], {"nextCursor": "1"}),
+        ([["alpha", "beta"]], None),
+    ],
+    ids=["paginated", "single-page"],
+)
+async def test_tools_list_response_is_the_envelope_without_tools(
+    pages, expected_response
+):
+    server = make_paged_lowlevel(
+        [
+            [mcp_types.Tool(name=name, inputSchema={"type": "object"}) for name in page]
+            for page in pages
+        ]
+    )
+    client = FakeClient()
+    instrument(server, client)
+
+    result = await list_page(server)
+    await _flush()
+
+    assert tool_names(result) == pages[0]
+    props = _events(client, "$mcp_tools_list")[0]["properties"]
+    assert props["$mcp_listed_tool_names"] == pages[0]
+    assert props.get("$mcp_response") == expected_response
 
 
 async def test_tools_list_handler_raise_is_captured():
