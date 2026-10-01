@@ -118,10 +118,13 @@ def test_mirrors_into_a_model_result_both_attr_shapes():
     for attr in ("structured_content", "structuredContent"):
         result = SimpleNamespace(**{attr: {"total": 7}})
 
-        _, delivered = mirror_instructions_into_structured_content(result, "conv-2")
+        prepared, delivered = mirror_instructions_into_structured_content(
+            result, "conv-2"
+        )
 
         assert delivered is True
-        assert getattr(result, attr)[MCP_INSTRUCTIONS_KEY] == {
+        assert getattr(result, attr) == {"total": 7}
+        assert getattr(prepared, attr)[MCP_INSTRUCTIONS_KEY] == {
             "conversation_id": "conv-2"
         }
 
@@ -130,10 +133,11 @@ def test_mirrors_through_a_serverresult_wrapper():
     inner = SimpleNamespace(structuredContent={"total": 1})
     result = SimpleNamespace(root=inner)
 
-    _, delivered = mirror_instructions_into_structured_content(result, "conv-3")
+    prepared, delivered = mirror_instructions_into_structured_content(result, "conv-3")
 
     assert delivered is True
-    assert inner.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+    assert inner.structuredContent == {"total": 1}
+    assert prepared.root.structuredContent[MCP_INSTRUCTIONS_KEY] == {
         "conversation_id": "conv-3"
     }
 
