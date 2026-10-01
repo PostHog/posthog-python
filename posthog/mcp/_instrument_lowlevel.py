@@ -605,10 +605,13 @@ def _tool_schema_view(
         return None, None, None
     schema = getattr(tool, "parameters", None)
     if isinstance(schema, dict):
-        declared, injectable = _schema_view(
-            schema, dereferenced=_server_dereferences(high_level)
+        dereferenced = _server_dereferences(high_level)
+        declared, injectable = _schema_view(schema, dereferenced=dereferenced)
+        return (
+            declared,
+            injectable,
+            _input_schema_view(schema, dereferenced=dereferenced),
         )
-        return declared, injectable, schema
     fn = getattr(tool, "fn", None)
     if fn is None:
         return set(), True, None
@@ -701,6 +704,26 @@ def _schema_view(schema: Dict[str, Any], *, dereferenced: bool) -> Tuple[set, bo
     }
     injectable = can_inject_model_parameter(nodes[-1]) and "llm_model" not in declared
     return declared, injectable
+
+
+def _input_schema_view(
+    schema: Dict[str, Any], *, dereferenced: bool
+) -> Optional[Dict[str, Any]]:
+    """Return the declared fields that the client sees for input analytics."""
+    if not dereferenced:
+        return schema
+    nodes = _reference_chain(schema)
+    if nodes is None:
+        return None
+    if len(nodes) == 1:
+        return schema
+    properties = {
+        key: value
+        for node in nodes
+        if isinstance(node.get("properties"), dict)
+        for key, value in node["properties"].items()
+    }
+    return {"type": "object", "properties": properties}
 
 
 def _server_dereferences(server: Any) -> bool:

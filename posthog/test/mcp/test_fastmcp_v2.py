@@ -358,6 +358,43 @@ async def test_jlowin_root_ref_schema_is_dereferenced_for_ownership(declares_mod
     assert recorded == ("gpt-5" if stripped else None)
 
 
+async def test_jlowin_root_ref_schema_is_dereferenced_for_input_names():
+    from fastmcp.tools import Tool
+
+    ToolResult = _tool_result_type()
+
+    class Echo(Tool):
+        async def run(self, arguments):
+            return ToolResult(
+                content=[mcp_types.TextContent(type="text", text=str(arguments["a"]))]
+            )
+
+    server = FastMCP("jlowin-input-ref")
+    server.add_tool(
+        Echo(
+            name="echo",
+            parameters={
+                "$ref": "#/$defs/Args",
+                "$defs": {
+                    "Args": {
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}},
+                    }
+                },
+            },
+        )
+    )
+    client = FakeClient()
+    instrument(server, client)
+
+    out = await _call(server, "echo", {"a": 1})
+    await _flush()
+
+    assert out.root.isError is False
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["a"]
+
+
 async def test_jlowin_ownership_follows_the_dispatched_tool_version():
     # A request may pin a version in `_meta`; only a FastMCP that exposes
     # `extract_version_spec` honours it when dispatching, every other release
