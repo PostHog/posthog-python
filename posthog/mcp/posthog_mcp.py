@@ -28,7 +28,6 @@ from ._context_parameters import (
 )
 from ._conversation_id import (
     add_conversation_id_to_schema,
-    build_prompt_back,
     can_inject_conversation_id,
     inject_prompt_back,
     resolve_conversation_id,
@@ -153,8 +152,6 @@ class PostHogMCP(Client):
         self._mcp_exception_autocapture = mcp_exception_autocapture
         self._capture_model = capture_model
         self._model_parameter_injected: Dict[str, bool] = {}
-        # Correlate calls through an agent-carried `conversation_id` and a derived
-        # session id. Off leaves schemas, arguments, results, and capture unchanged.
         self._enable_conversation_id = enable_conversation_id
         self._conversation_ownership: Dict[str, _ConversationOwnership] = {}
         # (kind, name) collision warnings already emitted from prepare_tool_list,
@@ -258,7 +255,6 @@ class PostHogMCP(Client):
         duration_ms: Optional[float] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
         client_user_agent: Optional[str] = None,
         vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
@@ -271,7 +267,7 @@ class PostHogMCP(Client):
             MCPAnalyticsEventType.MCP_INITIALIZE,
             distinct_id,
             session_id,
-            conversation_id,
+            None,
             set_properties,
             groups,
             properties,
@@ -300,7 +296,6 @@ class PostHogMCP(Client):
         protocol_version: Optional[str] = None,
         distinct_id: Optional[str] = None,
         session_id: Optional[str] = None,
-        conversation_id: Optional[str] = None,
         client_user_agent: Optional[str] = None,
         vendor_client: Optional[str] = None,
         set_properties: Optional[JsonRecord] = None,
@@ -314,7 +309,7 @@ class PostHogMCP(Client):
             MCPAnalyticsEventType.MCP_TOOLS_LIST,
             distinct_id,
             session_id,
-            conversation_id,
+            None,
             set_properties,
             groups,
             properties,
@@ -543,8 +538,8 @@ class PostHogMCP(Client):
         shadowed). When model capture is enabled, resolve its value and source and
         strip the SDK-owned ``llm_model`` argument before dispatch. When
         conversation correlation is enabled, validate an echoed
-        ``conversation_id`` or mint a new one, strip the SDK-owned argument, and
-        derive the session id from it.
+        ``conversation_id`` or prepare a new one, strip the SDK-owned argument,
+        and derive the session from an echoed handle.
 
         Dispatch the returned ``args`` to your tool. Then pass the tool result and
         this prepared call to :meth:`prepare_tool_result`. Return its ``result``
@@ -589,9 +584,9 @@ class PostHogMCP(Client):
             llm_model, llm_model_source = resolve_model(
                 request_meta, args, allow_self_reported=analytics_owns_model
             )
-        prepared_args = _strip_context(args)
+        prepared_args = _strip_args(args, "context")
         if analytics_owns_model:
-            prepared_args = _strip_model(prepared_args)
+            prepared_args = _strip_args(prepared_args, "llm_model")
 
         ownership = (
             _conversation_ownership_of(original_tool)
@@ -602,10 +597,13 @@ class PostHogMCP(Client):
         can_read_conversation = self._enable_conversation_id and (
             ownership is None or ownership.conversation_id
         )
-        conversation_id, minted = resolve_conversation_id(can_read_conversation, args)
-        # A carried session stays stable until the agent echoes its own handle.
-        if minted and session_id:
-            conversation_id, minted = None, False
+        resolved_conversation_id, minted = resolve_conversation_id(
+            can_read_conversation, args
+        )
+        minted_conversation_id = (
+            resolved_conversation_id if minted and not session_id else None
+        )
+        conversation_id = None if minted else resolved_conversation_id
         if conversation_id:
             session_id = derive_session_id_from_conversation(conversation_id)
         if (
@@ -613,7 +611,7 @@ class PostHogMCP(Client):
             and ownership is not None
             and ownership.conversation_id
         ):
-            prepared_args = _strip_conversation_id(prepared_args)
+            prepared_args = _strip_args(prepared_args, "conversation_id")
         # A supplied `original_tool` is a real application tool by this name (it
         # comes from the host's own list, which never holds a virtual tool), so
         # the real tool wins — the stateless twin of the ownership check
@@ -650,7 +648,7 @@ class PostHogMCP(Client):
             session_id=session_id,
             conversation_id=conversation_id,
             _conversation_state=PreparedConversationState(
-                minted=minted,
+                minted_conversation_id=minted_conversation_id,
                 output_instructions=self._enable_conversation_id
                 and ownership is not None
                 and ownership.output_instructions,
@@ -667,32 +665,34 @@ class PostHogMCP(Client):
 
         Return the prepared ``result`` to the client, and capture with its
         ``session_id`` and ``conversation_id``. If a new handle could not reach
-        the client, ``conversation_id`` is omitted and the derived
-        ``session_id`` is kept."""
+        the client, ``conversation_id`` is omitted and the input ``session_id``
+        stays unchanged."""
         conversation_id = prepared_call.conversation_id
         session_id = prepared_call.session_id
-        state = prepared_call._conversation_state
-        if not conversation_id:
-            return PreparedToolResult(result, session_id, conversation_id)
-        if state is None:
-            # A call built outside prepare_tool_call: its delivery is unknown.
+        state = prepared_call._conversation_state or PreparedConversationState()
+        minted_conversation_id = state.minted_conversation_id
+        handle = conversation_id or minted_conversation_id
+        if not handle:
             return PreparedToolResult(result, session_id, None)
 
         prepared: Any = result
         delivered = False
         if state.output_instructions:
             prepared, delivered = mirror_instructions_into_structured_content(
-                prepared, conversation_id
+                prepared, handle
             )
-        if state.minted:
-            injected = _inject_prompt_back(prepared, conversation_id)
+        if minted_conversation_id:
+            injected = inject_prompt_back(prepared, handle)
             if injected is not prepared:
                 delivered = True
             prepared = injected
+            if delivered:
+                conversation_id = handle
+                session_id = derive_session_id_from_conversation(handle)
         return PreparedToolResult(
             prepared,
             session_id,
-            None if state.minted and not delivered else conversation_id,
+            None if minted_conversation_id and not delivered else conversation_id,
         )
 
     # --- internals -----------------------------------------------------------
@@ -713,8 +713,6 @@ class PostHogMCP(Client):
         event: Dict[str, Any] = {
             "event_type": event_type,
             "session_id": session_id,
-            # Pass the value from prepare_tool_result: it drops a newly minted
-            # handle that never reached the client.
             "conversation_id": conversation_id,
             "timestamp": timestamp or datetime.now(timezone.utc),
             "properties": properties,
@@ -833,16 +831,26 @@ class PostHogMCP(Client):
         if not self._enable_conversation_id:
             self._conversation_ownership = {}
             return tools
+        for tool_name, current in ownership.items():
+            previous = self._conversation_ownership.get(tool_name)
+            if previous is not None:
+                ownership[tool_name] = _ConversationOwnership(
+                    previous.conversation_id and current.conversation_id,
+                    previous.output_instructions and current.output_instructions,
+                )
         prepared = []
         for tool in tools:
             name = _tool_name(tool)
-            owned = ownership.get(name) if name is not None else None
-            if name is None or owned is None or owned == _NOT_OWNED:
+            if name is None:
+                prepared.append(tool)
+                continue
+            owned = ownership[name]
+            if owned == _NOT_OWNED:
                 prepared.append(tool)
                 continue
             injected, ownership[name] = _inject_conversation_fields(tool, name, owned)
             prepared.append(injected)
-        self._conversation_ownership = ownership
+        self._conversation_ownership.update(ownership)
         return prepared
 
 
@@ -868,22 +876,10 @@ def _apply_model(
     event["llm_model_source"] = source or "self_reported"
 
 
-def _strip_context(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
-    if not args or "context" not in args:
+def _strip_args(args: Optional[JsonRecord], *keys: str) -> Optional[JsonRecord]:
+    if not args or not any(key in args for key in keys):
         return args
-    return {k: v for k, v in args.items() if k != "context"}
-
-
-def _strip_model(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
-    if not args or "llm_model" not in args:
-        return args
-    return {k: v for k, v in args.items() if k != "llm_model"}
-
-
-def _strip_conversation_id(args: Optional[JsonRecord]) -> Optional[JsonRecord]:
-    if not args or "conversation_id" not in args:
-        return args
-    return {k: v for k, v in args.items() if k != "conversation_id"}
+    return {key: value for key, value in args.items() if key not in keys}
 
 
 def _inject_conversation_fields(
@@ -936,40 +932,6 @@ def _collect_conversation_ownership(
             )
         ownership[name] = found
     return ownership
-
-
-def _inject_prompt_back(result: Any, conversation_id: str) -> Any:
-    """Append the handle to a tuple, list, dict, or ``CallToolResult`` result's
-    ``content``, including a ``CallToolResult`` inside an MCP SDK 1.x
-    ``ServerResult``. Returns ``result`` itself when there is no content list to
-    append to."""
-    if isinstance(result, dict):
-        return inject_prompt_back(result, conversation_id)
-    block: Any = build_prompt_back(conversation_id)
-    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], list):
-        return ([*result[0], block], result[1])
-    if isinstance(result, list):
-        return [*result, block]
-    target = getattr(result, "root", result)
-    content = getattr(target, "content", None)
-    copy_model = getattr(target, "model_copy", None)
-    if not isinstance(content, list) or not callable(copy_model):
-        return result
-    # SDK model results use TextContent when the peer dependency is present.
-    # A custom model can still work without it and receives plain wire data.
-    try:
-        import mcp.types as mcp_types  # noqa: PLC0415
-
-        block = mcp_types.TextContent(type="text", text=block["text"])
-    except ImportError:
-        pass
-    try:
-        updated = copy_model(update={"content": [*content, block]})
-        if target is result:
-            return updated
-        return result.model_copy(update={"root": updated})
-    except Exception:  # noqa: BLE001 - never let delivery break the tool path
-        return result
 
 
 def _copy_tool(tool: Any) -> Optional[Any]:

@@ -420,6 +420,35 @@ def test_prepare_tool_list_adds_conversation_schemas_without_mutating_source():
     assert tools == [_sql_tool()]
 
 
+def test_prepare_tool_list_recognizes_its_conversation_declaration():
+    client, _ = make_client(capture_model=False)
+    prepared = client.prepare_tool_list([_sql_tool()])
+
+    prepared = client.prepare_tool_list(prepared)
+    call = client.prepare_tool_call(
+        "execute-sql", {"query": "select 1", "conversation_id": _CONVERSATION_ID}
+    )
+
+    assert call.args == {"query": "select 1"}
+    assert call.conversation_id == _CONVERSATION_ID
+
+
+def test_prepare_tool_list_keeps_ownership_across_pages():
+    client, _ = make_client(capture_model=False)
+    first = _sql_tool()
+    second = {**_sql_tool(), "name": "query-events"}
+
+    client.prepare_tool_list([first])
+    client.prepare_tool_list([second])
+
+    for name in ("execute-sql", "query-events"):
+        call = client.prepare_tool_call(
+            name, {"query": "select 1", "conversation_id": _CONVERSATION_ID}
+        )
+        assert call.args == {"query": "select 1"}
+        assert call.conversation_id == _CONVERSATION_ID
+
+
 def test_conversation_disabled_leaves_schemas_arguments_and_results_unchanged():
     client, _ = make_client(enable_conversation_id=False)
     prepared_tools = client.prepare_tool_list([_sql_tool()])
@@ -481,14 +510,17 @@ def test_prepare_tool_call_uses_original_tool_without_prior_listing():
     assert call.session_id == derive_session_id_from_conversation(_CONVERSATION_ID)
 
 
-def test_prepare_tool_call_mints_handles_and_derives_stable_sessions_across_clients():
+def test_prepare_tool_result_delivers_handles_and_derives_stable_sessions():
     client, _ = make_client()
     client.prepare_tool_list([_sql_tool()])
-    minted = client.prepare_tool_call(
+    minted_call = client.prepare_tool_call(
         "execute-sql", {"query": "select 1", "conversation_id": "invalid"}
     )
+    assert minted_call.args == {"query": "select 1"}
+    assert (minted_call.session_id, minted_call.conversation_id) == (None, None)
+
+    minted = client.prepare_tool_result({"content": []}, minted_call)
     assert _UUID7.match(minted.conversation_id)
-    assert minted.args == {"query": "select 1"}
     assert minted.session_id == derive_session_id_from_conversation(
         minted.conversation_id
     )
@@ -542,11 +574,14 @@ def test_prepare_tool_result_delivers_minted_handle_without_mutation(transport):
         "content": [{"type": "text", "text": "done"}],
         "structuredContent": {"rows": []},
     }
-    assert prepared.result["content"][-1] == _handle_block(call.conversation_id)
+    assert prepared.result["content"][-1] == _handle_block(prepared.conversation_id)
     assert prepared.result["structuredContent"][MCP_INSTRUCTIONS_KEY] == {
-        "conversation_id": call.conversation_id
+        "conversation_id": prepared.conversation_id
     }
-    assert prepared.conversation_id == call.conversation_id
+    assert _UUID7.match(prepared.conversation_id)
+    assert prepared.session_id == derive_session_id_from_conversation(
+        prepared.conversation_id
+    )
 
 
 @pytest.mark.parametrize("wrapped", [False, True], ids=["bare", "server-result"])
@@ -566,11 +601,11 @@ def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
 
     delivered = prepared.result.root if wrapped else prepared.result
     assert len(call_result.content) == 1
-    assert delivered.content[-1].text == _handle_block(call.conversation_id)["text"]
+    assert delivered.content[-1].text == _handle_block(prepared.conversation_id)["text"]
     assert delivered.structuredContent[MCP_INSTRUCTIONS_KEY] == {
-        "conversation_id": call.conversation_id
+        "conversation_id": prepared.conversation_id
     }
-    assert prepared.conversation_id == call.conversation_id
+    assert _UUID7.match(prepared.conversation_id)
 
 
 def test_prepare_tool_result_delivers_minted_handle_into_tuple_content():
@@ -583,8 +618,8 @@ def test_prepare_tool_result_delivers_minted_handle_into_tuple_content():
     prepared = client.prepare_tool_result(tool_result, call)
 
     assert len(content) == 1
-    assert prepared.result[0][-1] == _handle_block(call.conversation_id)
-    assert prepared.conversation_id == call.conversation_id
+    assert prepared.result[0][-1] == _handle_block(prepared.conversation_id)
+    assert _UUID7.match(prepared.conversation_id)
 
 
 def test_prepare_tool_result_copies_shared_custom_result_objects():
@@ -600,16 +635,20 @@ def test_prepare_tool_result_copies_shared_custom_result_objects():
     assert shared_result.structuredContent == {"rows": []}
     assert first.result is not shared_result
     assert second.result is not shared_result
+    assert first.result.content[-1].text == _handle_block(first.conversation_id)["text"]
+    assert (
+        second.result.content[-1].text == _handle_block(second.conversation_id)["text"]
+    )
     assert first.result.structuredContent[MCP_INSTRUCTIONS_KEY] == {
-        "conversation_id": first_call.conversation_id
+        "conversation_id": first.conversation_id
     }
     assert second.result.structuredContent[MCP_INSTRUCTIONS_KEY] == {
-        "conversation_id": second_call.conversation_id
+        "conversation_id": second.conversation_id
     }
-    assert first_call.conversation_id != second_call.conversation_id
+    assert first.conversation_id != second.conversation_id
 
 
-def test_prepare_tool_result_omits_conversation_without_delivery_state():
+def test_prepare_tool_result_preserves_an_echoed_conversation_without_delivery_state():
     client, _ = make_client()
     tool_result = {"content": []}
     call = PreparedToolCall(session_id="ses_123", conversation_id=_CONVERSATION_ID)
@@ -617,7 +656,10 @@ def test_prepare_tool_result_omits_conversation_without_delivery_state():
     prepared = client.prepare_tool_result(tool_result, call)
 
     assert prepared.result is tool_result
-    assert (prepared.session_id, prepared.conversation_id) == ("ses_123", None)
+    assert (prepared.session_id, prepared.conversation_id) == (
+        "ses_123",
+        _CONVERSATION_ID,
+    )
 
 
 def test_prepare_tool_result_preserves_application_structured_instructions():
@@ -638,7 +680,7 @@ def test_prepare_tool_result_preserves_application_structured_instructions():
     )
 
     assert prepared.result["structuredContent"][MCP_INSTRUCTIONS_KEY] == "app-value"
-    assert prepared.conversation_id == call.conversation_id
+    assert _UUID7.match(prepared.conversation_id)
 
 
 def test_prepare_tool_result_delivers_minted_handle_on_error_results():
@@ -649,11 +691,11 @@ def test_prepare_tool_result_delivers_minted_handle_on_error_results():
     prepared = client.prepare_tool_result({"content": [], "isError": True}, call)
 
     assert prepared.result["isError"] is True
-    assert _handle_block(call.conversation_id) in prepared.result["content"]
-    assert prepared.conversation_id == call.conversation_id
+    assert _handle_block(prepared.conversation_id) in prepared.result["content"]
+    assert _UUID7.match(prepared.conversation_id)
 
 
-def test_prepare_tool_result_omits_undelivered_minted_handle_but_keeps_session():
+def test_prepare_tool_result_omits_undelivered_minted_handle_and_session():
     client, _ = make_client()
     client.prepare_tool_list([_sql_tool()])
     call = client.prepare_tool_call("execute-sql", {})
@@ -663,7 +705,7 @@ def test_prepare_tool_result_omits_undelivered_minted_handle_but_keeps_session()
 
     assert prepared.result is tool_result
     assert prepared.conversation_id is None
-    assert prepared.session_id == call.session_id
+    assert prepared.session_id is None
 
 
 def test_prepare_tool_list_adds_conversation_to_virtual_tools():
@@ -677,7 +719,7 @@ def test_prepare_tool_list_adds_conversation_to_virtual_tools():
     assert virtual_tool["inputSchema"]["properties"]["conversation_id"]["type"] == (
         "string"
     )
-    assert result.result["content"][-1] == _handle_block(call.conversation_id)
+    assert result.result["content"][-1] == _handle_block(result.conversation_id)
 
 
 async def test_capture_tool_call_records_prepared_conversation_and_session():

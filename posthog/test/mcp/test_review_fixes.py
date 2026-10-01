@@ -231,7 +231,7 @@ def test_posthogmcp_usable_without_mcp_sdk():
         "    call = c.prepare_tool_call('search', {})\n"
         "    prepared = c.prepare_tool_result(raw, call)\n"
         "    content = prepared.result[0] if isinstance(prepared.result, tuple) else prepared.result\n"
-        "    assert content[-1] == {'type': 'text', 'text': '{\"conversation_id\": \"' + call.conversation_id + '\"}'}\n"
+        "    assert content[-1] == {'type': 'text', 'text': '{\"conversation_id\": \"' + prepared.conversation_id + '\"}'}\n"
         "print('RESULT_OK')\n"
         "try:\n"
         "    instrument(object(), c)\n"
