@@ -45,7 +45,10 @@ __all__ = [
     "FeedbackReport",
     "FeedbackSentiment",
     "FeedbackType",
+    "InputAliasMap",
     "PreparedToolCall",
+    "ShouldRecordInputKeyFn",
+    "ToolInputOptions",
 ]
 
 JsonRecord = Dict[str, Any]
@@ -176,6 +179,23 @@ IdentifyFn = Callable[
 ]  # (request, extra) -> Optional[UserIdentity] | awaitable
 IntentFallbackFn = Callable[..., Any]  # (request, extra) -> Optional[str] | awaitable
 EventPropertiesFn = Callable[..., Any]  # (request, extra) -> Optional[dict] | awaitable
+InputAliasMap = Dict[str, List[str]]
+
+
+class ToolInputKeyDetails(TypedDict):
+    declared: bool
+
+
+ShouldRecordInputKeyFn = Callable[[str, ToolInputKeyDetails], bool]
+ResolveInputAliasesFn = Callable[[str], Optional[InputAliasMap]]
+
+
+@dataclass
+class ToolInputOptions:
+    """Configure safe tool input field-name capture."""
+
+    should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
+    input_aliases: Optional[InputAliasMap] = None
 
 
 @dataclass
@@ -216,6 +236,12 @@ class MCPAnalyticsOptions:
     # Exact deployment identifier recorded as `$mcp_server_build`. Use an
     # immutable value such as a Git commit SHA or a container image digest.
     server_build: Optional[str] = None
+    # Decide which top-level argument names `$mcp_input_keys` records. The
+    # default records only names that the server's input schema declares.
+    should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
+    # Return the alternative names that one tool accepts. The SDK records alias
+    # use but does not change tool arguments.
+    resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
 
 
 @dataclass

@@ -87,6 +87,8 @@ class PostHogMCPAnalyticsProperty:
     IS_ERROR = "$mcp_is_error"
     INTENT = "$mcp_intent"
     INTENT_SOURCE = "$mcp_intent_source"
+    INPUT_ALIASES_USED = "$mcp_input_aliases_used"
+    INPUT_KEYS = "$mcp_input_keys"
     LLM_MODEL = "$mcp_llm_model"
     LLM_MODEL_SOURCE = "$mcp_llm_model_source"
     LISTED_TOOL_NAMES = "$mcp_listed_tool_names"

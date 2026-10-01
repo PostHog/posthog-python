@@ -339,6 +339,7 @@ alias posthog.integrations.django.contexts -> posthog.contexts
 alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
 alias posthog.mcp.CollectFeedbackOptions -> posthog.mcp.types.CollectFeedbackOptions
 alias posthog.mcp.FeedbackReport -> posthog.mcp.types.FeedbackReport
+alias posthog.mcp.InputAliasMap -> posthog.mcp.types.InputAliasMap
 alias posthog.mcp.MCPAnalyticsContextOptions -> posthog.mcp.types.MCPAnalyticsContextOptions
 alias posthog.mcp.MCPAnalyticsModelOptions -> posthog.mcp.types.MCPAnalyticsModelOptions
 alias posthog.mcp.MCPAnalyticsModelSource -> posthog.mcp.types.MCPAnalyticsModelSource
@@ -353,6 +354,8 @@ alias posthog.mcp.PreparedToolCall -> posthog.mcp.types.PreparedToolCall
 alias posthog.mcp.PreparedToolResult -> posthog.mcp.types.PreparedToolResult
 alias posthog.mcp.SEND_FEEDBACK_TOOL_NAME -> posthog.mcp.feedback.SEND_FEEDBACK_TOOL_NAME
 alias posthog.mcp.SessionTokenPayload -> posthog.mcp.session_token.SessionTokenPayload
+alias posthog.mcp.ShouldRecordInputKeyFn -> posthog.mcp.types.ShouldRecordInputKeyFn
+alias posthog.mcp.ToolInputOptions -> posthog.mcp.types.ToolInputOptions
 alias posthog.mcp.UserIdentity -> posthog.mcp.types.UserIdentity
 alias posthog.mcp.__version__ -> posthog.mcp.version.__version__
 alias posthog.mcp.asgi.MCP_SESSION_HEADER -> posthog.mcp.session_token.MCP_SESSION_HEADER
@@ -786,6 +789,8 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_SUMMARY = '
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_TASK_COMPLETED = '$mcp_feedback_task_completed'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_TOOL = '$mcp_feedback_tool'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_TYPE = '$mcp_feedback_type'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INPUT_ALIASES_USED = '$mcp_input_aliases_used'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INPUT_KEYS = '$mcp_input_keys'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT = '$mcp_intent'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT_SOURCE = '$mcp_intent_source'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.IS_ERROR = '$mcp_is_error'
@@ -831,6 +836,7 @@ attribute posthog.mcp.types.FeedbackReport.task_completed: Optional[bool] = None
 attribute posthog.mcp.types.FeedbackReport.tool_name: Optional[str] = None
 attribute posthog.mcp.types.FeedbackSentiment = Literal['positive', 'neutral', 'negative', 'mixed']
 attribute posthog.mcp.types.FeedbackType = Literal['missing_capability', 'issue', 'praise', 'other']
+attribute posthog.mcp.types.InputAliasMap = Dict[str, List[str]]
 attribute posthog.mcp.types.MCPAnalyticsContextOptions.description: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsModelOptions.description: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsModelSource = Literal['client_metadata', 'self_reported']
@@ -846,7 +852,9 @@ attribute posthog.mcp.types.MCPAnalyticsOptions.intent_fallback: Optional[Intent
 attribute posthog.mcp.types.MCPAnalyticsOptions.logger: Optional[LoggerFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.missing_capability_tool_name: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.report_missing: bool = False
+attribute posthog.mcp.types.MCPAnalyticsOptions.resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.server_build: Optional[str] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
 attribute posthog.mcp.types.PreparedToolCall.args: Optional[JsonRecord] = None
 attribute posthog.mcp.types.PreparedToolCall.conversation_id: Optional[str] = None
 attribute posthog.mcp.types.PreparedToolCall.feedback_report: Optional[FeedbackReport] = None
@@ -857,6 +865,9 @@ attribute posthog.mcp.types.PreparedToolCall.is_missing_capability: bool = False
 attribute posthog.mcp.types.PreparedToolCall.llm_model: Optional[str] = None
 attribute posthog.mcp.types.PreparedToolCall.llm_model_source: Optional[MCPAnalyticsModelSource] = None
 attribute posthog.mcp.types.PreparedToolCall.session_id: Optional[str] = None
+attribute posthog.mcp.types.ShouldRecordInputKeyFn = Callable[[str, ToolInputKeyDetails], bool]
+attribute posthog.mcp.types.ToolInputOptions.input_aliases: Optional[InputAliasMap] = None
+attribute posthog.mcp.types.ToolInputOptions.should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
 attribute posthog.mcp.types.UserIdentity.distinct_id: str
 attribute posthog.mcp.types.UserIdentity.groups: Optional[Dict[str, str]] = None
 attribute posthog.mcp.types.UserIdentity.properties: Optional[JsonRecord] = None
@@ -1056,8 +1067,9 @@ class posthog.mcp.types.CollectFeedbackOptions(tool_name: Optional[str] = None, 
 class posthog.mcp.types.FeedbackReport(feedback_type: str = 'other', summary: str = '', sentiment: Optional[str] = None, friction_points: Optional[str] = None, suggested_improvement: Optional[str] = None, details: Optional[str] = None, tool_name: Optional[str] = None, task_completed: Optional[bool] = None, extras: JsonRecord = dict(), raw: JsonRecord = dict())
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = None)
-class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, _conversation_state: Optional[PreparedConversationState] = None)
+class posthog.mcp.types.ToolInputOptions(should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, input_aliases: Optional[InputAliasMap] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
 class posthog.metrics_capture.PostHogMetrics(client, config: Optional[dict] = None)
 class posthog.poller.Poller(interval, execute, *args, **kwargs)

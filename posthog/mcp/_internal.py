@@ -88,6 +88,11 @@ class MCPAnalyticsData:
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
+    # Original tool input schemas by PostHog session. This keeps field-name
+    # privacy decisions isolated when a server advertises user-specific tools.
+    tool_input_schemas: "OrderedDict[str, Dict[str, Any]]" = field(
+        default_factory=OrderedDict
+    )
     # True only when PostHog added llm_model to this tool's advertised schema.
     # Missing/False fails closed so an application-owned field is never read or stripped.
     tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)

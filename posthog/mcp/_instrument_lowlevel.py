@@ -472,7 +472,7 @@ def _wrap_list_tools(
 
         # Zero advertised tools is treated as an errored tools/list before the
         # virtual missing-capability tool is appended.
-        names, empty = collect_listed_tools(data, tools)
+        names, empty = collect_listed_tools(data, tools, lifecycle.session_id)
         injection = resolve_virtual_tool_injection(
             data,
             tools,

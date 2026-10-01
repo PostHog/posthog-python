@@ -41,6 +41,7 @@ from .feedback import (
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._tool_input import get_tool_input_properties
 from ._model_parameters import (
     add_model_parameter_to_schema,
     get_model_description,
@@ -55,7 +56,7 @@ from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import resolve_missing_capability_tool_name
-from .types import CollectFeedbackOptions, FeedbackReport
+from .types import CollectFeedbackOptions, FeedbackReport, ToolInputOptions
 
 # The virtual tools this SDK advertises into tools/list. Every piece of per-tool
 # policy -- enable switch, configured name, warning text, warn-once
@@ -677,8 +678,24 @@ async def record_tool_call(
                 event["error"] = capture_exception(result)
 
         props = await resolve_event_properties(data, request, extra)
-        if props is not None:
-            event["properties"] = props
+        input_aliases = None
+        if data.options.resolve_input_aliases is not None:
+            try:
+                input_aliases = data.options.resolve_input_aliases(name)
+            except Exception as err:  # noqa: BLE001 - analytics callbacks are isolated
+                log(f"Warning: resolve_input_aliases failed for tool {name}: {err}")
+        schema = data.tool_input_schemas.get(session_id, {}).get(name)
+        event["properties"] = {
+            **(props or {}),
+            **get_tool_input_properties(
+                arguments or {},
+                schema,
+                ToolInputOptions(
+                    should_record_input_key=data.options.should_record_input_key,
+                    input_aliases=input_aliases,
+                ),
+            ),
+        }
 
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
@@ -991,9 +1008,12 @@ def read_tool_category(tool: Any) -> Optional[str]:
     return None
 
 
-def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str], bool]:
+def collect_listed_tools(
+    data: MCPAnalyticsData, tools: list, session_id: Optional[str] = None
+) -> tuple[List[str], bool]:
     """Cache common tool metadata and return the pre-injection listing summary."""
     names = []
+    schemas = data.tool_input_schemas.get(session_id, {}) if session_id else None
     for tool in tools:
         names.append(tool.name)
         if getattr(tool, "description", None):
@@ -1001,6 +1021,16 @@ def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str]
         category = read_tool_category(tool)
         if category:
             data.tool_categories[tool.name] = category
+        if schemas is not None:
+            schema = getattr(tool, "inputSchema", None)
+            if schema is None:
+                schema = getattr(tool, "input_schema", None)
+            schemas[tool.name] = schema
+    if session_id and schemas is not None:
+        data.tool_input_schemas[session_id] = schemas
+        data.tool_input_schemas.move_to_end(session_id)
+        while len(data.tool_input_schemas) > 1000:
+            data.tool_input_schemas.popitem(last=False)
     return names, not tools
 
 

@@ -695,7 +695,7 @@ def _wrap_v2_list_tools(
 
         tools = list(getattr(result, "tools", []) or [])
         # Empty is computed before adding the virtual missing-capability tool.
-        names, empty = collect_listed_tools(data, tools)
+        names, empty = collect_listed_tools(data, tools, lifecycle.session_id)
         injection = resolve_virtual_tool_injection(
             data, tools, is_first_page=is_first_listing_page(params)
         )

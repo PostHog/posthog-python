@@ -67,6 +67,35 @@ The value must contain 1 to 256 characters. The SDK records it as
 `$mcp_server_build` on all MCP events. `PostHogMCP.capture()` also adds it to
 custom events unless the event provides its own value.
 
+## Capture safe input field names
+
+Tool-call events include `$mcp_input_keys`. The SDK records names from the
+server's input schema. It replaces unknown names with one `[redacted]` entry.
+Argument values do not affect this property.
+
+Use `resolve_input_aliases` when a tool accepts alternative names. The map uses
+each canonical name as a key. Its value lists accepted aliases in server order.
+
+```python
+instrument(
+    server,
+    posthog,
+    MCPAnalyticsOptions(
+        resolve_input_aliases=lambda tool_name: (
+            {"location": ["city", "place"]}
+            if tool_name == "weather-current"
+            else None
+        )
+    ),
+)
+```
+
+The SDK records `city` in `$mcp_input_keys`. It also records
+`city:location` in `$mcp_input_aliases_used`. The SDK does not change the call.
+
+Custom dispatchers can call `get_tool_input_properties()` and add its result to
+the `properties` argument of `capture_tool_call()`.
+
 Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
 high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
 strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.

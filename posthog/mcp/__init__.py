@@ -46,6 +46,7 @@ from .constants import (
 )
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import drain_pending
+from ._tool_input import get_tool_input_properties
 from ._internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
@@ -82,12 +83,15 @@ from .types import (
     CaptureEventData,
     CollectFeedbackOptions,
     FeedbackReport,
+    InputAliasMap,
     MCPAnalyticsContextOptions,
     MCPAnalyticsModelOptions,
     MCPAnalyticsModelSource,
     MCPAnalyticsOptions,
     PreparedToolCall,
     PreparedToolResult,
+    ShouldRecordInputKeyFn,
+    ToolInputOptions,
     UserIdentity,
 )
 from .version import __version__
@@ -104,8 +108,12 @@ __all__ = [
     "CaptureEventData",
     "CollectFeedbackOptions",
     "FeedbackReport",
+    "InputAliasMap",
     "PreparedToolCall",
     "PreparedToolResult",
+    "ShouldRecordInputKeyFn",
+    "ToolInputOptions",
+    "get_tool_input_properties",
     "get_more_tools_result",
     "send_feedback_result",
     "SEND_FEEDBACK_TOOL_NAME",
