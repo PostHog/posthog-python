@@ -155,6 +155,10 @@ def _authority_starts(value: str) -> List[Tuple[int, str]]:
     character seen before it. One forward pass: the cursor never moves backwards,
     so a value carrying thousands of addresses costs the same per character as one
     carrying a single address."""
+    # The search tries up to 64 scheme characters at every position, which a long
+    # base64 `data:` URI turns into seconds; without `://` it cannot match at all.
+    if "://" not in value:
+        return []
     query, fragment, fragment_tail = _structural_delimiters(value)
     starts: List[Tuple[int, str]] = []
     cursor = 0

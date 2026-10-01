@@ -769,6 +769,17 @@ def test_sanitize_url_is_not_quadratic_on_many_addresses():
     assert time.monotonic() - start < 1.0
 
 
+def test_sanitize_passes_a_large_image_inlined_in_html_quickly():
+    # An HTML email embeds its images as `data:` URIs, one URL-shaped match as
+    # long as the image, so it cannot be cut out of the scanned head.
+    import time
+
+    html = f'<p>Hi</p><img src="data:image/png;base64,{"iVBORw0KGgo" * 1_000_000}" alt="logo"/>'
+    start = time.monotonic()
+    assert sanitize_captured_value(html) == html
+    assert time.monotonic() - start < 1.0
+
+
 def test_redact_pii_is_not_quadratic_on_pathological_input():
     # A 100k-char run with an `@` but no valid TLD is the worst case for an
     # unbounded email pattern. With bounded quantifiers this stays linear; a
