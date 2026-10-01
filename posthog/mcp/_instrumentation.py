@@ -448,6 +448,7 @@ class ToolCallLifecycle:
     feedback_name: Optional[str]
     conversation_id: Optional[str]
     minted_conversation_id: bool
+    input_schema: Any
 
     @property
     def is_missing_capability(self) -> bool:
@@ -547,6 +548,7 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             conversation_id=conversation_id,
             extra=self.extra,
+            input_schema=self.input_schema,
         )
 
     async def record_result(
@@ -568,6 +570,7 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             conversation_id=conversation_id,
             extra=self.extra,
+            input_schema=self.input_schema,
         )
 
 
@@ -584,6 +587,7 @@ def start_tool_call_lifecycle(
     client_version: Optional[str],
     protocol_version: Optional[str],
     extra: Dict[str, Any],
+    input_schema: Any = None,
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
     enabled = enabled_virtual_tool_names(data)
@@ -617,6 +621,7 @@ def start_tool_call_lifecycle(
         feedback_name=feedback_name,
         conversation_id=conversation_id,
         minted_conversation_id=minted,
+        input_schema=input_schema,
     )
 
 
@@ -636,6 +641,7 @@ async def record_tool_call(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    input_schema: Any = None,
 ) -> None:
     # Analytics must never change what the tool returns or raises: any failure
     # building/publishing the event is logged and swallowed here.
@@ -684,12 +690,11 @@ async def record_tool_call(
                 input_aliases = data.options.resolve_input_aliases(name)
             except Exception as err:  # noqa: BLE001 - analytics callbacks are isolated
                 log(f"Warning: resolve_input_aliases failed for tool {name}: {err}")
-        schema = data.tool_input_schemas.get(session_id, {}).get(name)
         event["properties"] = {
             **(props or {}),
             **get_tool_input_properties(
                 arguments or {},
-                schema,
+                input_schema,
                 ToolInputOptions(
                     should_record_input_key=data.options.should_record_input_key,
                     input_aliases=input_aliases,
@@ -1008,12 +1013,9 @@ def read_tool_category(tool: Any) -> Optional[str]:
     return None
 
 
-def collect_listed_tools(
-    data: MCPAnalyticsData, tools: list, session_id: Optional[str] = None
-) -> tuple[List[str], bool]:
+def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str], bool]:
     """Cache common tool metadata and return the pre-injection listing summary."""
     names = []
-    schemas = data.tool_input_schemas.get(session_id, {}) if session_id else None
     for tool in tools:
         names.append(tool.name)
         if getattr(tool, "description", None):
@@ -1021,16 +1023,6 @@ def collect_listed_tools(
         category = read_tool_category(tool)
         if category:
             data.tool_categories[tool.name] = category
-        if schemas is not None:
-            schema = getattr(tool, "inputSchema", None)
-            if schema is None:
-                schema = getattr(tool, "input_schema", None)
-            schemas[tool.name] = schema
-    if session_id and schemas is not None:
-        data.tool_input_schemas[session_id] = schemas
-        data.tool_input_schemas.move_to_end(session_id)
-        while len(data.tool_input_schemas) > 1000:
-            data.tool_input_schemas.popitem(last=False)
     return names, not tools
 
 

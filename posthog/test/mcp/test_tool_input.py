@@ -68,6 +68,33 @@ def test_canonical_name_prevents_alias_use_record():
     assert result == {"$mcp_input_keys": ["experiment_id", "id"]}
 
 
+def test_alias_telemetry_uses_the_recording_rule():
+    result = get_tool_input_properties(
+        {"privateAlias": 1},
+        {"properties": {"id": {}}},
+        ToolInputOptions(
+            input_aliases={"id": ["privateAlias"]},
+            should_record_input_key=lambda key, _details: key != "privateAlias",
+        ),
+    )
+
+    assert result == {"$mcp_input_keys": ["[redacted]"]}
+
+
+def test_long_alias_does_not_hide_a_later_valid_alias():
+    long_alias = "x" * 65
+    result = get_tool_input_properties(
+        {long_alias: 1, "validAlias": 2},
+        {"properties": {"id": {}}},
+        ToolInputOptions(input_aliases={"id": [long_alias, "validAlias"]}),
+    )
+
+    assert result == {
+        "$mcp_input_keys": ["validAlias", "[redacted]"],
+        "$mcp_input_aliases_used": ["validAlias:id"],
+    }
+
+
 def test_bounds_names_and_fails_closed():
     properties = {f"key{i}": {} for i in range(30)}
     result = get_tool_input_properties(properties, {"properties": properties})

@@ -186,10 +186,10 @@ def _wrap_call_tool(
     async def handler(req: Any) -> Any:
         name = req.params.name
         arguments = dict(req.params.arguments or {})
-        strip, model_ours = (
+        strip, model_ours, input_schema = (
             await _standalone_ownership(data, high_level, name, req.params.meta)
             if strip_injected
-            else (set(), data.tool_model_parameter_injected.get(name))
+            else (set(), data.tool_model_parameter_injected.get(name), None)
         )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
@@ -212,6 +212,7 @@ def _wrap_call_tool(
             client_version=client_version,
             protocol_version=protocol_version,
             extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
+            input_schema=input_schema,
         )
 
         if lifecycle.is_missing_capability and (
@@ -472,7 +473,7 @@ def _wrap_list_tools(
 
         # Zero advertised tools is treated as an errored tools/list before the
         # virtual missing-capability tool is appended.
-        names, empty = collect_listed_tools(data, tools, lifecycle.session_id)
+        names, empty = collect_listed_tools(data, tools)
         injection = resolve_virtual_tool_injection(
             data,
             tools,
@@ -565,10 +566,11 @@ _INJECTED_KEYS = ("context", "conversation_id", "llm_model")
 
 async def _standalone_ownership(
     data: MCPAnalyticsData, high_level: Any, name: str, meta: Any
-) -> Tuple[set, Optional[bool]]:
+) -> Tuple[set, Optional[bool], Optional[Dict[str, Any]]]:
     """Ownership of the injected arguments on jlowin's standalone FastMCP: the
     keys to strip before it validates the call, and whether ``llm_model`` is
-    ours (``None`` when nothing can say).
+    ours (``None`` when nothing can say). The third item is the trusted schema
+    for input-name analytics, or ``None`` when middleware can change dispatch.
 
     Only keys injected under the current options are candidates. ``context``
     and ``conversation_id`` are stripped unless the registered schema (or,
@@ -580,17 +582,41 @@ async def _standalone_ownership(
     stays and is still read (posthog-js ADR-0011).
     """
     try:
-        declared, model_injectable = await _registry_view(high_level, name, meta)
+        declared, model_injectable, input_schema = await _registry_view(
+            high_level, name, meta
+        )
         model_ours = data.tool_model_parameter_injected.get(name, model_injectable)
         if _dispatch_can_differ(high_level):
             model_ours = False
+            input_schema = None
     except Exception:  # noqa: BLE001 - ownership inference must never prevent dispatch
-        declared, model_ours = None, None
+        declared, model_ours, input_schema = None, None, None
     candidates = _injected_keys(data)
     strip = {k for k in candidates - {"llm_model"} if k not in (declared or set())}
     if "llm_model" in candidates and model_ours:
         strip.add("llm_model")
-    return strip, model_ours
+    return strip, model_ours, input_schema
+
+
+def _tool_schema_view(
+    high_level: Any, tool: Any
+) -> Tuple[Optional[set], Optional[bool], Optional[Dict[str, Any]]]:
+    if tool is None:
+        return None, None, None
+    schema = getattr(tool, "parameters", None)
+    if isinstance(schema, dict):
+        declared, injectable = _schema_view(
+            schema, dereferenced=_server_dereferences(high_level)
+        )
+        return declared, injectable, schema
+    fn = getattr(tool, "fn", None)
+    if fn is None:
+        return set(), True, None
+    try:
+        declared = {k for k in _INJECTED_KEYS if k in inspect.signature(fn).parameters}
+    except Exception:  # noqa: BLE001 - introspection is best-effort
+        return set(), True, None
+    return declared, "llm_model" not in declared, None
 
 
 def _injected_keys(data: MCPAnalyticsData) -> set:
@@ -609,7 +635,7 @@ def _injected_keys(data: MCPAnalyticsData) -> set:
 
 async def _registry_view(
     high_level: Any, name: str, meta: Any
-) -> Tuple[Optional[set], Optional[bool]]:
+) -> Tuple[Optional[set], Optional[bool], Optional[Dict[str, Any]]]:
     """What the registered tool says about the injected keys: which of
     ``_INJECTED_KEYS`` it declares itself, and whether a listing would have
     injected ``llm_model`` into its schema (the same test the listing applies,
@@ -617,27 +643,16 @@ async def _registry_view(
     subclass may have no function) else the signature. The registry is read
     directly, never through middleware, so a cold instance answers without a
     listing and rate limiters are not charged. ``(None, None)`` when the
-    registry has no such tool or cannot be read."""
+    registry has no such tool or cannot be read. The third item is the tool's
+    input schema when the registry supplies one."""
     try:
         tool = await _registered_tool(high_level, name, meta)
     except Exception as error:  # noqa: BLE001 - introspection is best-effort
         if not isinstance(error, _tool_lookup_not_found_errors()):
             warn_ownership_lookup_failed(name, error)
-            return set(_INJECTED_KEYS), None
-        return None, None
-    if tool is None:
-        return None, None
-    schema = getattr(tool, "parameters", None)
-    if isinstance(schema, dict):
-        return _schema_view(schema, dereferenced=_server_dereferences(high_level))
-    fn = getattr(tool, "fn", None)
-    if fn is None:
-        return set(), True
-    try:
-        declared = {k for k in _INJECTED_KEYS if k in inspect.signature(fn).parameters}
-    except Exception:  # noqa: BLE001 - introspection is best-effort
-        return set(), True
-    return declared, "llm_model" not in declared
+            return set(_INJECTED_KEYS), None, None
+        return None, None, None
+    return _tool_schema_view(high_level, tool)
 
 
 async def _registered_tool(high_level: Any, name: str, meta: Any) -> Any:

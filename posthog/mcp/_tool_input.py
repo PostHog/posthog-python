@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .constants import PostHogMCPAnalyticsProperty
 from .types import InputAliasMap, JsonRecord, ToolInputOptions
@@ -32,13 +32,20 @@ def _alias_names(aliases: Optional[InputAliasMap]) -> List[str]:
 
 
 def _aliases_used(
-    aliases: Optional[InputAliasMap], input_value: Dict[str, Any]
+    aliases: Optional[InputAliasMap],
+    input_value: Dict[str, Any],
+    can_record: Callable[[str], bool],
 ) -> List[str]:
     if not isinstance(aliases, dict):
         return []
     used = []
     for canonical, names in aliases.items():
-        if not isinstance(canonical, str) or canonical in input_value:
+        if (
+            not isinstance(canonical, str)
+            or canonical in input_value
+            or len(canonical) > _MAX_KEY_LENGTH
+            or not can_record(canonical)
+        ):
             continue
         names_value: Any = names
         if not isinstance(names_value, (list, tuple)):
@@ -47,15 +54,14 @@ def _aliases_used(
             (
                 name
                 for name in names_value
-                if isinstance(name, str) and name in input_value
+                if isinstance(name, str)
+                and name in input_value
+                and len(name) <= _MAX_KEY_LENGTH
+                and can_record(name)
             ),
             None,
         )
-        if (
-            alias
-            and len(alias) <= _MAX_KEY_LENGTH
-            and len(canonical) <= _MAX_KEY_LENGTH
-        ):
+        if alias:
             used.append(f"{alias}:{canonical}")
     return sorted(used)[:_MAX_INPUT_KEYS]
 
@@ -84,8 +90,12 @@ def get_tool_input_properties(
         declared: List[str] = []
         undeclared: List[str] = []
         has_redacted = False
-        for key in keys:
-            is_declared = key in known
+        recording_decisions: Dict[tuple[str, bool], bool] = {}
+
+        def can_record(key: str, is_declared: bool) -> bool:
+            cache_key = (key, is_declared)
+            if cache_key in recording_decisions:
+                return recording_decisions[cache_key]
             record = is_declared
             if resolved.should_record_input_key is not None:
                 try:
@@ -95,7 +105,12 @@ def get_tool_input_properties(
                     )
                 except Exception:  # noqa: BLE001 - analytics callbacks fail closed
                     record = False
-            if len(key) <= _MAX_KEY_LENGTH and record:
+            recording_decisions[cache_key] = record
+            return record
+
+        for key in keys:
+            is_declared = key in known
+            if len(key) <= _MAX_KEY_LENGTH and can_record(key, is_declared):
                 (declared if is_declared else undeclared).append(key)
             else:
                 has_redacted = True
@@ -103,7 +118,9 @@ def get_tool_input_properties(
         visible = [*sorted(declared), *sorted(undeclared)][:_MAX_INPUT_KEYS]
         if has_redacted and len(visible) < _MAX_INPUT_KEYS:
             visible.append("[redacted]")
-        aliases_used = _aliases_used(resolved.input_aliases, input_value)
+        aliases_used = _aliases_used(
+            resolved.input_aliases, input_value, lambda key: can_record(key, True)
+        )
         result: JsonRecord = {
             PostHogMCPAnalyticsProperty.INPUT_KEYS: visible,
         }

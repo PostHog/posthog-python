@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from dataclasses import replace
 from typing import Any, Dict, Optional, Tuple
 
 import mcp.types as mcp_types
@@ -130,6 +131,8 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 mcp_types.TextContent(type="text", text=text)
                 for text in lifecycle.virtual_result_texts(reply)
             ]
+
+        lifecycle = replace(lifecycle, input_schema=_tool_input_schema(server, name))
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -272,7 +275,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
         duration_ms = (time.monotonic() - start) * 1000
         tools = extract_tools(result)
         # Empty is computed before adding the virtual missing-capability tool.
-        names, empty = collect_listed_tools(data, tools, lifecycle.session_id)
+        names, empty = collect_listed_tools(data, tools)
         injection = resolve_virtual_tool_injection(
             data,
             tools,
@@ -333,6 +336,15 @@ def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
+
+
+def _tool_input_schema(server: Any, name: str) -> Optional[Dict[str, Any]]:
+    """Return the schema from the tool that this server will call."""
+    try:
+        schema = server._tool_manager.get_tool(name).parameters
+    except Exception:  # noqa: BLE001 - analytics must not break the call
+        return None
+    return schema if isinstance(schema, dict) else None
 
 
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:
