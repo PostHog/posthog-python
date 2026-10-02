@@ -15,8 +15,43 @@ _ANALYTICS_KEYS = {"context", "llm_model", "conversation_id"}
 def _declared_properties(schema: Any) -> Dict[str, Any]:
     if not isinstance(schema, dict):
         return {}
-    properties = schema.get("properties")
-    return properties if isinstance(properties, dict) else {}
+    nodes = _root_reference_chain(schema)
+    if nodes is None:
+        return {}
+    return {
+        key: value
+        for node in nodes
+        if isinstance(node.get("properties"), dict)
+        for key, value in node["properties"].items()
+    }
+
+
+def _root_reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
+    nodes = [schema]
+    while len(nodes) <= 8:
+        ref = nodes[-1].get("$ref")
+        if ref is None:
+            return nodes
+        if not isinstance(ref, str) or not ref.startswith("#/"):
+            return None
+        target: Any = schema
+        for part in ref[2:].split("/"):
+            key = part.replace("~1", "/").replace("~0", "~")
+            target = target.get(key) if isinstance(target, dict) else None
+        if not isinstance(target, dict) or any(target is node for node in nodes):
+            return None
+        nodes.append(target)
+    return None
+
+
+def get_registered_tool_input_schema(
+    server: Any, name: str
+) -> Optional[Dict[str, Any]]:
+    try:
+        schema = server._tool_manager.get_tool(name).parameters
+    except Exception:  # noqa: BLE001 - analytics must not break the call
+        return None
+    return schema if isinstance(schema, dict) else None
 
 
 def _alias_names(aliases: Optional[InputAliasMap]) -> List[str]:
@@ -54,14 +89,11 @@ def _aliases_used(
             (
                 name
                 for name in names_value
-                if isinstance(name, str)
-                and name in input_value
-                and len(name) <= _MAX_KEY_LENGTH
-                and can_record(name)
+                if isinstance(name, str) and name in input_value
             ),
             None,
         )
-        if alias:
+        if alias and len(alias) <= _MAX_KEY_LENGTH and can_record(alias):
             used.append(f"{alias}:{canonical}")
     return sorted(used)[:_MAX_INPUT_KEYS]
 

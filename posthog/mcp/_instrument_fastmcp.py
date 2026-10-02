@@ -49,6 +49,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._tool_input import get_registered_tool_input_schema
 from .logger import log
 from .tools import get_more_tools_result_text
 
@@ -132,7 +133,10 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 for text in lifecycle.virtual_result_texts(reply)
             ]
 
-        lifecycle = replace(lifecycle, input_schema=_tool_input_schema(server, name))
+        lifecycle = replace(
+            lifecycle,
+            input_schema=get_registered_tool_input_schema(server, name),
+        )
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -336,15 +340,6 @@ def _name_owned_by_real_tool(server: Any, name: str) -> Optional[bool]:
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
-
-
-def _tool_input_schema(server: Any, name: str) -> Optional[Dict[str, Any]]:
-    """Return the schema from the tool that this server will call."""
-    try:
-        schema = server._tool_manager.get_tool(name).parameters
-    except Exception:  # noqa: BLE001 - analytics must not break the call
-        return None
-    return schema if isinstance(schema, dict) else None
 
 
 def _tool_owns_param(server: Any, name: str, param: str) -> bool:

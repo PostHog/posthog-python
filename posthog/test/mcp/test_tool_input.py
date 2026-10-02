@@ -1,3 +1,5 @@
+import pytest
+
 from posthog.mcp import ToolInputOptions, get_tool_input_properties
 
 
@@ -35,37 +37,38 @@ def test_custom_rule_replaces_the_default_and_keeps_declared_names_first():
     assert ("experiment_id", False) in seen
 
 
-def test_records_alias_names_and_the_first_alias_used():
-    result = get_tool_input_properties(
-        {"experimentId": 1, "experiment_id": 2, "flagKey": "k", "other": 3},
-        {"properties": {"id": {}, "key": {}}},
-        ToolInputOptions(
-            input_aliases={
-                "id": ["experimentId", "experiment_id"],
-                "key": ["flagKey"],
-            }
+@pytest.mark.parametrize(
+    ("input_value", "schema", "aliases", "expected"),
+    [
+        (
+            {"experimentId": 1, "experiment_id": 2, "flagKey": "k", "other": 3},
+            {"properties": {"id": {}, "key": {}}},
+            {"id": ["experimentId", "experiment_id"], "key": ["flagKey"]},
+            {
+                "$mcp_input_keys": [
+                    "experimentId",
+                    "experiment_id",
+                    "flagKey",
+                    "[redacted]",
+                ],
+                "$mcp_input_aliases_used": ["experimentId:id", "flagKey:key"],
+            },
         ),
+        (
+            {"id": 1, "experiment_id": 2},
+            {"properties": {"id": {}}},
+            {"id": ["experiment_id"]},
+            {"$mcp_input_keys": ["experiment_id", "id"]},
+        ),
+    ],
+)
+def test_records_input_aliases(input_value, schema, aliases, expected):
+    assert (
+        get_tool_input_properties(
+            input_value, schema, ToolInputOptions(input_aliases=aliases)
+        )
+        == expected
     )
-
-    assert result == {
-        "$mcp_input_keys": [
-            "experimentId",
-            "experiment_id",
-            "flagKey",
-            "[redacted]",
-        ],
-        "$mcp_input_aliases_used": ["experimentId:id", "flagKey:key"],
-    }
-
-
-def test_canonical_name_prevents_alias_use_record():
-    result = get_tool_input_properties(
-        {"id": 1, "experiment_id": 2},
-        {"properties": {"id": {}}},
-        ToolInputOptions(input_aliases={"id": ["experiment_id"]}),
-    )
-
-    assert result == {"$mcp_input_keys": ["experiment_id", "id"]}
 
 
 def test_alias_telemetry_uses_the_recording_rule():
@@ -81,7 +84,7 @@ def test_alias_telemetry_uses_the_recording_rule():
     assert result == {"$mcp_input_keys": ["[redacted]"]}
 
 
-def test_long_alias_does_not_hide_a_later_valid_alias():
+def test_first_present_alias_controls_alias_telemetry():
     long_alias = "x" * 65
     result = get_tool_input_properties(
         {long_alias: 1, "validAlias": 2},
@@ -89,9 +92,17 @@ def test_long_alias_does_not_hide_a_later_valid_alias():
         ToolInputOptions(input_aliases={"id": [long_alias, "validAlias"]}),
     )
 
-    assert result == {
-        "$mcp_input_keys": ["validAlias", "[redacted]"],
-        "$mcp_input_aliases_used": ["validAlias:id"],
+    assert result == {"$mcp_input_keys": ["validAlias", "[redacted]"]}
+
+
+def test_resolves_local_root_references():
+    schema = {
+        "$ref": "#/$defs/Args",
+        "$defs": {"Args": {"type": "object", "properties": {"id": {"type": "string"}}}},
+    }
+
+    assert get_tool_input_properties({"id": 1, "private@example.com": 2}, schema) == {
+        "$mcp_input_keys": ["id", "[redacted]"]
     }
 
 

@@ -73,6 +73,14 @@ Tool-call events include `$mcp_input_keys`. The SDK records names from the
 server's input schema. It replaces unknown names with one `[redacted]` entry.
 Argument values do not affect this property.
 
+The SDK records at most 20 names. Each name can contain at most 64 characters.
+Use `should_record_input_key` to control names in both input properties. The
+callback receives the name and `{"declared": bool}`. Return `True` only for
+names that the SDK can record.
+
+Raw low-level servers have no trusted tool registry. The SDK redacts names when
+it cannot resolve the current schema for a call.
+
 Use `resolve_input_aliases` when a tool accepts alternative names. The map uses
 each canonical name as a key. Its value lists accepted aliases in server order.
 
@@ -92,6 +100,9 @@ instrument(
 
 The SDK records `city` in `$mcp_input_keys`. It also records
 `city:location` in `$mcp_input_aliases_used`. The SDK does not change the call.
+
+This safe-name rule does not change `$mcp_parameters`. That property still
+contains the sanitized tool arguments and their original names.
 
 Custom dispatchers can call `get_tool_input_properties()` and add its result to
 the `properties` argument of `capture_tool_call()`.

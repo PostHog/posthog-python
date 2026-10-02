@@ -64,6 +64,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._tool_input import get_registered_tool_input_schema
 from .logger import log
 from .request_headers import get_request_headers
 from .session_token import read_mcp_session_header
@@ -231,21 +232,15 @@ def _tool_own_properties_v2(high_level: Any, name: str) -> Dict[str, Any]:
     site so checking ownership of both ``context`` and ``conversation_id``
     doesn't look the tool up from the manager twice."""
     try:
-        properties = (_tool_input_schema_v2(high_level, name) or {}).get("properties")
+        properties = (get_registered_tool_input_schema(high_level, name) or {}).get(
+            "properties"
+        )
     except Exception:  # noqa: BLE001
         return {}
     # Fail closed on a malformed schema: the caller does `param in <this>` in the
     # tool-call hot path, where a None or a string would raise or answer by
     # substring.
     return properties if isinstance(properties, dict) else {}
-
-
-def _tool_input_schema_v2(high_level: Any, name: str) -> Optional[Dict[str, Any]]:
-    try:
-        schema = high_level._tool_manager.get_tool(name).parameters
-    except Exception:  # noqa: BLE001 - analytics must not break the call
-        return None
-    return schema if isinstance(schema, dict) else None
 
 
 def _tool_owns_param_v2(high_level: Any, name: str, param: str) -> bool:
@@ -326,7 +321,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
             ]
             return mcp_types.CallToolResult(content=virtual_content)
 
-        lifecycle = replace(lifecycle, input_schema=_tool_input_schema_v2(server, name))
+        lifecycle = replace(
+            lifecycle,
+            input_schema=get_registered_tool_input_schema(server, name),
+        )
 
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never

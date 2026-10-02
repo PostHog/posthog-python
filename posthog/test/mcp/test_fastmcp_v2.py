@@ -220,6 +220,7 @@ async def test_jlowin_middleware_defaults_work_across_fresh_instances(monkeypatc
     event = _events(client, "$mcp_tool_call")[0]["properties"]
     assert event["$mcp_llm_model"] == "gpt-5"
     assert event["$mcp_llm_model_source"] == "client_metadata"
+    assert event["$mcp_input_keys"] == ["a", "b"]
 
 
 _OWN_MODEL = {"llm_model": {"type": "string"}}

@@ -588,7 +588,7 @@ async def _standalone_ownership(
         model_ours = data.tool_model_parameter_injected.get(name, model_injectable)
         if _dispatch_can_differ(high_level):
             model_ours = False
-            input_schema = None
+            input_schema = await _listed_input_schema(high_level, name, meta)
     except Exception:  # noqa: BLE001 - ownership inference must never prevent dispatch
         declared, model_ours, input_schema = None, None, None
     candidates = _injected_keys(data)
@@ -610,7 +610,7 @@ def _tool_schema_view(
         return (
             declared,
             injectable,
-            _input_schema_view(schema, dereferenced=dereferenced),
+            schema,
         )
     fn = getattr(tool, "fn", None)
     if fn is None:
@@ -669,6 +669,29 @@ async def _registered_tool(high_level: Any, name: str, meta: Any) -> Any:
     return await high_level.get_tool(name, version=VersionSpec(eq=version))
 
 
+async def _listed_input_schema(
+    high_level: Any, name: str, meta: Any
+) -> Optional[Dict[str, Any]]:
+    """Return the schema that middleware advertises for the current request."""
+    try:
+        version = _requested_tool_version(meta)
+        candidates = [
+            tool for tool in await high_level.list_tools() if tool.name == name
+        ]
+        if version is not None:
+            candidates = [
+                tool
+                for tool in candidates
+                if str(getattr(tool, "version", "")) == version
+            ]
+        tool = candidates[-1] if candidates else None
+        schema = getattr(tool, "parameters", None)
+    except Exception as error:  # noqa: BLE001 - analytics must not break dispatch
+        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
+        return None
+    return schema if isinstance(schema, dict) else None
+
+
 def _requested_tool_version(meta: Any) -> Optional[str]:
     """Ownership must follow dispatch. Only a FastMCP that exposes the
     ``_meta`` version extractor its own dispatch uses honours a pinned
@@ -704,26 +727,6 @@ def _schema_view(schema: Dict[str, Any], *, dereferenced: bool) -> Tuple[set, bo
     }
     injectable = can_inject_model_parameter(nodes[-1]) and "llm_model" not in declared
     return declared, injectable
-
-
-def _input_schema_view(
-    schema: Dict[str, Any], *, dereferenced: bool
-) -> Optional[Dict[str, Any]]:
-    """Return the declared fields that the client sees for input analytics."""
-    if not dereferenced:
-        return schema
-    nodes = _reference_chain(schema)
-    if nodes is None:
-        return None
-    if len(nodes) == 1:
-        return schema
-    properties = {
-        key: value
-        for node in nodes
-        if isinstance(node.get("properties"), dict)
-        for key, value in node["properties"].items()
-    }
-    return {"type": "object", "properties": properties}
 
 
 def _server_dereferences(server: Any) -> bool:
