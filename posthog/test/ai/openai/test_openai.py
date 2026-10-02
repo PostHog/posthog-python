@@ -1916,6 +1916,85 @@ def test_streaming_responses_api_extracts_model_from_response_object(mock_client
         assert props["$ai_model"] == "gpt-4o-mini-stored"
 
 
+def test_streaming_responses_api_captures_usage_and_output_when_incomplete(
+    mock_client,
+):
+    """A stream cut short by max_output_tokens ends on response.incomplete, not
+    response.completed. Its usage and partial output are still billed and must be
+    captured."""
+    from openai.types.responses import ResponseIncompleteEvent
+    from openai.types.responses.response import IncompleteDetails
+
+    incomplete_response = Response(
+        id="resp_incomplete",
+        model="gpt-4o-mini",
+        object="response",
+        created_at=1741476542,
+        status="incomplete",
+        error=None,
+        incomplete_details=IncompleteDetails(reason="max_output_tokens"),
+        instructions=None,
+        max_output_tokens=16,
+        tools=[],
+        tool_choice="auto",
+        output=[
+            ResponseOutputMessage(
+                id="msg_123",
+                type="message",
+                role="assistant",
+                status="incomplete",
+                content=[
+                    ResponseOutputText(
+                        type="output_text",
+                        text="Once upon a time",
+                        annotations=[],
+                    )
+                ],
+            )
+        ],
+        parallel_tool_calls=True,
+        previous_response_id=None,
+        usage=make_response_usage(
+            input_tokens=20,
+            output_tokens=16,
+            total_tokens=36,
+        ),
+        user=None,
+        metadata={},
+    )
+    chunks = [
+        ResponseIncompleteEvent(
+            type="response.incomplete",
+            sequence_number=1,
+            response=incomplete_response,
+        )
+    ]
+
+    with patch("openai.resources.responses.Responses.create") as mock_create:
+        mock_create.return_value = iter(chunks)
+
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        response_generator = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "Tell me a story"}],
+            max_output_tokens=16,
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+        list(response_generator)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "max_output_tokens"
+    assert props["$ai_input_tokens"] == 20
+    assert props["$ai_output_tokens"] == 16
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "Once upon a time"}],
+        }
+    ]
+
+
 def test_non_streaming_extracts_model_from_response(mock_client):
     """Test that non-streaming calls extract model from response when not in kwargs."""
     # Create a response with model but we won't pass model in kwargs
