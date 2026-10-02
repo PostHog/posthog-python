@@ -59,6 +59,15 @@ def _is_public_alias(obj: object) -> bool:
     return _is_public_posthog_path(target_path)
 
 
+def _is_private_sdk_alias(obj: object) -> bool:
+    target = _alias_target_path(obj)
+    return (
+        target.startswith("posthog.")
+        and not _is_excluded_path(target)
+        and not _is_public_posthog_path(target)
+    )
+
+
 def _module_exports(module: object) -> set[str] | None:
     exports = getattr(module, "exports", None)
     if exports is None:
@@ -98,7 +107,9 @@ def _is_public_member(parent: object, name: str, member: object) -> bool:
         return False
 
     if _is_alias(member):
-        return _is_public_alias(member)
+        return _is_public_alias(member) or (
+            exports is not None and _is_private_sdk_alias(member)
+        )
 
     if _is_module(member):
         return _is_public_posthog_path(_object_path(member))
@@ -119,7 +130,7 @@ def _signature(obj: object) -> str | None:
 
 def _signature_for_path(obj: object) -> str | None:
     signature = _signature(obj)
-    if signature is None:
+    if signature is None or (not signature and _is_alias(obj)):
         return None
 
     name = str(getattr(obj, "name", ""))
@@ -144,7 +155,7 @@ def _attribute_details(obj: object) -> str:
 
 
 def _record(obj: object) -> str:
-    if _is_alias(obj):
+    if _is_alias(obj) and not _is_private_sdk_alias(obj):
         return f"alias {_object_path(obj)} -> {_alias_target_path(obj)}"
 
     if _is_module(obj):
@@ -169,15 +180,21 @@ def _record(obj: object) -> str:
     return f"{getattr(obj, 'kind', 'object')} {_object_path(obj)}"
 
 
-def _iter_class_members(cls: object) -> Iterable[object]:
+def _iter_class_members(
+    cls: object, *, exported_alias: bool = False
+) -> Iterable[object]:
     members = getattr(cls, "members", {})
     for name, member in sorted(members.items()):
-        if not _is_public_member(cls, str(name), member):
+        if not (
+            _is_public_name(str(name))
+            if exported_alias
+            else _is_public_member(cls, str(name), member)
+        ):
             continue
 
         yield member
-        if not _is_alias(member) and _is_class(member):
-            yield from _iter_class_members(member)
+        if _is_class(member) and (exported_alias or not _is_alias(member)):
+            yield from _iter_class_members(member, exported_alias=exported_alias)
 
 
 def _iter_module_members(module: object) -> Iterable[object]:
@@ -188,6 +205,8 @@ def _iter_module_members(module: object) -> Iterable[object]:
         if _is_alias(member):
             if _is_public_member(module, str(name), member):
                 yield member
+                if _is_private_sdk_alias(member) and _is_class(member):
+                    yield from _iter_class_members(member, exported_alias=True)
             continue
 
         if _is_module(member):
