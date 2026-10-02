@@ -131,6 +131,10 @@ def _score(value: object) -> bool | float | list[str]:
             ) from exc
         if not math.isfinite(number):
             raise ValueError("Numeric scores must be finite.")
+        if type(value) is int and number != value:
+            raise ValueError(
+                "Integer scores must be exactly representable as a binary64 number."
+            )
         return number
     if (
         isinstance(value, list)

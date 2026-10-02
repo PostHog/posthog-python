@@ -452,6 +452,30 @@ def test_accepted_scores_preserve_type_and_polarity(value):
         assert actual == (sorted(value) if isinstance(value, list) else value)
 
 
+@pytest.mark.parametrize("value", [2**53 - 1, 2**53, 2**53 + 2, 2**100])
+@pytest.mark.parametrize("sign", [1, -1])
+def test_exactly_representable_integer_scores_preserve_value(value, sign):
+    supplied = sign * value
+    actual = result(value=supplied).to_dict()["value"]
+    assert isinstance(actual, float)
+    assert actual == supplied
+
+
+@pytest.mark.parametrize("value", [2**53 + 1, 2**100 + 1])
+@pytest.mark.parametrize("sign", [1, -1])
+def test_integer_scores_that_lose_precision_fail_before_upload(client, value, sign):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    with pytest.raises(ValueError, match="exactly representable"):
+        invoke(
+            experiment.upload_result,
+            item=EvaluationItem(),
+            scorer_version_id=VERSION_ID,
+            value=sign * value,
+        )
+    transport.request.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "value",
     [
