@@ -1,5 +1,12 @@
 # posthog
 
+## 7.62.1 — 2026-10-02
+
+### Patch changes
+
+- [053e734](https://github.com/posthog/posthog-python/commit/053e734d3028f969c9c7814051d8b3ecdc0549ff) Keep streamed Anthropic tool call arguments when the response also contains server tool blocks, such as web search. — Thanks @breken-ai!
+- [c2470c0](https://github.com/posthog/posthog-python/commit/c2470c0c6ef3fcf10729e7422c2971af3d6f5ac7) Capture token usage and output for OpenAI Responses streams that end incomplete, such as when `max_output_tokens` is reached. — Thanks @breken-ai!
+
 ## 7.62.0 — 2026-10-01
 
 ### Minor changes
