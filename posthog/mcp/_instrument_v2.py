@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Mapping
+from dataclasses import replace
 from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
@@ -63,6 +64,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._tool_input import get_registered_tool_input_schema
 from .logger import log
 from .request_headers import get_request_headers
 from .session_token import read_mcp_session_header
@@ -230,8 +232,9 @@ def _tool_own_properties_v2(high_level: Any, name: str) -> Dict[str, Any]:
     site so checking ownership of both ``context`` and ``conversation_id``
     doesn't look the tool up from the manager twice."""
     try:
-        tool = high_level._tool_manager.get_tool(name)
-        properties = (getattr(tool, "parameters", None) or {}).get("properties")
+        properties = (get_registered_tool_input_schema(high_level, name) or {}).get(
+            "properties"
+        )
     except Exception:  # noqa: BLE001
         return {}
     # Fail closed on a malformed schema: the caller does `param in <this>` in the
@@ -317,6 +320,11 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 for text in lifecycle.virtual_result_texts(reply)
             ]
             return mcp_types.CallToolResult(content=virtual_content)
+
+        lifecycle = replace(
+            lifecycle,
+            input_schema=get_registered_tool_input_schema(server, name),
+        )
 
         # v2 validates against the function signature and rejects unexpected
         # keys, so injected parameters are stripped before dispatch — but never
@@ -441,7 +449,7 @@ def _requested_tool_version(ctx: Any) -> Optional[str]:
 
 async def _standalone_injected_parameters(
     server: Any, data: MCPAnalyticsData, name: str, version: Optional[str]
-) -> Optional[FrozenSet[str]]:
+) -> Tuple[Optional[FrozenSet[str]], Optional[Dict[str, Any]]]:
     """Resolve ownership in the current request, including middleware and versions.
 
     Listings from other requests can have different application-owned parameters.
@@ -464,9 +472,9 @@ async def _standalone_injected_parameters(
         schema = getattr(tool, "parameters", None)
     except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
         log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
-        return None
+        return None, None
     if not isinstance(schema, dict):
-        return None
+        return None, None
     injected = set()
     if is_context_enabled(data.options.context):
         injected.add("context")
@@ -476,7 +484,10 @@ async def _standalone_injected_parameters(
         can_inject_model_parameter(schema)
     ):
         injected.add("llm_model")
-    return frozenset(key for key in injected if not schema_has_param(schema, key))
+    return (
+        frozenset(key for key in injected if not schema_has_param(schema, key)),
+        schema,
+    )
 
 
 def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
@@ -492,10 +503,11 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         # reads the self-reported model anyway; only a listing that proved the
         # application owns `llm_model` stops it (posthog-js ADR-0011).
         analytics_owns_model = data.tool_model_parameter_injected.get(name) is not False
+        input_schema = None
         standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
         if standalone is not None:
             version = _requested_tool_version(ctx)
-            injected = await _standalone_injected_parameters(
+            injected, input_schema = await _standalone_injected_parameters(
                 standalone, data, name, version
             )
             if injected is not None:
@@ -521,6 +533,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             client_version=client_version,
             protocol_version=protocol_version,
             extra={"session_id": mcp_session_id, "ctx": ctx},
+            input_schema=input_schema,
         )
 
         # No tool registry on a raw low-level server, so ownership is settled

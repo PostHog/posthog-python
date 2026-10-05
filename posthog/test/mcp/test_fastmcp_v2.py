@@ -220,6 +220,7 @@ async def test_jlowin_middleware_defaults_work_across_fresh_instances(monkeypatc
     event = _events(client, "$mcp_tool_call")[0]["properties"]
     assert event["$mcp_llm_model"] == "gpt-5"
     assert event["$mcp_llm_model_source"] == "client_metadata"
+    assert event["$mcp_input_keys"] == ["a", "b"]
 
 
 _OWN_MODEL = {"llm_model": {"type": "string"}}
@@ -356,6 +357,43 @@ async def test_jlowin_root_ref_schema_is_dereferenced_for_ownership(declares_mod
     assert out.root.content[0].text == ("a" if stripped else "a,llm_model")
     recorded = _events(client, "$mcp_tool_call")[0]["properties"].get("$mcp_llm_model")
     assert recorded == ("gpt-5" if stripped else None)
+
+
+async def test_jlowin_root_ref_schema_is_dereferenced_for_input_names():
+    from fastmcp.tools import Tool
+
+    ToolResult = _tool_result_type()
+
+    class Echo(Tool):
+        async def run(self, arguments):
+            return ToolResult(
+                content=[mcp_types.TextContent(type="text", text=str(arguments["a"]))]
+            )
+
+    server = FastMCP("jlowin-input-ref")
+    server.add_tool(
+        Echo(
+            name="echo",
+            parameters={
+                "$ref": "#/$defs/Args",
+                "$defs": {
+                    "Args": {
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}},
+                    }
+                },
+            },
+        )
+    )
+    client = FakeClient()
+    instrument(server, client)
+
+    out = await _call(server, "echo", {"a": 1})
+    await _flush()
+
+    assert out.root.isError is False
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["a"]
 
 
 async def test_jlowin_ownership_follows_the_dispatched_tool_version():
