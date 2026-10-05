@@ -290,10 +290,9 @@ async def test_renamed_tool_is_intercepted_and_the_default_name_is_not():
     assert len(_events(client, "$mcp_missing_capability")) == 1
 
 
-async def test_real_tool_named_get_more_tools_keeps_normal_injection():
-    # With report_missing off the SDK advertises no such tool, so one by that
-    # name is an ordinary application tool: it gets `context` injected and its
-    # value captured as $mcp_intent, like any other tool's.
+async def test_real_tool_named_get_more_tools_keeps_tool_owned_context():
+    # With report_missing off the SDK advertises no such virtual tool. A real
+    # tool with this name keeps its declared `context` argument as tool data.
     server = make_paged_lowlevel([[_REAL_GET_MORE_TOOLS]])
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(report_missing=False, context=True))
@@ -305,7 +304,11 @@ async def test_real_tool_named_get_more_tools_keeps_normal_injection():
     assert out.root.content[0].text == "real tool ran"
     calls = _events(client, "$mcp_tool_call")
     assert calls
-    assert calls[0]["properties"]["$mcp_intent"] == "delete a cohort"
+    properties = calls[0]["properties"]
+    assert "$mcp_intent" not in properties
+    assert properties["$mcp_parameters"]["request"]["params"]["arguments"] == {
+        "context": "delete a cohort"
+    }
 
 
 # --- a host that reuses one result object --------------------------------------

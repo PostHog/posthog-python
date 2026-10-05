@@ -91,12 +91,11 @@ class MCPAnalyticsData:
     # True only when PostHog added llm_model to this tool's advertised schema.
     # Missing/False fails closed so an application-owned field is never read or stripped.
     tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
-    # Ownership and original schemas learned from tools/list on this instance.
-    # These entries have priority over the low-level resolver callback.
+    # Ownership learned from tools/list on this instance has priority over the
+    # low-level resolver callback.
     tool_analytics_parameter_ownership: Dict[str, FrozenSet[str]] = field(
         default_factory=dict
     )
-    original_tool_input_schemas: Dict[str, Any] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under

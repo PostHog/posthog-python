@@ -413,6 +413,50 @@ def _make_strict_ownership_server(input_schema):
     return server, seen
 
 
+async def test_reused_tool_descriptor_keeps_posthog_argument_ownership():
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    tool = mcp_types.Tool(name="search_docs", inputSchema=schema)
+
+    def make_server():
+        server = Server("reused-tool")
+        seen = []
+
+        @server.list_tools()
+        async def list_tools():
+            return [tool]
+
+        @server.call_tool()
+        async def call_tool(name, arguments):
+            seen.append(dict(arguments or {}))
+            return [mcp_types.TextContent(type="text", text="ok")]
+
+        return server, seen
+
+    first, _ = make_server()
+    instrument(first, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=False))
+    await first.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+
+    second, seen = make_server()
+    instrument(second, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=False))
+    await second.request_handlers[mcp_types.ListToolsRequest](
+        mcp_types.ListToolsRequest(method="tools/list")
+    )
+    await second.request_handlers[mcp_types.CallToolRequest](
+        _call_request(
+            "search_docs",
+            {"query": "flags", "context": "find docs", "llm_model": "model-a"},
+        )
+    )
+
+    assert seen == [{"query": "flags"}]
+
+
 async def test_fresh_lowlevel_resolver_strips_posthog_arguments():
     schema = {
         "type": "object",

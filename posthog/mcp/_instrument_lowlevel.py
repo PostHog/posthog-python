@@ -24,6 +24,7 @@ import mcp.types as mcp_types
 
 from ._argument_ownership import (
     cache_listed_tool_ownership,
+    mark_listed_tool_ownership,
     resolve_lowlevel_tool_ownership,
 )
 from ._context_parameters import is_context_enabled, schema_has_param
@@ -196,9 +197,8 @@ def _wrap_call_tool(
                 data, high_level, name, req.params.meta
             )
         else:
-            parameter_ownership, input_schema = await resolve_lowlevel_tool_ownership(
-                data, name
-            )
+            parameter_ownership = await resolve_lowlevel_tool_ownership(data, name)
+            input_schema = None
             strip = set(parameter_ownership or ())
             model_ours = (
                 "llm_model" in parameter_ownership
@@ -360,7 +360,9 @@ def _inject_tool_schemas(
     verdicts: Dict[str, bool] = {}
     for tool in tools:
         schema = getattr(tool, "inputSchema", None)
-        cache_listed_tool_ownership(data, tool, schema_attribute="inputSchema")
+        ownership = cache_listed_tool_ownership(
+            data, tool, schema_attribute="inputSchema"
+        )
         mutate_tool_schema(
             data,
             tool,
@@ -370,6 +372,7 @@ def _inject_tool_schemas(
             is_sdk_virtual_tool=False,
             inject_model=inject_model,
         )
+        mark_listed_tool_ownership(tool, ownership, schema_attribute="inputSchema")
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
             continue
