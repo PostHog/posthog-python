@@ -29,4 +29,4 @@ Preserve v0 defaults/compatibility; strictly typed v1 options and `$set`/`$set_o
 
 - Prefer relative SDK-internal imports (e.g. `from .client import Client`). Absolute `posthog...` imports can collide with the PostHog app's own package after mirror generation rewrites imports to `posthoganalytics`.
 - Run focused tests for mirror-sensitive changes; when app testing is relevant, follow the contributor guide's mirror workflow. **`make prep_local` deletes and recreates `../posthog-python-local`; verify no work there needs preserving before every use.** Do not commit generated `posthoganalytics/` directories.
-- `make build_release_analytics` temporarily rewrites/copies source and package files: require a clean working tree before running it and verify the tree is clean afterward.
+- `make build_release_analytics` temporarily rewrites/copies source and package files and clears `dist/`. Publish or preserve the `posthog` build artifacts before running it. Require a clean working tree before running it and verify the tree is clean afterward.
