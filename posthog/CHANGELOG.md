@@ -1,5 +1,11 @@
 # posthog
 
+## 7.63.0 — 2026-10-05
+
+### Minor changes
+
+- [8ef0573](https://github.com/posthog/posthog-python/commit/8ef05738cedffb28dc3ce8886179a0ba9a267f5d) Record safe tool input field names on MCP tool-call events. Add server-owned input alias maps for automatic instrumentation and a public helper for custom dispatchers. The SDK records field names and alias use without reading argument values or changing tool calls. — Thanks @gesh!
+
 ## 7.62.1 — 2026-10-02
 
 ### Patch changes
