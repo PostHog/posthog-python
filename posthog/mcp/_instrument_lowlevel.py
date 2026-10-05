@@ -22,6 +22,10 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
+from ._argument_ownership import (
+    cache_listed_tool_ownership,
+    resolve_lowlevel_tool_ownership,
+)
 from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
@@ -186,11 +190,21 @@ def _wrap_call_tool(
     async def handler(req: Any) -> Any:
         name = req.params.name
         arguments = dict(req.params.arguments or {})
-        strip, model_ours, input_schema = (
-            await _standalone_ownership(data, high_level, name, req.params.meta)
-            if strip_injected
-            else (set(), data.tool_model_parameter_injected.get(name), None)
-        )
+        parameter_ownership = None
+        if strip_injected:
+            strip, model_ours, input_schema = await _standalone_ownership(
+                data, high_level, name, req.params.meta
+            )
+        else:
+            parameter_ownership, input_schema = await resolve_lowlevel_tool_ownership(
+                data, name
+            )
+            strip = set(parameter_ownership or ())
+            model_ours = (
+                "llm_model" in parameter_ownership
+                if parameter_ownership is not None
+                else data.tool_model_parameter_injected.get(name)
+            )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
         mcp_session_id = _mcp_session_id(server)
@@ -213,6 +227,7 @@ def _wrap_call_tool(
             protocol_version=protocol_version,
             extra={"session_id": mcp_session_id, "ctx": _request_context(server)},
             input_schema=input_schema,
+            analytics_owned_parameters=parameter_ownership,
         )
 
         if lifecycle.is_missing_capability and (
@@ -345,6 +360,7 @@ def _inject_tool_schemas(
     verdicts: Dict[str, bool] = {}
     for tool in tools:
         schema = getattr(tool, "inputSchema", None)
+        cache_listed_tool_ownership(data, tool, schema_attribute="inputSchema")
         mutate_tool_schema(
             data,
             tool,

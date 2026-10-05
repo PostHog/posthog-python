@@ -761,3 +761,183 @@ async def test_v2_cached_result_object_does_not_collide_with_itself():
     assert result.content[0].text == get_more_tools_result_text()
     assert _events(client, "$mcp_missing_capability")
     assert not [m for m in messages if "Cannot inject PostHog's" in m]
+
+
+def _make_strict_ownership_server_v2(input_schema):
+    seen = []
+
+    async def on_call_tool(ctx, params):
+        arguments = dict(params.arguments or {})
+        seen.append(arguments)
+        allowed = set(input_schema.get("properties", {}))
+        unexpected = set(arguments) - allowed
+        if unexpected:
+            raise ValueError(f"Unexpected arguments: {sorted(unexpected)}")
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="ok")]
+        )
+
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(
+                    name="search_docs",
+                    input_schema=input_schema,
+                )
+            ]
+        )
+
+    return (
+        Server(
+            "strict-lowlevel-v2",
+            on_call_tool=on_call_tool,
+            on_list_tools=on_list_tools,
+        ),
+        seen,
+    )
+
+
+async def test_v2_fresh_lowlevel_resolver_strips_posthog_arguments():
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    server, seen = _make_strict_ownership_server_v2(schema)
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            enable_conversation_id=False,
+            resolve_original_tool=lambda _name: {"input_schema": schema},
+        ),
+    )
+
+    result = await _call_tool(
+        server,
+        "search_docs",
+        {"query": "flags", "context": "find docs", "llm_model": "model-a"},
+    )
+    await _flush()
+
+    assert result.is_error is False
+    assert seen == [{"query": "flags"}]
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_intent"] == "find docs"
+    assert props["$mcp_llm_model"] == "model-a"
+
+
+async def test_v2_fresh_lowlevel_resolver_preserves_tool_owned_context():
+    schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "context": {"type": "string"},
+        },
+        "additionalProperties": False,
+    }
+    server, seen = _make_strict_ownership_server_v2(schema)
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            capture_model=False,
+            enable_conversation_id=False,
+            resolve_original_tool=lambda _name: {"inputSchema": schema},
+        ),
+    )
+
+    await _call_tool(
+        server,
+        "search_docs",
+        {"query": "flags", "context": "tool context"},
+    )
+    await _flush()
+
+    assert seen == [{"query": "flags", "context": "tool context"}]
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert "$mcp_intent" not in props
+    captured = props["$mcp_parameters"]["request"]["params"]["arguments"]
+    assert captured["context"] == "tool context"
+
+
+@pytest.mark.parametrize("failure", ["none", "raise"])
+async def test_v2_fresh_lowlevel_resolver_failure_keeps_arguments(failure):
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    server, seen = _make_strict_ownership_server_v2(schema)
+    client = FakeClient()
+    messages = []
+
+    def resolver(_name):
+        if failure == "raise":
+            raise RuntimeError("registry unavailable")
+        return None
+
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            enable_conversation_id=False,
+            logger=messages.append,
+            resolve_original_tool=resolver,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="Unexpected arguments"):
+        await _call_tool(
+            server,
+            "search_docs",
+            {"query": "flags", "context": "find docs", "llm_model": "model-a"},
+        )
+
+    assert seen == [{"query": "flags", "context": "find docs", "llm_model": "model-a"}]
+    warnings = [
+        message for message in messages if "resolve_original_tool failed" in message
+    ]
+    assert len(warnings) == int(failure == "raise")
+
+
+async def test_v2_lowlevel_served_listing_has_priority_over_resolver():
+    schema = {
+        "type": "object",
+        "properties": {
+            "query": {"type": "string"},
+            "context": {"type": "string"},
+        },
+    }
+    resolver_calls = []
+    server, seen = _make_strict_ownership_server_v2(schema)
+
+    def resolver(name):
+        resolver_calls.append(name)
+        return {
+            "input_schema": {
+                "type": "object",
+                "properties": {"query": {"type": "string"}},
+            }
+        }
+
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(
+            capture_model=False,
+            enable_conversation_id=False,
+            resolve_original_tool=resolver,
+        ),
+    )
+    await _list_tools(server)
+    await _call_tool(
+        server,
+        "search_docs",
+        {"query": "flags", "context": "tool context"},
+    )
+
+    assert resolver_calls == []
+    assert seen == [{"query": "flags", "context": "tool context"}]

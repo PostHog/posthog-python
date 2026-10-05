@@ -37,6 +37,10 @@ from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
+from ._argument_ownership import (
+    cache_listed_tool_ownership,
+    resolve_lowlevel_tool_ownership,
+)
 from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
@@ -503,21 +507,30 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         # reads the self-reported model anyway; only a listing that proved the
         # application owns `llm_model` stops it (posthog-js ADR-0011).
         analytics_owns_model = data.tool_model_parameter_injected.get(name) is not False
-        input_schema = None
         standalone = data.standalone_fastmcp() if data.standalone_fastmcp else None
+        parameter_ownership = None
+        input_schema = None
         if standalone is not None:
             version = _requested_tool_version(ctx)
             injected, input_schema = await _standalone_injected_parameters(
                 standalone, data, name, version
             )
             if injected is not None:
+                parameter_ownership = injected
                 analytics_owns_model = "llm_model" in injected
-                call_arguments = {
-                    key: value
-                    for key, value in arguments.items()
-                    if key not in injected
-                }
-                params = params.model_copy(update={"arguments": call_arguments})
+        else:
+            parameter_ownership, input_schema = await resolve_lowlevel_tool_ownership(
+                data, name
+            )
+            if parameter_ownership is not None:
+                analytics_owns_model = "llm_model" in parameter_ownership
+        if parameter_ownership is not None:
+            call_arguments = {
+                key: value
+                for key, value in arguments.items()
+                if key not in parameter_ownership
+            }
+            params = params.model_copy(update={"arguments": call_arguments})
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -534,6 +547,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             protocol_version=protocol_version,
             extra={"session_id": mcp_session_id, "ctx": ctx},
             input_schema=input_schema,
+            analytics_owned_parameters=parameter_ownership,
         )
 
         # No tool registry on a raw low-level server, so ownership is settled
@@ -715,6 +729,7 @@ def _wrap_v2_list_tools(
 
         for tool in tools:
             schema = getattr(tool, "input_schema", None)
+            cache_listed_tool_ownership(data, tool, schema_attribute="input_schema")
             owns_context = (
                 _tool_owns_param_v2(high_level, tool.name, "context")
                 if high_level is not None
