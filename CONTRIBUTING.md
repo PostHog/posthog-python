@@ -18,7 +18,7 @@ uv sync --extra dev --extra test
 
 ## CI-aligned checks
 
-Run the same core checks CI uses before opening a PR:
+Run the smallest relevant tests first, for example `pytest posthog/test/test_capture_v1.py --timeout=30` for v1 transport changes. Then run these core CI-aligned checks from the repository root in the activated `.venv` populated by the setup commands above:
 
 ```bash
 ruff format --check .
@@ -28,13 +28,28 @@ pytest --verbose --timeout=30
 python -W error -c "import posthog"
 ```
 
+Without activating `.venv`, prefix Python-tool commands with `uv run --no-sync` after the same setup/sync (including both sides of the mypy pipeline). This uses the populated environment without re-syncing away its selected extras.
+
+For public API changes, regenerate and review `references/public_api_snapshot.txt`, then check it in that environment:
+
+```bash
+make public_api_snapshot
+make public_api_check
+```
+
+These Make targets invoke `python`: keep `.venv` activated, or use `uv run --no-sync make <target>`.
+
+For changes under `openfeature-provider/`, also follow its [contributor guide](./openfeature-provider/CONTRIBUTING.md#local-development). Root pytest collection targets `posthog/test`; it does not substitute for the provider's package-scoped checks.
+
 ## Running locally
 
 Assuming you have a [local version of PostHog](https://posthog.com/docs/developing-locally) running, you can run `python3 example.py` to see the library in action.
 
 ## Testing changes locally with the PostHog app
 
-Run `make prep_local` to create a sibling folder named `posthog-python-local`. You can then import it into the PostHog app by changing `pyproject.toml` like this:
+**Warning:** `make prep_local` deletes and recreates `../posthog-python-local`. Before using it (including every re-run), verify that no work there needs preserving. It creates a renamed SDK copy for local testing; do not commit generated `posthoganalytics/` directories.
+
+You can then import that copy into the PostHog app by changing the app's `pyproject.toml` like this:
 
 ```toml
 dependencies = [
@@ -43,7 +58,7 @@ dependencies = [
     ...
 ]
 ...
-[tools.uv.sources]
+[tool.uv.sources]
 posthoganalytics = { path = "../posthog-python-local" }
 ```
 
@@ -61,4 +76,4 @@ This section is for external contributors. PostHog maintainers (members of the P
 - Check first whether an existing option or hook, such as `before_send`, already covers the use case. We avoid offering two ways to do the same thing.
 - If a reviewer suggests a different API on your PR, confirm it with them before re-implementing. Treat it as a question, not an instruction.
 
-`make public_api_snapshot` regenerates `references/public_api_snapshot.txt`, and CI runs `make public_api_check` to catch an outdated snapshot. A diff in that file means your change touches public API.
+Follow the snapshot update/check commands in [CI-aligned checks](#ci-aligned-checks); CI checks for an outdated snapshot. A diff in `references/public_api_snapshot.txt` means your change touches public API.
