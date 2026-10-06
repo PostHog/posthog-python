@@ -1,5 +1,11 @@
 # posthog
 
+## 7.64.1 — 2026-10-06
+
+### Patch changes
+
+- [e3cfe17](https://github.com/posthog/posthog-python/commit/e3cfe17e748deb9f2aa4e2ca6325f82ff10cc73f) Mask `Bearer` and `Basic` credentials in exception code variables, including values held apart from their header name, such as in header lists and ASGI scopes. Also mask signed URLs that carry a `sig` query parameter. — Thanks @ablaszkiewicz!
+
 ## 7.64.0 — 2026-10-06
 
 ### Minor changes
