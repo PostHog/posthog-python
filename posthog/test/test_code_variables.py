@@ -238,6 +238,50 @@ class TestUrlCredentialScrubbing:
         assert _redact_url_credentials(value) == value
 
 
+# --- 2b. Authorization credential scrubbing ------------------------------------------
+
+_BEARER_TOKEN = _key("tok_", "Zx81Qm7Lp2Vb9Nc4")
+_BASIC_CREDENTIAL = _key("c3ZjOmZha2Ut", "cGFzcy0xMjM=")  # svc:fake-pass-123
+
+
+class TestAuthorizationCredentialScrubbing:
+    """A `Bearer` or `Basic` credential is removed even when no header name sits next
+    to it, so name patterns can't catch it. The scheme stays for context."""
+
+    @pytest.mark.parametrize(
+        "value, credential",
+        [
+            # header pair list: the name is redacted, the value used to survive
+            ([("authorization", "Bearer " + _BEARER_TOKEN)], _BEARER_TOKEN),
+            # ASGI scope: raw byte headers
+            (
+                {
+                    "headers": [
+                        (b"authorization", b"Basic " + _BASIC_CREDENTIAL.encode())
+                    ]
+                },
+                _BASIC_CREDENTIAL,
+            ),
+            # a local with a neutral name
+            ("Basic " + _BASIC_CREDENTIAL, _BASIC_CREDENTIAL),
+        ],
+    )
+    def test_credential_is_removed(self, value, credential):
+        result = json.dumps(mask(value))
+        assert credential not in result
+        assert REDACTED in result
+
+    def test_scheme_is_kept(self):
+        assert mask("Bearer " + _BEARER_TOKEN) == "Bearer " + REDACTED
+
+    @pytest.mark.parametrize(
+        "value", ["basic authentication", "Bearer token", "the bearer of bad news"]
+    )
+    def test_prose_is_left_untouched(self, value):
+        # name patterns off, so only the Authorization check can change the text
+        assert mask(value, patterns=[]) == value
+
+
 # --- 3. scalar masking ---------------------------------------------------------------
 
 
@@ -287,6 +331,17 @@ class TestStringMasking:
     def test_url_scrubbing_can_be_turned_off(self):
         result = mask("postgresql://user:p4ss@host/db", patterns=[], mask_urls=False)
         assert result == "postgresql://user:p4ss@host/db"
+
+    def test_signed_url_is_redacted(self):
+        # an Azure SAS URL carries its signature in the `sig` query parameter
+        url = "https://acct.blob.core.windows.net/c/f?sv=2022-11-02&sp=r&sig=" + _key(
+            "q2VxT8", "fKz1aB3dE%3D"
+        )
+        assert mask(url) == REDACTED
+
+    @pytest.mark.parametrize("value", ["design", "signal_handler", "/signup?step=2"])
+    def test_sig_inside_other_words_is_left_untouched(self, value):
+        assert mask(value) == value
 
 
 # --- 5. collection masking -----------------------------------------------------------

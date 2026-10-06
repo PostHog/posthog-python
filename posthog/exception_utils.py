@@ -67,6 +67,9 @@ DEFAULT_CODE_VARIABLES_MASK_PATTERNS = [
     r"(?i)conn_str",
     r"(?i)connstr",
     r"(?i)dsn",
+    # The signature parameter of a signed URL, such as an Azure SAS URL. It is matched
+    # as a query parameter, because the bare word `sig` occurs in common names.
+    r"(?i)[?&]sig=",
 ]
 
 DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = [r"^__.*"]
@@ -122,6 +125,39 @@ def _redact_url_credentials(value):
     return _URL_CREDENTIALS_RE.sub(
         r"\g<1>" + CODE_VARIABLES_REDACTED_VALUE + "@", value
     )
+
+
+# Matches the credential of an HTTP `Authorization` value, e.g. `Bearer <token>` or
+# `Basic <base64 user:pass>`. A header pair list or an ASGI scope holds this value apart
+# from its header name, so the name patterns never see it.
+_AUTH_HEADER_CREDENTIALS_RE = re.compile(
+    r"\b(bearer|basic)(\s+)([A-Za-z0-9._~+/-]+=*)", re.IGNORECASE
+)
+
+# Shorter values, and lowercase words, are prose such as "basic authentication".
+_AUTH_HEADER_CREDENTIAL_MIN_LENGTH = 8
+
+
+def _redact_auth_header_match(match):
+    credential = match.group(3)
+    if len(credential) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH or (
+        credential.isalpha() and credential.islower()
+    ):
+        return match.group(0)
+    return match.group(1) + match.group(2) + CODE_VARIABLES_REDACTED_VALUE
+
+
+def _redact_auth_header_credentials(value):
+    return _AUTH_HEADER_CREDENTIALS_RE.sub(_redact_auth_header_match, value)
+
+
+def _redact_embedded_credentials(value, config):
+    """Scrub credentials embedded in otherwise safe text: `Authorization` values always,
+    and URL credentials when that toggle is on."""
+    value = _redact_auth_header_credentials(value)
+    if config.mask_url_credentials:
+        value = _redact_url_credentials(value)
+    return value
 
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 10 * 1024
@@ -1270,16 +1306,14 @@ def _looks_like_secret(value):
 
 def _mask_string(value, config):
     """Apply the string masking policy: over-length cap, name/value patterns,
-    entropy-based secret detection, then embedded URL credentials."""
+    entropy-based secret detection, then embedded `Authorization` and URL credentials."""
     if len(value) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
         return CODE_VARIABLES_TOO_LONG_VALUE
     if _matcher_matches(value, config.mask):
         return CODE_VARIABLES_REDACTED_VALUE
     if config.detect_secrets and _looks_like_secret(value):
         return CODE_VARIABLES_REDACTED_VALUE
-    if config.mask_url_credentials:
-        return _redact_url_credentials(value)
-    return value
+    return _redact_embedded_credentials(value, config)
 
 
 def _safe_type_name(value):
@@ -1306,9 +1340,7 @@ def _safe_repr(value, config):
     # A __repr__ that is itself a bare secret would otherwise bypass detection.
     if config.detect_secrets and _looks_like_secret(rendered):
         return CODE_VARIABLES_REDACTED_VALUE
-    if config.mask_url_credentials:
-        return _redact_url_credentials(rendered)
-    return rendered
+    return _redact_embedded_credentials(rendered, config)
 
 
 def _extract_object_attrs(value):
@@ -1485,8 +1517,8 @@ def _mask_mapping(items, config, seen, depth):
             out_key = _redacted_key(result)
         elif not key_is_json_safe and _key_parts_fail_masking(key, config, seen, depth):
             out_key = _redacted_key(result)
-        elif config.mask_url_credentials and isinstance(out_key, str):
-            out_key = _redact_url_credentials(out_key)
+        elif isinstance(out_key, str):
+            out_key = _redact_embedded_credentials(out_key, config)
         if out_key in result:
             # Two keys can end up with the same text, for example URLs that differ only in
             # their credentials. A placeholder keeps the later entry from overwriting.
