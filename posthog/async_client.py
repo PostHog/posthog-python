@@ -11,7 +11,7 @@ import warnings
 import weakref
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Union
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from typing_extensions import Unpack
 
@@ -19,6 +19,7 @@ from ._async_consumer import (
     _STOP,
     _AsyncConsumer,
     _invoke_callback,
+    _report_capture_failure,
     _is_processing_event,
     _QueuedEvent,
     _run_outside_processing_event,
@@ -34,6 +35,7 @@ from .capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
+from .capture_send import _CAPTURE_V1_PATH
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
@@ -76,7 +78,13 @@ from .feature_flag_evaluations import (
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
 from .types import FlagMetadata, FlagValue, normalize_flags_response
-from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
+from .utils import (
+    SizeLimitedDict,
+    _normalize_timestamp,
+    _uuid7,
+    clean,
+    system_context,
+)
 from .version import VERSION
 
 __all__ = ["AsyncClient", "AsyncPosthog"]
@@ -380,7 +388,7 @@ class AsyncClient:
                 msg["uuid"] = normalized
                 return normalized
 
-        normalized = str(uuid4())
+        normalized = str(_uuid7())
         msg["uuid"] = normalized
         return normalized
 
@@ -576,20 +584,11 @@ class AsyncClient:
             await consumer.request(error_batch)
             return sent_uuid
         except Exception as error:
-            if self.on_error:
-                try:
-                    await _invoke_callback(self.on_error, error, error_batch)
-                except Exception as callback_error:
-                    self.log.error(
-                        "on_error handler failed (%s)", type(callback_error).__name__
-                    )
+            await _report_capture_failure(
+                self.on_error, self.log, error, error_batch, _CAPTURE_V1_PATH
+            )
             if self.debug:
                 raise
-            self.log.error(
-                "Immediate async capture failed (%s, status=%s)",
-                type(error).__name__,
-                getattr(error, "status", None),
-            )
             return None
         finally:
             remaining_calls = self._immediate_callers[current] - 1

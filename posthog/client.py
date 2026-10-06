@@ -34,6 +34,7 @@ from posthog.capture_compression import (
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
+    _capture_loss_message,
     _send_v1_batch,
 )
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
@@ -124,6 +125,7 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
+    _uuid7,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -141,6 +143,9 @@ _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 # overrun it by up to the client's request timeout.
 _TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
+# Marks a thread that is running a sync-mode `on_error`, so a capture that fails
+# inside the callback logs instead of re-entering it.
+_on_error_state = threading.local()
 _atexit_deadline_lock = threading.Lock()
 
 
@@ -246,13 +251,12 @@ def _stringify_event_uuid(value) -> str:
         )
 
     try:
-        UUID(stringified)
+        # Canonical form, because capture keys per-event results by it.
+        return str(UUID(stringified))
     except ValueError:
         raise ValueError(
             f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
         ) from None
-
-    return stringified
 
 
 def add_context_tags(properties):
@@ -724,8 +728,12 @@ class Client(object):
                 API methods.
             max_queue_size: Maximum number of events buffered before upload.
             send: If False, queueing succeeds but events are not sent.
-            on_error: Optional callback invoked by background consumers when an
-                upload fails. Keep it short and non-blocking. Calling lifecycle
+            on_error: Optional callback ``(error, batch)`` invoked when an upload
+                fails: by background consumers, or on the calling thread in
+                ``sync_mode``. Capture failures arrive as ``CaptureError``.
+                Without it, each failed batch logs one aggregate line. A capture
+                that fails inside the callback logs that line instead of calling
+                it again. Keep it short and non-blocking. Calling lifecycle
                 methods directly is safe and deferred, but do not start another
                 thread or task that calls ``flush()``, ``join()``, or
                 ``shutdown()`` and then wait for it from the callback.
@@ -2310,7 +2318,26 @@ class Client(object):
 
         if "uuid" not in msg:
             # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
+            msg["uuid"] = str(_uuid7())
+
+    def _report_capture_failure(
+        self, error: Exception, batch: list[dict], endpoint: str
+    ) -> None:
+        """Hand a failed sync-mode send to `on_error`, like the queued path does.
+
+        Without a handler, or when the failed capture ran inside `on_error`,
+        log one aggregate line instead, so the loss stays visible without recursion.
+        """
+        if not self.on_error or getattr(_on_error_state, "active", False):
+            self.log.error(_capture_loss_message(error, len(batch), endpoint))
+            return
+        _on_error_state.active = True
+        try:
+            self.on_error(error, batch)
+        except Exception as callback_error:
+            self.log.error("on_error handler failed: %s", callback_error)
+        finally:
+            _on_error_state.active = False
 
     def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
         # type: (...) -> Optional[str]
@@ -2423,7 +2450,12 @@ class Client(object):
                     path=lane.endpoint,
                 )
 
-            if lane.run_sync_if_open(send_sync):
+            try:
+                admitted = lane.run_sync_if_open(send_sync)
+            except Exception as e:
+                self._report_capture_failure(e, [msg], lane.endpoint)
+                return None
+            if admitted:
                 return sent_uuid
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",

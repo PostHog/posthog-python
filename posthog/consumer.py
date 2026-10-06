@@ -6,7 +6,11 @@ from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_send import _CAPTURE_V1_PATH, _send_v1_batch
+from posthog.capture_send import (
+    _CAPTURE_V1_PATH,
+    _capture_loss_message,
+    _send_v1_batch,
+)
 from posthog.request import (
     USER_AGENT as _USER_AGENT,
     DatetimeSerializer,
@@ -105,7 +109,7 @@ class Consumer(Thread):
         host=None,
         on_error=None,
         flush_interval=5.0,
-        retries=10,
+        retries=3,
         timeout=15,
         historical_migration=False,
         endpoint=_CAPTURE_V1_PATH,
@@ -172,13 +176,14 @@ class Consumer(Thread):
                 self.request(batch)
                 success = True
             except Exception as e:
-                self.log.error("error uploading: %s", e)
                 success = False
                 if self.on_error:
                     try:
                         self.on_error(e, batch)
-                    except Exception as e:
-                        self.log.error("on_error handler failed: %s", e)
+                    except Exception as callback_error:
+                        self.log.error("on_error handler failed: %s", callback_error)
+                else:
+                    self.log.error(_capture_loss_message(e, len(batch), self.endpoint))
         finally:
             # mark items as acknowledged from queue
             for item in batch:

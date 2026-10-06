@@ -472,6 +472,24 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
+            ("uppercase", "0190A3B4-C5D6-7E8F-9A0B-1C2D3E4F5A6B"),
+            ("no hyphens", "0190a3b4c5d67e8f9a0b1c2d3e4f5a6b"),
+            ("braced", "{0190a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b}"),
+        ]
+    )
+    def test_capture_sends_and_returns_canonical_uuid(self, _name, supplied):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=supplied
+            )
+
+        canonical = "0190a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b"
+        self.assertEqual(msg_uuid, canonical)
+        self.assertEqual(sent_batch(mock_post)[0]["uuid"], canonical)
+
+    @parameterized.expand(
+        [
             ("empty string", ""),
             ("invalid string", "not-a-uuid"),
             ("short string", "1234"),
@@ -489,7 +507,7 @@ class TestClient(unittest.TestCase):
                 )
 
             self.assertIsNotNone(msg_uuid)
-            UUID(msg_uuid)
+            self.assertEqual(UUID(msg_uuid).version, 7)
             mock_post.assert_called_once()
             msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["uuid"], msg_uuid)
@@ -2707,20 +2725,61 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(timeouts, [0, None])
 
-    def test_sync_send_failure_does_not_invoke_async_on_error(self):
-        on_error = mock.Mock()
-        client = Client(
-            FAKE_TEST_API_KEY,
-            sync_mode=True,
-            on_error=on_error,
-        )
+    def test_sync_send_failure_invokes_on_error_after_releasing_send_slot(self):
+        error = Exception("upload failed")
+        active_sends_in_callback = []
+        client: Client
 
-        with patch_capture_send("client", side_effect=Exception("upload failed")):
+        def on_error(err, batch):
+            active_sends_in_callback.append(client._analytics_lane._active_sync_sends)
+            self.assertIs(err, error)
+            self.assertEqual([event["event"] for event in batch], ["event"])
+            client.shutdown()
+
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True, on_error=on_error)
+
+        with patch_capture_send("client", side_effect=error):
             result = client.capture("event", distinct_id="distinct_id")
 
         self.assertIsNone(result)
-        on_error.assert_not_called()
-        self.assertEqual(client._analytics_lane._active_sync_sends, 0)
+        self.assertEqual(active_sends_in_callback, [0])
+
+    def test_sync_send_failure_inside_on_error_logs_instead_of_recursing(self):
+        calls = []
+        client: Client
+
+        def on_error(err, batch):
+            calls.append(batch[0]["event"])
+            client.capture("from_callback", distinct_id="distinct_id")
+
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True, on_error=on_error)
+
+        with patch_capture_send("client", side_effect=Exception("upload failed")):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                client.capture("event", distinct_id="distinct_id")
+
+        self.assertEqual(calls, ["event"])
+        self.assertIn(
+            "1 event(s) not persisted by /i/v1/analytics/events: Exception",
+            "\n".join(logs.output),
+        )
+
+    def test_sync_send_failure_without_on_error_logs_aggregate_line(self):
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+
+        with patch_capture_send(
+            "client", side_effect=APIError(400, "password=server-secret")
+        ):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                result = client.capture("event", distinct_id="distinct_id")
+
+        self.assertIsNone(result)
+        output = "\n".join(logs.output)
+        self.assertIn(
+            "1 event(s) not persisted by /i/v1/analytics/events: APIError (status=400)",
+            output,
+        )
+        self.assertNotIn("server-secret", output)
 
     def test_on_error_can_request_shutdown_with_pending_work(self):
         first_send_started = threading.Event()

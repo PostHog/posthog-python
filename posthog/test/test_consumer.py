@@ -232,9 +232,11 @@ class TestConsumer(unittest.TestCase):
         # other tests can log into the same stream. Assert on the line under
         # test rather than on the entire capture.
         upload_logs = [
-            line for line in logs.getvalue().splitlines() if "error uploading" in line
+            line for line in logs.getvalue().splitlines() if "not persisted" in line
         ]
-        expected_log = "[PostHog] error uploading: boom"
+        expected_log = (
+            "[PostHog] 1 event(s) not persisted by /i/v1/analytics/events: Exception"
+        )
         self.assertEqual(
             [line for line in upload_logs if line == expected_log], [expected_log]
         )

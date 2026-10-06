@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from ._async_request import async_send_v1_batch
 from .capture_compression import CaptureCompression
+from .capture_send import _CAPTURE_V1_PATH, _capture_loss_message
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
 from .request import DatetimeSerializer
 
@@ -45,6 +46,33 @@ async def _invoke_callback(callback, *args):
     if inspect.isawaitable(result):
         return await result
     return result
+
+
+# True while an SDK-invoked `on_error` runs, so a capture that fails inside the
+# callback logs instead of re-entering it.
+_IN_ON_ERROR: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "posthog_in_on_error", default=False
+)
+
+
+async def _report_capture_failure(
+    on_error: Optional[Callable[..., Any]],
+    log: logging.Logger,
+    error: Exception,
+    batch: list[dict[str, Any]],
+    endpoint: str,
+) -> None:
+    """Hand a failed send to `on_error`, or log one aggregate line without one."""
+    if on_error is None or _IN_ON_ERROR.get():
+        log.error(_capture_loss_message(error, max(1, len(batch)), endpoint))
+        return
+    token = _IN_ON_ERROR.set(True)
+    try:
+        await _invoke_callback(on_error, error, batch)
+    except Exception as callback_error:
+        log.error("on_error handler failed (%s)", type(callback_error).__name__)
+    finally:
+        _IN_ON_ERROR.reset(token)
 
 
 async def _serialized_event_size(event: dict[str, Any]) -> int:
@@ -142,18 +170,9 @@ class _AsyncConsumer:
         try:
             await self.request(batch)
         except Exception as error:
-            self.log.error(
-                "async capture upload failed (%s, status=%s)",
-                type(error).__name__,
-                getattr(error, "status", None),
+            await _report_capture_failure(
+                self.on_error, self.log, error, batch, _CAPTURE_V1_PATH
             )
-            if self.on_error:
-                try:
-                    await _invoke_callback(self.on_error, error, batch)
-                except Exception as callback_error:
-                    self.log.error(
-                        "on_error handler failed (%s)", type(callback_error).__name__
-                    )
         finally:
             for _ in batch:
                 self.queue.task_done()

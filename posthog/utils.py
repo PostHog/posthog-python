@@ -1,6 +1,7 @@
 import json
 import logging
 import numbers
+import os
 import re
 import threading
 import time
@@ -49,6 +50,19 @@ def guess_timezone(dt: datetime) -> datetime:
             dt = dt.replace(tzinfo=timezone.utc)
 
     return dt.astimezone(timezone.utc)
+
+
+def _uuid7() -> UUID:
+    """Return a time-ordered version 7 UUID (RFC 9562).
+
+    Capture generates v7 server-side when a client omits the uuid, so
+    SDK-generated event uuids sort the same way.
+    """
+    unix_ms = time.time_ns() // 1_000_000
+    value = ((unix_ms & ((1 << 48) - 1)) << 80) | int.from_bytes(os.urandom(10), "big")
+    value = (value & ~(0xF << 76)) | (0x7 << 76)
+    value = (value & ~(0x3 << 62)) | (0x2 << 62)
+    return UUID(int=value)
 
 
 def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
