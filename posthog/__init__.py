@@ -362,6 +362,11 @@ Attributes:
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
         Return ``None`` to drop an event.
+    should_capture: Optional synchronous callback for context-based filtering of
+        analytics and AI events before payload cleaning. Receives no event and
+        must return ``True`` to allow capture; any other result or an exception
+        drops the event. Does not filter metrics or tracing spans. Use
+        ``before_send`` when filtering depends on event contents.
     enable_local_evaluation: Whether to poll feature flag definitions for local
         evaluation when a personal API key is configured.
     flag_definition_cache_provider: Optional external cache provider for sharing
@@ -420,6 +425,7 @@ project_root = None  # type: Optional[str]
 # Used for our AI observability feature to not capture any prompt or output just usage + metadata
 privacy_mode = False  # type: bool
 before_send = None  # type: Optional[BeforeSendCallback]
+should_capture: Optional[Callable[[], bool]] = None
 # Whether to enable feature flag polling for local evaluation by default. Defaults to True.
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
@@ -1410,6 +1416,7 @@ def setup() -> Client:
             project_root=project_root,
             privacy_mode=privacy_mode,
             before_send=before_send,
+            should_capture=should_capture,
             enable_local_evaluation=enable_local_evaluation,
             flag_definition_cache_provider=flag_definition_cache_provider,
             capture_exception_code_variables=capture_exception_code_variables,
@@ -1432,6 +1439,7 @@ def setup() -> Client:
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)
+    default_client.should_capture = should_capture
     default_client.enable_full_ai_capture = (
         bool(enable_full_ai_capture)
         or bool(_use_ai_lane)

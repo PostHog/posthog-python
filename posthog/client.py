@@ -720,6 +720,7 @@ class Client(object):
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
+        should_capture: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -787,6 +788,12 @@ class Client(object):
                 False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event.
+            should_capture: Optional synchronous callback for context-based event
+                filtering. Runs in the caller's context before payload cleaning;
+                receives no event and must return ``True`` to allow capture.
+                Any other result or an exception drops the event. Applies to
+                analytics and AI events, not metrics or tracing spans. Use
+                ``before_send`` when filtering depends on event contents.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -1049,6 +1056,7 @@ class Client(object):
             )
 
         self._set_before_send(before_send)
+        self.should_capture = should_capture
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(
@@ -2350,6 +2358,15 @@ class Client(object):
 
         if self.disabled:
             return None
+
+        if self.should_capture is not None:
+            try:
+                if self.should_capture() is not True:
+                    self.log.debug("Event dropped by should_capture callback")
+                    return None
+            except Exception:
+                self.log.warning("Error in should_capture callback; dropping event")
+                return None
 
         timestamp = msg["timestamp"]
         if timestamp is None:
