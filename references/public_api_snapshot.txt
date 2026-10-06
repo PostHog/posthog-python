@@ -825,7 +825,7 @@ attribute posthog.exception_utils.CODE_VARIABLES_REDACTED_VALUE = '$$_posthog_re
 attribute posthog.exception_utils.CODE_VARIABLES_TOO_LONG_VALUE = '$$_posthog_value_too_long_$$'
 attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS = True
 attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS = ['^__.*']
-attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS = ['(?i)password', '(?i)secret', '(?i)passwd', '(?i)pwd', '(?i)api_key', '(?i)apikey', '(?i)auth', '(?i)credentials', '(?i)privatekey', '(?i)private_key', '(?i)token', '(?i)aws_access_key_id', '(?i)_pass', '(?i)sk_', '(?i)jwt', '(?i)connection_string', '(?i)connectionstring', '(?i)conn_str', '(?i)connstr', '(?i)dsn']
+attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS = ['(?i)password', '(?i)secret', '(?i)passwd', '(?i)pwd', '(?i)api_key', '(?i)apikey', '(?i)auth', '(?i)credentials', '(?i)privatekey', '(?i)private_key', '(?i)token', '(?i)aws_access_key_id', '(?i)_pass', '(?i)sk_', '(?i)jwt', '(?i)connection_string', '(?i)connectionstring', '(?i)conn_str', '(?i)connstr', '(?i)dsn', '(?i)[?&]sig=']
 attribute posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS = True
 attribute posthog.exception_utils.DEFAULT_MAX_VALUE_LENGTH = 1024
 attribute posthog.exception_utils.DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 10 * 1024
@@ -1408,6 +1408,7 @@ function posthog.load_feature_flags()
 function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
 function posthog.mcp.asgi.get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]
 function posthog.mcp.feedback.send_feedback_result() -> Dict[str, Any]
+function posthog.mcp.get_tool_input_properties(input_value: Any, input_schema: Any = None, options: Optional[ToolInputOptions] = None)
 function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
 function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
 function posthog.mcp.request_headers.get_request_headers(extra: Any) -> Optional[RequestHeaderBag]
