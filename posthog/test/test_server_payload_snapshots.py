@@ -117,7 +117,7 @@ def _event_family_request():
 
     with (
         freeze_time(_FIXED_TIME),
-        mock.patch("posthog.capture_v1._get_session", return_value=session),
+        mock.patch("posthog.capture_send._get_session", return_value=session),
         mock.patch("posthog.client.system_context", return_value=_RUNTIME_CONTEXT),
     ):
         client = Client(
@@ -182,7 +182,7 @@ def _exception_request():
 
     with (
         freeze_time(_FIXED_TIME),
-        mock.patch("posthog.capture_v1._get_session", return_value=session),
+        mock.patch("posthog.capture_send._get_session", return_value=session),
         mock.patch("posthog.client.system_context", return_value=_RUNTIME_CONTEXT),
         mock.patch("posthog.client._get_current_otel_span_properties", return_value={}),
     ):

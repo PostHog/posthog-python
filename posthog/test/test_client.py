@@ -18,7 +18,7 @@ from parameterized import parameterized
 import pytest
 
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_v1 import _CAPTURE_V1_PATH
+from posthog.capture_send import _CAPTURE_V1_PATH
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
@@ -4671,7 +4671,7 @@ class TestClientCaptureRetrySemantics(unittest.TestCase):
         client = None
 
         with mock.patch(
-            "posthog.capture_v1._post_v1", return_value=response
+            "posthog.capture_send._post_v1", return_value=response
         ) as v1_post:
             try:
                 client = Client(

@@ -7,7 +7,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from .capture_compression import CaptureCompression
-from .capture_v1 import _parse_retry_after, _send_v1_batch
+from .capture_send import _parse_retry_after, _send_v1_batch
 from .request import (
     APIError,
     DatetimeSerializer,

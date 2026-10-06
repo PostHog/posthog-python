@@ -9,7 +9,7 @@ from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privac
 from posthog.capture_compression import CaptureCompression
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
-from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
+from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.version import VERSION
 from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.test_utils import TEST_API_KEY

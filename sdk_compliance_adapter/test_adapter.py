@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import posthog.capture_v1
+import posthog.capture_send
 import posthog.client
 import posthog.consumer
 import posthog.request
@@ -20,7 +20,7 @@ def adapter(monkeypatch):
     # Importing the adapter installs transport instrumentation. Restore it after
     # every test so collecting these tests alongside SDK tests is safe.
     for module, name in [
-        (posthog.capture_v1, "_post_v1"),
+        (posthog.capture_send, "_post_v1"),
     ]:
         monkeypatch.setattr(module, name, getattr(module, name))
     spec = importlib.util.spec_from_file_location(
