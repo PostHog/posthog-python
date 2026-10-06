@@ -105,6 +105,7 @@ test = [
 packages = [
     "posthog",
     "posthog.ai",
+    "posthog.ai.evaluations",
     "posthog.ai.langchain",
     "posthog.ai.openai",
     "posthog.ai.openai_agents",

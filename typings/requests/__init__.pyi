@@ -1,6 +1,9 @@
 from typing import Any
 
-from . import adapters as adapters, exceptions as exceptions
+from . import adapters as adapters, auth as auth, exceptions as exceptions
+
+class PreparedRequest:
+    headers: dict[str, str]
 
 class Response:
     status_code: int
@@ -11,8 +14,20 @@ class Response:
     def close(self) -> None: ...
 
 class Session:
+    auth: auth.AuthBase | None
+    headers: dict[str, str]
     def mount(self, prefix: str, adapter: adapters.HTTPAdapter) -> None: ...
     def close(self) -> None: ...
+    def request(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: str | bytes | None = ...,
+        params: dict[str, str | int] | None = ...,
+        timeout: float | None = ...,
+        allow_redirects: bool = ...,
+    ) -> Response: ...
     def post(
         self,
         url: str,
