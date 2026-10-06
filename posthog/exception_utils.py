@@ -138,9 +138,12 @@ _AUTH_HEADER_CREDENTIALS_RE = re.compile(
     r"\b(bearer|basic)((?:\s*:\s*|\s+)['\"]?)([A-Za-z0-9._~+/-]+=*)", re.IGNORECASE
 )
 
-# Shorter values are prose, such as "the bearer of". A `Basic` credential of any length
-# is still redacted when it decodes to `user:password`, e.g. `YTpi` for `a:b`.
+# Shorter values are prose, such as "the bearer of", and so is a lowercase word of up to
+# 15 letters, such as "bearer transportation". A random lowercase token is longer than
+# that. A `Basic` credential of any length is still redacted when it decodes to
+# `user:password`, e.g. `YTpi` for `a:b`.
 _AUTH_HEADER_CREDENTIAL_MIN_LENGTH = 8
+_AUTH_HEADER_PROSE_WORD_MAX_LENGTH = 15
 
 
 def _is_basic_credential(credential):
@@ -151,10 +154,20 @@ def _is_basic_credential(credential):
     return ":" in decoded
 
 
+def _is_prose_word(credential):
+    return (
+        len(credential) <= _AUTH_HEADER_PROSE_WORD_MAX_LENGTH
+        and credential.isalpha()
+        and credential.islower()
+    )
+
+
 def _redact_auth_header_match(match):
     scheme, credential = match.group(1), match.group(3)
-    if len(credential) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH and not (
-        scheme.lower() == "basic" and _is_basic_credential(credential)
+    is_basic_pair = scheme.lower() == "basic" and _is_basic_credential(credential)
+    if not is_basic_pair and (
+        len(credential) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH
+        or _is_prose_word(credential)
     ):
         return match.group(0)
     return scheme + match.group(2) + CODE_VARIABLES_REDACTED_VALUE
@@ -165,12 +178,12 @@ def _redact_auth_header_credentials(value):
 
 
 def _redact_embedded_credentials(value, config):
-    """Scrub credentials embedded in otherwise safe text: `Authorization` values always,
-    and URL credentials when that toggle is on."""
-    value = _redact_auth_header_credentials(value)
+    """Scrub credentials embedded in otherwise safe text: URL credentials when that toggle
+    is on, then `Authorization` values always. URLs go first, because the `Authorization`
+    pass can consume a URL scheme, as in `Bearer postgresql://user:pass@host`."""
     if config.mask_url_credentials:
         value = _redact_url_credentials(value)
-    return value
+    return _redact_auth_header_credentials(value)
 
 
 DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT = 10 * 1024

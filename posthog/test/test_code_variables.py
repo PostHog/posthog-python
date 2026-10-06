@@ -268,6 +268,11 @@ class TestAuthorizationCredentialScrubbing:
             ("Basic YTpi", "YTpi"),
             # a credential of lowercase letters only
             ("Bearer " + _key("zqwklmno", "pxyzrstu"), _key("zqwklmno", "pxyzrstu")),
+            # a DSN after the scheme keeps its own credential redacted
+            (
+                "Bearer postgresql://alice:" + _key("sunfl", "ower99") + "@db/app",
+                _key("sunfl", "ower99"),
+            ),
             # a colon or a quote between the scheme and the credential
             ("Bearer: " + _BEARER_TOKEN, _BEARER_TOKEN),
             ("Bearer '" + _BEARER_TOKEN + "'", _BEARER_TOKEN),
@@ -286,7 +291,9 @@ class TestAuthorizationCredentialScrubbing:
         [
             "basicConfig(level=10)",
             "basic auth",
+            "basic: configuration",
             "Bearer token",
+            "bearer transportation",
             "the bearer of bad news",
         ],
     )
