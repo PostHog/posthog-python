@@ -4231,7 +4231,7 @@ class Client(object):
                 _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
             )
 
-        self.capture(
+        event_uuid = self.capture(
             "$feature_flag_called",
             distinct_id=distinct_id,
             properties=properties,
@@ -4239,7 +4239,9 @@ class Client(object):
             disable_geoip=disable_geoip,
             **extra_capture_kwargs,
         )
-        reported_flags.add(feature_flag_reported_key)
+        # A dropped event was not reported, so a later allowed call must still send it.
+        if event_uuid is not None:
+            reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         """

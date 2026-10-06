@@ -112,6 +112,54 @@ def test_filter_uses_each_callers_context_without_disabling_the_shared_client():
     assert client.disabled is False
 
 
+@pytest.mark.parametrize(
+    "access_flag",
+    [
+        lambda client: client.get_feature_flag_result(
+            "beta-feature", "user1", only_evaluate_locally=True
+        ),
+        lambda client: client.evaluate_flags(
+            "user1", only_evaluate_locally=True
+        ).is_enabled("beta-feature"),
+    ],
+    ids=["get_feature_flag_result", "evaluate_flags"],
+)
+def test_rejected_flag_exposure_is_still_sent_from_an_allowed_context(access_flag):
+    private_context = ContextVar("private_context", default=False)
+    sent_events = []
+
+    def before_send(event):
+        sent_events.append(event["event"])
+        return event
+
+    client = Client(
+        FAKE_TEST_API_KEY,
+        secret_key="test",
+        should_capture=lambda: not private_context.get(),
+        before_send=before_send,
+        send=False,
+    )
+    client.feature_flags = [
+        {
+            "id": 1,
+            "key": "beta-feature",
+            "active": True,
+            "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+        }
+    ]
+
+    token = private_context.set(True)
+    try:
+        access_flag(client)
+    finally:
+        private_context.reset(token)
+    assert sent_events == []
+
+    access_flag(client)
+    access_flag(client)
+    assert sent_events == ["$feature_flag_called"]
+
+
 def test_filter_survives_client_reinitialization_after_fork():
     should_capture = mock.Mock(return_value=False)
     client = Client(FAKE_TEST_API_KEY, should_capture=should_capture, send=False)
