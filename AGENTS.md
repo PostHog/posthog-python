@@ -1,77 +1,32 @@
 # AGENTS.md
 
-Guidance for coding agents working in `posthog-python`.
+Guidance for coding agents working on the PostHog Python SDK (`posthog`). Runtime: `posthog/`; main tests: `posthog/test/`.
 
-## Repo context
+## Start here
 
-- This repository contains the PostHog Python SDK, published as `posthog`.
-- The main runtime package is `posthog/`; tests live under `posthog/test/`.
-- The project uses `uv` for local development. See `CONTRIBUTING.md` for setup.
-- Public API changes: follow "Public API changes" in [CONTRIBUTING.md](./CONTRIBUTING.md). As an agent, also:
-    - When reviewing or fixing someone else's PR, don't ask for or open an issue, but note in the review when an external contributor's PR changes public API without one.
-    - The author is a PostHog maintainer when the PR's `author_association` is `MEMBER` or `OWNER` (`gh api repos/PostHog/posthog-python/pulls/<number> --jq .author_association`) or, before a PR exists, when `gh api orgs/PostHog/members/$(gh api user --jq .login)` succeeds. If the check fails or can't run, treat the author as an external contributor.
-    - A published [sdk-spec](https://github.com/PostHog/sdk-specs) that defines the API counts as the agreement, so no issue is needed.
-    - For an external contributor with no agreed issue and no spec, stop before implementing and draft the issue body for the user to post. Open it only if they ask.
-- Before implementing or reviewing SDK behavior, check [PostHog/sdk-specs](https://github.com/PostHog/sdk-specs) for a spec covering it (its README lists every capability). If one exists, use it as the cross-SDK contract for the behavior the PR changes, and call out any divergence in that behavior in the PR description. Don't fix or flag discrepancies between the spec and code the PR doesn't touch. If none exists, carry on.
-- Keep edits targeted and follow existing patterns. Prefer adding or updating tests near the behavior you change.
+- Use `uv`; follow [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and [checks](./CONTRIBUTING.md#ci-aligned-checks). Run the smallest relevant tests first.
+- For `openfeature-provider/` changes, also follow its [contributor guide](./openfeature-provider/CONTRIBUTING.md); root pytest collection does not cover it.
+- Read [RELEASING.md](./RELEASING.md) when adding changesets or changing builds/publishing. Releases publish both `posthog` and its generated `posthoganalytics` mirror.
+- For public API changes, update/review `references/public_api_snapshot.txt` and run its check as described in the contributor guide.
 
-## Capture protocol (`capture_mode`)
+## Public API and specifications
 
-The client supports two ingestion wire protocols, selected by `capture_mode` (precedence: explicit `Client(capture_mode=...)` kwarg > `POSTHOG_CAPTURE_MODE` env var > default).
+Follow [Public API changes](./CONTRIBUTING.md#public-api-changes). As an agent, also:
 
-- `"v0"` (default) — legacy `POST /batch/`. Upgrades stay transparent; existing callers are unaffected.
-- `"v1"` — `POST /i/v1/analytics/events`: Bearer auth, a typed event `options` object, per-event results, and partial retry.
+- When reviewing or fixing someone else's PR, don't ask for or open an issue. Note an external contributor's public API change when it has neither an agreed issue nor an API-defining published spec.
+- The author is a PostHog maintainer when the PR's `author_association` is `MEMBER` or `OWNER` (`gh api repos/PostHog/posthog-python/pulls/<number> --jq .author_association`) or, before a PR exists, when `gh api orgs/PostHog/members/$(gh api user --jq .login)` succeeds. If the check fails or can't run, treat the author as an external contributor.
+- A published [sdk-spec](https://github.com/PostHog/sdk-specs) that defines the API counts as the agreement, so no issue is needed.
+- For an external contributor with no agreed issue and no API-defining spec, stop before implementing and draft the issue body for the user to post. Open it only if they ask. The review/fix exception above still applies.
+- Before implementing or reviewing SDK behavior, check [PostHog/sdk-specs](https://github.com/PostHog/sdk-specs) for a covering spec (its README lists every capability). Use it as the cross-SDK contract for changed behavior and call out divergence in the PR description. Don't fix or flag discrepancies in code the PR doesn't touch. If no spec covers it, carry on.
 
-v1 request bodies can additionally be compressed via `capture_compression` (precedence: explicit `Client(capture_compression=...)` kwarg > `POSTHOG_CAPTURE_COMPRESSION` env var > the legacy `gzip` flag > none). Supported values are `"none"`, `"gzip"`, `"deflate"` (zlib-wrapped, RFC 1950, to match the server's decoder and the Go/Rust SDKs), and `"zstd"` (requires the optional `posthog[zstd]` extra; explicit zstd without the package raises, env-var zstd warns and falls back). v0 keeps using its own `gzip` flag; `capture_compression` is v1-only.
+## Capture changes
 
-Where the pieces live:
+Before changing capture configuration, serialization, routing, or retries, read the relevant implementation and tests.
 
-- `posthog/capture_mode.py` — the `CaptureMode` enum and `_resolve_capture_mode()` precedence logic.
-- `posthog/capture_compression.py` — the `CaptureCompression` enum and `_resolve_capture_compression()` precedence logic (with `gzip` fallback).
-- `posthog/capture_v1.py` — pure transforms (`_to_v1_event`, `_build_v1_batch_body`) and transport (`_post_v1`, `_compress_v1`, `_parse_v1_response`, `_send_v1_batch`, `CaptureV1Error`).
-- Public API surface (enforced by `references/public_api_snapshot.txt`): `CaptureMode`, `CaptureCompression` (both re-exported from `posthog`), `CaptureV1Error`, and the two env var names. Everything else in these modules is underscore-private plumbing.
-- Routing: `Consumer.request` (async) and `Client._enqueue` (sync) pick the submitter by `capture_mode`.
+Preserve v0 defaults/compatibility; strictly typed v1 options and `$set`/`$set_once` relocation; v1-only compression (zlib-wrapped deflate, optional zstd); partial-only per-event retries with stable identity; accumulated drop reporting even on 2xx; terminal v1 `429`; `Retry-After` as a minimum bounded by the shared 30s ceiling; and inline blocking retries with `sync_mode=True`.
 
-v1-specific behavior to preserve when editing: sentinel `$`-properties are lifted into `options` (coerced to native JSON types or omitted — a wrong type 400s the whole batch); top-level `$set`/`$set_once` are relocated into `properties`; only events the server tags `retry` are resent (stable `PostHog-Request-Id`/`created_at`, incrementing `PostHog-Attempt`); a server `drop` is a terminal per-event rejection — drops are accumulated across attempts and surfaced via `CaptureV1Error`/`on_error` even on a 2xx with no retries (a success status is not full delivery); `Retry-After` is a *minimum*, not a replacement (the client waits `max(configured_backoff, min(Retry-After, _MAX_BACKOFF_SECONDS))`); `_MAX_BACKOFF_SECONDS` (30s) is the single ceiling for both the exponential backoff and the `Retry-After` clamp; `429` is terminal.
+## Mirror and build safety
 
-Retry blocking matches v0: in the default async mode retries happen on the background consumer thread, but with `sync_mode=True` the partial-retry loop (including its backoff sleeps) runs inline on the calling thread, so a slow/erroring endpoint blocks the caller until retries are exhausted.
-
-## Validation
-
-Useful checks:
-
-```bash
-uv run ruff format --check .
-uv run ruff check .
-uv run mypy --no-site-packages --config-file mypy.ini . | uv run mypy-baseline filter
-uv run pytest --verbose --timeout=30
-uv run python -W error -c "import posthog"
-```
-
-For focused changes, run the smallest relevant `uv run pytest ...` command first.
-
-If public API surface changes, update/check `references/public_api_snapshot.txt` with:
-
-```bash
-make public_api_snapshot
-make public_api_check
-```
-
-## `posthoganalytics` mirror package
-
-This repo also publishes `posthoganalytics`, a generated mirror of `posthog` used by the PostHog app. The mirror is created by copying `posthog/` to `posthoganalytics/` and rewriting absolute imports such as `from posthog.foo import ...` to `from posthoganalytics.foo import ...`.
-
-Important when editing SDK-internal code:
-
-- Prefer relative imports for imports within the SDK package, especially in runtime modules under `posthog/`.
-  - Good: `from .client import Client`, `from .exception_utils import extract_exception_properties`
-  - Risky: `from posthog.client import Client`
-- Absolute `posthog...` imports inside SDK modules can break the `posthoganalytics` mirror when it is imported inside an application that also has its own `posthog` package/module on `sys.path`.
-- Test mirror-sensitive changes by running the normal focused tests and, when relevant, `make prep_local` to generate a local `posthoganalytics` copy for testing in the PostHog app.
-- Do not commit generated `posthoganalytics/` directories; they are build/local artifacts.
-
-## Release/build notes
-
-- `make build_release` builds the `posthog` distribution.
-- `make build_release_analytics` builds the `posthoganalytics` distribution and temporarily rewrites/copies package files; ensure the working tree is clean before and after running it.
-- Release flow publishes both packages; see `RELEASING.md`.
+- Prefer relative SDK-internal imports (e.g. `from .client import Client`). Absolute `posthog...` imports can collide with the PostHog app's own package after mirror generation rewrites imports to `posthoganalytics`.
+- Run focused tests for mirror-sensitive changes; when app testing is relevant, follow the contributor guide's mirror workflow. **`make prep_local` deletes and recreates `../posthog-python-local`; verify no work there needs preserving before every use.** Do not commit generated `posthoganalytics/` directories.
+- `make build_release_analytics` temporarily rewrites/copies source and package files and clears `dist/`. Publish or preserve the `posthog` build artifacts before running it. Require a clean working tree before running it and verify the tree is clean afterward.
