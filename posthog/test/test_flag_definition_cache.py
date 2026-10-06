@@ -17,6 +17,7 @@ from posthog.flag_definition_cache import (
 )
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.capture_helpers import patch_capture_send
 
 
 class MockCacheProvider:
@@ -94,8 +95,8 @@ class TestFlagDefinitionCacheProvider(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # Prevent real HTTP requests
-        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
-        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher = patch_capture_send("client")
+        cls.consumer_post_patcher = patch_capture_send("consumer")
         cls.client_post_patcher.start()
         cls.consumer_post_patcher.start()
 

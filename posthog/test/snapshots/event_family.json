@@ -1,18 +1,16 @@
 {
   "body": {
-    "api_key": "phc_snapshot_project",
     "batch": [
       {
         "distinct_id": "user-123",
         "event": "order completed",
+        "options": {},
         "properties": {
           "$geoip_disable": true,
           "$groups": {
             "company": "company-456"
           },
           "$is_server": true,
-          "$lib": "posthog-python",
-          "$lib_version": "<SDK_VERSION>",
           "$os": "<OS>",
           "$os_distro": "<OS_DISTRO>",
           "$os_version": "<OS_VERSION>",
@@ -34,17 +32,16 @@
         "uuid": "00000000-0000-4000-8000-000000000001"
       },
       {
-        "$set": {
-          "email": "person@example.com",
-          "plan": "pro"
-        },
         "distinct_id": "user-123",
         "event": "$set",
+        "options": {},
         "properties": {
           "$geoip_disable": true,
           "$is_server": true,
-          "$lib": "posthog-python",
-          "$lib_version": "<SDK_VERSION>"
+          "$set": {
+            "email": "person@example.com",
+            "plan": "pro"
+          }
         },
         "timestamp": "2026-01-02T03:04:05+00:00",
         "uuid": "00000000-0000-4000-8000-000000000002"
@@ -52,11 +49,10 @@
       {
         "distinct_id": "anonymous-789",
         "event": "$create_alias",
+        "options": {},
         "properties": {
           "$geoip_disable": true,
           "$is_server": true,
-          "$lib": "posthog-python",
-          "$lib_version": "<SDK_VERSION>",
           "alias": "user-123",
           "distinct_id": "anonymous-789"
         },
@@ -66,6 +62,7 @@
       {
         "distinct_id": "user-123",
         "event": "$groupidentify",
+        "options": {},
         "properties": {
           "$geoip_disable": true,
           "$group_key": "company-456",
@@ -74,21 +71,23 @@
             "name": "Example Corp"
           },
           "$group_type": "company",
-          "$is_server": true,
-          "$lib": "posthog-python",
-          "$lib_version": "<SDK_VERSION>"
+          "$is_server": true
         },
         "timestamp": "2026-01-02T03:04:05+00:00",
         "uuid": "00000000-0000-4000-8000-000000000004"
       }
     ],
-    "historical_migration": false,
-    "sent_at": "2026-01-02T03:04:05+00:00"
+    "created_at": "2026-01-02T03:04:05+00:00"
   },
   "headers": {
+    "Authorization": "Bearer phc_snapshot_project",
     "Content-Type": "application/json",
+    "PostHog-Attempt": "1",
+    "PostHog-Request-Id": "<REQUEST_ID>",
+    "PostHog-Request-Timestamp": "2026-01-02T03:04:05+00:00",
+    "PostHog-Sdk-Info": "posthog-python/<SDK_VERSION>",
     "User-Agent": "posthog-python/<SDK_VERSION>"
   },
   "timeout": 15,
-  "url": "https://example.posthog.test/batch/"
+  "url": "https://example.posthog.test/i/v1/analytics/events"
 }

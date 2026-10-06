@@ -17,8 +17,7 @@ from posthog import Client
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_v1 import _CAPTURE_V1_PATH
 from posthog.capture_v1 import _post_v1 as original_post_v1
-from posthog.request import EVENTS_ENDPOINT, USER_AGENT
-from posthog.request import batch_post as original_batch_post
+from posthog.request import USER_AGENT
 from posthog.version import VERSION
 
 # Configure logging
@@ -28,16 +27,6 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-# Selects which capture protocol this adapter process speaks. Baked at build
-# time via the CAPTURE_MODE env var ("v1" => capture-v1, anything else => legacy
-# v0), mirroring the v0/v1 Dockerfile split. One process speaks one mode and
-# advertises it via /health capabilities.
-CAPTURE_MODE = os.environ.get("CAPTURE_MODE", "")
-
-
-def is_v1() -> bool:
-    return CAPTURE_MODE == "v1"
 
 
 class RequestInfo:
@@ -81,7 +70,6 @@ class SDKState:
         self.client: Optional[Client] = None
         self.remote_client: Client | None = None
         self.reload_thread: threading.Thread | None = None
-        self.retry_attempts: Dict[str, int] = {}  # Track retry attempts by batch ID
 
     def reset(self):
         """Reset all state"""
@@ -107,44 +95,12 @@ class SDKState:
             self.total_retries = 0
             self.last_error = None
             self.requests_made = []
-            self.retry_attempts = {}
 
     def increment_captured(self):
         """Increment total events captured"""
         with self.lock:
             self.total_events_captured += 1
             self.pending_events += 1
-
-    def record_request(self, status_code: int, batch: List[Dict], batch_id: str):
-        """Record an HTTP request made by the SDK"""
-        with self.lock:
-            # Determine retry attempt for this batch
-            retry_attempt = self.retry_attempts.get(batch_id, 0)
-
-            # Extract UUIDs from batch
-            uuid_list = [event.get("uuid", "") for event in batch]
-
-            request_info = RequestInfo(
-                timestamp_ms=int(time.time() * 1000),
-                status_code=status_code,
-                retry_attempt=retry_attempt,
-                event_count=len(batch),
-                uuid_list=uuid_list,
-            )
-            self.requests_made.append(request_info)
-
-            # Update counters
-            if status_code == 200:
-                # Success - clear pending events
-                self.total_events_sent += len(batch)
-                self.pending_events = max(0, self.pending_events - len(batch))
-                # Remove batch from retry tracking
-                self.retry_attempts.pop(batch_id, None)
-            else:
-                # Failure - increment retry count
-                self.retry_attempts[batch_id] = retry_attempt + 1
-                if retry_attempt > 0:
-                    self.total_retries += 1
 
     def record_request_v1(
         self, status_code: int, batch: List[Dict], attempt: int, terminal_count: int
@@ -195,40 +151,6 @@ class SDKState:
 state = SDKState()
 
 
-def create_batch_id(batch: List[Dict]) -> str:
-    """Create a unique ID for a batch based on UUIDs"""
-    uuids = sorted([event.get("uuid", "") for event in batch])
-    return "-".join(uuids[:3])  # Use first 3 UUIDs as batch ID
-
-
-def patched_batch_post(
-    api_key: str,
-    host: Optional[str] = None,
-    gzip: bool = False,
-    timeout: int = 15,
-    path: str = EVENTS_ENDPOINT,
-    **kwargs,
-):
-    """Patched version of batch_post that tracks requests"""
-    batch = kwargs.get("batch", [])
-    batch_id = create_batch_id(batch)
-
-    try:
-        # Call original batch_post
-        response = original_batch_post(api_key, host, gzip, timeout, path, **kwargs)
-        # Record successful request
-        state.record_request(200, batch, batch_id)
-        return response
-    except Exception as e:
-        # Record failed request
-        status_code = (
-            getattr(e, "status_code", 500) if hasattr(e, "status_code") else 500
-        )
-        state.record_request(status_code, batch, batch_id)
-        state.record_error(str(e))
-        raise
-
-
 def patched_post_v1(
     api_key: str,
     host: Optional[str],
@@ -244,8 +166,8 @@ def patched_post_v1(
 ):
     """Patched version of _post_v1 that records requests for /state assertions.
 
-    Mirrors the legacy `patched_batch_post`, but reads the retry attempt from the
-    call (1-based) and counts only terminal per-event results as sent.
+    Reads the retry attempt from the call (1-based) and counts only terminal
+    per-event results as sent.
     """
     batch = batch_body.get("batch", [])
     try:
@@ -287,16 +209,6 @@ def patched_post_v1(
     return response
 
 
-# Monkey-patch the batch_post function
-import posthog.request  # noqa: E402
-
-posthog.request.batch_post = patched_batch_post
-
-# Also patch in consumer module
-import posthog.consumer  # noqa: E402
-
-posthog.consumer.batch_post = patched_batch_post
-
 # Patch the capture-v1 submitter. `_send_v1_batch` resolves `_post_v1` as a module
 # global at call time, so patching it here covers both the async consumer and the
 # sync client paths.
@@ -310,10 +222,11 @@ def health():
     """Health check endpoint"""
     # No AI capture capability: `capture_ai` posts capture v1 to
     # /i/v1/ai/events, which this harness version has no suite for.
-    capabilities = (
-        ["capture_v1", "encoding_gzip"] if is_v1() else ["capture_v0", "encoding_gzip"]
-    )
-    capabilities.append("feature_flags_local_evaluation_v1")
+    capabilities = [
+        "capture_v1",
+        "encoding_gzip",
+        "feature_flags_local_evaluation_v1",
+    ]
     return jsonify(
         {
             "sdk_name": "posthog-python",
@@ -354,9 +267,6 @@ def init():
         # Convert flush_interval from ms to seconds
         flush_interval = flush_interval_ms / 1000.0
 
-        # One adapter process speaks one capture protocol, selected by CAPTURE_MODE.
-        capture_mode = "v1" if is_v1() else "v0"
-
         # Explicit reloads exercise the real loader without background polling
         # racing the harness's per-test definition snapshots.
         client_options = {
@@ -364,12 +274,15 @@ def init():
             "host": host,
             "flush_at": flush_at,
             "flush_interval": flush_interval,
-            "gzip": enable_compression,
+            "capture_compression": (
+                CaptureCompression.GZIP
+                if enable_compression
+                else CaptureCompression.NONE
+            ),
             "max_retries": max_retries,
             "debug": False,
             "disable_geoip": disable_geoip,
             "historical_migration": historical_migration,
-            "capture_mode": capture_mode,
             "enable_local_evaluation": False,
         }
         personal_api_key = data.get("personal_api_key")
@@ -384,8 +297,8 @@ def init():
         logger.info(
             f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
             f"flush_at={flush_at}, flush_interval={flush_interval}, "
-            f"max_retries={max_retries}, gzip={enable_compression}, "
-            f"capture_mode={capture_mode}, disable_geoip={disable_geoip}, "
+            f"max_retries={max_retries}, compression={enable_compression}, "
+            f"disable_geoip={disable_geoip}, "
             f"historical_migration={historical_migration}"
         )
 
@@ -417,9 +330,8 @@ def capture():
 
         # Fold capture-v1 options back into the magic `$`-prefixed properties the
         # SDK lifts onto the wire `options` object. Renamed keys mirror the SDK's
-        # sentinel table; unknown keys get a bare `$` prefix. v0 has no wire
-        # options object, so this only applies in v1 mode.
-        if options and is_v1():
+        # sentinel table; unknown keys get a bare `$` prefix.
+        if options:
             properties = dict(properties or {})
             option_to_property = {
                 "cookieless_mode": "$cookieless_mode",
@@ -473,7 +385,7 @@ def capture_ai():
         if not event:
             return jsonify({"error": "event is required"}), 400
 
-        if options and is_v1():
+        if options:
             properties = dict(properties or {})
             option_to_property = {
                 "cookieless_mode": "$cookieless_mode",

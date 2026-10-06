@@ -31,7 +31,6 @@ from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
-from posthog.capture_mode import CaptureMode, _resolve_capture_mode
 from posthog.capture_v1 import (
     _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
@@ -89,7 +88,6 @@ from posthog.flag_definition_cache import (
 from posthog.poller import Poller
 from posthog.release_id import _resolve_release_id
 from posthog.request import (
-    EVENTS_ENDPOINT,
     USER_AGENT as _USER_AGENT,
     APIError,
     QuotaLimitError,
@@ -97,7 +95,6 @@ from posthog.request import (
     RequestsTimeout,
     _get as _get_with_identity,
     _remote_config as _remote_config_with_identity,
-    batch_post,
     determine_server_host,
     flags,
     get,
@@ -377,13 +374,11 @@ class _Lane:
         send,
         flush_at,
         flush_interval,
-        gzip,
         max_retries,
         timeout,
         historical_migration,
         endpoint,
         max_msg_size,
-        capture_mode,
         capture_compression,
         sdk_info,
         eager_start,
@@ -395,13 +390,11 @@ class _Lane:
         self.send = send
         self.flush_at = flush_at
         self.flush_interval = flush_interval
-        self.gzip = gzip
         self.max_retries = max_retries
         self.timeout = timeout
         self.historical_migration = historical_migration
         self.endpoint = endpoint
         self.max_msg_size = max_msg_size
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         self.sdk_info = sdk_info
         self._max_queue_size = max_queue_size
@@ -430,13 +423,11 @@ class _Lane:
                 on_error=self.on_error,
                 flush_at=self.flush_at,
                 flush_interval=self.flush_interval,
-                gzip=self.gzip,
                 retries=self.max_retries,
                 timeout=self.timeout,
                 historical_migration=self.historical_migration,
                 endpoint=self.endpoint,
                 max_msg_size=self.max_msg_size,
-                capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
             )
             consumer._sdk_info = self.sdk_info
@@ -674,13 +665,13 @@ class Client(object):
         self,
         project_api_key: str,
         host=None,
+        *,
         debug=False,
         max_queue_size=10000,
         send=True,
         on_error=None,
         flush_at=100,
         flush_interval=5.0,
-        gzip=False,
         max_retries=3,
         sync_mode=False,
         timeout=15,
@@ -712,13 +703,10 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
-        capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         secret_key=None,
         metrics: Optional[dict] = None,
         enable_full_ai_capture=False,
-        # Appended rather than grouped with the other `capture_*` options so
-        # existing positional arguments keep their slots.
         capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
@@ -744,7 +732,6 @@ class Client(object):
             flush_at: Number of queued events that triggers a batch upload.
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
-            gzip: Whether to gzip event upload payloads.
             max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
                 background worker threads. This blocks the calling thread; in
@@ -843,16 +830,11 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
-            capture_mode: Capture wire protocol to use. Defaults to
-                ``CaptureMode.V1`` (``/i/v1/analytics/events``). Set
-                ``CaptureMode.V0`` (or pass the string ``"v0"``) to opt back
-                into the legacy ``/batch/`` endpoint. When omitted, the
-                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V1``.
-            capture_compression: Request-body compression for capture-v1 uploads
-                (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``
-                or ``DEFLATE`` (or the strings ``"gzip"``/``"deflate"``). When
-                omitted, the ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted,
-                then the legacy ``gzip`` flag, then no compression.
+            capture_compression: Request-body compression for ``capture()``
+                uploads. ``CaptureCompression.GZIP`` or ``DEFLATE`` (or the
+                strings ``"gzip"``/``"deflate"``). When omitted, the
+                ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
+                compression.
 
         Examples:
             ```python
@@ -893,7 +875,6 @@ class Client(object):
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
-        self.gzip = gzip
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
         self._feature_flags: Optional[list[Any]] = (
@@ -953,18 +934,10 @@ class Client(object):
         )
         self.is_server = is_server
         self.historical_migration = historical_migration
-        # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
-        # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
-        # applied once; V0 is the default and keeps upgrades transparent.
-        self.capture_mode = _resolve_capture_mode(capture_mode)
         self._library_id = "posthog-python"
         self._library_version = VERSION
         self._sdk_info = f"{self._library_id}/{self._library_version}"
-        # v1-only request compression; falls back to the legacy `gzip` flag when
-        # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
-        self.capture_compression = _resolve_capture_compression(
-            capture_compression, gzip_fallback=gzip
-        )
+        self.capture_compression = _resolve_capture_compression(capture_compression)
         self.super_properties = super_properties
         # Release id from POSTHOG_RELEASE_ID, attached to every event. Resolved
         # here so the env var is read once per client.
@@ -1079,7 +1052,6 @@ class Client(object):
             send=send,
             flush_at=flush_at,
             flush_interval=flush_interval,
-            gzip=gzip,
             max_retries=self.max_retries,
             timeout=timeout,
             historical_migration=historical_migration,
@@ -1088,27 +1060,20 @@ class Client(object):
         self._analytics_lane = _Lane(
             name="analytics",
             **lane_defaults,
-            endpoint=(
-                _CAPTURE_V1_PATH
-                if self.capture_mode == CaptureMode.V1
-                else EVENTS_ENDPOINT
-            ),
+            endpoint=_CAPTURE_V1_PATH,
             max_msg_size=MAX_MSG_SIZE,
-            capture_mode=self.capture_mode,
             capture_compression=self.capture_compression,
             eager_start=not sync_mode,
         )
-        # The AI lane always posts capture v1 to the AI endpoint, whatever the
-        # analytics `capture_mode`, so multi-MB AI events stay off the
-        # analytics endpoint's smaller caps. It sends uncompressed. Lazy start,
-        # so the many clients that never emit AI events pay for no extra
+        # The AI lane posts to its own endpoint so multi-MB AI events stay off
+        # the analytics endpoint's smaller caps. It sends uncompressed. Lazy
+        # start, so the many clients that never emit AI events pay for no extra
         # threads.
         self._ai_lane = _Lane(
             name="ai",
             **lane_defaults,
             endpoint=_CAPTURE_AI_V1_PATH,
             max_msg_size=AI_MAX_MSG_SIZE,
-            capture_mode=CaptureMode.V1,
             capture_compression=CaptureCompression.NONE,
             eager_start=False,
         )
@@ -2445,30 +2410,17 @@ class Client(object):
 
             def send_sync() -> None:
                 # Sync mode bypasses the lane's queue but keeps its wire config,
-                # so AI events post to the AI endpoint whatever `capture_mode`.
-                if lane.capture_mode == CaptureMode.V1:
-                    _send_v1_batch(
-                        self.api_key,
-                        self.host,
-                        [msg],
-                        compression=lane.capture_compression,
-                        timeout=self.timeout,
-                        max_retries=self.max_retries,
-                        historical_migration=self.historical_migration,
-                        sdk_info=self._sdk_info,
-                        path=lane.endpoint,
-                    )
-                    return
-
-                batch_post(
+                # so AI events still post to the AI endpoint.
+                _send_v1_batch(
                     self.api_key,
                     self.host,
-                    gzip=self.gzip,
+                    [msg],
+                    compression=lane.capture_compression,
                     timeout=self.timeout,
-                    batch=[msg],
+                    max_retries=self.max_retries,
                     historical_migration=self.historical_migration,
+                    sdk_info=self._sdk_info,
                     path=lane.endpoint,
-                    **self._request_identity_kwargs(),
                 )
 
             if lane.run_sync_if_open(send_sync):

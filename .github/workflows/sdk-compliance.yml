@@ -28,21 +28,11 @@ jobs:
         run: python -m pytest sdk_compliance_adapter/test_adapter.py --timeout=30
 
   compliance:
-    name: PostHog SDK compliance tests (capture v0)
+    name: PostHog SDK compliance tests
     uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@4593de8b423f61fa222115da592e5c18dc82ad3c # 1.11.0
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
       adapter-context: "."
       test-harness-version: "1.1.1"
       continue-on-error: false
-      report-name: "sdk-compliance-report-v0"
-
-  compliance-v1:
-    name: PostHog SDK compliance tests (capture v1)
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@4593de8b423f61fa222115da592e5c18dc82ad3c # 1.11.0
-    with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
-      adapter-context: "."
-      test-harness-version: "1.1.1"
-      continue-on-error: false
-      report-name: "sdk-compliance-report-v1"
+      report-name: "sdk-compliance-report"

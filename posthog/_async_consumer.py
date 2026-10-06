@@ -9,11 +9,10 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from ._async_request import async_batch_post, async_send_v1_batch
+from ._async_request import async_send_v1_batch
 from .capture_compression import CaptureCompression
-from .capture_mode import CaptureMode
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
-from .request import APIError, DatetimeSerializer, EVENTS_ENDPOINT
+from .request import DatetimeSerializer
 
 _STOP = object()
 _PROCESSING_EVENT = contextvars.ContextVar(
@@ -68,13 +67,10 @@ class _AsyncConsumer:
         process_event: Callable[[dict[str, Any]], Awaitable[Optional[dict[str, Any]]]],
         flush_at: int,
         flush_interval: float,
-        gzip: bool,
         retries: int,
         timeout: int,
         historical_migration: bool,
-        capture_mode: CaptureMode,
         capture_compression: CaptureCompression,
-        http_client: Optional[Any],
     ) -> None:
         self.queue = queue
         self.api_key = api_key
@@ -83,13 +79,10 @@ class _AsyncConsumer:
         self.process_event = process_event
         self.flush_at = flush_at
         self.flush_interval = flush_interval
-        self.gzip = gzip
         self.retries = max(0, retries)
         self.timeout = timeout
         self.historical_migration = historical_migration
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
-        self.http_client = http_client
         self._carryover: Optional[tuple[dict[str, Any], int]] = None
         self._flush_event = asyncio.Event()
 
@@ -238,50 +231,12 @@ class _AsyncConsumer:
         return items, stop
 
     async def request(self, batch: list[dict[str, Any]]) -> None:
-        if self.capture_mode == CaptureMode.V1:
-            await async_send_v1_batch(
-                self.api_key,
-                self.host,
-                batch,
-                compression=self.capture_compression,
-                timeout=self.timeout,
-                max_retries=self.retries,
-                historical_migration=self.historical_migration,
-            )
-            return
-
-        last_error: Optional[Exception] = None
-        for attempt in range(self.retries + 1):
-            try:
-                await async_batch_post(
-                    self.api_key,
-                    self.host,
-                    batch=batch,
-                    path=EVENTS_ENDPOINT,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    historical_migration=self.historical_migration,
-                    client=self.http_client,
-                )
-                return
-            except Exception as error:
-                last_error = error
-                if not self._is_retryable(error) or attempt >= self.retries:
-                    raise
-                retry_after = getattr(error, "retry_after", None)
-                delay = max(
-                    min(2**attempt, 30),
-                    min(retry_after, 30) if retry_after and retry_after > 0 else 0,
-                )
-                await asyncio.sleep(delay)
-
-        if last_error is not None:  # pragma: no cover - loop always raises first
-            raise last_error
-
-    @staticmethod
-    def _is_retryable(error: Exception) -> bool:
-        if not isinstance(error, APIError):
-            return True
-        if not isinstance(error.status, int):
-            return False
-        return not (400 <= error.status < 500 and error.status not in (408, 429))
+        await async_send_v1_batch(
+            self.api_key,
+            self.host,
+            batch,
+            compression=self.capture_compression,
+            timeout=self.timeout,
+            max_retries=self.retries,
+            historical_migration=self.historical_migration,
+        )

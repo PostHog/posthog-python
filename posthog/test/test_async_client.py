@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from posthog import AsyncClient, AsyncPosthog, CaptureCompression, CaptureMode
+from posthog import AsyncClient, AsyncPosthog, CaptureCompression
 from posthog.consumer import MAX_MSG_SIZE
 from posthog.contexts import (
     new_context,
@@ -306,7 +306,6 @@ async def test_capture_immediate_uses_capture_v1_without_building_httpx_client()
     ):
         client = AsyncPosthog(
             "test-key",
-            capture_mode=CaptureMode.V1,
             capture_compression=CaptureCompression.GZIP,
         )
         event_uuid = await client.capture_immediate("event", distinct_id="user-1")
@@ -317,23 +316,6 @@ async def test_capture_immediate_uses_capture_v1_without_building_httpx_client()
     send_v1.assert_awaited_once()
     assert send_v1.await_args.kwargs["compression"] == CaptureCompression.GZIP
     assert send_v1.await_args.args[2][0]["uuid"] == event_uuid
-
-
-@pytest.mark.asyncio
-async def test_missing_async_extra_does_not_accept_undeliverable_events():
-    with mock.patch(
-        "posthog.async_client._require_httpx",
-        side_effect=RuntimeError("install posthog[async]"),
-    ):
-        client = AsyncPosthog("test-key", capture_mode=CaptureMode.V0)
-        assert client.capture("event", distinct_id="user-1") is None
-        assert (
-            client.set(distinct_id="user-1", properties={"email": "a@example.com"})
-            is None
-        )
-        assert client._pending_queue_items() == 0
-        assert client._worker_tasks == []
-        await client.shutdown()
 
 
 @pytest.mark.asyncio
@@ -609,16 +591,17 @@ async def test_reuses_and_closes_instance_owned_http_client():
             "posthog.async_client._build_client", return_value=http_client
         ) as build,
         mock.patch(
-            "posthog._async_consumer.async_batch_post", new=mock.AsyncMock()
-        ) as batch_post,
+            "posthog.async_client._async_flags",
+            new=mock.AsyncMock(return_value={"flags": {}}),
+        ) as flags,
     ):
-        client = AsyncPosthog("test-key", capture_mode=CaptureMode.V0)
-        await client.capture_immediate("first", distinct_id="user-1")
-        await client.capture_immediate("second", distinct_id="user-1")
+        client = AsyncPosthog("test-key")
+        await client._get_flags_decision("user-1")
+        await client._get_flags_decision("user-2")
         await client.shutdown()
 
     build.assert_called_once_with(client.host)
-    assert [call.kwargs["client"] for call in batch_post.await_args_list] == [
+    assert [call.kwargs["client"] for call in flags.await_args_list] == [
         http_client,
         http_client,
     ]

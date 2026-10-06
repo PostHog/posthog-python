@@ -3503,8 +3503,12 @@ class TestClient(unittest.TestCase):
     def test_debug(self):
         Client("bad_key", debug=True)
 
-    def test_gzip(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.fail, gzip=True)
+    def test_gzip_compression(self):
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.fail,
+            capture_compression=CaptureCompression.GZIP,
+        )
         for _ in range(10):
             client.capture(
                 "event", distinct_id="distinct_id", properties={"trait": "value"}
@@ -4660,30 +4664,18 @@ class TestClient(unittest.TestCase):
 
 
 class TestClientCaptureRetrySemantics(unittest.TestCase):
-    @parameterized.expand(
-        [
-            ("v0_sync", "v0", True),
-            ("v1_sync", "v1", True),
-            ("v0_async", "v0", False),
-            ("v1_async", "v1", False),
-        ]
-    )
-    def test_negative_max_retries_still_attempts_delivery_once(
-        self, _name, capture_mode, sync_mode
-    ):
+    @parameterized.expand([("sync", True), ("async", False)])
+    def test_negative_max_retries_still_attempts_delivery_once(self, _name, sync_mode):
         response = mock.Mock(status_code=200, headers={}, text="")
         response.json.return_value = {"results": {}}
         client = None
 
-        with (
-            mock.patch("posthog.client.batch_post") as sync_v0_post,
-            mock.patch("posthog.consumer.batch_post") as async_v0_post,
-            mock.patch("posthog.capture_v1._post_v1", return_value=response) as v1_post,
-        ):
+        with mock.patch(
+            "posthog.capture_v1._post_v1", return_value=response
+        ) as v1_post:
             try:
                 client = Client(
                     FAKE_TEST_API_KEY,
-                    capture_mode=capture_mode,
                     sync_mode=sync_mode,
                     max_retries=-1,
                     flush_at=1,
@@ -4694,61 +4686,30 @@ class TestClientCaptureRetrySemantics(unittest.TestCase):
                     client.flush()
 
                 self.assertEqual(client.max_retries, 0)
-                if capture_mode == "v1":
-                    v1_post.assert_called_once()
-                    sync_v0_post.assert_not_called()
-                    async_v0_post.assert_not_called()
-                elif sync_mode:
-                    sync_v0_post.assert_called_once()
-                    async_v0_post.assert_not_called()
-                    v1_post.assert_not_called()
-                else:
-                    async_v0_post.assert_called_once()
-                    sync_v0_post.assert_not_called()
-                    v1_post.assert_not_called()
+                v1_post.assert_called_once()
             finally:
                 if client is not None and not sync_mode:
                     client.shutdown()
 
 
-class TestClientSyncCaptureMode(unittest.TestCase):
-    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`."""
+class TestClientSyncCapture(unittest.TestCase):
+    """Sync-mode `_enqueue` sends analytics events through the v1 submitter."""
 
     def _client(self, **kwargs):
         return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
 
-    @parameterized.expand(
-        [
-            ("default", None, True),
-            ("v1", "v1", True),
-            ("v0", "v0", False),
-        ]
-    )
-    def test_capture_mode_selects_sync_submitter(self, _name, capture_mode, expects_v1):
-        kwargs = {"capture_mode": capture_mode} if capture_mode else {}
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            self._client(**kwargs).capture("evt", distinct_id="d")
-        if expects_v1:
-            mock_post.assert_not_called()
-            mock_v1.assert_called_once()
-            batch = mock_v1.call_args.args[2]
-            self.assertEqual(len(batch), 1)
-            self.assertEqual(batch[0]["event"], "evt")
-            self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
-        else:
-            mock_v1.assert_not_called()
-            mock_post.assert_called_once()
+    def test_sync_capture_posts_to_analytics_endpoint(self):
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
+            self._client().capture("evt", distinct_id="d")
+        mock_v1.assert_called_once()
+        batch = mock_v1.call_args.args[2]
+        self.assertEqual(len(batch), 1)
+        self.assertEqual(batch[0]["event"], "evt")
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
 
-    def test_v1_sync_forwards_config_to_submitter(self):
-        with (
-            mock.patch("posthog.client.batch_post"),
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
+    def test_sync_forwards_config_to_submitter(self):
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
             self._client(
-                capture_mode="v1",
                 capture_compression=CaptureCompression.GZIP,
                 max_retries=4,
                 historical_migration=True,
@@ -4758,29 +4719,15 @@ class TestClientSyncCaptureMode(unittest.TestCase):
             self.assertEqual(kwargs["max_retries"], 4)
             self.assertEqual(kwargs["historical_migration"], True)
 
-    def test_v1_sync_gzip_flag_falls_back_to_gzip_compression(self):
-        # Legacy `gzip=True` with no explicit capture_compression -> GZIP on v1.
-        with (
-            mock.patch("posthog.client.batch_post"),
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            self._client(capture_mode="v1", gzip=True).capture("evt", distinct_id="d")
-            self.assertEqual(
-                mock_v1.call_args.kwargs["compression"], CaptureCompression.GZIP
-            )
-
-    def test_v1_sync_ai_named_event_through_capture_uses_v1(self):
+    def test_sync_ai_named_event_through_capture_uses_analytics_endpoint(self):
         # `capture()` never special-cases AI events: an `$ai_*`-named event
-        # follows `capture_mode` and rides the v1 submitter like any analytics
-        # event. Only `capture_ai()` reaches the AI lane.
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            client = self._client(capture_mode="v1")
+        # rides the analytics endpoint like any other event. Only
+        # `capture_ai()` reaches the AI lane.
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
+            client = self._client()
             client.capture("$ai_generation", distinct_id="d")
-            mock_post.assert_not_called()
             mock_v1.assert_called_once()
             batch = mock_v1.call_args.args[2]
             self.assertEqual(len(batch), 1)
             self.assertEqual(batch[0]["event"], "$ai_generation")
+            self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
