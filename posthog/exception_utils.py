@@ -5,6 +5,8 @@
 # 💖open source (under MIT License)
 # We want to keep payloads as similar to Sentry as possible for easy interoperability
 
+import base64
+import binascii
 import dataclasses
 import functools
 import json
@@ -136,14 +138,26 @@ _AUTH_HEADER_CREDENTIALS_RE = re.compile(
     r"\b(bearer|basic)((?:\s*:\s*|\s+)['\"]?)([A-Za-z0-9._~+/-]+=*)", re.IGNORECASE
 )
 
-# Shorter values are prose, such as "the bearer of".
+# Shorter values are prose, such as "the bearer of". A `Basic` credential of any length
+# is still redacted when it decodes to `user:password`, e.g. `YTpi` for `a:b`.
 _AUTH_HEADER_CREDENTIAL_MIN_LENGTH = 8
 
 
+def _is_basic_credential(credential):
+    try:
+        decoded = base64.b64decode(credential, validate=True).decode("utf-8")
+    except (binascii.Error, ValueError):
+        return False
+    return ":" in decoded
+
+
 def _redact_auth_header_match(match):
-    if len(match.group(3)) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH:
+    scheme, credential = match.group(1), match.group(3)
+    if len(credential) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH and not (
+        scheme.lower() == "basic" and _is_basic_credential(credential)
+    ):
         return match.group(0)
-    return match.group(1) + match.group(2) + CODE_VARIABLES_REDACTED_VALUE
+    return scheme + match.group(2) + CODE_VARIABLES_REDACTED_VALUE
 
 
 def _redact_auth_header_credentials(value):
