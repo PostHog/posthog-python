@@ -264,6 +264,11 @@ class TestAuthorizationCredentialScrubbing:
             ),
             # a local with a neutral name
             ("Basic " + _BASIC_CREDENTIAL, _BASIC_CREDENTIAL),
+            # a credential of lowercase letters only
+            ("Bearer " + _key("zqwklmno", "pxyzrstu"), _key("zqwklmno", "pxyzrstu")),
+            # a colon or a quote between the scheme and the credential
+            ("Bearer: " + _BEARER_TOKEN, _BEARER_TOKEN),
+            ("Bearer '" + _BEARER_TOKEN + "'", _BEARER_TOKEN),
         ],
     )
     def test_credential_is_removed(self, value, credential):
@@ -275,7 +280,7 @@ class TestAuthorizationCredentialScrubbing:
         assert mask("Bearer " + _BEARER_TOKEN) == "Bearer " + REDACTED
 
     @pytest.mark.parametrize(
-        "value", ["basic authentication", "Bearer token", "the bearer of bad news"]
+        "value", ["basicConfig(level=10)", "Bearer token", "the bearer of bad news"]
     )
     def test_prose_is_left_untouched(self, value):
         # name patterns off, so only the Authorization check can change the text

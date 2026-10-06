@@ -129,20 +129,19 @@ def _redact_url_credentials(value):
 
 # Matches the credential of an HTTP `Authorization` value, e.g. `Bearer <token>` or
 # `Basic <base64 user:pass>`. A header pair list or an ASGI scope holds this value apart
-# from its header name, so the name patterns never see it.
+# from its header name, so the name patterns never see it. The separator also accepts a
+# colon or an opening quote, as in `Bearer: <token>`, but it must not be empty, so that
+# names such as `basicConfig` stay untouched.
 _AUTH_HEADER_CREDENTIALS_RE = re.compile(
-    r"\b(bearer|basic)(\s+)([A-Za-z0-9._~+/-]+=*)", re.IGNORECASE
+    r"\b(bearer|basic)((?:\s*:\s*|\s+)['\"]?)([A-Za-z0-9._~+/-]+=*)", re.IGNORECASE
 )
 
-# Shorter values, and lowercase words, are prose such as "basic authentication".
+# Shorter values are prose, such as "the bearer of".
 _AUTH_HEADER_CREDENTIAL_MIN_LENGTH = 8
 
 
 def _redact_auth_header_match(match):
-    credential = match.group(3)
-    if len(credential) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH or (
-        credential.isalpha() and credential.islower()
-    ):
+    if len(match.group(3)) < _AUTH_HEADER_CREDENTIAL_MIN_LENGTH:
         return match.group(0)
     return match.group(1) + match.group(2) + CODE_VARIABLES_REDACTED_VALUE
 
