@@ -204,6 +204,27 @@ class TestConsumer(unittest.TestCase):
         q.put(big_msg)
         self.assertEqual(consumer.next(), [big_msg])
 
+    @parameterized.expand(
+        [
+            # A small event serializes to 18 bytes, the "big" one to 81.
+            ("closes_before_overflow", 43, [0, 1, 2, 3], [[0, 1], [2, 3]]),
+            ("event_over_limit_goes_alone", 30, [0, "big", 1], [[0], ["big"], [1]]),
+        ]
+    )
+    def test_batch_byte_limit_is_checked_before_appending(
+        self, _name, limit, ids, expected
+    ) -> None:
+        q = Queue()
+        consumer = Consumer(q, "", flush_at=10, flush_interval=0.01)
+        for i in ids:
+            q.put({"m": "x" * (60 if i == "big" else 1), "i": i})
+
+        with mock.patch("posthog.consumer.BATCH_SIZE_LIMIT", limit):
+            batches = [[e["i"] for e in consumer.next()] for _ in expected]
+
+        self.assertEqual(batches, expected)
+        self.assertEqual(q.unfinished_tasks, len(ids))
+
     def test_upload(self) -> None:
         q = Queue()
         consumer = Consumer(q, TEST_API_KEY, flush_at=1)

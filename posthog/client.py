@@ -2,6 +2,7 @@ import atexit
 import hashlib as _hashlib
 import inspect
 import json
+from contextlib import contextmanager
 import logging
 import os
 import sys
@@ -29,6 +30,7 @@ from posthog.tracing.span import Span
 from posthog.tracing._span import inert_span as _inert_span
 from posthog.capture_compression import (
     CaptureCompression,
+    _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
 from posthog.capture_send import (
@@ -91,6 +93,7 @@ from posthog.release_id import _resolve_release_id
 from posthog.request import (
     USER_AGENT as _USER_AGENT,
     APIError,
+    DatetimeSerializer as _DatetimeSerializer,
     QuotaLimitError,
     RequestsConnectionError,
     RequestsTimeout,
@@ -225,6 +228,23 @@ def _get_atexit_deadline() -> float:
         if _atexit_deadline is None:
             _atexit_deadline = time.monotonic() + _ATEXIT_FLUSH_TIMEOUT_SECONDS
         return _atexit_deadline
+
+
+def _positive_config_value(
+    name: str, value, *, integer: bool = False, maximum: Optional[int] = None
+):
+    """Return ``value`` if it is positive and no larger than ``maximum``.
+
+    Bad lane config is a programming error, so it raises instead of falling
+    back to a default.
+    """
+    allowed = (int,) if integer else (int, float)
+    if isinstance(value, bool) or not isinstance(value, allowed) or value <= 0:
+        kind = "integer" if integer else "number"
+        raise ValueError(f"{name} must be a positive {kind}, got {value!r}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}, got {value!r}")
+    return value
 
 
 def get_identity_state(passed) -> tuple[str, bool]:
@@ -708,6 +728,10 @@ class Client(object):
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_max_queue_size: int = 1000,
+        capture_ai_timeout: float = 30,
+        capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE,
         secret_key=None,
         metrics: Optional[dict] = None,
         enable_full_ai_capture=False,
@@ -726,7 +750,8 @@ class Client(object):
                 the corresponding ingestion host.
             debug: Enable verbose SDK logging and re-raise errors from public
                 API methods.
-            max_queue_size: Maximum number of events buffered before upload.
+            max_queue_size: Maximum number of analytics events buffered before
+                upload. AI events use ``capture_ai_max_queue_size``.
             send: If False, queueing succeeds but events are not sent.
             on_error: Optional callback ``(error, batch)`` invoked when an upload
                 fails: by background consumers, or on the calling thread in
@@ -843,6 +868,21 @@ class Client(object):
                 strings ``"gzip"``/``"deflate"``). When omitted, the
                 ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
                 compression.
+            capture_ai_compression: Request-body compression for
+                ``capture_ai()`` uploads, set independently of
+                ``capture_compression``. Defaults to no compression, and the
+                env var does not apply. ``CaptureCompression.ZSTD`` suits large
+                AI payloads.
+            capture_ai_max_queue_size: Maximum number of AI events buffered
+                before upload. Defaults to 1000, lower than ``max_queue_size``
+                because AI events are much larger.
+            capture_ai_timeout: Seconds allowed for one AI upload request.
+                Defaults to 30, longer than ``timeout`` because AI batches are
+                much larger.
+            capture_ai_max_event_bytes: Largest serialized AI event the SDK
+                sends; a larger one is dropped with an error log. Defaults to
+                the AI endpoint's ceiling plus envelope headroom, and may only
+                be lowered.
 
         Examples:
             ```python
@@ -946,6 +986,21 @@ class Client(object):
         self._library_version = VERSION
         self._sdk_info = f"{self._library_id}/{self._library_version}"
         self.capture_compression = _resolve_capture_compression(capture_compression)
+        self.capture_ai_compression = _resolve_capture_ai_compression(
+            capture_ai_compression
+        )
+        capture_ai_max_queue_size = _positive_config_value(
+            "capture_ai_max_queue_size", capture_ai_max_queue_size, integer=True
+        )
+        capture_ai_timeout = _positive_config_value(
+            "capture_ai_timeout", capture_ai_timeout
+        )
+        capture_ai_max_event_bytes = _positive_config_value(
+            "capture_ai_max_event_bytes",
+            capture_ai_max_event_bytes,
+            integer=True,
+            maximum=AI_MAX_MSG_SIZE,
+        )
         self.super_properties = super_properties
         # Release id from POSTHOG_RELEASE_ID, attached to every event. Resolved
         # here so the env var is read once per client.
@@ -1055,34 +1110,36 @@ class Client(object):
             api_key=self.api_key,
             host=self.host,
             on_error=on_error,
-            max_queue_size=max_queue_size,
             thread_count=thread,
             send=send,
             flush_at=flush_at,
             flush_interval=flush_interval,
             max_retries=self.max_retries,
-            timeout=timeout,
             historical_migration=historical_migration,
             sdk_info=self._sdk_info,
         )
         self._analytics_lane = _Lane(
             name="analytics",
             **lane_defaults,
+            max_queue_size=max_queue_size,
+            timeout=timeout,
             endpoint=_CAPTURE_V1_PATH,
             max_msg_size=MAX_MSG_SIZE,
             capture_compression=self.capture_compression,
             eager_start=not sync_mode,
         )
         # The AI lane posts to its own endpoint so multi-MB AI events stay off
-        # the analytics endpoint's smaller caps. It sends uncompressed. Lazy
-        # start, so the many clients that never emit AI events pay for no extra
-        # threads.
+        # the analytics endpoint's smaller caps, with its own queue, timeout,
+        # size guard and compression. Lazy start, so the many clients that never
+        # emit AI events pay for no extra threads.
         self._ai_lane = _Lane(
             name="ai",
             **lane_defaults,
+            max_queue_size=capture_ai_max_queue_size,
+            timeout=capture_ai_timeout,
             endpoint=_CAPTURE_AI_V1_PATH,
-            max_msg_size=AI_MAX_MSG_SIZE,
-            capture_compression=CaptureCompression.NONE,
+            max_msg_size=capture_ai_max_event_bytes,
+            capture_compression=self.capture_ai_compression,
             eager_start=False,
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
@@ -2435,6 +2492,23 @@ class Client(object):
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
 
+            try:
+                event_size = len(json.dumps(msg, cls=_DatetimeSerializer).encode())
+            except Exception:
+                self.log.error("Unable to serialize event for sizing, dropping.")
+                return None
+            if event_size > lane.max_msg_size:
+                # Log only name and size: AI events may carry unredacted
+                # multimodal payloads that must not leak into logs.
+                self.log.error(
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                    msg["event"],
+                    event_size,
+                    lane.max_msg_size // 1024,
+                    lane.endpoint,
+                )
+                return None
+
             def send_sync() -> None:
                 # Sync mode bypasses the lane's queue but keeps its wire config,
                 # so AI events still post to the AI endpoint.
@@ -2443,7 +2517,7 @@ class Client(object):
                     self.host,
                     [msg],
                     compression=lane.capture_compression,
-                    timeout=self.timeout,
+                    timeout=lane.timeout,
                     max_retries=self.max_retries,
                     historical_migration=self.historical_migration,
                     sdk_info=self._sdk_info,
@@ -2681,13 +2755,14 @@ class Client(object):
             # Spans drain with events: serverless handlers call flush(), not
             # shutdown(), and leaving spans on their own timer would lose them.
             span_flush = self._start_span_flush(timeout_seconds)
-            if timeout_seconds is None:
-                for lane in self._lanes:
-                    lane.flush(None)
-            else:
-                deadline = time.monotonic() + timeout_seconds
-                for lane in self._lanes:
-                    lane.flush(max(0.0, deadline - time.monotonic()))
+            with self._drain_lanes_together():
+                if timeout_seconds is None:
+                    for lane in self._lanes:
+                        lane.flush(None)
+                else:
+                    deadline = time.monotonic() + timeout_seconds
+                    for lane in self._lanes:
+                        lane.flush(max(0.0, deadline - time.monotonic()))
             if span_flush is not None:
                 # The last span request is bounded only by the request
                 # timeout, so the wait is not.
@@ -2824,7 +2899,36 @@ class Client(object):
             self.log.exception(log_message)
             errors.append(error)
 
+    @contextmanager
+    def _drain_lanes_together(self):
+        """Signal every lane to drain before waiting on any of them.
+
+        Lanes then drain in parallel under one budget. Otherwise a lane keeps
+        batching on its normal cadence while the client waits on the lane before it.
+        """
+        signals: list[_DrainSignal] = []
+        try:
+            for lane in self._lanes:
+                signal = lane._drain_signal
+                signal.request()
+                signals.append(signal)
+            yield
+        finally:
+            for signal in signals:
+                signal.complete()
+
     def _flush_or_discard_queues(self, errors: list[Exception]) -> None:
+        try:
+            with self._drain_lanes_together():
+                self._flush_or_discard_each_lane(errors)
+            return
+        except Exception as error:
+            self.log.exception("Failed to signal lane drains during lifecycle cleanup")
+            errors.append(error)
+        # Each lane's flush signals its own drain, so lanes still drain one by one.
+        self._flush_or_discard_each_lane(errors)
+
+    def _flush_or_discard_each_lane(self, errors: list[Exception]) -> None:
         for lane in self._lanes:
             try:
                 if any(consumer.is_alive() for consumer in lane.consumers):

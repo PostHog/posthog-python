@@ -21,13 +21,21 @@ from queue import Empty
 
 MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
 
-# AI events carry LLM inputs/outputs and post to a dedicated endpoint whose
-# pipeline accepts larger messages than analytics ingestion, so the AI lane
-# grants a higher per-event ceiling. `next()` appends an item before checking
-# BATCH_SIZE_LIMIT, so worst-case request body is BATCH_SIZE_LIMIT +
-# AI_MAX_MSG_SIZE (~13MiB) — keep that sum under the 20MiB server body cap.
-AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
+# The AI endpoint's per-event ceiling. The endpoint applies it to the
+# serialized properties alone.
+AI_MAX_PROPERTIES_SIZE = 8 * 1024 * 1024
+# The local guard measures the whole serialized event, so it adds headroom for
+# the rest of the event. Without it, an event whose properties sit at the
+# ceiling is refused here although the endpoint accepts it. The guard stays
+# coarse: it skips a doomed multi-megabyte upload, it does not reproduce the
+# endpoint's check.
+AI_ENVELOPE_HEADROOM = 64 * 1024
+# The AI lane's per-event guard, and the upper bound for
+# `capture_ai_max_event_bytes`.
+AI_MAX_MSG_SIZE = AI_MAX_PROPERTIES_SIZE + AI_ENVELOPE_HEADROOM
 
+# A batch closes before it appends an event that would take it past this, so
+# a request carries at most this much event data, or one larger event alone.
 # The maximum request body size is currently 20MiB, let's be conservative
 # in case we want to lower it in the future.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
@@ -265,6 +273,11 @@ class Consumer(Thread):
                         queue.task_done()
                         pending_items -= 1
                         continue
+                    if items and total_size + item_size > BATCH_SIZE_LIMIT:
+                        self._return_to_queue_head(item)
+                        pending_items -= 1
+                        self.log.debug("hit batch size limit (size: %d)", total_size)
+                        break
                     items.append(item)
                     total_size += item_size
                     if total_size >= BATCH_SIZE_LIMIT:
@@ -283,6 +296,18 @@ class Consumer(Thread):
             return []
 
         return items
+
+    def _return_to_queue_head(self, item) -> None:
+        """Put a dequeued event back at the head of the queue for the next batch.
+
+        The event stays counted in ``unfinished_tasks``, because it was never
+        marked done. Keeping it in the queue, not in the consumer, means a
+        stop, a discard or a fork accounts for it like any other queued event.
+        """
+        queue = self.queue
+        with queue.not_empty:
+            queue.queue.appendleft(item)
+            queue.not_empty.notify()
 
     def request(self, batch):
         """Upload the batch to this consumer's `endpoint` with the capture v1

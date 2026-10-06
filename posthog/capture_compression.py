@@ -54,6 +54,7 @@ def _zstd_available() -> bool:
 
 def _coerce_explicit(
     value: Union[CaptureCompression, str],
+    name: str = "capture_compression",
 ) -> CaptureCompression:
     """Normalize an explicitly-supplied compression to a ``CaptureCompression``.
 
@@ -68,7 +69,7 @@ def _coerce_explicit(
         if resolved is not None:
             return resolved
     raise ValueError(
-        f"invalid capture_compression {value!r}; expected a CaptureCompression "
+        f"invalid {name} {value!r}; expected a CaptureCompression "
         f"or one of {sorted(_ALIASES)}"
     )
 
@@ -122,3 +123,22 @@ def _resolve_capture_compression(
         )
         return fallback
     return env_resolved
+
+
+def _resolve_capture_ai_compression(
+    capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+) -> CaptureCompression:
+    """Resolve the AI lane's request-body compression.
+
+    Explicit argument only, defaulting to ``NONE``. ``POSTHOG_CAPTURE_COMPRESSION``
+    does not apply, so changing analytics compression never changes AI uploads.
+    """
+    if capture_ai_compression is None:
+        return CaptureCompression.NONE
+    resolved = _coerce_explicit(capture_ai_compression, "capture_ai_compression")
+    if resolved is CaptureCompression.ZSTD and not _zstd_available():
+        raise ValueError(
+            "capture_ai_compression 'zstd' requires the zstandard package; "
+            "install posthog[zstd]"
+        )
+    return resolved

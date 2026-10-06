@@ -1,14 +1,17 @@
+import os
 import threading
 import unittest
 import uuid
 from unittest import mock
 
+from parameterized import parameterized
+
 import posthog
 
 from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
-from posthog.capture_compression import CaptureCompression
+from posthog.capture_compression import CAPTURE_COMPRESSION_ENV_VAR, CaptureCompression
 from posthog.client import Client
-from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
+from posthog.consumer import AI_MAX_MSG_SIZE, AI_MAX_PROPERTIES_SIZE, MAX_MSG_SIZE
 from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.version import VERSION
 from posthog.test.capture_helpers import patch_capture_send, sent_batch
@@ -174,13 +177,44 @@ class TestLaneSizeCaps(unittest.TestCase):
         batch = consumer.next()
         self.assertEqual([e["event"] for e in batch], ["$ai_generation"])
 
-    def test_ai_lane_drops_events_over_its_cap(self):
-        client = self._client()
+    @parameterized.expand(
+        [
+            ("properties_at_endpoint_ceiling", {}, AI_MAX_PROPERTIES_SIZE, True),
+            ("over_guard", {}, AI_MAX_MSG_SIZE, False),
+            (
+                "over_lowered_cap",
+                {"capture_ai_max_event_bytes": 1024 * 1024},
+                2 * 1024 * 1024,
+                False,
+            ),
+        ]
+    )
+    def test_ai_lane_size_guard(self, _name, config, payload_bytes, accepted):
+        client = Client(TEST_API_KEY, send=False, flush_interval=0.05, **config)
         client._ai_lane.start()
         consumer = client._ai_lane.consumers[0]
-        client._ai_lane.queue.put(self._sized_event("$ai_generation", AI_MAX_MSG_SIZE))
-        self.assertEqual(consumer.next(), [])
+        client._ai_lane.queue.put(self._sized_event("$ai_generation", payload_bytes))
+        self.assertEqual(
+            [e["event"] for e in consumer.next()],
+            ["$ai_generation"] if accepted else [],
+        )
         self.assertTrue(client._ai_lane.queue.empty())
+
+    def test_sync_mode_ai_event_over_cap_is_not_sent(self):
+        client = Client(
+            TEST_API_KEY, sync_mode=True, capture_ai_max_event_bytes=1024 * 1024
+        )
+        with patch_capture_send("client") as mock_send:
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                result = client.capture_ai(
+                    "$ai_generation",
+                    distinct_id="d",
+                    properties={"p": "x" * (2 * 1024 * 1024)},
+                )
+
+        self.assertIsNone(result)
+        mock_send.assert_not_called()
+        self.assertIn("exceeds the 1024KiB limit", "\n".join(logs.output))
 
     def test_analytics_lane_rejects_events_over_900kib(self):
         client = self._client()
@@ -191,18 +225,74 @@ class TestLaneSizeCaps(unittest.TestCase):
 
 
 class TestAiLaneWireConfig(unittest.TestCase):
-    """The AI lane posts to the AI endpoint uncompressed, whatever the
-    analytics `capture_compression`."""
+    """The AI lane has its own endpoint, compression, timeout, queue and size
+    guard, independent of the analytics lane's settings."""
 
-    def test_ai_lane_consumers_use_ai_endpoint_without_compression(self):
-        client = Client(TEST_API_KEY, send=False, capture_compression="gzip", thread=2)
+    @parameterized.expand(
+        [
+            ("defaults", {}, CaptureCompression.NONE, 30, 1000, AI_MAX_MSG_SIZE),
+            (
+                "configured",
+                {
+                    "capture_ai_compression": "zstd",
+                    "capture_ai_timeout": 45,
+                    "capture_ai_max_queue_size": 50,
+                    "capture_ai_max_event_bytes": 1024 * 1024,
+                },
+                CaptureCompression.ZSTD,
+                45,
+                50,
+                1024 * 1024,
+            ),
+        ]
+    )
+    def test_ai_lane_consumers_use_ai_config(
+        self, _name, config, compression, timeout, queue_size, max_event_bytes
+    ):
+        with mock.patch.dict(os.environ, {CAPTURE_COMPRESSION_ENV_VAR: "deflate"}):
+            client = Client(
+                TEST_API_KEY,
+                send=False,
+                capture_compression="gzip",
+                timeout=9,
+                max_queue_size=77,
+                thread=2,
+                **config,
+            )
         client._ai_lane.start()
+        self.assertEqual(client._ai_lane.queue.maxsize, queue_size)
         self.assertEqual(len(client._ai_lane.consumers), 2)
         for consumer in client._ai_lane.consumers:
             self.assertIs(consumer.queue, client._ai_lane.queue)
             self.assertEqual(consumer.endpoint, _CAPTURE_AI_V1_PATH)
-            self.assertEqual(consumer.max_msg_size, AI_MAX_MSG_SIZE)
-            self.assertEqual(consumer.capture_compression, CaptureCompression.NONE)
+            self.assertEqual(consumer.max_msg_size, max_event_bytes)
+            self.assertEqual(consumer.capture_compression, compression)
+            self.assertEqual(consumer.timeout, timeout)
+        self.assertEqual(client.queue.maxsize, 77)
+        for consumer in client._analytics_lane.consumers:
+            self.assertEqual(consumer.capture_compression, CaptureCompression.GZIP)
+            self.assertEqual(consumer.timeout, 9)
+        client.join()
+
+    @parameterized.expand(
+        [
+            (
+                "event_bytes_over_ceiling",
+                "capture_ai_max_event_bytes",
+                AI_MAX_MSG_SIZE + 1,
+            ),
+            ("event_bytes_zero", "capture_ai_max_event_bytes", 0),
+            ("event_bytes_float", "capture_ai_max_event_bytes", 1024.5),
+            ("event_bytes_bool", "capture_ai_max_event_bytes", True),
+            ("queue_size_negative", "capture_ai_max_queue_size", -1),
+            ("queue_size_string", "capture_ai_max_queue_size", "100"),
+            ("timeout_zero", "capture_ai_timeout", 0),
+            ("compression_unknown", "capture_ai_compression", "br"),
+        ]
+    )
+    def test_invalid_ai_config_raises(self, _name, field, value):
+        with self.assertRaisesRegex(ValueError, field):
+            Client(TEST_API_KEY, send=False, **{field: value})
 
     def test_async_lanes_keep_separate_path_and_compression(self):
         client = Client(TEST_API_KEY, capture_compression="gzip", flush_interval=0.05)
@@ -228,22 +318,56 @@ class TestAiLaneWireConfig(unittest.TestCase):
         )
         client.join()
 
-    def test_sync_lanes_keep_separate_path_and_compression(self):
-        client = Client(TEST_API_KEY, sync_mode=True, capture_compression="gzip")
+    def test_sync_lanes_keep_separate_path_compression_and_timeout(self):
+        client = Client(
+            TEST_API_KEY,
+            sync_mode=True,
+            capture_compression="gzip",
+            capture_ai_compression="deflate",
+            timeout=9,
+            capture_ai_timeout=45,
+        )
         with patch_capture_send("client") as mock_send:
             client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
 
         self.assertEqual(
             [
-                (call.kwargs["path"], call.kwargs["compression"])
+                (
+                    call.kwargs["path"],
+                    call.kwargs["compression"],
+                    call.kwargs["timeout"],
+                )
                 for call in mock_send.call_args_list
             ],
             [
-                (_CAPTURE_AI_V1_PATH, CaptureCompression.NONE),
-                (_CAPTURE_V1_PATH, CaptureCompression.GZIP),
+                (_CAPTURE_AI_V1_PATH, CaptureCompression.DEFLATE, 45),
+                (_CAPTURE_V1_PATH, CaptureCompression.GZIP, 9),
             ],
         )
+
+    def test_flush_drains_ai_lane_while_waiting_on_analytics(self):
+        release_analytics = threading.Event()
+        ai_sent = threading.Event()
+
+        def send(api_key, host, batch, **kwargs):
+            if kwargs["path"] == _CAPTURE_AI_V1_PATH:
+                ai_sent.set()
+            else:
+                release_analytics.wait(5)
+
+        client = Client(TEST_API_KEY, flush_interval=30)
+        with patch_capture_send("consumer", side_effect=send):
+            client.capture("button_clicked", distinct_id="d")
+            client.capture_ai("$ai_generation", distinct_id="d")
+            flusher = threading.Thread(target=client.flush, args=(10,))
+            flusher.start()
+            try:
+                self.assertTrue(ai_sent.wait(2))
+            finally:
+                release_analytics.set()
+                flusher.join(5)
+            client.join()
 
 
 class TestAiLaneLazyStart(unittest.TestCase):
