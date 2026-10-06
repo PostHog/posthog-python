@@ -5,6 +5,9 @@ end-to-end adapter tests by exercising edge branches directly."""
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
+import mcp.types as mcp_types
+
 from posthog.mcp._conversation_id import (
     add_conversation_id_to_schema,
     can_inject_prompt_back,
@@ -19,6 +22,7 @@ from posthog.mcp._instrumentation import (
     is_first_listing_page,
     mutate_tool_schema,
     resolve_virtual_tool_injection,
+    tools_list_envelope,
 )
 from posthog.mcp._intent import _get_context_argument, resolve_tool_call_intent
 from posthog.mcp._internal import (
@@ -408,3 +412,29 @@ def test_identity_cache_evicts_least_recently_used():
     cache.get("s1")  # touch s1 so s2 becomes the LRU entry
     cache.set("s3", UserIdentity(distinct_id="u3"))  # evicts s2
     assert cache.has("s1") and cache.has("s3") and not cache.has("s2")
+
+
+@pytest.mark.parametrize(
+    "result, expected",
+    [
+        (
+            mcp_types.ListToolsResult(
+                tools=[mcp_types.Tool(name="a", inputSchema={"type": "object"})],
+                nextCursor="2",
+            ),
+            {"nextCursor": "2"},
+        ),
+        (
+            mcp_types.ListToolsResult.model_validate(
+                {"tools": [], "nextCursor": "2", "_meta": {"trace": "t"}}
+            ),
+            {"nextCursor": "2", "_meta": {"trace": "t"}},
+        ),
+        (mcp_types.ListToolsResult(tools=[]), None),
+        (None, None),
+        ([mcp_types.Tool(name="a", inputSchema={"type": "object"})], None),
+    ],
+    ids=["paginated", "meta", "tools-only", "none", "bare-list"],
+)
+def test_tools_list_envelope(result, expected):
+    assert tools_list_envelope(result) == expected

@@ -45,6 +45,7 @@ def capture_event(
         "duration": duration,
         "sdk_language": "Python",
         "sdk_version": __version__,
+        "server_build": data.server_build,
         "server_name": data.server_name,
         "server_version": data.server_version,
         "client_name": event_input.get("client_name"),

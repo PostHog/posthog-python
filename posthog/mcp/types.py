@@ -22,10 +22,12 @@ from typing import (
     Awaitable,
     Callable,
     Dict,
+    Generic,
     List,
     Literal,
     Optional,
     TypedDict,
+    TypeVar,
     Union,
 )
 
@@ -43,7 +45,10 @@ __all__ = [
     "FeedbackReport",
     "FeedbackSentiment",
     "FeedbackType",
+    "InputAliasMap",
     "PreparedToolCall",
+    "ShouldRecordInputKeyFn",
+    "ToolInputOptions",
 ]
 
 JsonRecord = Dict[str, Any]
@@ -174,6 +179,23 @@ IdentifyFn = Callable[
 ]  # (request, extra) -> Optional[UserIdentity] | awaitable
 IntentFallbackFn = Callable[..., Any]  # (request, extra) -> Optional[str] | awaitable
 EventPropertiesFn = Callable[..., Any]  # (request, extra) -> Optional[dict] | awaitable
+InputAliasMap = Dict[str, List[str]]
+
+
+class ToolInputKeyDetails(TypedDict):
+    declared: bool
+
+
+ShouldRecordInputKeyFn = Callable[[str, ToolInputKeyDetails], bool]
+ResolveInputAliasesFn = Callable[[str], Optional[InputAliasMap]]
+
+
+@dataclass
+class ToolInputOptions:
+    """Configure safe tool input field-name capture."""
+
+    should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
+    input_aliases: Optional[InputAliasMap] = None
 
 
 @dataclass
@@ -209,9 +231,17 @@ class MCPAnalyticsOptions:
     # defaults; the object form renames the tool, replaces its description,
     # declares host-specific extra_properties, or wires an on_feedback handler.
     # Covers what `report_missing` covers (as feedback_type "missing_capability"),
-    # so new integrations should enable only one of the two. New field appended
-    # last: positional construction of the earlier fields must keep working.
+    # so new integrations should enable only one of the two.
     collect_feedback: Union[bool, CollectFeedbackOptions] = False
+    # Exact deployment identifier recorded as `$mcp_server_build`. Use an
+    # immutable value such as a Git commit SHA or a container image digest.
+    server_build: Optional[str] = None
+    # Decide which top-level argument names `$mcp_input_keys` records. The
+    # default records only names that the server's input schema declares.
+    should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
+    # Return the alternative names that one tool accepts. The SDK records alias
+    # use but does not change tool arguments.
+    resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
 
 
 @dataclass
@@ -242,6 +272,40 @@ class PreparedToolCall:
     # ``PostHogMCP.capture_feedback`` and to your own feedback backend, then
     # reply with ``send_feedback_result()`` or a custom text.
     feedback_report: Optional[FeedbackReport] = None
+    # The transport session, or the session derived from an echoed handle.
+    session_id: Optional[str] = None
+    # A valid handle that the agent echoed. Capture the value from
+    # ``PostHogMCP.prepare_tool_result`` because a new handle is set there only
+    # after it reaches the client.
+    conversation_id: Optional[str] = None
+    # Delivery state for ``prepare_tool_result``. Plain data, so a prepared call
+    # survives a copy or pickle across workers.
+    _conversation_state: Optional[PreparedConversationState] = field(
+        default=None, repr=False
+    )
+
+
+@dataclass(frozen=True)
+class PreparedConversationState:
+    """How :meth:`PostHogMCP.prepare_tool_result` may deliver the handle."""
+
+    minted_conversation_id: Optional[str] = None
+    output_instructions: bool = False
+
+
+TResult = TypeVar("TResult")
+
+
+@dataclass
+class PreparedToolResult(Generic[TResult]):
+    """Result of :meth:`PostHogMCP.prepare_tool_result`."""
+
+    # The result to return to the MCP client.
+    result: TResult
+    # The resolved session id to use when capturing this call.
+    session_id: Optional[str] = None
+    # The conversation handle to capture, set only if it reached the client.
+    conversation_id: Optional[str] = None
 
 
 @dataclass

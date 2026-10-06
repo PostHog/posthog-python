@@ -123,8 +123,19 @@ def add_instructions_to_output_schema(tool: Any) -> bool:
             )
         return False
 
+    try:
+        setattr(tool, attr, declare_output_instructions(original))
+    except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+        log(f"WARN: could not set {attr} on tool {name}")
+        return False
+    return True
+
+
+def declare_output_instructions(output_schema: Dict[str, Any]) -> Dict[str, Any]:
+    """A copy of ``output_schema`` with the optional :data:`MCP_INSTRUCTIONS_KEY`
+    declared. Callers check :func:`can_declare_output_instructions` first."""
     # Deep copy: the server may reuse or freeze the schema object it handed us.
-    schema = copy.deepcopy(original)
+    schema = copy.deepcopy(output_schema)
     if not isinstance(schema.get("properties"), dict):
         schema["properties"] = {}
     schema["properties"][MCP_INSTRUCTIONS_KEY] = {
@@ -137,12 +148,14 @@ def add_instructions_to_output_schema(tool: Any) -> bool:
             }
         },
     }
-    try:
-        setattr(tool, attr, schema)
-    except Exception:  # noqa: BLE001 - some schema attrs may be read-only
-        log(f"WARN: could not set {attr} on tool {name}")
-        return False
-    return True
+    return schema
+
+
+def tool_output_schema(tool: Any) -> Any:
+    """A tool's advertised output schema, whether it is a dict or an SDK model."""
+    if isinstance(tool, dict):
+        return tool.get("outputSchema")
+    return _read_attr(tool, _OUTPUT_SCHEMA_ATTRS)[1]
 
 
 def build_conversation_instructions(conversation_id: str) -> Dict[str, Any]:
@@ -205,17 +218,35 @@ def mirror_instructions_into_structured_content(
             new_target = copy_model(update={attr: updated})
         except Exception:  # noqa: BLE001 - never let delivery break the tool path
             return result, False
-        if target is result:
-            return new_target, True
-        rewrap = getattr(result, "model_copy", None)
-        if callable(rewrap):
-            try:
-                return rewrap(update={"root": new_target}), True
-            except Exception:  # noqa: BLE001
-                return result, False
+    else:
+        new_target = _copy_with_attr(target, attr, updated)
+        if new_target is None:
+            return result, False
+    if target is result:
+        return new_target, True
+    rewrap = getattr(result, "model_copy", None)
+    if callable(rewrap):
+        try:
+            return rewrap(update={"root": new_target}), True
+        except Exception:  # noqa: BLE001
+            return result, False
+    new_result = _copy_with_attr(result, "root", new_target)
+    if new_result is None:
         return result, False
+    return new_result, True
+
+
+def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
+    """Return a shallow copy with one changed attribute, or ``None`` when the
+    object cannot be copied safely."""
     try:
-        setattr(target, attr, updated)
-    except Exception:  # noqa: BLE001 - never let delivery break the tool path
-        return result, False
-    return result, True
+        copied = copy.copy(value)
+    except Exception:  # noqa: BLE001 - analytics must not break tool results
+        return None
+    if copied is value:
+        return None
+    try:
+        setattr(copied, attr, updated)
+    except Exception:  # noqa: BLE001 - read-only result objects fail closed
+        return None
+    return copied

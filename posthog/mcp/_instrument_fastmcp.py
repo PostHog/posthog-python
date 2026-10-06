@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import inspect
 import time
+from dataclasses import replace
 from typing import Any, Dict, Optional, Tuple
 
 import mcp.types as mcp_types
@@ -29,7 +30,6 @@ import mcp.types as mcp_types
 from ._conversation_id import build_prompt_back
 from ._instrument_lowlevel import _wrap_resource_requests
 from ._instrumentation import (
-    _to_jsonable,
     apply_virtual_tool_injection,
     collect_listed_tools,
     extract_tools,
@@ -49,6 +49,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._tool_input import get_registered_tool_input_schema
 from .logger import log
 from .tools import get_more_tools_result_text
 
@@ -131,6 +132,11 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 mcp_types.TextContent(type="text", text=text)
                 for text in lifecycle.virtual_result_texts(reply)
             ]
+
+        lifecycle = replace(
+            lifecycle,
+            input_schema=get_registered_tool_input_schema(server, name),
+        )
 
         # Strip each injected key independently. A tool can declare its own
         # `context` (kept) while `conversation_id` is still SDK-injected (stripped),
@@ -288,7 +294,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
         await lifecycle.record_result(
             names=names,
-            response=_to_jsonable(result),
+            result=result,
             duration_ms=duration_ms,
             is_empty=empty,
         )

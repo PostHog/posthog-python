@@ -42,6 +42,8 @@ def add_conversation_id_to_schema(
         and isinstance(schema.get("properties"), dict)
         and CONVERSATION_ID_PARAM_NAME in schema["properties"]
     ):
+        if _is_our_declaration(schema["properties"][CONVERSATION_ID_PARAM_NAME]):
+            return schema
         log(
             f"WARN: Tool \"{tool_name}\" already has '{CONVERSATION_ID_PARAM_NAME}'. Skipping injection."
         )
@@ -62,6 +64,26 @@ def add_conversation_id_to_schema(
         "description": DEFAULT_CONVERSATION_ID_DESCRIPTION,
     }
     return schema
+
+
+def can_inject_conversation_id(input_schema: Any) -> bool:
+    """Whether the SDK can own ``conversation_id`` on this input schema. An
+    application-declared field or a composed schema stays the application's,
+    so its value is never read as a handle or stripped before dispatch."""
+    if not isinstance(input_schema, dict):
+        return True
+    properties = input_schema.get("properties")
+    if isinstance(properties, dict) and CONVERSATION_ID_PARAM_NAME in properties:
+        return _is_our_declaration(properties[CONVERSATION_ID_PARAM_NAME])
+    return not any(input_schema.get(key) for key in ("$ref", "oneOf", "allOf", "anyOf"))
+
+
+def _is_our_declaration(declaration: Any) -> bool:
+    return (
+        isinstance(declaration, dict)
+        and declaration.get("type") == "string"
+        and declaration.get("description") == DEFAULT_CONVERSATION_ID_DESCRIPTION
+    )
 
 
 def extract_conversation_id(args: Any) -> Optional[str]:
@@ -116,9 +138,60 @@ def build_prompt_back(conversation_id: str) -> Dict[str, Any]:
 
 
 def inject_prompt_back(result: Any, conversation_id: str) -> Any:
-    if not can_inject_prompt_back(result):
+    """Append a handle block to a result copy when it has content."""
+    block: Any = build_prompt_back(conversation_id)
+    if isinstance(result, dict):
+        if not isinstance(result.get("content"), list):
+            return result
+        return {**result, "content": [*result["content"], block]}
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], list):
+        return ([*result[0], block], result[1])
+    if isinstance(result, list):
+        return [*result, block]
+
+    target = getattr(result, "root", result)
+    content = getattr(target, "content", None)
+    if not isinstance(content, list):
         return result
-    return {
-        **result,
-        "content": [*result["content"], build_prompt_back(conversation_id)],
-    }
+    try:
+        import mcp.types as mcp_types  # noqa: PLC0415
+
+        block = mcp_types.TextContent(type="text", text=block["text"])
+    except ImportError:
+        pass
+
+    copy_model = getattr(target, "model_copy", None)
+    if callable(copy_model):
+        try:
+            updated = copy_model(update={"content": [*content, block]})
+        except Exception:  # noqa: BLE001 - delivery must not break a tool call
+            return result
+    else:
+        updated = _copy_with_attr(target, "content", [*content, block])
+        if updated is None:
+            return result
+    if target is result:
+        return updated
+
+    rewrap = getattr(result, "model_copy", None)
+    if callable(rewrap):
+        try:
+            return rewrap(update={"root": updated})
+        except Exception:  # noqa: BLE001 - delivery must not break a tool call
+            return result
+    wrapped = _copy_with_attr(result, "root", updated)
+    return result if wrapped is None else wrapped
+
+
+def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
+    try:
+        copied = copy.copy(value)
+    except Exception:  # noqa: BLE001 - delivery must not break a tool call
+        return None
+    if copied is value:
+        return None
+    try:
+        setattr(copied, attr, updated)
+    except Exception:  # noqa: BLE001 - read-only objects fail closed
+        return None
+    return copied

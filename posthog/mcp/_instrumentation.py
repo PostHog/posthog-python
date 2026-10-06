@@ -41,6 +41,7 @@ from .feedback import (
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._tool_input import get_tool_input_properties
 from ._model_parameters import (
     add_model_parameter_to_schema,
     get_model_description,
@@ -55,7 +56,7 @@ from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import resolve_missing_capability_tool_name
-from .types import CollectFeedbackOptions, FeedbackReport
+from .types import CollectFeedbackOptions, FeedbackReport, ToolInputOptions
 
 # The virtual tools this SDK advertises into tools/list. Every piece of per-tool
 # policy -- enable switch, configured name, warning text, warn-once
@@ -447,6 +448,7 @@ class ToolCallLifecycle:
     feedback_name: Optional[str]
     conversation_id: Optional[str]
     minted_conversation_id: bool
+    input_schema: Any
 
     @property
     def is_missing_capability(self) -> bool:
@@ -546,6 +548,7 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             conversation_id=conversation_id,
             extra=self.extra,
+            input_schema=self.input_schema,
         )
 
     async def record_result(
@@ -567,6 +570,7 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             conversation_id=conversation_id,
             extra=self.extra,
+            input_schema=self.input_schema,
         )
 
 
@@ -583,6 +587,7 @@ def start_tool_call_lifecycle(
     client_version: Optional[str],
     protocol_version: Optional[str],
     extra: Dict[str, Any],
+    input_schema: Any = None,
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
     enabled = enabled_virtual_tool_names(data)
@@ -616,6 +621,7 @@ def start_tool_call_lifecycle(
         feedback_name=feedback_name,
         conversation_id=conversation_id,
         minted_conversation_id=minted,
+        input_schema=input_schema,
     )
 
 
@@ -635,6 +641,7 @@ async def record_tool_call(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
+    input_schema: Any = None,
 ) -> None:
     # Analytics must never change what the tool returns or raises: any failure
     # building/publishing the event is logged and swallowed here.
@@ -677,8 +684,23 @@ async def record_tool_call(
                 event["error"] = capture_exception(result)
 
         props = await resolve_event_properties(data, request, extra)
-        if props is not None:
-            event["properties"] = props
+        input_aliases = None
+        if data.options.resolve_input_aliases is not None:
+            try:
+                input_aliases = data.options.resolve_input_aliases(name)
+            except Exception as err:  # noqa: BLE001 - analytics callbacks are isolated
+                log(f"Warning: resolve_input_aliases failed for tool {name}: {err}")
+        event["properties"] = {
+            **(props or {}),
+            **get_tool_input_properties(
+                arguments or {},
+                input_schema,
+                ToolInputOptions(
+                    should_record_input_key=data.options.should_record_input_key,
+                    input_aliases=input_aliases,
+                ),
+            ),
+        }
 
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
@@ -690,6 +712,24 @@ def extract_tools(result: Any) -> list:
     """Pull the tool list out of a ListTools ServerResult, as a copy."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
+
+
+def tools_list_envelope(result: Any) -> Optional[Dict[str, Any]]:
+    """The ``tools/list`` result minus its tools, or None when nothing else is set.
+
+    The names already ride ``listed_tool_names``, and a descriptor copy would be
+    sanitized and truncated on the request path."""
+    root = getattr(result, "root", result)
+    if not hasattr(root, "model_dump"):
+        return None
+    envelope = root.model_dump(
+        mode="json",
+        by_alias=True,
+        exclude={"tools"},
+        exclude_unset=True,
+        exclude_none=True,
+    )
+    return envelope or None
 
 
 def append_virtual_tool(result: Any, tool: Any) -> Any:
@@ -1113,7 +1153,7 @@ class ToolsListLifecycle:
         self,
         *,
         names: List[str],
-        response: Any,
+        result: Any,
         duration_ms: float,
         is_empty: bool,
     ) -> None:
@@ -1122,7 +1162,7 @@ class ToolsListLifecycle:
             self.session_id,
             names=names,
             request=self.request,
-            response=response,
+            result=result,
             duration_ms=duration_ms,
             is_error=is_empty,
             error="tools/list returned no tools" if is_empty else None,
@@ -1276,7 +1316,7 @@ async def record_tools_list(
     *,
     names: List[str],
     request: Dict[str, Any],
-    response: Any = None,
+    result: Any = None,
     duration_ms: Optional[float] = None,
     is_error: bool = False,
     error: Any = None,
@@ -1291,7 +1331,7 @@ async def record_tools_list(
             "session_id": session_id,
             "listed_tool_names": names,
             "parameters": build_captured_mcp_parameters(request),
-            "response": _wrap_response(response) if response is not None else None,
+            "response": tools_list_envelope(result),
             "duration": duration_ms,
             "client_name": client_name,
             "client_version": client_version,

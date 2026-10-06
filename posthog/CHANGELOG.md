@@ -1,5 +1,54 @@
 # posthog
 
+## 7.64.1 — 2026-10-06
+
+### Patch changes
+
+- [e3cfe17](https://github.com/posthog/posthog-python/commit/e3cfe17e748deb9f2aa4e2ca6325f82ff10cc73f) Mask `Bearer` and `Basic` credentials in exception code variables, including values held apart from their header name, such as in header lists and ASGI scopes. Also mask signed URLs that carry a `sig` query parameter. — Thanks @ablaszkiewicz!
+
+## 7.64.0 — 2026-10-06
+
+### Minor changes
+
+- [6d83875](https://github.com/posthog/posthog-python/commit/6d8387506ca7eaa0465aadcf67a53b9f605eeca3) Add typed synchronous and asynchronous offline evaluation clients with reusable items, acknowledged bulk uploads, resumable identities, and explicit experiment completion. Manage scorers and immutable versions through the SDK, including boolean, numeric, and categorical polarity configuration. — Thanks @Radu-Raicea!
+
+## 7.63.0 — 2026-10-05
+
+### Minor changes
+
+- [8ef0573](https://github.com/posthog/posthog-python/commit/8ef05738cedffb28dc3ce8886179a0ba9a267f5d) Record safe tool input field names on MCP tool-call events. Add server-owned input alias maps for automatic instrumentation and a public helper for custom dispatchers. The SDK records field names and alias use without reading argument values or changing tool calls. — Thanks @gesh!
+
+## 7.62.1 — 2026-10-02
+
+### Patch changes
+
+- [053e734](https://github.com/posthog/posthog-python/commit/053e734d3028f969c9c7814051d8b3ecdc0549ff) Keep streamed Anthropic tool call arguments when the response also contains server tool blocks, such as web search. — Thanks @breken-ai!
+- [c2470c0](https://github.com/posthog/posthog-python/commit/c2470c0c6ef3fcf10729e7422c2971af3d6f5ac7) Capture token usage and output for OpenAI Responses streams that end incomplete, such as when `max_output_tokens` is reached. — Thanks @breken-ai!
+
+## 7.62.0 — 2026-10-01
+
+### Minor changes
+
+- [3eb3861](https://github.com/posthog/posthog-python/commit/3eb3861176d1c0e521ad42cd6fd1ac12f9164650) Add conversation and session correlation to custom `PostHogMCP` dispatchers, matching `@posthog/mcp`. `prepare_tool_list()` adds an optional `conversation_id` field to each compatible tool input schema and a compatible `_mcp_instructions` output field. `prepare_tool_call()` accepts a carried `session_id`. The new `prepare_tool_result()` delivers a minted handle without changing the original result. Tool and report capture methods accept `conversation_id`. Existing dispatchers must call `prepare_tool_result()` to deliver new handles. Set `PostHogMCP(enable_conversation_id=False)` to keep the previous behavior. — Thanks @gesh!
+
+## 7.61.1 — 2026-09-30
+
+### Patch changes
+
+- [bcf9d34](https://github.com/posthog/posthog-python/commit/bcf9d3426d1c2a6dc1966338e0d5409906387875) `$mcp_tools_list` events no longer copy the tool descriptors into `$mcp_response`, which keeps only the response envelope such as `nextCursor`. The tool names stay in `$mcp_listed_tool_names`. — Thanks @lucasheriques!
+
+## 7.61.0 — 2026-09-30
+
+### Minor changes
+
+- [299906b](https://github.com/posthog/posthog-python/commit/299906b8cb25e0e3063458ff42e93c116f300d5e) Add optional MCP server build metadata. Set `server_build` to record an immutable deployment identifier as `$mcp_server_build` on MCP events from automatic instrumentation, custom dispatchers, and custom events captured through `PostHogMCP`. — Thanks @gesh!
+
+## 7.60.2 — 2026-09-29
+
+### Patch changes
+
+- [3f94e80](https://github.com/posthog/posthog-python/commit/3f94e809dcdb3543331130baa54e51306e2975e9) Code variable masking now searches strings of up to 2,048 characters for known credential formats, not only strings of up to 200 characters. A key inside a longer string, such as a SQL query that inlines an access key, is now redacted. Dict keys are now masked too. A key is replaced with a `$$_posthog_redacted_key_<n>_$$` placeholder when it matches a mask pattern but is not a plain field name, when it looks like a secret, when a non-string key holds a part that masking redacts or can't check, when its text can't be read, or when it is too long to scan. URL credentials are removed from string keys, and keys that end up with the same text keep separate entries. — Thanks @ablaszkiewicz!
+
 ## 7.60.1 — 2026-09-25
 
 ### Patch changes

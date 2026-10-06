@@ -3,6 +3,7 @@
 import json
 
 import mcp.types as mcp_types
+import pytest
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
 
@@ -122,6 +123,89 @@ async def test_fastmcp_conversation_id_captured():
 
     calls = _events(client, "$mcp_tool_call")
     assert calls and calls[0]["properties"].get("$mcp_conversation_id")  # minted
+
+
+async def test_fastmcp_captures_server_build_on_all_events():
+    server = make_fastmcp()
+    client = FakeClient()
+    options = MCPAnalyticsOptions(server_build="sha-abc123")
+    instrument(
+        server,
+        client,
+        options,
+    )
+    options.server_build = "changed-after-setup"
+
+    list_handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    await list_handler(mcp_types.ListToolsRequest(method="tools/list"))
+    await server._tool_manager.call_tool("add", {"a": 1, "b": 2}, convert_result=True)
+    await _flush()
+
+    assert client.events
+    assert all(
+        event["properties"]["$mcp_server_build"] == "sha-abc123"
+        for event in client.events
+    )
+
+
+async def test_fastmcp_captures_safe_input_names_and_aliases():
+    server = make_fastmcp()
+    client = FakeClient()
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            resolve_input_aliases=lambda name: {"a": ["first"]}
+            if name == "add"
+            else None
+        ),
+    )
+
+    # Alias telemetry does not normalize arguments. This server does not accept
+    # the alias, so the call fails after the SDK records the original names.
+    with pytest.raises(Exception):
+        await server._tool_manager.call_tool(
+            "add",
+            {"first": 1, "b": 2, "unknown@example.com": 3},
+            convert_result=True,
+        )
+    await _flush()
+
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["b", "first", "[redacted]"]
+    assert properties["$mcp_input_aliases_used"] == ["first:a"]
+
+
+async def test_fastmcp_keeps_input_names_after_conversation_anchoring():
+    server = make_fastmcp()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=True))
+    handle = "0198d3a7-1111-7222-8333-444455556666"
+
+    await server._tool_manager.call_tool(
+        "add",
+        {"a": 1, "b": 2, "conversation_id": handle},
+        convert_result=True,
+    )
+    await _flush()
+
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["a", "b"]
+
+
+async def test_lowlevel_does_not_reuse_a_listed_schema_for_input_names():
+    server = make_lowlevel()
+    client = FakeClient()
+    instrument(server, client)
+
+    list_handler = server.request_handlers[mcp_types.ListToolsRequest]
+    await list_handler(mcp_types.ListToolsRequest(method="tools/list"))
+    call_handler = server.request_handlers[mcp_types.CallToolRequest]
+    await call_handler(_call_request("echo", {"msg": "hi"}))
+    await _flush()
+
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["[redacted]"]
 
 
 async def test_lowlevel_conversation_id_captured_and_prompt_back():

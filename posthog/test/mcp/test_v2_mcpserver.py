@@ -79,6 +79,29 @@ async def test_context_injection_can_be_disabled():
     assert "context" not in add_tool.input_schema.get("properties", {})
 
 
+async def test_tool_call_resolves_input_names_from_a_root_reference():
+    server = make_server()
+    tool = server._tool_manager.get_tool("add")
+    tool.parameters = {
+        "$ref": "#/$defs/Args",
+        "$defs": {
+            "Args": {
+                "type": "object",
+                "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+            }
+        },
+    }
+    client = FakeClient()
+    instrument(server, client)
+
+    result = await _call_tool(server, "add", {"a": 2, "b": 3})
+    await _flush()
+
+    assert result.is_error is False
+    properties = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert properties["$mcp_input_keys"] == ["a", "b"]
+
+
 # --- tools/call --------------------------------------------------------------
 
 

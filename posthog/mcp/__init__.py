@@ -38,6 +38,7 @@ from typing import Any, Optional
 from posthog.client import Client
 
 from ._capture import capture_event
+from ._server_build import validate_server_build
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
@@ -45,6 +46,7 @@ from .constants import (
 )
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import drain_pending
+from ._tool_input import get_tool_input_properties
 from ._internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
@@ -81,11 +83,15 @@ from .types import (
     CaptureEventData,
     CollectFeedbackOptions,
     FeedbackReport,
+    InputAliasMap,
     MCPAnalyticsContextOptions,
     MCPAnalyticsModelOptions,
     MCPAnalyticsModelSource,
     MCPAnalyticsOptions,
     PreparedToolCall,
+    PreparedToolResult,
+    ShouldRecordInputKeyFn,
+    ToolInputOptions,
     UserIdentity,
 )
 from .version import __version__
@@ -102,7 +108,12 @@ __all__ = [
     "CaptureEventData",
     "CollectFeedbackOptions",
     "FeedbackReport",
+    "InputAliasMap",
     "PreparedToolCall",
+    "PreparedToolResult",
+    "ShouldRecordInputKeyFn",
+    "ToolInputOptions",
+    "get_tool_input_properties",
     "get_more_tools_result",
     "send_feedback_result",
     "SEND_FEEDBACK_TOOL_NAME",
@@ -248,6 +259,7 @@ def instrument(
     :param options: Optional :class:`MCPAnalyticsOptions`.
     """
     opts = options or MCPAnalyticsOptions()
+    server_build = validate_server_build(opts.server_build)
 
     # Install the logger first so the version advisory below (and any warning) is
     # actually visible rather than going to the default no-op sink.
@@ -299,7 +311,10 @@ def instrument(
         if data is None:
             sink = McpEventSink(client) if client is not None else None
             data = MCPAnalyticsData(
-                options=opts, sink=sink, session_id=new_session_id()
+                options=opts,
+                sink=sink,
+                session_id=new_session_id(),
+                server_build=server_build,
             )
 
         if is_fastmcp_v2(server) and uses_v2_handler_registry(key):

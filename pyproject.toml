@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.60.1"
+version = "7.64.1"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -119,6 +119,7 @@ test = [
 packages = [
     "posthog",
     "posthog.ai",
+    "posthog.ai.evaluations",
     "posthog.ai.langchain",
     "posthog.ai.openai",
     "posthog.ai.openai_agents",
