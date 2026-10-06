@@ -87,7 +87,7 @@ def test_health_opts_into_local_evaluation_without_losing_capture(
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
     assert capability in capabilities
-    assert "capture_ai_v0" in capabilities
+    assert "capture_ai_v0" not in capabilities
 
 
 def test_init_enables_explicit_definitions_loading_without_polling(adapter):

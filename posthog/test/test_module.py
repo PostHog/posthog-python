@@ -7,6 +7,7 @@ from parameterized import parameterized
 
 import posthog
 from posthog import Posthog
+from posthog.test.capture_helpers import patch_capture_send, sent_batch
 
 
 class TestModule(unittest.TestCase):
@@ -17,7 +18,7 @@ class TestModule(unittest.TestCase):
         self.assertTrue(result)
 
     def setUp(self):
-        patcher = mock.patch("posthog.consumer.batch_post")
+        patcher = patch_capture_send("consumer")
         self.transport = patcher.start()
         self.addCleanup(patcher.stop)
         self.on_error = mock.Mock()
@@ -32,7 +33,7 @@ class TestModule(unittest.TestCase):
         self._assert_enqueue_result(res)
         self.posthog.flush()
         self.transport.assert_called_once()
-        event = self.transport.call_args.kwargs["batch"][0]
+        event = sent_batch(self.transport)[0]
         self.assertEqual(event["event"], "python module event")
         self.assertEqual(event["distinct_id"], "distinct_id")
         self.assertEqual(event["uuid"], res)
@@ -42,7 +43,7 @@ class TestModule(unittest.TestCase):
         self._assert_enqueue_result(res)
         self.posthog.flush()
         self.transport.assert_called_once()
-        event = self.transport.call_args.kwargs["batch"][0]
+        event = sent_batch(self.transport)[0]
         self.assertEqual(event["event"], "$create_alias")
         self.assertEqual(event["distinct_id"], "previousId")
         self.assertEqual(event["properties"]["alias"], "distinct_id")

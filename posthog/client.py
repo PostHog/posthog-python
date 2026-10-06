@@ -32,7 +32,11 @@ from posthog.capture_compression import (
     _resolve_capture_compression,
 )
 from posthog.capture_mode import CaptureMode, _resolve_capture_mode
-from posthog.capture_v1 import _send_v1_batch
+from posthog.capture_v1 import (
+    _CAPTURE_AI_V1_PATH,
+    _CAPTURE_V1_PATH,
+    _send_v1_batch,
+)
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.contexts import (
     _get_current_context,
@@ -85,7 +89,6 @@ from posthog.flag_definition_cache import (
 from posthog.poller import Poller
 from posthog.release_id import _resolve_release_id
 from posthog.request import (
-    AI_EVENTS_ENDPOINT,
     EVENTS_ENDPOINT,
     USER_AGENT as _USER_AGENT,
     APIError,
@@ -841,10 +844,10 @@ class Client(object):
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
             capture_mode: Capture wire protocol to use. Defaults to
-                ``CaptureMode.V0`` (legacy ``/batch/``). Set ``CaptureMode.V1``
-                (or pass the string ``"v1"``) to opt into
-                ``/i/v1/analytics/events``. When omitted, the
-                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V0``.
+                ``CaptureMode.V1`` (``/i/v1/analytics/events``). Set
+                ``CaptureMode.V0`` (or pass the string ``"v0"``) to opt back
+                into the legacy ``/batch/`` endpoint. When omitted, the
+                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V1``.
             capture_compression: Request-body compression for capture-v1 uploads
                 (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``
                 or ``DEFLATE`` (or the strings ``"gzip"``/``"deflate"``). When
@@ -1085,24 +1088,27 @@ class Client(object):
         self._analytics_lane = _Lane(
             name="analytics",
             **lane_defaults,
-            endpoint=EVENTS_ENDPOINT,
+            endpoint=(
+                _CAPTURE_V1_PATH
+                if self.capture_mode == CaptureMode.V1
+                else EVENTS_ENDPOINT
+            ),
             max_msg_size=MAX_MSG_SIZE,
             capture_mode=self.capture_mode,
             capture_compression=self.capture_compression,
             eager_start=not sync_mode,
         )
-        # The AI lane is pinned to the v0 submitter: the AI endpoint has no v1
-        # form, and this keeps multi-MB AI events away from capture v1's
-        # smaller caps. The `capture_compression` pin is inert on v0 — its wire
-        # compression is the `gzip` flag, inherited from client config. Lazy
-        # start, so the many clients that never emit AI events pay for no
-        # extra threads.
+        # The AI lane always posts capture v1 to the AI endpoint, whatever the
+        # analytics `capture_mode`, so multi-MB AI events stay off the
+        # analytics endpoint's smaller caps. It sends uncompressed. Lazy start,
+        # so the many clients that never emit AI events pay for no extra
+        # threads.
         self._ai_lane = _Lane(
             name="ai",
             **lane_defaults,
-            endpoint=AI_EVENTS_ENDPOINT,
+            endpoint=_CAPTURE_AI_V1_PATH,
             max_msg_size=AI_MAX_MSG_SIZE,
-            capture_mode=CaptureMode.V0,
+            capture_mode=CaptureMode.V1,
             capture_compression=CaptureCompression.NONE,
             eager_start=False,
         )
@@ -2438,19 +2444,19 @@ class Client(object):
             self.log.debug("enqueued with blocking %s.", msg["event"])
 
             def send_sync() -> None:
-                # Sync mode bypasses the lane's queue but keeps its wire config:
-                # the AI lane is pinned to v0, so its events post to the AI
-                # endpoint regardless of `capture_mode`.
+                # Sync mode bypasses the lane's queue but keeps its wire config,
+                # so AI events post to the AI endpoint whatever `capture_mode`.
                 if lane.capture_mode == CaptureMode.V1:
                     _send_v1_batch(
                         self.api_key,
                         self.host,
                         [msg],
-                        compression=self.capture_compression,
+                        compression=lane.capture_compression,
                         timeout=self.timeout,
                         max_retries=self.max_retries,
                         historical_migration=self.historical_migration,
                         sdk_info=self._sdk_info,
+                        path=lane.endpoint,
                     )
                     return
 

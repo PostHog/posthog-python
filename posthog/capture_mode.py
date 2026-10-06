@@ -13,10 +13,9 @@ CAPTURE_MODE_ENV_VAR = "POSTHOG_CAPTURE_MODE"
 class CaptureMode(str, Enum):
     """Selects the capture wire protocol used for event ingestion.
 
-    ``V0`` is the legacy ``POST /batch/`` endpoint and the default, so upgrading
-    is transparent to existing callers. ``V1`` opts into
-    ``POST /i/v1/analytics/events`` (Bearer auth, per-event results, partial
-    retry). Inheriting from ``str`` keeps the members directly comparable to and
+    ``V1`` is ``POST /i/v1/analytics/events`` (Bearer auth, per-event results,
+    partial retry) and the default. ``V0`` opts back into the legacy
+    ``POST /batch/`` endpoint. Inheriting from ``str`` keeps the members directly comparable to and
     serializable as their ``"v0"`` / ``"v1"`` values.
     """
 
@@ -61,15 +60,15 @@ def _resolve_capture_mode(
     """Resolve the effective capture mode.
 
     Precedence: explicit ``capture_mode`` argument > ``POSTHOG_CAPTURE_MODE`` env
-    var > ``CaptureMode.V0``. An unrecognized env value logs a warning and falls
-    back to ``V0`` so a typo never silently flips the wire protocol.
+    var > ``CaptureMode.V1``. An unrecognized env value logs a warning and falls
+    back to ``V1`` so a typo never silently flips the wire protocol.
     """
     if capture_mode is not None:
         return _coerce_explicit(capture_mode)
 
     raw = os.environ.get(CAPTURE_MODE_ENV_VAR)
     if raw is None or raw.strip() == "":
-        return CaptureMode.V0
+        return CaptureMode.V1
 
     resolved = _ALIASES.get(raw.strip().lower())
     if resolved is None:
@@ -77,8 +76,8 @@ def _resolve_capture_mode(
             "Unrecognized %s=%r; falling back to %s. Expected one of %s.",
             CAPTURE_MODE_ENV_VAR,
             raw,
-            CaptureMode.V0.value,
+            CaptureMode.V1.value,
             sorted(_ALIASES),
         )
-        return CaptureMode.V0
+        return CaptureMode.V1
     return resolved

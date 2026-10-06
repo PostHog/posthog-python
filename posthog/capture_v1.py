@@ -1,9 +1,10 @@
 """Serialization and transport for the Capture V1 wire protocol.
 
-This module owns everything specific to ``POST /i/v1/analytics/events``: the
-*transform* layer (legacy-shaped queued message -> v1 wire event + batch
-envelope) and the *transport* layer (a single HTTP attempt, response parsing,
-and the partial-retry send loop).
+This module owns everything specific to the capture v1 endpoints
+(``POST /i/v1/analytics/events`` and ``POST /i/v1/ai/events``, which share one
+wire contract): the *transform* layer (legacy-shaped queued message -> v1 wire
+event + batch envelope) and the *transport* layer (a single HTTP attempt,
+response parsing, and the partial-retry send loop).
 
 The v1 contract (see ``rust/capture/src/v1/analytics/types.rs``) differs from
 the legacy ``/batch/`` shape in a few load-bearing ways that this module
@@ -66,6 +67,7 @@ log = logging.getLogger("posthog")
 __all__ = ["CaptureV1Error"]
 
 _CAPTURE_V1_PATH = "/i/v1/analytics/events"
+_CAPTURE_AI_V1_PATH = "/i/v1/ai/events"
 
 # Required request/response headers for the v1 endpoint. Defined here as the
 # single source of truth; the transport layer builds requests from them.
@@ -350,8 +352,9 @@ def _post_v1(
     timeout: int = 15,
     sdk_info: str = USER_AGENT,
     session: Optional["requests.Session"] = None,
+    path: str = _CAPTURE_V1_PATH,
 ) -> "requests.Response":
-    """Perform a single ``POST /i/v1/analytics/events`` attempt.
+    """Perform a single capture v1 ``POST`` to ``path``.
 
     Bearer-authed (no ``api_key`` in the body) with the required v1 headers.
     ``attempt`` (1-based) and the stable ``request_id`` are echoed via
@@ -361,7 +364,7 @@ def _post_v1(
     the caller.
     """
     trimmed_host = remove_trailing_slash(normalize_host(host))
-    url = trimmed_host + _CAPTURE_V1_PATH
+    url = trimmed_host + path
     data = json.dumps(batch_body, cls=DatetimeSerializer)
     headers = {
         "Content-Type": "application/json",
@@ -473,8 +476,9 @@ def _send_v1_batch(
     historical_migration: bool = False,
     sdk_info: str = USER_AGENT,
     session: Optional["requests.Session"] = None,
+    path: str = _CAPTURE_V1_PATH,
 ) -> None:
-    """Deliver ``batch`` to the v1 endpoint with partial retry.
+    """Deliver ``batch`` to the v1 endpoint at ``path`` with partial retry.
 
     The v1 sibling of ``Consumer._send``: it loops up to ``max_retries + 1``
     attempts, but unlike v0 it shrinks the batch to only the events the server
@@ -525,6 +529,7 @@ def _send_v1_batch(
                 timeout=timeout,
                 sdk_info=sdk_info,
                 session=session,
+                path=path,
             )
         except Exception as e:
             # Transport-level failure (connection/timeout): retry like v0 does.

@@ -278,15 +278,10 @@ def test_excepthook(tmpdir):
         dedent(
             """
     from posthog import Posthog
-    from requests import Response
     import posthog.request
+    from posthog.test.capture_helpers import offline_v1_post
 
-    def offline_post(url, **kwargs):
-        response = Response()
-        response.status_code = 200
-        return response
-
-    posthog.request._session.post = offline_post
+    posthog.request._session.post = offline_v1_post
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
     # frame_value = "LOL"
@@ -305,7 +300,8 @@ def test_excepthook(tmpdir):
 
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
-    assert b"DEBUG:posthog:[PostHog] data uploaded successfully" in output
+    assert b"[PostHog] capture v1 response" in output
+    assert b" ok=1 " in output
     assert (
         b'"$exception_list": [{"mechanism": {"type": "generic", "handled": true}, "module": null, "type": "ZeroDivisionError", "value": "division by zero", "stacktrace": {"frames": [{"platform": "python", "filename": "app.py", "abs_path"'
         in output

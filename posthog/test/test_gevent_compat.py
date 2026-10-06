@@ -10,6 +10,7 @@ from unittest import mock
 
 from posthog.client import Client, _new_lane_queue
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.capture_helpers import patch_capture_send
 
 
 class TestLaneQueueFallback(unittest.TestCase):
@@ -80,7 +81,7 @@ class TestLaneQueueFallback(unittest.TestCase):
             with (
                 mock.patch("posthog.client.Queue", return_value=incompatible_queue),
                 mock.patch.dict(sys.modules, {"gevent.monkey": None}),
-                mock.patch("posthog.client.batch_post") as mock_post,
+                patch_capture_send("client") as mock_post,
                 mock.patch(
                     "posthog.client.flags",
                     return_value={"featureFlags": {"beta-feature": True}},
@@ -113,9 +114,9 @@ class TestGeventCompatibility(unittest.TestCase):
                 "is not being exercised"
             )
 
-            from unittest import mock
+            from posthog.test.capture_helpers import patch_capture_send
 
-            with mock.patch("posthog.consumer.batch_post") as mock_post:
+            with patch_capture_send("consumer") as mock_post:
                 from posthog.client import Client
 
                 client = Client("phc_test", flush_at=1, flush_interval=60)
@@ -137,7 +138,7 @@ class TestGeventCompatibility(unittest.TestCase):
                 client.flush(timeout_seconds=10)
                 client.join()
 
-            assert mock_post.called, "batch_post was never called"
+            assert mock_post.called, "capture send was never called"
             assert client.queue.empty(), "flush did not drain the queue"
             """
         )

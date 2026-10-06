@@ -16,8 +16,10 @@ except ImportError:
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
+from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.consumer import MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
+from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
 
@@ -212,11 +214,11 @@ class TestConsumer(unittest.TestCase):
         consumer = Consumer(q, TEST_API_KEY, flush_at=1)
         event = _track_event()
         q.put(event)
-        with mock.patch("posthog.consumer.batch_post") as post:
+        with patch_capture_send("consumer") as post:
             success = consumer.upload()
         self.assertTrue(success)
         post.assert_called_once()
-        self.assertEqual(post.call_args.kwargs["batch"], [event])
+        self.assertEqual(sent_batch(post), [event])
         self.assertEqual(q.unfinished_tasks, 0)
         self.assertTrue(q.empty())
 
@@ -307,12 +309,12 @@ class TestConsumer(unittest.TestCase):
         delivered = threading.Event()
         batches = []
 
-        def record_batch(*args, **kwargs):
-            batches.append(kwargs["batch"])
+        def record_batch(api_key, host, batch, **kwargs):
+            batches.append(batch)
             if len(batches) == 2:
                 delivered.set()
 
-        with mock.patch("posthog.consumer.batch_post", side_effect=record_batch):
+        with patch_capture_send("consumer", side_effect=record_batch):
             consumer.start()
             try:
                 events = [
@@ -328,7 +330,7 @@ class TestConsumer(unittest.TestCase):
             self.assertFalse(consumer.is_alive())
 
     def test_request(self) -> None:
-        consumer = Consumer(None, TEST_API_KEY)
+        consumer = Consumer(None, TEST_API_KEY, capture_mode=CaptureMode.V0)
         batch = [_track_event()]
         with mock.patch("posthog.consumer.batch_post") as post:
             consumer.request(batch)
@@ -357,7 +359,9 @@ class TestConsumer(unittest.TestCase):
             if call_count[0] <= exception_count:
                 raise exception
 
-        consumer = Consumer(None, TEST_API_KEY, retries=retries)
+        consumer = Consumer(
+            None, TEST_API_KEY, retries=retries, capture_mode=CaptureMode.V0
+        )
         batch = [_track_event()]
         with (
             mock.patch("posthog.consumer.batch_post", side_effect=mock_post) as post,
@@ -400,7 +404,7 @@ class TestConsumer(unittest.TestCase):
         )
 
     def test_negative_retries_still_attempts_delivery_once(self) -> None:
-        consumer = Consumer(None, TEST_API_KEY, retries=-1)
+        consumer = Consumer(None, TEST_API_KEY, retries=-1, capture_mode=CaptureMode.V0)
 
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.request([_track_event()])
@@ -602,7 +606,7 @@ class TestConsumer(unittest.TestCase):
         # Let's capture 8MB of data to trigger two batches
         n_msgs = int(8_000_000 / msg_size)
 
-        with mock.patch.object(consumer, "_send") as mock_send:
+        with mock.patch.object(consumer, "request") as mock_send:
             consumer.start()
             try:
                 for _ in range(0, n_msgs + 2):
@@ -629,7 +633,7 @@ class TestConsumer(unittest.TestCase):
             if call_count[0] <= 1:
                 raise error
 
-        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
         with (
             mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
             mock.patch("posthog.consumer.time.sleep") as mock_sleep,
@@ -646,7 +650,7 @@ class TestConsumer(unittest.TestCase):
             if call_count[0] <= 3:
                 raise error
 
-        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
         with (
             mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
             mock.patch("posthog.consumer.time.sleep") as mock_sleep,
@@ -687,7 +691,7 @@ class TestConsumer(unittest.TestCase):
         session = mock.Mock()
         session.post.side_effect = [retry_response, retry_response, success_response]
 
-        consumer = Consumer(None, TEST_API_KEY, retries=2)
+        consumer = Consumer(None, TEST_API_KEY, retries=2, capture_mode=CaptureMode.V0)
         with (
             mock.patch("posthog.request._get_session", return_value=session),
             mock.patch("posthog.consumer.time.sleep") as mock_sleep,
@@ -707,7 +711,7 @@ class TestConsumer(unittest.TestCase):
             if call_count[0] <= 1:
                 raise APIError(408, "Request Timeout")
 
-        consumer = Consumer(None, TEST_API_KEY, retries=3)
+        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
         with (
             mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
             mock.patch("posthog.consumer.time.sleep"),
@@ -752,10 +756,11 @@ def _ai_event(event_name: str = "$ai_generation") -> dict[str, str]:
 
 
 class TestConsumerCaptureModeRouting(unittest.TestCase):
-    """`capture_mode` selects the submitter; V0 posts to the consumer's `endpoint`."""
+    """`capture_mode` selects the submitter; both post to the consumer's `endpoint`."""
 
     @parameterized.expand(
         [
+            ("default", None, True),
             ("v0", CaptureMode.V0, False),
             ("v1", CaptureMode.V1, True),
         ]
@@ -763,7 +768,8 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
     def test_capture_mode_selects_analytics_submitter(
         self, _name, mode, expects_v1
     ) -> None:
-        consumer = Consumer(None, TEST_API_KEY, capture_mode=mode)
+        kwargs = {"capture_mode": mode} if mode else {}
+        consumer = Consumer(None, TEST_API_KEY, **kwargs)
         batch = [_track_event()]
         with (
             mock.patch("posthog.consumer.batch_post") as mock_post,
@@ -774,6 +780,7 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
             mock_post.assert_not_called()
             mock_v1.assert_called_once()
             self.assertEqual(mock_v1.call_args.args[2], batch)
+            self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
         else:
             mock_v1.assert_not_called()
             mock_post.assert_called_once()
@@ -800,8 +807,22 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
             self.assertEqual(kwargs["max_retries"], 4)
             self.assertEqual(kwargs["historical_migration"], True)
 
+    def test_v1_posts_to_configured_endpoint(self) -> None:
+        consumer = Consumer(None, TEST_API_KEY, endpoint=_CAPTURE_AI_V1_PATH)
+        batch = [_ai_event()]
+        with patch_capture_send("consumer") as mock_v1:
+            consumer.request(batch)
+        mock_v1.assert_called_once()
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
+        self.assertEqual(sent_batch(mock_v1), batch)
+
     def test_v0_posts_to_configured_endpoint(self) -> None:
-        consumer = Consumer(None, TEST_API_KEY, endpoint=AI_EVENTS_ENDPOINT)
+        consumer = Consumer(
+            None,
+            TEST_API_KEY,
+            endpoint=AI_EVENTS_ENDPOINT,
+            capture_mode=CaptureMode.V0,
+        )
         batch = [_ai_event()]
         with mock.patch("posthog.consumer.batch_post") as mock_post:
             consumer.request(batch)

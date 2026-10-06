@@ -10,6 +10,7 @@ from parameterized import parameterized
 
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_v1 import (
+    _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
     _HEADER_ATTEMPT,
     _HEADER_REQUEST_ID,
@@ -84,9 +85,11 @@ class _PostV1Stub:
         timeout=15,
         sdk_info=USER_AGENT,
         session=None,
+        path=_CAPTURE_V1_PATH,
     ):
         self.calls.append(
             {
+                "path": path,
                 "attempt": attempt,
                 "request_id": request_id,
                 "compression": compression,
@@ -410,6 +413,8 @@ class TestPostV1(unittest.TestCase):
     def test_url_uses_v1_path_and_trims_host(self) -> None:
         call = self._post(_results_response({}))
         self.assertEqual(call["url"], "https://app.posthog.com" + _CAPTURE_V1_PATH)
+        call = self._post(_results_response({}), path=_CAPTURE_AI_V1_PATH)
+        self.assertEqual(call["url"], "https://app.posthog.com" + _CAPTURE_AI_V1_PATH)
 
     def test_required_headers_present(self) -> None:
         headers = self._post(_results_response({}))["headers"]
@@ -585,13 +590,15 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(stub.calls[0]["created_at"], stub.calls[1]["created_at"])
         self.assertEqual([c["attempt"] for c in stub.calls], [1, 2])
 
-    def test_compression_forwarded_to_post_v1(self) -> None:
+    def test_compression_and_path_forwarded_to_post_v1(self) -> None:
         stub = self._run(
             [_msg("u-1")],
             [_results_response({"u-1": "ok"})],
             compression=CaptureCompression.DEFLATE,
+            path=_CAPTURE_AI_V1_PATH,
         )
         self.assertEqual(stub.calls[0]["compression"], CaptureCompression.DEFLATE)
+        self.assertEqual(stub.calls[0]["path"], _CAPTURE_AI_V1_PATH)
 
     def test_drop_on_2xx_surfaces_via_error(self) -> None:
         # A server-chosen drop is terminal: even on an all-ok-otherwise 2xx with
