@@ -1,4 +1,5 @@
 import importlib
+import warnings
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
@@ -50,6 +51,24 @@ def test_rejected_events_skip_normalization_cleaning_and_before_send(method, res
     normalize_uuid.assert_not_called()
     before_send.assert_not_called()
     post.assert_not_called()
+
+
+@pytest.mark.parametrize("allowed", [False, True])
+def test_feature_flags_are_requested_only_for_allowed_events(allowed):
+    should_capture = mock.Mock(return_value=allowed)
+    client = Client(FAKE_TEST_API_KEY, should_capture=should_capture, send=False)
+    with (
+        mock.patch("posthog.client.flags", return_value={"featureFlags": {}}) as flags,
+        warnings.catch_warnings(),
+    ):
+        warnings.simplefilter("ignore", DeprecationWarning)
+        event_uuid = client.capture(
+            "example_event", distinct_id="user1", send_feature_flags=True
+        )
+
+    assert (event_uuid is not None) is allowed
+    assert flags.call_count == int(allowed)
+    should_capture.assert_called_once_with()
 
 
 def test_callback_failure_drops_event_without_logging_its_contents(caplog):

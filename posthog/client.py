@@ -1682,6 +1682,10 @@ class Client(object):
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
 
+        # Checked before flag evaluation, so a rejected event makes no `/flags` request.
+        if not self._should_capture_event():
+            return None
+
         properties = {**(properties or {}), **system_context()}
 
         if self.capture_trace_context:
@@ -1798,7 +1802,11 @@ class Client(object):
             msg["properties"] = properties
 
         return self._enqueue(
-            msg, disable_geoip, lane, property_allowlist=property_allowlist
+            msg,
+            disable_geoip,
+            lane,
+            property_allowlist=property_allowlist,
+            admitted=True,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2349,9 +2357,26 @@ class Client(object):
             # Always send a uuid, so we can always return one
             msg["uuid"] = stringify_id(uuid4())
 
-    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
+    def _should_capture_event(self) -> bool:
+        """Run the `should_capture` callback; any result but `True`, or an error, drops the event."""
+        if self.should_capture is None:
+            return True
+        try:
+            if self.should_capture() is True:
+                return True
+            self.log.debug("Event dropped by should_capture callback")
+        except Exception:
+            self.log.warning("Error in should_capture callback; dropping event")
+        return False
+
+    def _enqueue(
+        self, msg, disable_geoip, lane=None, property_allowlist=None, admitted=False
+    ):
         # type: (...) -> Optional[str]
-        """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
+        """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None.
+
+        `admitted` means the caller already ran the `should_capture` callback.
+        """
 
         if lane is None:
             lane = self._analytics_lane
@@ -2359,14 +2384,8 @@ class Client(object):
         if self.disabled:
             return None
 
-        if self.should_capture is not None:
-            try:
-                if self.should_capture() is not True:
-                    self.log.debug("Event dropped by should_capture callback")
-                    return None
-            except Exception:
-                self.log.warning("Error in should_capture callback; dropping event")
-                return None
+        if not admitted and not self._should_capture_event():
+            return None
 
         timestamp = msg["timestamp"]
         if timestamp is None:
