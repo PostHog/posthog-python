@@ -1,5 +1,11 @@
 # posthog
 
+## 7.64.0 — 2026-10-06
+
+### Minor changes
+
+- [6d83875](https://github.com/posthog/posthog-python/commit/6d8387506ca7eaa0465aadcf67a53b9f605eeca3) Add typed synchronous and asynchronous offline evaluation clients with reusable items, acknowledged bulk uploads, resumable identities, and explicit experiment completion. Manage scorers and immutable versions through the SDK, including boolean, numeric, and categorical polarity configuration. — Thanks @Radu-Raicea!
+
 ## 7.63.0 — 2026-10-05
 
 ### Minor changes
