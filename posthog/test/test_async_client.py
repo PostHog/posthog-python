@@ -12,7 +12,8 @@ from uuid import UUID
 import pytest
 
 from posthog import AsyncClient, AsyncPosthog, CaptureCompression
-from posthog.consumer import MAX_MSG_SIZE
+from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
+from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from posthog.contexts import (
     new_context,
     set_capture_exception_code_variables_context,
@@ -88,8 +89,8 @@ async def main():
 
     with patch_async_capture_send(side_effect=send_batch):
         client = AsyncPosthog("test-key", flush_interval=30)
-        client._ensure_workers_started()
-        while not client._queue._getters:
+        client._ensure_workers_started(client._analytics_lane)
+        while not client._analytics_lane.queue._getters:
             await asyncio.sleep(0)
 
         asyncio.get_running_loop().set_debug(True)
@@ -124,7 +125,7 @@ asyncio.run(main())
 @pytest.mark.asyncio
 async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
     client = AsyncPosthog("test-key", flush_interval=30)
-    client._ensure_workers_started()
+    client._ensure_workers_started(client._analytics_lane)
     scheduled_callbacks = []
     capture_result = []
 
@@ -148,9 +149,9 @@ async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
         capture_thread.join(timeout=1)
 
     assert capture_result == [None]
-    for task in client._worker_tasks:
+    for task in client._analytics_lane.worker_tasks:
         task.cancel()
-    await asyncio.gather(*client._worker_tasks, return_exceptions=True)
+    await asyncio.gather(*client._analytics_lane.worker_tasks, return_exceptions=True)
     await client._close_transport()
 
 
@@ -283,22 +284,41 @@ async def test_capture_immediate_supports_async_before_send():
 
 
 @pytest.mark.asyncio
-async def test_capture_immediate_drops_oversized_event_after_before_send():
+@pytest.mark.parametrize(
+    ("method_name", "client_kwargs", "payload_size", "sent"),
+    [
+        ("capture_immediate", {}, MAX_MSG_SIZE, False),
+        ("capture_ai_immediate", {}, MAX_MSG_SIZE, True),
+        ("capture_ai_immediate", {"capture_ai_max_event_bytes": 1024}, 2048, False),
+    ],
+)
+async def test_capture_immediate_applies_its_lane_size_cap_after_before_send(
+    method_name, client_kwargs, payload_size, sent
+):
     def before_send(event):
-        event["properties"]["user_input"] = "x" * MAX_MSG_SIZE
+        event["properties"]["user_input"] = "x" * payload_size
         return event
 
     with patch_async_capture_send(new=mock.AsyncMock()) as send_batch:
-        client = AsyncPosthog("test-key", before_send=before_send)
-        result = await client.capture_immediate("event", distinct_id="user-1")
+        client = AsyncPosthog("test-key", before_send=before_send, **client_kwargs)
+        result = await getattr(client, method_name)("event", distinct_id="user-1")
         await client.shutdown()
 
-    assert result is None
-    send_batch.assert_not_awaited()
+    assert (result is not None) is sent
+    assert send_batch.await_count == (1 if sent else 0)
 
 
 @pytest.mark.asyncio
-async def test_capture_immediate_uses_capture_v1_without_building_httpx_client():
+@pytest.mark.parametrize(
+    ("method_name", "path", "compression", "timeout"),
+    [
+        ("capture_immediate", _CAPTURE_V1_PATH, CaptureCompression.GZIP, 15),
+        ("capture_ai_immediate", _CAPTURE_AI_V1_PATH, CaptureCompression.DEFLATE, 45),
+    ],
+)
+async def test_capture_immediate_uses_its_lane_without_building_httpx_client(
+    method_name, path, compression, timeout
+):
     with (
         mock.patch(
             "posthog._async_consumer.async_send_v1_batch", new=mock.AsyncMock()
@@ -308,15 +328,50 @@ async def test_capture_immediate_uses_capture_v1_without_building_httpx_client()
         client = AsyncPosthog(
             "test-key",
             capture_compression=CaptureCompression.GZIP,
+            capture_ai_compression=CaptureCompression.DEFLATE,
+            capture_ai_timeout=45,
         )
-        event_uuid = await client.capture_immediate("event", distinct_id="user-1")
+        event_uuid = await getattr(client, method_name)(
+            "$ai_generation", distinct_id="user-1"
+        )
         await client.shutdown()
 
     assert event_uuid is not None
     build_client.assert_not_called()
     send_v1.assert_awaited_once()
-    assert send_v1.await_args.kwargs["compression"] == CaptureCompression.GZIP
+    assert send_v1.await_args.kwargs["path"] == path
+    assert send_v1.await_args.kwargs["compression"] == compression
+    assert send_v1.await_args.kwargs["timeout"] == timeout
     assert send_v1.await_args.args[2][0]["uuid"] == event_uuid
+
+
+@pytest.mark.asyncio
+async def test_ai_events_queue_on_their_own_lane_and_flush_drains_both():
+    sent: dict[str, list[str]] = {}
+
+    async def send_batch(api_key, host, batch, **kwargs):
+        sent.setdefault(kwargs["path"], []).extend(e["event"] for e in batch)
+
+    with patch_async_capture_send(side_effect=send_batch):
+        client = AsyncPosthog("test-key", flush_at=100, flush_interval=30)
+        client.capture("pageview", distinct_id="user-1")
+        assert client._ai_lane.worker_tasks == []
+        client.capture_ai(
+            "$ai_generation",
+            distinct_id="user-1",
+            properties={"$ai_input": "x" * MAX_MSG_SIZE},
+        )
+        await client.flush(timeout_seconds=1)
+        assert sent == {
+            _CAPTURE_V1_PATH: ["pageview"],
+            _CAPTURE_AI_V1_PATH: ["$ai_generation"],
+        }
+
+        client.capture_ai("$ai_span", distinct_id="user-1")
+        await client.shutdown()
+
+    assert sent[_CAPTURE_AI_V1_PATH] == ["$ai_generation", "$ai_span"]
+    assert client._all_worker_tasks() == []
 
 
 @pytest.mark.asyncio
@@ -325,7 +380,7 @@ async def test_send_false_accepts_without_starting_workers_or_transport():
         client = AsyncPosthog("test-key", send=False)
         assert client.capture("event", distinct_id="user-1") is not None
         assert await client.capture_immediate("event", distinct_id="user-1") is not None
-        assert client._worker_tasks == []
+        assert client._all_worker_tasks() == []
         await client.shutdown()
     build_client.assert_not_called()
 
@@ -380,7 +435,7 @@ async def test_capture_after_shutdown_is_dropped_without_restarting_workers():
         await client.shutdown()
         assert client.capture("event", distinct_id="user-1") is None
         assert await client.capture_immediate("event", distinct_id="user-1") is None
-        assert client._worker_tasks == []
+        assert client._all_worker_tasks() == []
     build_client.assert_not_called()
 
 
@@ -521,10 +576,10 @@ async def test_external_shutdown_delivers_event_already_in_before_send():
 @pytest.mark.asyncio
 async def test_shutdown_returns_when_all_workers_exited_with_queued_work():
     client = AsyncPosthog("test-key", flush_interval=30)
-    client._ensure_workers_started()
-    for task in client._worker_tasks:
+    client._ensure_workers_started(client._analytics_lane)
+    for task in client._analytics_lane.worker_tasks:
         task.cancel()
-    await asyncio.gather(*client._worker_tasks, return_exceptions=True)
+    await asyncio.gather(*client._analytics_lane.worker_tasks, return_exceptions=True)
 
     assert client.capture("undrainable event", distinct_id="user-1") is not None
     try:
@@ -625,8 +680,17 @@ def test_capture_before_loop_starts_is_flushed_when_loop_runs():
     assert batches[0][0]["event"] == "event"
 
 
-@pytest.mark.parametrize(("option", "value"), [("flush_at", 0), ("flush_interval", 0)])
-def test_rejects_non_positive_batch_settings(option, value):
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("flush_at", 0),
+        ("flush_interval", 0),
+        ("capture_ai_max_queue_size", 0),
+        ("capture_ai_timeout", 0),
+        ("capture_ai_max_event_bytes", AI_MAX_MSG_SIZE + 1),
+    ],
+)
+def test_rejects_invalid_batch_settings(option, value):
     with pytest.raises(ValueError, match=option):
         AsyncPosthog("test-key", **{option: value})
 

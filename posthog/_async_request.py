@@ -7,7 +7,7 @@ from typing import Any, Optional
 from urllib.parse import quote
 
 from .capture_compression import CaptureCompression
-from .capture_send import _parse_retry_after, _send_v1_batch
+from .capture_send import _CAPTURE_V1_PATH, _parse_retry_after, _send_v1_batch
 from .request import (
     APIError,
     DatetimeSerializer,
@@ -150,9 +150,10 @@ async def async_send_v1_batch(
     batch: list[dict[str, Any]],
     *,
     compression: CaptureCompression,
-    timeout: int,
+    timeout: float,
     max_retries: int,
     historical_migration: bool,
+    path: str = _CAPTURE_V1_PATH,
 ) -> None:
     """Run the existing capture-v1 submitter off-loop to preserve wire parity."""
     await asyncio.to_thread(
@@ -164,4 +165,5 @@ async def async_send_v1_batch(
         timeout=timeout,
         max_retries=max_retries,
         historical_migration=historical_migration,
+        path=path,
     )
