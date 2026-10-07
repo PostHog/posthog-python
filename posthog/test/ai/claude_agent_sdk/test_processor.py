@@ -202,7 +202,7 @@ class TestGenerationEmission:
                 collected.append(msg)
 
         # Should have captured $ai_generation + $ai_trace
-        calls = mock_client.capture.call_args_list
+        calls = mock_client.capture_ai.call_args_list
         events = [c.kwargs.get("event") or c[1].get("event") for c in calls]
         assert "$ai_generation" in events
         assert "$ai_trace" in events
@@ -247,7 +247,7 @@ class TestGenerationEmission:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         props = generation_call.kwargs.get("properties") or generation_call[1].get(
@@ -286,7 +286,7 @@ class TestGenerationEmission:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 2
@@ -318,7 +318,7 @@ class TestGenerationEmission:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 1
@@ -349,7 +349,7 @@ class TestGenerationEmission:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         props = generation_call.kwargs.get("properties") or generation_call[1].get(
@@ -391,7 +391,7 @@ class TestToolSpanEmission:
 
         span_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
@@ -422,7 +422,7 @@ class TestTraceEmission:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -449,7 +449,7 @@ class TestTraceEmission:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -473,7 +473,7 @@ class TestPrivacyMode:
             async for _ in proc.query(prompt="secret", options=ClaudeAgentOptions()):
                 pass
 
-        properties = mock_client.capture.call_args.kwargs["properties"]
+        properties = mock_client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] is None
 
     @pytest.mark.asyncio
@@ -502,7 +502,7 @@ class TestPrivacyMode:
             ):
                 pass
 
-        properties = mock_client.capture.call_args.kwargs["properties"]
+        properties = mock_client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] is None
 
     @pytest.mark.asyncio
@@ -559,7 +559,7 @@ class TestPrivacyMode:
 
         span_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
@@ -570,7 +570,7 @@ class TestPrivacyMode:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         generation_props = generation_call.kwargs.get("properties") or generation_call[
@@ -619,7 +619,7 @@ class TestMediaRedactionEndToEnd:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 2
@@ -667,7 +667,7 @@ class TestPersonlessMode:
             ):
                 pass
 
-        for call in mock_client.capture.call_args_list:
+        for call in mock_client.capture_ai.call_args_list:
             assert call.kwargs["options"] == {"process_person_profile": False}
             assert call.kwargs["distinct_id"] == "trace-fallback"
 
@@ -681,7 +681,7 @@ class TestCapturePolicy:
 
         proc._capture_event("$ai_trace", {}, groups={})
 
-        assert mock_client.capture.call_args.kwargs["groups"] == {}
+        assert mock_client.capture_ai.call_args.kwargs["groups"] == {}
 
     def test_default_properties_keep_existing_precedence(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
@@ -694,7 +694,7 @@ class TestCapturePolicy:
             {"environment": "event", "$ai_trace_id": "trace-id"},
         )
 
-        assert mock_client.capture.call_args.kwargs["properties"] == {
+        assert mock_client.capture_ai.call_args.kwargs["properties"] == {
             "$ai_lib": "posthog-ai",
             "$ai_lib_version": VERSION,
             "environment": "processor",
@@ -707,7 +707,7 @@ class TestCapturePolicy:
         proc._capture_event("$ai_trace", {})
 
     def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
-        mock_client.capture.side_effect = RuntimeError("capture failed")
+        mock_client.capture_ai.side_effect = RuntimeError("capture failed")
         proc = PostHogClaudeAgentProcessor(client=mock_client)
 
         with caplog.at_level(logging.DEBUG, logger="posthog"):
@@ -738,7 +738,7 @@ class TestCustomProperties:
             async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
-        for call in mock_client.capture.call_args_list:
+        for call in mock_client.capture_ai.call_args_list:
             props = call.kwargs.get("properties") or call[1].get("properties")
             assert props.get("app") == "stamphog"
             assert props.get("version") == "1.0"
@@ -763,7 +763,7 @@ class TestCustomProperties:
             ):
                 pass
 
-        for call in mock_client.capture.call_args_list:
+        for call in mock_client.capture_ai.call_args_list:
             props = call.kwargs.get("properties") or call[1].get("properties")
             assert props.get("pr_number") == 42
 
@@ -791,7 +791,7 @@ class TestCallableDistinctId:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -894,13 +894,3 @@ class TestQueryGracefulFallback:
                     prompt="Hello", options=ClaudeAgentOptions()
                 ):
                     pass
-
-
-def test_ai_lane_client_routes_through_capture_ai(mock_client):
-    mock_client.enable_full_ai_capture = True
-    processor = PostHogClaudeAgentProcessor(client=mock_client, distinct_id="test-user")
-    processor._capture_event(event="$ai_trace", properties={}, distinct_id="d")
-
-    mock_client.capture.assert_not_called()
-    mock_client.capture_ai.assert_called_once()
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"

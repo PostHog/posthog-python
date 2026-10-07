@@ -46,7 +46,7 @@ def _sync_props(mock_client, chunks):
                 posthog_distinct_id="test-id",
             )
         )
-    return mock_client.capture.call_args[1]["properties"]
+    return mock_client.capture_ai.call_args[1]["properties"]
 
 
 async def _async_props(mock_client, chunks):
@@ -68,7 +68,7 @@ async def _async_props(mock_client, chunks):
         )
         async for _ in stream:
             pass
-    return mock_client.capture.call_args[1]["properties"]
+    return mock_client.capture_ai.call_args[1]["properties"]
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ async def test_async_streaming_emits_the_same_properties_as_sync(
     mock_client, streaming_tool_call_chunks
 ):
     sync_props = _sync_props(mock_client, streaming_tool_call_chunks)
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
     async_props = await _async_props(mock_client, streaming_tool_call_chunks)
 
     # Guard: if the sync side stopped emitting these, the comparison below is vacuous.
@@ -120,7 +120,7 @@ async def test_responses_streaming_properties_have_sync_async_parity(mock_client
     ):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         list(client.responses.create(**request))
-    sync_props = mock_client.capture.call_args.kwargs["properties"]
+    sync_props = mock_client.capture_ai.call_args.kwargs["properties"]
 
     async def create(self, **kwargs):
         async def chunks():
@@ -128,13 +128,13 @@ async def test_responses_streaming_properties_have_sync_async_parity(mock_client
 
         return chunks()
 
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
     with patch("openai.resources.responses.AsyncResponses.create", new=create):
         client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
         stream = await client.responses.create(**request)
         async for _ in stream:
             pass
-    async_props = mock_client.capture.call_args.kwargs["properties"]
+    async_props = mock_client.capture_ai.call_args.kwargs["properties"]
 
     sync_without_latency = {k: v for k, v in sync_props.items() if k != "$ai_latency"}
     async_without_latency = {k: v for k, v in async_props.items() if k != "$ai_latency"}
@@ -167,15 +167,15 @@ async def test_embedding_telemetry_has_sync_async_parity(mock_client):
         client = OpenAI(api_key="test-key", posthog_client=mock_client)
         assert client.embeddings.create(**request) is response
     sync_create.assert_called_once_with(**provider_request)
-    sync_capture = mock_client.capture.call_args
+    sync_capture = mock_client.capture_ai.call_args
 
     async_create = AsyncMock(return_value=response)
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
     with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=async_create):
         client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
         assert await client.embeddings.create(**request) is response
     async_create.assert_awaited_once_with(**provider_request)
-    async_capture = mock_client.capture.call_args
+    async_capture = mock_client.capture_ai.call_args
 
     sync_props = sync_capture.kwargs["properties"]
     async_props = async_capture.kwargs["properties"]
@@ -209,5 +209,5 @@ def test_sync_stream_close_after_early_exit_captures_partial_state(
         assert next(stream) == streaming_tool_call_chunks[0]
         stream.close()
 
-    assert mock_client.capture.call_count == 1
-    assert mock_client.capture.call_args.kwargs["properties"]["$ai_model"] == "gpt-4"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args.kwargs["properties"]["$ai_model"] == "gpt-4"
