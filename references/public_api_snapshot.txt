@@ -21,6 +21,8 @@ alias posthog.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.Feature
 alias posthog.FeatureFlagResult -> posthog.types.FeatureFlagResult
 alias posthog.FlagDefinitionCacheData -> posthog.flag_definition_cache.FlagDefinitionCacheData
 alias posthog.FlagDefinitionCacheProvider -> posthog.flag_definition_cache.FlagDefinitionCacheProvider
+alias posthog.FlagEvaluationDetails -> posthog.types.FlagEvaluationDetails
+alias posthog.FlagEvaluationErrorCode -> posthog.types.FlagEvaluationErrorCode
 alias posthog.FlagValue -> posthog.types.FlagValue
 alias posthog.FlagsAndPayloads -> posthog.types.FlagsAndPayloads
 alias posthog.ID_TYPES -> posthog.args.ID_TYPES
@@ -317,6 +319,8 @@ alias posthog.exception_capture.BucketedRateLimiter -> posthog.bucketed_rate_lim
 alias posthog.exception_capture.Client -> posthog.client.Client
 alias posthog.exception_utils.ExcInfo -> posthog.args.ExcInfo
 alias posthog.exception_utils.ExceptionArg -> posthog.args.ExceptionArg
+alias posthog.feature_flag_evaluations.FeatureFlag -> posthog.types.FeatureFlag
+alias posthog.feature_flag_evaluations.FlagEvaluationDetails -> posthog.types.FlagEvaluationDetails
 alias posthog.feature_flag_evaluations.FlagValue -> posthog.types.FlagValue
 alias posthog.feature_flags.FlagValue -> posthog.types.FlagValue
 alias posthog.feature_flags.convert_to_datetime_aware -> posthog.utils.convert_to_datetime_aware
@@ -1033,9 +1037,13 @@ attribute posthog.traces = None
 attribute posthog.types.BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.BeforeSpanSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.FeatureFlag.enabled: bool
+attribute posthog.types.FeatureFlag.error_code: Optional[FlagEvaluationErrorCode] = None
+attribute posthog.types.FeatureFlag.error_message: Optional[str] = None
+attribute posthog.types.FeatureFlag.failed: bool = False
 attribute posthog.types.FeatureFlag.key: str
 attribute posthog.types.FeatureFlag.metadata: Union[FlagMetadata, LegacyFlagMetadata]
 attribute posthog.types.FeatureFlag.reason: Optional[FlagReason]
+attribute posthog.types.FeatureFlag.value: Any = _DERIVED_VALUE
 attribute posthog.types.FeatureFlag.variant: Optional[str]
 attribute posthog.types.FeatureFlagError.CONNECTION_ERROR = 'connection_error'
 attribute posthog.types.FeatureFlagError.ERRORS_WHILE_COMPUTING = 'errors_while_computing_flags'
@@ -1051,10 +1059,29 @@ attribute posthog.types.FeatureFlagResult.key: str
 attribute posthog.types.FeatureFlagResult.payload: Optional[Any]
 attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
+attribute posthog.types.FlagEvaluationDetails.error_code: Optional[FlagEvaluationErrorCode] = None
+attribute posthog.types.FlagEvaluationDetails.error_message: Optional[str] = None
+attribute posthog.types.FlagEvaluationDetails.key: str
+attribute posthog.types.FlagEvaluationDetails.metadata: Optional[FlagMetadata] = None
+attribute posthog.types.FlagEvaluationDetails.reason: Optional[FlagReason] = None
+attribute posthog.types.FlagEvaluationDetails.value: _T
+attribute posthog.types.FlagEvaluationDetails.variant: Optional[str] = None
+attribute posthog.types.FlagEvaluationErrorCode.FLAG_NOT_FOUND = 'FLAG_NOT_FOUND'
+attribute posthog.types.FlagEvaluationErrorCode.GENERAL = 'GENERAL'
+attribute posthog.types.FlagEvaluationErrorCode.INVALID_CONTEXT = 'INVALID_CONTEXT'
+attribute posthog.types.FlagEvaluationErrorCode.PARSE_ERROR = 'PARSE_ERROR'
+attribute posthog.types.FlagEvaluationErrorCode.TYPE_MISMATCH = 'TYPE_MISMATCH'
+attribute posthog.types.FlagMetadata.config_version: Optional[int] = None
 attribute posthog.types.FlagMetadata.description: str
+attribute posthog.types.FlagMetadata.experiment_id: Optional[int] = None
+attribute posthog.types.FlagMetadata.forced_variant: Optional[bool] = None
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
+attribute posthog.types.FlagMetadata.holdout_id: Optional[int] = None
 attribute posthog.types.FlagMetadata.id: int
 attribute posthog.types.FlagMetadata.payload: Optional[str]
+attribute posthog.types.FlagMetadata.rule_id: Optional[str] = None
+attribute posthog.types.FlagMetadata.rule_type: Optional[str] = None
+attribute posthog.types.FlagMetadata.variant_key: Optional[str] = None
 attribute posthog.types.FlagMetadata.version: int
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
@@ -1222,11 +1249,13 @@ class posthog.request.GetResponse(data: Any, etag: Optional[str] = None, not_mod
 class posthog.request.HTTPAdapterWithSocketOptions(*args, socket_options: Optional[SocketOptions] = None, **kwargs)
 class posthog.request.QuotaLimitError 
 class posthog.tracing.span.Span 
-class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata])
+class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata], value: Any = _DERIVED_VALUE, failed: bool = False, error_code: Optional[FlagEvaluationErrorCode] = None, error_message: Optional[str] = None)
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None)
+class posthog.types.FlagEvaluationDetails(key: str, value: _T, variant: Optional[str] = None, reason: Optional[FlagReason] = None, metadata: Optional[FlagMetadata] = None, error_code: Optional[FlagEvaluationErrorCode] = None, error_message: Optional[str] = None)
+class posthog.types.FlagEvaluationErrorCode 
+class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, experiment_id: Optional[int] = None, variant_key: Optional[str] = None, holdout_id: Optional[int] = None, forced_variant: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
@@ -1650,8 +1679,16 @@ method posthog.exception_utils.AnnotatedValue.substituted_because_contains_sensi
 method posthog.exception_utils.VariableSizeLimiter.add(size)
 method posthog.exception_utils.VariableSizeLimiter.can_add(size)
 method posthog.exception_utils.VariableSizeLimiter.get_remaining_space()
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_details(key: str, default_value: bool) -> FlagEvaluationDetails[bool]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_value(key: str, default_value: bool) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str) -> Optional[FlagValue]
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload(key: str) -> Optional[Any]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_details(key: str, default_value: float) -> FlagEvaluationDetails[float]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_value(key: str, default_value: float) -> float
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_details(key: str, default_value: Dict[str, Any]) -> FlagEvaluationDetails[Dict[str, Any]]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_value(key: str, default_value: Dict[str, Any]) -> Dict[str, Any]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_details(key: str, default_value: str) -> FlagEvaluationDetails[str]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_value(key: str, default_value: str) -> str
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only(keys: List[str]) -> FeatureFlagEvaluations
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed() -> FeatureFlagEvaluations

@@ -968,6 +968,7 @@ class AsyncClient:
                     ),
                     locally_evaluated=False,
                     has_experiment=_metadata_has_experiment(metadata),
+                    details=detail,
                 )
         except QuotaLimitError:
             self.log.warning(
