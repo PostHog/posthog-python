@@ -29,7 +29,12 @@ class FakeClient:
         **kwargs,
     ):
         self.events.append(
-            {"event": event, "distinct_id": distinct_id, "properties": properties or {}}
+            {
+                "event": event,
+                "distinct_id": distinct_id,
+                "properties": properties or {},
+                "options": kwargs.get("options") or {},
+            }
         )
         return None
 

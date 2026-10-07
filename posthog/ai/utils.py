@@ -69,12 +69,24 @@ def _ai_lane_enabled(ph_client) -> bool:
     return _full_ai_capture_enabled(ph_client)
 
 
-def _capture_ai_event(ph_client, event: str, **kwargs):
-    """Capture a wrapper-emitted AI event with the PostHog AI library identity."""
+def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwargs):
+    """Capture a wrapper-emitted AI event with the PostHog AI library identity.
+
+    ``personless`` marks an event whose distinct ID is a fallback, such as a
+    trace ID, not a real user.
+    """
     kwargs["properties"] = {
         **_AI_LIB_PROPERTIES,
         **(kwargs.get("properties") or {}),
     }
+    if personless:
+        # A per-event option beats legacy properties and global or context
+        # options, because a person profile for a fallback ID is always wrong.
+        # before_send can still change it.
+        kwargs["options"] = {
+            **(kwargs.get("options") or {}),
+            "process_person_profile": False,
+        }
     if _ai_lane_enabled(ph_client):
         capture_ai = getattr(ph_client, "capture_ai", None)
         if callable(capture_ai):
@@ -90,6 +102,7 @@ def _capture_processor_event(
     default_properties: Optional[Dict[str, Any]] = None,
     distinct_id: Optional[str] = None,
     groups: Optional[Dict[str, Any]] = None,
+    personless: bool = False,
 ) -> None:
     """Apply the shared capture policy used by AI SDK processors."""
     try:
@@ -103,6 +116,7 @@ def _capture_processor_event(
             distinct_id=distinct_id or "unknown",
             properties={**properties, **(default_properties or {})},
             groups=groups,
+            personless=personless,
         )
     except Exception as exc:
         logging.getLogger("posthog").debug("Failed to capture PostHog event: %s", exc)
@@ -586,9 +600,6 @@ def call_llm_and_track_usage(
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
 
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
             # Process instructions for Responses API
             if provider == "openai" and kwargs.get("instructions") is not None:
                 tag(
@@ -615,6 +626,7 @@ def call_llm_and_track_usage(
                     distinct_id=contexts.get_context_distinct_id(),
                     properties=merged_properties,
                     groups=posthog_groups,
+                    personless=not has_person_distinct_id,
                 )
 
         if error:
@@ -753,9 +765,6 @@ async def call_llm_and_track_usage_async(
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
 
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
             # Process instructions for Responses API
             if provider == "openai" and kwargs.get("instructions") is not None:
                 tag(
@@ -782,6 +791,7 @@ async def call_llm_and_track_usage_async(
                     distinct_id=contexts.get_context_distinct_id(),
                     properties=merged_properties,
                     groups=posthog_groups,
+                    personless=not has_person_distinct_id,
                 )
 
         if error:
@@ -964,9 +974,6 @@ def capture_streaming_event(
             event_data["kwargs"]["instructions"],
         )
 
-    if event_data.get("distinct_id") is None:
-        event_properties["$process_person_profile"] = False
-
     # Send event to PostHog
     if hasattr(ph_client, "capture"):
         _capture_ai_event(
@@ -975,4 +982,5 @@ def capture_streaming_event(
             distinct_id=event_data.get("distinct_id") or trace_id,
             properties=event_properties,
             groups=event_data.get("groups"),
+            personless=event_data.get("distinct_id") is None,
         )

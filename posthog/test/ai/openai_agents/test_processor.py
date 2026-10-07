@@ -157,7 +157,7 @@ class TestPostHogTracingProcessor:
         processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        assert call_kwargs["options"] == {"process_person_profile": False}
         # Should fallback to trace_id as the distinct_id
         assert call_kwargs["distinct_id"] == mock_trace.trace_id
 
@@ -179,7 +179,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_end(mock_span)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        assert call_kwargs["options"] == {"process_person_profile": False}
         assert call_kwargs["distinct_id"] == mock_span.trace_id
 
     def test_personless_mode_when_callable_returns_none(
@@ -205,7 +205,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_end(mock_span)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        assert call_kwargs["options"] == {"process_person_profile": False}
         assert call_kwargs["distinct_id"] == mock_span.trace_id
 
     def test_person_profile_when_distinct_id_provided(self, mock_client, mock_trace):
@@ -219,7 +219,7 @@ class TestPostHogTracingProcessor:
         processor.on_trace_end(mock_trace)
 
         call_kwargs = mock_client.capture.call_args[1]
-        assert "$process_person_profile" not in call_kwargs["properties"]
+        assert "options" not in call_kwargs
 
     def test_on_trace_end_clears_metadata(self, processor, mock_client, mock_trace):
         """Test that on_trace_end clears stored trace metadata."""

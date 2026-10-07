@@ -38,9 +38,6 @@ def _capture_embedding_event(
         **(properties or {}),
     }
 
-    if distinct_id is None:
-        event_properties["$process_person_profile"] = False
-
     if hasattr(posthog_client, "capture"):
         _capture_ai_event(
             posthog_client,
@@ -48,4 +45,5 @@ def _capture_embedding_event(
             distinct_id=distinct_id or trace_id,
             properties=event_properties,
             groups=groups,
+            personless=distinct_id is None,
         )
