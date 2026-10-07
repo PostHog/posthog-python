@@ -2390,10 +2390,10 @@ class TestClient(unittest.TestCase):
         [
             # test_name, super_properties, event_session_id, expected_session_id, expected_super_props
             (
-                "super_properties_override_session_id",
+                "event_session_id_overrides_super_properties",
                 {"$session_id": "super-session", "source": "test"},
                 "event-session-808",
-                "super-session",
+                "event-session-808",
                 {"source": "test"},
             ),
             (

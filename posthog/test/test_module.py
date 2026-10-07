@@ -65,6 +65,7 @@ class TestModuleLevelSetup(unittest.TestCase):
         self._original_api_key = posthog.api_key
         self._original_project_api_key = posthog.project_api_key
         self._original_project_root = posthog.project_root
+        self._original_super_options = posthog.super_options
         self._original_privacy_mode = posthog.privacy_mode
         self._original_disabled = posthog.disabled
         self._original_send = posthog.send
@@ -81,6 +82,7 @@ class TestModuleLevelSetup(unittest.TestCase):
         posthog.api_key = self._original_api_key
         posthog.project_api_key = self._original_project_api_key
         posthog.project_root = self._original_project_root
+        posthog.super_options = self._original_super_options
         posthog.privacy_mode = self._original_privacy_mode
         posthog.disabled = self._original_disabled
         posthog.send = self._original_send
@@ -129,13 +131,19 @@ class TestModuleLevelSetup(unittest.TestCase):
         self.assertEqual(client.api_key, "phc_api_key")
         self.assertFalse(client.disabled)
 
-    def test_setup_propagates_project_root(self):
+    @parameterized.expand(
+        [
+            ("project_root", "/path/to/project"),
+            ("super_options", {"cookieless_mode": True}),
+        ]
+    )
+    def test_setup_propagates_config(self, setting, value):
         posthog.api_key = "phc_test"
-        posthog.project_root = "/path/to/project"
+        setattr(posthog, setting, value)
 
         client = posthog.setup()
 
-        self.assertEqual(client.project_root, "/path/to/project")
+        self.assertEqual(getattr(client, setting), value)
 
     def test_setup_propagates_and_updates_privacy_mode(self):
         posthog.api_key = "phc_test"

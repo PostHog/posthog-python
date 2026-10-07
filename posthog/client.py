@@ -52,11 +52,13 @@ from posthog.contexts import (
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
+    get_context_options as _context_get_context_options,
     get_tags as _context_get_tags,
     identify_context as _context_identify_context,
     _scoped as _context_scoped,
     new_context,
     set_context_device_id as _context_set_context_device_id,
+    set_context_option as _context_set_context_option,
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
@@ -274,6 +276,11 @@ def _stringify_event_uuid(value) -> str:
             f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
         )
     return canonical
+
+
+def _personless_options(personless: bool) -> dict[str, Any]:
+    """The lowest option layer: no person profile for a generated distinct ID."""
+    return {"process_person_profile": False} if personless else {}
 
 
 def add_context_tags(properties):
@@ -712,6 +719,7 @@ class Client(object):
         feature_flags_request_timeout_seconds=3,
         feature_flags_request_max_retries=1,
         super_properties=None,
+        super_options=None,
         enable_exception_autocapture=False,
         log_captured_exceptions=False,
         project_root=None,
@@ -797,7 +805,11 @@ class Client(object):
             feature_flags_request_max_retries: Number of retries for feature flag
                 requests after network, transport, or timeout failures. Defaults
                 to 1. Set to 0 to disable retries.
-            super_properties: Properties merged into every captured event.
+            super_properties: Properties for every captured event. Context
+                tags and an event's own properties override them.
+            super_options: Capture options for every captured event, such as
+                ``{"cookieless_mode": True}``. Context options and an event's
+                own ``options`` override them.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1005,6 +1017,7 @@ class Client(object):
             maximum=AI_MAX_MSG_SIZE,
         )
         self.super_properties = super_properties
+        self.super_options = super_options
         # Release id from POSTHOG_RELEASE_ID, attached to every event. Resolved
         # here so the env var is read once per client.
         self._release_id = _resolve_release_id()
@@ -1314,6 +1327,31 @@ class Client(object):
             Contexts
         """
         return _context_get_tags()
+
+    def set_context_option(self, key: str, value: Any) -> None:
+        """
+        Set a capture option for every event captured within the current context.
+
+        Args:
+            key: The option name, such as ``"process_person_profile"``.
+            value: The option value, sent as given.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_option(key, value)
+
+    def get_context_options(self) -> Dict[str, Any]:
+        """
+        Get all capture options from the current context.
+
+        Returns:
+            Dict of all capture options in the current context.
+
+        Category:
+            Contexts
+        """
+        return _context_get_context_options()
 
     def identify_context(self, distinct_id: str) -> None:
         """
@@ -1711,7 +1749,10 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
-        options = _event_options(kwargs.get("options", None))
+        options = {
+            **_context_get_context_options(),
+            **_event_options(kwargs.get("options", None)),
+        }
         # Internal, set for minimal $feature_flag_called events: a strict allowlist
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
@@ -1725,9 +1766,6 @@ class Client(object):
         assert properties is not None  # Type hint for mypy
 
         (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless and "$process_person_profile" not in properties:
-            properties["$process_person_profile"] = False
 
         msg = {
             "properties": properties,
@@ -1833,7 +1871,11 @@ class Client(object):
             msg["properties"] = properties
 
         return self._enqueue(
-            msg, disable_geoip, lane, property_allowlist=property_allowlist
+            msg,
+            disable_geoip,
+            lane,
+            property_allowlist=property_allowlist,
+            derived_options=_personless_options(personless),
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -1921,7 +1963,10 @@ class Client(object):
             "$set": properties,
             "event": "$set",
             "uuid": uuid,
-            "options": _event_options(kwargs.get("options", None)),
+            "options": {
+                **_context_get_context_options(),
+                **_event_options(kwargs.get("options", None)),
+            },
         }
 
         return self._enqueue(msg, disable_geoip)
@@ -1971,7 +2016,10 @@ class Client(object):
             "$set_once": properties,
             "event": "$set_once",
             "uuid": uuid,
-            "options": _event_options(kwargs.get("options", None)),
+            "options": {
+                **_context_get_context_options(),
+                **_event_options(kwargs.get("options", None)),
+            },
         }
 
         return self._enqueue(msg, disable_geoip)
@@ -2412,7 +2460,14 @@ class Client(object):
         finally:
             _on_error_state.active = False
 
-    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
+    def _enqueue(
+        self,
+        msg,
+        disable_geoip,
+        lane=None,
+        property_allowlist=None,
+        derived_options=None,
+    ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
 
@@ -2449,7 +2504,15 @@ class Client(object):
             msg["properties"]["$geoip_disable"] = True
 
         if self.super_properties:
-            msg["properties"] = {**msg["properties"], **self.super_properties}
+            msg["properties"] = {**self.super_properties, **msg["properties"]}
+
+        # Each layer overrides the one before it: values the SDK derives, such
+        # as personless, then super options, then context and event options.
+        msg["options"] = {
+            **(derived_options or {}),
+            **_event_options(self.super_options),
+            **(msg.get("options") or {}),
+        }
 
         # Set after the super_properties merge so an explicit `$release_id` from
         # the caller's properties or the super properties wins over the env var.
