@@ -21,7 +21,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install adapter and test dependencies
-        run: python -m pip install -e . -r sdk_compliance_adapter/requirements.txt pytest pytest-timeout pytest-asyncio
+        run: python -m pip install -e ".[zstd]" -r sdk_compliance_adapter/requirements.txt pytest pytest-timeout pytest-asyncio
       - name: Test adapter protocol
         run: python -m pytest sdk_compliance_adapter/test_adapter.py --timeout=30
 
