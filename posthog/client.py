@@ -809,7 +809,9 @@ class Client(object):
                 tags and an event's own properties override them.
             super_options: Capture options for every captured event, such as
                 ``{"cookieless_mode": True}``. Context options and an event's
-                own ``options`` override them.
+                own ``options`` override them. They also win over an event's
+                legacy property for the same key, such as ``$cookieless_mode``,
+                so pass per-event overrides of that key as ``options``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1332,6 +1334,9 @@ class Client(object):
         """
         Set a capture option for every event captured within the current context.
 
+        Context options override ``super_options``. An event's own ``options``
+        override context options.
+
         Args:
             key: The option name, such as ``"process_person_profile"``.
             value: The option value, sent as given.
@@ -1673,8 +1678,10 @@ class Client(object):
             disable_geoip: Whether to disable GeoIP for this event.
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
-                PostHog to validate. An option wins over its legacy ``$``
-                property, such as ``$process_person_profile``.
+                PostHog to validate. They override context options and
+                ``super_options``. An option set at any layer wins over its
+                legacy ``$`` property, such as ``$process_person_profile``,
+                set at any layer. A ``None`` option counts as unset.
 
         Examples:
             ```python
