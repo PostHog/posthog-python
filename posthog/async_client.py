@@ -18,6 +18,7 @@ from typing_extensions import Unpack
 from ._async_consumer import (
     _STOP,
     _AsyncConsumer,
+    _AsyncLane,
     _invoke_callback,
     _report_capture_failure,
     _is_processing_event,
@@ -33,6 +34,7 @@ from ._async_request import (
 from .args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
 from .capture_compression import (
     CaptureCompression,
+    _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
 from .capture_event import (
@@ -43,7 +45,7 @@ from .capture_event import (
     _fill_event_defaults,
     _merge_groups,
 )
-from .capture_send import _CAPTURE_V1_PATH
+from .capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
@@ -53,6 +55,7 @@ from .client import (
     _add_context_session_id,
     _context_tag_defaults,
     _personless_options,
+    _positive_config_value,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -81,7 +84,7 @@ from .exception_utils import (
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
 )
-from .consumer import MAX_MSG_SIZE
+from .consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -107,7 +110,12 @@ class AsyncClient:
 
     ``capture()`` is a synchronous, non-blocking queue write. Use
     ``await capture_immediate()`` when the caller must wait for delivery.
+    ``capture_ai()`` and ``await capture_ai_immediate()`` do the same for AI
+    events, on a separate queue that posts to the AI capture endpoint.
     ``flush()``, ``join()``, and ``shutdown()`` are awaitable lifecycle methods.
+
+    The ``capture_ai_*`` options configure the AI queue the same way as on
+    :class:`posthog.Client`.
     """
 
     log = logging.getLogger("posthog")
@@ -142,6 +150,10 @@ class AsyncClient:
         code_variables_detect_secrets=None,
         in_app_modules: Optional[list[str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_max_queue_size: int = 1000,
+        capture_ai_timeout: float = 30,
+        capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE,
         capture_trace_context: bool = False,
         secret_key: Optional[str] = None,
         personal_api_key: Optional[str] = None,
@@ -152,6 +164,18 @@ class AsyncClient:
             raise ValueError("flush_at must be greater than zero")
         if flush_interval <= 0:
             raise ValueError("flush_interval must be greater than zero")
+        capture_ai_max_queue_size = _positive_config_value(
+            "capture_ai_max_queue_size", capture_ai_max_queue_size, integer=True
+        )
+        capture_ai_timeout = _positive_config_value(
+            "capture_ai_timeout", capture_ai_timeout
+        )
+        capture_ai_max_event_bytes = _positive_config_value(
+            "capture_ai_max_event_bytes",
+            capture_ai_max_event_bytes,
+            integer=True,
+            maximum=AI_MAX_MSG_SIZE,
+        )
 
         self.api_key = (project_api_key or "").strip()
         self.raw_host = normalize_host(host)
@@ -169,6 +193,9 @@ class AsyncClient:
         self.super_options = super_options
         self._release_id = _resolve_release_id()
         self.capture_compression = _resolve_capture_compression(capture_compression)
+        self.capture_ai_compression = _resolve_capture_ai_compression(
+            capture_ai_compression
+        )
         self.capture_trace_context = capture_trace_context
         if personal_api_key is not None and secret_key is None:
             warnings.warn(
@@ -244,12 +271,29 @@ class AsyncClient:
                 "api_key is empty after trimming whitespace; check your project API key"
             )
 
-        self._queue: asyncio.Queue[Any] = asyncio.Queue(max_queue_size)
+        self._analytics_lane = _AsyncLane(
+            name="analytics",
+            max_queue_size=max_queue_size,
+            endpoint=_CAPTURE_V1_PATH,
+            max_msg_size=MAX_MSG_SIZE,
+            timeout=timeout,
+            capture_compression=self.capture_compression,
+        )
+        # AI events post to their own endpoint, so multi-MB events stay off the
+        # analytics endpoint's smaller caps. Its workers start on the first AI
+        # event, so clients that never send one pay nothing.
+        self._ai_lane = _AsyncLane(
+            name="ai",
+            max_queue_size=capture_ai_max_queue_size,
+            endpoint=_CAPTURE_AI_V1_PATH,
+            max_msg_size=capture_ai_max_event_bytes,
+            timeout=capture_ai_timeout,
+            capture_compression=self.capture_ai_compression,
+        )
+        self._lanes = (self._analytics_lane, self._ai_lane)
         self._worker_count = max(1, thread)
         self._flush_at = flush_at
         self._flush_interval = flush_interval
-        self._consumers: list[_AsyncConsumer] = []
-        self._worker_tasks: list[asyncio.Task[None]] = []
         self._immediate_callers: dict[asyncio.Task[Any], int] = {}
         self._inflight_operations: set[asyncio.Future[None]] = set()
         self._http_client: Optional[Any] = None
@@ -263,7 +307,7 @@ class AsyncClient:
         self._register_duplicate_client()
 
     async def __aenter__(self) -> AsyncClient:
-        self._ensure_workers_started()
+        self._ensure_workers_started(self._analytics_lane)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -324,9 +368,9 @@ class AsyncClient:
             self._http_client = _build_client(self.host)
         return self._http_client
 
-    def _new_consumer(self) -> _AsyncConsumer:
+    def _new_consumer(self, lane: _AsyncLane) -> _AsyncConsumer:
         return _AsyncConsumer(
-            self._queue,
+            lane.queue,
             self.api_key,
             host=self.host,
             on_error=self.on_error,
@@ -334,22 +378,27 @@ class AsyncClient:
             flush_at=self._flush_at,
             flush_interval=self._flush_interval,
             retries=self.max_retries,
-            timeout=self.timeout,
+            timeout=lane.timeout,
             historical_migration=self.historical_migration,
-            capture_compression=self.capture_compression,
+            capture_compression=lane.capture_compression,
+            endpoint=lane.endpoint,
+            max_msg_size=lane.max_msg_size,
         )
 
-    def _ensure_workers_started(self) -> None:
-        if self.disabled or not self.send or self._closed or self._worker_tasks:
+    def _ensure_workers_started(self, lane: _AsyncLane) -> None:
+        if self.disabled or not self.send or self._closed or lane.worker_tasks:
             return
         self._bind_loop()
         for _ in range(self._worker_count):
-            consumer = self._new_consumer()
-            self._consumers.append(consumer)
-            self._worker_tasks.append(asyncio.create_task(consumer.run()))
+            consumer = self._new_consumer(lane)
+            lane.consumers.append(consumer)
+            lane.worker_tasks.append(asyncio.create_task(consumer.run()))
+
+    def _all_worker_tasks(self) -> list[asyncio.Task[None]]:
+        return [task for lane in self._lanes for task in lane.worker_tasks]
 
     def _enqueue_prepared_event(
-        self, prepared: dict[str, Any], defaults: _EventDefaults
+        self, prepared: dict[str, Any], lane: _AsyncLane, defaults: _EventDefaults
     ) -> bool:
         if not self._accepting or self._closed:
             return False
@@ -361,13 +410,13 @@ class AsyncClient:
 
         if self._loop is None:
             if running_loop is not None:
-                self._ensure_workers_started()
-            self._queue.put_nowait(queued_event)
+                self._ensure_workers_started(lane)
+            lane.queue.put_nowait(queued_event)
             return True
 
         if running_loop is self._loop:
-            self._ensure_workers_started()
-            self._queue.put_nowait(queued_event)
+            self._ensure_workers_started(lane)
+            lane.queue.put_nowait(queued_event)
             return True
         if running_loop is not None:
             raise RuntimeError("AsyncClient cannot be shared across event loops")
@@ -381,8 +430,8 @@ class AsyncClient:
                 if not self._accepting or self._closed:
                     admitted.set_result(False)
                     return
-                self._ensure_workers_started()
-                self._queue.put_nowait(queued_event)
+                self._ensure_workers_started(lane)
+                lane.queue.put_nowait(queued_event)
             except BaseException as error:
                 admitted.set_exception(error)
             else:
@@ -542,6 +591,30 @@ class AsyncClient:
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Queue an event without blocking for network delivery."""
+        return self._capture(event, self._analytics_lane, kwargs)
+
+    def capture_ai(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Queue an AI event for the AI capture endpoint without blocking.
+
+        Takes the same arguments and returns the same value as ``capture()``.
+        The event uses a separate queue with a larger per-event size cap. The
+        payload is sent as given, with no redaction or truncation.
+        """
+        self._log_non_ai_event(event)
+        return self._capture(event, self._ai_lane, kwargs)
+
+    def _log_non_ai_event(self, event: str) -> None:
+        if not event.startswith("$ai_"):
+            self.log.debug(
+                "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                event,
+            )
+
+    def _capture(
+        self, event: str, lane: _AsyncLane, kwargs: OptionalCaptureArgs
+    ) -> Optional[str]:
         try:
             msg, property_allowlist, defaults = self._build_capture_event(event, kwargs)
             prepared, sent_uuid = self._prepare_event(msg, property_allowlist)
@@ -550,12 +623,12 @@ class AsyncClient:
             if not self.send:
                 return sent_uuid
 
-            if not self._enqueue_prepared_event(prepared, defaults):
+            if not self._enqueue_prepared_event(prepared, lane, defaults):
                 return None
             self.log.debug("queued async event %s", event)
             return sent_uuid
         except asyncio.QueueFull:
-            self.log.warning("PostHog async capture queue is full")
+            self.log.warning("PostHog async %s capture queue is full", lane.name)
             return None
         except Exception as error:
             if self.debug:
@@ -577,6 +650,21 @@ class AsyncClient:
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Capture one event and wait until its delivery attempt completes."""
+        return await self._capture_immediate(event, self._analytics_lane, kwargs)
+
+    async def capture_ai_immediate(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Capture one AI event and wait until its delivery attempt completes.
+
+        Uses the AI capture endpoint and the ``capture_ai_*`` settings.
+        """
+        self._log_non_ai_event(event)
+        return await self._capture_immediate(event, self._ai_lane, kwargs)
+
+    async def _capture_immediate(
+        self, event: str, lane: _AsyncLane, kwargs: OptionalCaptureArgs
+    ) -> Optional[str]:
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - async functions always have a task
             return None
@@ -603,21 +691,22 @@ class AsyncClient:
                     "unable to serialize immediate event for sizing, dropping"
                 )
                 return None
-            if event_size > MAX_MSG_SIZE:
+            if event_size > lane.max_msg_size:
                 self.log.error(
-                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
                     processed.get("event"),
                     event_size,
-                    MAX_MSG_SIZE // 1024,
+                    lane.max_msg_size // 1024,
+                    lane.endpoint,
                 )
                 return None
 
-            consumer = self._new_consumer()
+            consumer = self._new_consumer(lane)
             await consumer.request(error_batch)
             return sent_uuid
         except Exception as error:
             await _report_capture_failure(
-                self.on_error, self.log, error, error_batch, _CAPTURE_V1_PATH
+                self.on_error, self.log, error, error_batch, lane.endpoint
             )
             if self.debug:
                 raise
@@ -773,7 +862,7 @@ class AsyncClient:
         defaults = self._event_defaults(
             context_options=context_options, disable_geoip=disable_geoip
         )
-        if not self._enqueue_prepared_event(prepared, defaults):
+        if not self._enqueue_prepared_event(prepared, self._analytics_lane, defaults):
             return None
         return sent_uuid
 
@@ -1100,40 +1189,43 @@ class AsyncClient:
         reported_flags.add(reported_key)
 
     def _pending_queue_items(self) -> int:
-        return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
+        return sum(lane.pending_items() for lane in self._lanes)
 
     def _defer_lifecycle_call(self, awaitable) -> None:
         task = asyncio.create_task(_run_outside_processing_event(awaitable))
         self._deferred_lifecycle_tasks.add(task)
         task.add_done_callback(self._deferred_lifecycle_tasks.discard)
 
-    def _discard_undrainable_queue(self) -> None:
+    def _discard_undrainable_queue(self, lane: _AsyncLane) -> None:
         discarded = 0
         while True:
             try:
-                self._queue.get_nowait()
+                lane.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            self._queue.task_done()
+            lane.queue.task_done()
             discarded += 1
 
-        orphaned = self._pending_queue_items()
+        orphaned = lane.pending_items()
         for _ in range(orphaned):
-            self._queue.task_done()
+            lane.queue.task_done()
         discarded += orphaned
         if discarded:
             self.log.warning(
-                "discarded %d async capture items because all workers exited",
+                "discarded %d async %s capture items because all workers exited",
                 discarded,
+                lane.name,
             )
 
-    async def _wait_for_queue_drain(self, deadline: Optional[float]) -> None:
-        live_workers = [task for task in self._worker_tasks if not task.done()]
+    async def _wait_for_queue_drain(
+        self, lane: _AsyncLane, deadline: Optional[float]
+    ) -> None:
+        live_workers = [task for task in lane.worker_tasks if not task.done()]
         if not live_workers:
-            self._discard_undrainable_queue()
+            self._discard_undrainable_queue(lane)
             return
 
-        queue_join = asyncio.create_task(self._queue.join())
+        queue_join = asyncio.create_task(lane.queue.join())
 
         async def wait_for_workers() -> None:
             await asyncio.wait(live_workers, return_when=asyncio.ALL_COMPLETED)
@@ -1156,7 +1248,7 @@ class AsyncClient:
                 await queue_join
                 return
 
-            self._discard_undrainable_queue()
+            self._discard_undrainable_queue(lane)
             await queue_join
         finally:
             for task in (queue_join, workers_finished):
@@ -1165,22 +1257,28 @@ class AsyncClient:
             await asyncio.gather(queue_join, workers_finished, return_exceptions=True)
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
-        if asyncio.current_task() in self._worker_tasks or _is_processing_event():
+        if asyncio.current_task() in self._all_worker_tasks() or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
             return
         if not self.send or self.disabled or self._pending_queue_items() == 0:
             return
-        self._ensure_workers_started()
+        pending_lanes = [lane for lane in self._lanes if lane.pending_items()]
+        for lane in pending_lanes:
+            self._ensure_workers_started(lane)
         deadline = (
             None
             if timeout_seconds is None
             else asyncio.get_running_loop().time() + timeout_seconds
         )
         try:
-            for consumer in self._consumers:
-                consumer.request_flush()
+            # Wake every lane before waiting on any, so one lane's partial
+            # batch does not wait out its flush_interval behind the other.
+            for lane in pending_lanes:
+                for consumer in lane.consumers:
+                    consumer.request_flush()
 
-            await self._wait_for_queue_drain(deadline)
+            for lane in pending_lanes:
+                await self._wait_for_queue_drain(lane, deadline)
         except asyncio.TimeoutError:
             self.log.warning(
                 "flush timed out after %s seconds with %s items pending",
@@ -1197,7 +1295,7 @@ class AsyncClient:
     async def shutdown(self) -> None:
         current = asyncio.current_task()
         if (
-            current in self._worker_tasks
+            current in self._all_worker_tasks()
             or current in self._immediate_callers
             or _is_processing_event()
         ):
@@ -1227,17 +1325,20 @@ class AsyncClient:
                 errors.append(error)
 
             try:
-                live_workers = [task for task in self._worker_tasks if not task.done()]
-                for _ in live_workers:
-                    await self._queue.put(_STOP)
-                if self._worker_tasks:
-                    await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+                for lane in self._lanes:
+                    live_workers = [t for t in lane.worker_tasks if not t.done()]
+                    for _ in live_workers:
+                        await lane.queue.put(_STOP)
+                worker_tasks = self._all_worker_tasks()
+                if worker_tasks:
+                    await asyncio.gather(*worker_tasks, return_exceptions=True)
             except Exception as error:
                 self.log.exception("Failed to stop async capture workers")
                 errors.append(error)
             finally:
-                self._worker_tasks.clear()
-                self._consumers.clear()
+                for lane in self._lanes:
+                    lane.worker_tasks.clear()
+                    lane.consumers.clear()
 
             try:
                 await self._close_transport()

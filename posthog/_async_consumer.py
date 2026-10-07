@@ -101,9 +101,11 @@ class _AsyncConsumer:
         flush_at: int,
         flush_interval: float,
         retries: int,
-        timeout: int,
+        timeout: float,
         historical_migration: bool,
         capture_compression: CaptureCompression,
+        endpoint: str = _CAPTURE_V1_PATH,
+        max_msg_size: int = MAX_MSG_SIZE,
     ) -> None:
         self.queue = queue
         self.api_key = api_key
@@ -116,6 +118,8 @@ class _AsyncConsumer:
         self.timeout = timeout
         self.historical_migration = historical_migration
         self.capture_compression = capture_compression
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
         self._carryover: Optional[tuple[dict[str, Any], int]] = None
         self._flush_event = asyncio.Event()
 
@@ -176,7 +180,7 @@ class _AsyncConsumer:
             await self.request(batch)
         except Exception as error:
             await _report_capture_failure(
-                self.on_error, self.log, error, batch, _CAPTURE_V1_PATH
+                self.on_error, self.log, error, batch, self.endpoint
             )
         finally:
             for _ in batch:
@@ -234,12 +238,15 @@ class _AsyncConsumer:
                 self.queue.task_done()
                 continue
 
-            if item_size > MAX_MSG_SIZE:
+            if item_size > self.max_msg_size:
+                # Log only name and size: AI events may carry unredacted
+                # multimodal payloads that must not leak into logs.
                 self.log.error(
-                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
                     item.get("event"),
                     item_size,
-                    MAX_MSG_SIZE // 1024,
+                    self.max_msg_size // 1024,
+                    self.endpoint,
                 )
                 self.queue.task_done()
                 continue
@@ -263,4 +270,35 @@ class _AsyncConsumer:
             timeout=self.timeout,
             max_retries=self.retries,
             historical_migration=self.historical_migration,
+            path=self.endpoint,
         )
+
+
+class _AsyncLane:
+    """One capture queue, the consumer tasks that drain it, and the endpoint they post to.
+
+    The client owns one lane per traffic class (analytics, AI), so each gets
+    its own backpressure, timeout, size cap and compression.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        max_queue_size: int,
+        endpoint: str,
+        max_msg_size: int,
+        timeout: float,
+        capture_compression: CaptureCompression,
+    ) -> None:
+        self.name = name
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(max_queue_size)
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
+        self.timeout = timeout
+        self.capture_compression = capture_compression
+        self.consumers: list[_AsyncConsumer] = []
+        self.worker_tasks: list[asyncio.Task[None]] = []
+
+    def pending_items(self) -> int:
+        return int(getattr(self.queue, "_unfinished_tasks", self.queue.qsize()))
