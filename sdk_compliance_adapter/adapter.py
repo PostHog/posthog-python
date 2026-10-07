@@ -28,6 +28,19 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# The harness has one enable_compression flag but a test per codec, so each
+# adapter instance takes its codec from COMPRESSION and advertises only that
+# codec's encoding_<codec> capability. The SDK has no brotli support.
+COMPRESSION_CODECS = {
+    "gzip": CaptureCompression.GZIP,
+    "deflate": CaptureCompression.DEFLATE,
+    "zstd": CaptureCompression.ZSTD,
+}
+
+
+def compression_name() -> str:
+    return os.environ.get("COMPRESSION") or "gzip"
+
 
 class RequestInfo:
     """Information about an HTTP request made by the SDK"""
@@ -220,11 +233,11 @@ posthog.capture_send._post_v1 = patched_post_v1
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
-    # No AI capture capability: `capture_ai` posts capture v1 to
-    # /i/v1/ai/events, which this harness version has no suite for.
     capabilities = [
         "capture_v1",
-        "encoding_gzip",
+        "capture_ai_v1",
+        "event_options",
+        "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
     ]
     return jsonify(
@@ -267,6 +280,11 @@ def init():
         # Convert flush_interval from ms to seconds
         flush_interval = flush_interval_ms / 1000.0
 
+        compression = (
+            COMPRESSION_CODECS[compression_name()]
+            if enable_compression
+            else CaptureCompression.NONE
+        )
         # Explicit reloads exercise the real loader without background polling
         # racing the harness's per-test definition snapshots.
         client_options = {
@@ -274,11 +292,8 @@ def init():
             "host": host,
             "flush_at": flush_at,
             "flush_interval": flush_interval,
-            "capture_compression": (
-                CaptureCompression.GZIP
-                if enable_compression
-                else CaptureCompression.NONE
-            ),
+            "capture_compression": compression,
+            "capture_ai_compression": compression,
             "max_retries": max_retries,
             "debug": False,
             "disable_geoip": disable_geoip,
@@ -308,56 +323,55 @@ def init():
         return jsonify({"error": str(e)}), 500
 
 
+def _capture_with(capture_method_name: str):
+    """Capture one event through the named SDK method.
+
+    Options pass through unchanged, and a supplied uuid stays on the wire. The
+    response carries the uuid the SDK actually sent, which differs from the
+    supplied one when the SDK canonicalizes or replaces it.
+    """
+    if not state.client:
+        return jsonify({"error": "SDK not initialized"}), 400
+
+    data = request.json or {}
+
+    distinct_id = data.get("distinct_id")
+    event = data.get("event")
+    timestamp = data.get("timestamp")
+
+    if not distinct_id:
+        return jsonify({"error": "distinct_id is required"}), 400
+    if not event:
+        return jsonify({"error": "event is required"}), 400
+
+    kwargs = {
+        "distinct_id": distinct_id,
+        "properties": data.get("properties"),
+        "options": data.get("options"),
+    }
+    if timestamp:
+        # Parse ISO8601 timestamp
+        from dateutil.parser import parse
+
+        kwargs["timestamp"] = parse(timestamp)
+    if data.get("uuid"):
+        kwargs["uuid"] = data["uuid"]
+
+    uuid = getattr(state.client, capture_method_name)(event, **kwargs)
+
+    # Track that we captured an event
+    state.increment_captured()
+
+    logger.info(f"Captured event: {event} for {distinct_id}, uuid={uuid}")
+
+    return jsonify({"success": True, "uuid": uuid})
+
+
 @app.route("/capture", methods=["POST"])
 def capture():
     """Capture a single event"""
     try:
-        if not state.client:
-            return jsonify({"error": "SDK not initialized"}), 400
-
-        data = request.json or {}
-
-        distinct_id = data.get("distinct_id")
-        event = data.get("event")
-        properties = data.get("properties")
-        timestamp = data.get("timestamp")
-        options = data.get("options")
-
-        if not distinct_id:
-            return jsonify({"error": "distinct_id is required"}), 400
-        if not event:
-            return jsonify({"error": "event is required"}), 400
-
-        # Fold capture-v1 options back into the magic `$`-prefixed properties the
-        # SDK lifts onto the wire `options` object. Renamed keys mirror the SDK's
-        # sentinel table; unknown keys get a bare `$` prefix.
-        if options:
-            properties = dict(properties or {})
-            option_to_property = {
-                "cookieless_mode": "$cookieless_mode",
-                "disable_skew_correction": "$ignore_sent_at",
-                "process_person_profile": "$process_person_profile",
-                "product_tour_id": "$product_tour_id",
-            }
-            for key, value in options.items():
-                properties[option_to_property.get(key, "$" + key)] = value
-
-        # Capture event
-        kwargs = {"distinct_id": distinct_id, "properties": properties}
-        if timestamp:
-            # Parse ISO8601 timestamp
-            from dateutil.parser import parse
-
-            kwargs["timestamp"] = parse(timestamp)
-
-        uuid = state.client.capture(event, **kwargs)
-
-        # Track that we captured an event
-        state.increment_captured()
-
-        logger.info(f"Captured event: {event} for {distinct_id}, uuid={uuid}")
-
-        return jsonify({"success": True, "uuid": uuid})
+        return _capture_with("capture")
     except Exception as e:
         logger.exception("Error capturing event")
         state.record_error(str(e))
@@ -368,50 +382,7 @@ def capture():
 def capture_ai():
     """Capture a single AI event on the dedicated AI capture endpoint"""
     try:
-        if not state.client:
-            return jsonify({"error": "SDK not initialized"}), 400
-
-        data = request.json or {}
-
-        distinct_id = data.get("distinct_id")
-        event = data.get("event")
-        properties = data.get("properties")
-        timestamp = data.get("timestamp")
-        options = data.get("options")
-        supplied_uuid = data.get("uuid")
-
-        if not distinct_id:
-            return jsonify({"error": "distinct_id is required"}), 400
-        if not event:
-            return jsonify({"error": "event is required"}), 400
-
-        if options:
-            properties = dict(properties or {})
-            option_to_property = {
-                "cookieless_mode": "$cookieless_mode",
-                "disable_skew_correction": "$ignore_sent_at",
-                "process_person_profile": "$process_person_profile",
-                "product_tour_id": "$product_tour_id",
-            }
-            for key, value in options.items():
-                properties[option_to_property.get(key, "$" + key)] = value
-
-        kwargs = {"distinct_id": distinct_id, "properties": properties}
-        if timestamp:
-            from dateutil.parser import parse
-
-            kwargs["timestamp"] = parse(timestamp)
-        # Unlike /capture, forward a supplied uuid so it's echoed back to the caller.
-        if supplied_uuid:
-            kwargs["uuid"] = supplied_uuid
-
-        uuid = state.client.capture_ai(event, **kwargs)
-
-        state.increment_captured()
-
-        logger.info(f"Captured AI event: {event} for {distinct_id}, uuid={uuid}")
-
-        return jsonify({"success": True, "uuid": uuid})
+        return _capture_with("capture_ai")
     except Exception as e:
         logger.exception("Error capturing AI event")
         state.record_error(str(e))
@@ -638,7 +609,14 @@ def reset():
 def main():
     """Main entry point"""
     port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting SDK Test Adapter on port {port}")
+    if compression_name() not in COMPRESSION_CODECS:
+        raise SystemExit(
+            f"unsupported COMPRESSION {compression_name()!r}: "
+            f"want one of {', '.join(COMPRESSION_CODECS)}"
+        )
+    logger.info(
+        f"Starting SDK Test Adapter on port {port} (compression={compression_name()})"
+    )
     app.run(host="0.0.0.0", port=port, debug=False)
 
 
