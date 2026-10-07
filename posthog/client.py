@@ -1128,10 +1128,8 @@ class Client(object):
             capture_compression=self.capture_compression,
             eager_start=not sync_mode,
         )
-        # The AI lane posts to its own endpoint so multi-MB AI events stay off
-        # the analytics endpoint's smaller caps, with its own queue, timeout,
-        # size guard and compression. Lazy start, so the many clients that never
-        # emit AI events pay for no extra threads.
+        # A separate endpoint keeps multi-MB AI events off the analytics caps.
+        # Lazy start, so clients that never send AI events pay for no threads.
         self._ai_lane = _Lane(
             name="ai",
             **lane_defaults,

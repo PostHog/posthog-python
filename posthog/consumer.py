@@ -24,11 +24,8 @@ MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
 # The AI endpoint's per-event ceiling. The endpoint applies it to the
 # serialized properties alone.
 AI_MAX_PROPERTIES_SIZE = 8 * 1024 * 1024
-# The local guard measures the whole serialized event, so it adds headroom for
-# the rest of the event. Without it, an event whose properties sit at the
-# ceiling is refused here although the endpoint accepts it. The guard stays
-# coarse: it skips a doomed multi-megabyte upload, it does not reproduce the
-# endpoint's check.
+# The local guard measures the whole event, not only its properties, so it
+# allows this much more to keep events at the endpoint's ceiling.
 AI_ENVELOPE_HEADROOM = 64 * 1024
 # The AI lane's per-event guard, and the upper bound for
 # `capture_ai_max_event_bytes`.
