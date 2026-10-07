@@ -387,7 +387,9 @@ Attributes:
         an event's own properties override them.
     super_options: Capture options for every captured event, such as
         ``{"cookieless_mode": True}``. Context options and an event's own
-        ``options`` override them.
+        ``options`` override them. They also win over an event's legacy
+        property for the same key, such as ``$cookieless_mode``, so pass
+        per-event overrides of that key as ``options``.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
