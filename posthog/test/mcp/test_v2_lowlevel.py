@@ -828,6 +828,28 @@ async def test_v2_fresh_lowlevel_resolver_strips_posthog_arguments():
     assert props["$mcp_llm_model"] == "model-a"
 
 
+async def test_v2_lowlevel_keeps_top_level_reference_schema_unchanged():
+    schema = {
+        "$ref": "#/$defs/Input",
+        "$defs": {
+            "Input": {
+                "type": "object",
+                "properties": {
+                    "context": {"type": "string"},
+                    "conversation_id": {"type": "string"},
+                    "llm_model": {"type": "string"},
+                },
+            }
+        },
+    }
+    server, _ = _make_strict_ownership_server_v2(schema)
+    instrument(server, FakeClient())
+
+    result = await _list_tools(server)
+
+    assert result.tools[0].input_schema == schema
+
+
 async def test_v2_fresh_lowlevel_resolver_preserves_tool_owned_context():
     schema = {
         "type": "object",
@@ -863,7 +885,9 @@ async def test_v2_fresh_lowlevel_resolver_preserves_tool_owned_context():
     assert captured["context"] == "tool context"
 
 
-@pytest.mark.parametrize("failure", ["none", "raise"])
+@pytest.mark.parametrize(
+    "failure", ["none", "raise", "missing_schema", "schema_property_raises"]
+)
 async def test_v2_fresh_lowlevel_resolver_failure_keeps_arguments(failure):
     schema = {
         "type": "object",
@@ -874,9 +898,18 @@ async def test_v2_fresh_lowlevel_resolver_failure_keeps_arguments(failure):
     client = FakeClient()
     messages = []
 
+    class BrokenDescriptor:
+        @property
+        def inputSchema(self):
+            raise RuntimeError("schema unavailable")
+
     def resolver(_name):
         if failure == "raise":
             raise RuntimeError("registry unavailable")
+        if failure == "missing_schema":
+            return {"name": "search_docs"}
+        if failure == "schema_property_raises":
+            return BrokenDescriptor()
         return None
 
     instrument(
@@ -900,7 +933,7 @@ async def test_v2_fresh_lowlevel_resolver_failure_keeps_arguments(failure):
     warnings = [
         message for message in messages if "resolve_original_tool failed" in message
     ]
-    assert len(warnings) == int(failure == "raise")
+    assert len(warnings) == int(failure != "none")
 
 
 async def test_v2_lowlevel_served_listing_has_priority_over_resolver():

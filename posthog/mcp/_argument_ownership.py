@@ -111,14 +111,19 @@ async def resolve_lowlevel_tool_ownership(
         descriptor = resolver(name)
         if inspect.isawaitable(descriptor):
             descriptor = await descriptor
+        if descriptor is None:
+            return None
+        schema = _descriptor_input_schema(descriptor)
+        if not isinstance(schema, dict):
+            log(
+                f"Warning: resolve_original_tool failed for tool {name!r}: "
+                "resolver returned no usable input schema"
+            )
+            return None
+        return analytics_owned_parameters(data.options, schema)
     except Exception as error:  # noqa: BLE001 - analytics must not break dispatch
         log(f"Warning: resolve_original_tool failed for tool {name!r}: {error}")
         return None
-
-    if descriptor is None:
-        return None
-    schema = _descriptor_input_schema(descriptor)
-    return analytics_owned_parameters(data.options, schema)
 
 
 def _descriptor_input_schema(descriptor: Any) -> Any:
