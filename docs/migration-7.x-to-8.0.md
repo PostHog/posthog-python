@@ -91,7 +91,8 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`.
 - Options are sent as given. PostHog validates them.
 - The legacy properties `$cookieless_mode`, `$ignore_sent_at`, `$product_tour_id` and `$process_person_profile` still work. They move into options after `before_send`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
-- An option wins over its legacy property. A `None` option counts as unset.
+- An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
+- A `None` option counts as unset.
 
 Values apply in this order, and each layer overrides the ones before it:
 
