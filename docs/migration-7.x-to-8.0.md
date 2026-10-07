@@ -120,6 +120,7 @@ Two changes follow from this order:
   - `capture_ai_timeout`: default 30 seconds
   - `capture_ai_max_event_bytes`: default 8 MiB plus 64 KiB. You can only lower it.
 - `AsyncPosthog` has `capture_ai` and `capture_ai_immediate`.
+- `AsyncPosthog` accepts `privacy_mode` and `enable_full_ai_capture`, with the same meaning as on `Client`. An AI integration given an `AsyncPosthog` client used to always truncate and redact media.
 
 ## Batching and size limits
 
@@ -130,5 +131,5 @@ Two changes follow from this order:
 
 ## OpenFeature provider
 
-`openfeature-provider-posthog` 0.2.0 requires posthog 8.0 or later.
-Upgrade both packages together.
+`openfeature-provider-posthog` 0.2.0 works with posthog 7.x and 8.x.
+Older provider versions require posthog below 8.0, so upgrade the provider before or with posthog.
