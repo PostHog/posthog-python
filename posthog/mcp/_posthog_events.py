@@ -64,7 +64,6 @@ def _build_capture_event(event: Event) -> PostHogCaptureEvent:
     properties: Dict[str, Any] = {_P.SOURCE: POSTHOG_MCP_ANALYTICS_SOURCE}
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
-    _add_person_processing(event, properties)
     _add_common_properties(event, properties)
     _add_custom_properties(event, properties)
     _add_groups(event, properties)
@@ -77,6 +76,7 @@ def _build_capture_event(event: Event) -> PostHogCaptureEvent:
         "event": event_name,
         "distinct_id": _get_distinct_id(event),
         "properties": properties,
+        "options": _get_options(event),
         "timestamp": _get_timestamp(event),
     }
 
@@ -100,11 +100,13 @@ def _add_groups(event: Event, properties: Dict[str, Any]) -> None:
         _merge_groups(properties, groups)
 
 
-def _add_person_processing(event: Event, properties: Dict[str, Any]) -> None:
+def _get_options(event: Event) -> Dict[str, Any]:
     # Without a resolved identity the distinct id is just the session id, so
     # processing a person profile would mint one anonymous person per session.
+    # As an option it beats any custom $process_person_profile property.
     if not event.get("identify_actor_given_id"):
-        properties["$process_person_profile"] = False
+        return {"process_person_profile": False}
+    return {}
 
 
 def _is_tool_call(event: Event) -> bool:
@@ -266,7 +268,6 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
     properties: Dict[str, Any] = {}
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
-    _add_person_processing(event, properties)
     _add_groups(event, properties)
 
     error = event.get("error")
@@ -301,5 +302,6 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         "event": PostHogMCPAnalyticsEvent.EXCEPTION,
         "distinct_id": _get_distinct_id(event),
         "properties": properties,
+        "options": _get_options(event),
         "timestamp": _get_timestamp(event),
     }

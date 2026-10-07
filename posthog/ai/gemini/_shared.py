@@ -266,13 +266,11 @@ class _GeminiModelsPolicy:
             event_properties["$ai_is_error"] = True
             event_properties["$ai_error"] = str(error)
 
-        if distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
         _capture_ai_event(
             self._ph_client,
             "$ai_embedding",
             distinct_id=distinct_id or trace_id,
             properties=event_properties,
             groups=groups,
+            personless=distinct_id is None,
         )
