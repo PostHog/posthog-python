@@ -19,6 +19,7 @@ You need to change code if your app does any of these:
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
+- sets `$lib` or `$lib_version`, or filters on `$lib = "posthog-python-mcp"`
 
 ## Endpoints
 
@@ -29,6 +30,18 @@ You need to change code if your app does any of these:
 
 If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
 An endpoint that is not served drops every event sent to it.
+
+## SDK identity
+
+PostHog sets `$lib` and `$lib_version` on every event from the `PostHog-Sdk-Info` request header, which is always `posthog-python/<version>`.
+The SDK removes `$lib` and `$lib_version` from the properties it sends.
+A value you set in a call, in `super_properties` or in `before_send` does not reach PostHog.
+
+MCP instrumentation no longer relabels the client.
+In 7.x, `posthog.mcp.instrument()` and `PostHogMCP` set the client's identity to `posthog-python-mcp`.
+With the default client, or any client the app also used, every event and feature flag request from the app then reported `posthog-python-mcp`, not only the MCP events.
+In 8.0, MCP events report `posthog-python` like all other events.
+To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$lib`.
 
 ## Removed options and APIs
 
