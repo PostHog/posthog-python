@@ -114,8 +114,8 @@ class AsyncClient:
     events, on a separate queue that posts to the AI capture endpoint.
     ``flush()``, ``join()``, and ``shutdown()`` are awaitable lifecycle methods.
 
-    The ``capture_ai_*`` options configure the AI queue the same way as on
-    :class:`posthog.Client`.
+    The ``capture_ai_*``, ``privacy_mode`` and ``enable_full_ai_capture``
+    options work the same way as on :class:`posthog.Client`.
     """
 
     log = logging.getLogger("posthog")
@@ -154,6 +154,8 @@ class AsyncClient:
         capture_ai_max_queue_size: int = 1000,
         capture_ai_timeout: float = 30,
         capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE,
+        privacy_mode: bool = False,
+        enable_full_ai_capture: bool = False,
         capture_trace_context: bool = False,
         secret_key: Optional[str] = None,
         personal_api_key: Optional[str] = None,
@@ -197,6 +199,8 @@ class AsyncClient:
             capture_ai_compression
         )
         self.capture_trace_context = capture_trace_context
+        self.privacy_mode = privacy_mode
+        self.enable_full_ai_capture = enable_full_ai_capture is True
         if personal_api_key is not None and secret_key is None:
             warnings.warn(
                 "`personal_api_key` is deprecated; use `secret_key` instead.",
