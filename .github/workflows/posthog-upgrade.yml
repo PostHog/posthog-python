@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: posthog-upgrade-${{ github.event.inputs.package_name }}
+  cancel-in-progress: false
+
 jobs:
   posthog-upgrade:
     name: Upgrade PostHog package
@@ -81,16 +85,117 @@ jobs:
               fi
           done
 
-      - name: Generate branch name
-        id: generate-branch-name
+      - name: Generate pull request details
+        id: generate-pr-details
         shell: bash
         env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PACKAGE_NAME: ${{ github.event.inputs.package_name }}
           PACKAGE_VERSION: ${{ github.event.inputs.package_version }}
         run: |
-          echo "branch_name=${PACKAGE_NAME}-${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          TITLE_PREFIX="chore(deps): update ${PACKAGE_NAME} to "
+
+          skip_update() {
+              echo "::notice::$1"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+          }
+
+          # Serialize writers and reject stale reruns using Python package ordering.
+          check_version() {
+              local current_title="$1" current_version older
+              if [[ "$current_title" != "$TITLE_PREFIX"* ]]; then
+                  echo "::error::Cannot determine the destination PR's package version." >&2
+                  exit 1
+              fi
+              current_version="${current_title#"$TITLE_PREFIX"}"
+              older=$(uv run --no-project --with packaging==25.0 python - "$PACKAGE_VERSION" "$current_version" <<'PY'
+          import sys
+          from packaging.version import Version
+
+          print("true" if Version(sys.argv[1]) < Version(sys.argv[2]) else "false")
+          PY
+              ) || {
+                  echo "::error::Cannot compare package versions; leaving remote branches unchanged." >&2
+                  exit 1
+              }
+              if [ "$older" = "true" ]; then
+                  skip_update "Version $PACKAGE_VERSION is older than PR version $current_version; leaving it unchanged."
+              fi
+          }
+
+          queue_status() {
+              local pr="$1" status
+              if status=$(gh api "repos/PostHog/posthog/issues/${pr}/comments?per_page=100" \
+                  --paginate --slurp \
+                  --jq '[.[][] | select(.user.login == "trunk-io[bot]") | .body] | last // ""'); then
+                  printf '%s' "$status" \
+                      | grep -oE "Running tests on this pull request|waiting to start tests" | head -n 1 || true
+              else
+                  echo "::warning::Could not read the queue status of PR #${pr}; treating it as queued." >&2
+                  echo "unknown"
+              fi
+          }
+
+          EXISTING=$(gh pr list \
+              --repo PostHog/posthog \
+              --state open \
+              --search "\"${TITLE_PREFIX}\" in:title sort:created-desc" \
+              --limit 100 \
+              --json title,number,headRefName,headRepositoryOwner \
+              --jq ".[] | select(.title | startswith(\"${TITLE_PREFIX}\")) | select(.headRepositoryOwner.login == \"PostHog\") | [.number, .headRefName, .title] | @tsv" | head -n 1)
+          IFS=$'\t' read -r EXISTING_PR EXISTING_BRANCH EXISTING_TITLE <<< "$EXISTING"
+
+          # Updating a queued PR's branch restarts the merge queue's checks.
+          # Leave queued PRs alone, including when their status cannot be read.
+          QUEUED=""
+          if [ -n "$EXISTING_PR" ]; then
+              check_version "$EXISTING_TITLE"
+              QUEUED=$(queue_status "$EXISTING_PR")
+          fi
+
+          if [ -n "$EXISTING_BRANCH" ] && [ -z "$QUEUED" ]; then
+              BRANCH_NAME="$EXISTING_BRANCH"
+          elif [ -n "$QUEUED" ]; then
+              echo "::notice::PR #${EXISTING_PR} is in the merge queue; checking a separate branch instead."
+              BRANCH_NAME="${PACKAGE_NAME}-upgrade-${PACKAGE_VERSION}"
+              # A rerun can collide with an already queued version-specific PR.
+              if ! DESTINATIONS=$(gh pr list \
+                  --repo PostHog/posthog \
+                  --state open \
+                  --head "$BRANCH_NAME" \
+                  --limit 100 \
+                  --json title,number,headRefName,isCrossRepository \
+                  --jq '.[] | select(.isCrossRepository == false) | [.number, .headRefName, .title] | @tsv'); then
+                  skip_update "Could not check the fallback branch for an existing PR; leaving it unchanged."
+              fi
+              while IFS=$'\t' read -r DESTINATION_PR DESTINATION_BRANCH DESTINATION_TITLE; do
+                  [ -n "$DESTINATION_PR" ] || continue
+                  [ "$DESTINATION_BRANCH" = "$BRANCH_NAME" ] || continue
+                  check_version "$DESTINATION_TITLE"
+                  if [ -n "$(queue_status "$DESTINATION_PR")" ]; then
+                      skip_update "Fallback PR #${DESTINATION_PR} is queued or its status is unknown; leaving it unchanged."
+                  fi
+              done <<< "$DESTINATIONS"
+          else
+              BRANCH_NAME="${PACKAGE_NAME}-upgrade"
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "branch_name=$BRANCH_NAME" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE_PREFIX}${PACKAGE_VERSION}" >> "$GITHUB_OUTPUT"
+          {
+              echo 'body<<EOF'
+              echo '## Changes'
+              echo
+              echo "PostHog Python SDK version $PACKAGE_VERSION has been released. This updates the \`posthoganalytics\` and \`posthog\` dependency declarations to the same SDK version."
+              echo
+              echo '[GitHub releases](https://github.com/PostHog/posthog-python/releases) • [`posthoganalytics` on PyPI](https://pypi.org/project/posthoganalytics/#history) • [`posthog` on PyPI](https://pypi.org/project/posthog/#history)'
+              echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create main repo pull request
+        if: steps.generate-pr-details.outputs.skip == 'false'
         id: main-repo-pr
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         env:
@@ -99,18 +204,14 @@ jobs:
           token: ${{ steps.upgrader.outputs.token }}
           # PostHog/posthog requires signed commits, so commit through the GitHub API.
           sign-commits: true
-          commit-message: "chore(deps): update ${{ github.event.inputs.package_name }} to ${{ github.event.inputs.package_version }}"
-          branch: ${{ steps.generate-branch-name.outputs.branch_name }}
+          commit-message: ${{ steps.generate-pr-details.outputs.title }}
+          branch: ${{ steps.generate-pr-details.outputs.branch_name }}
           delete-branch: true
-          title: "chore(deps): update ${{ github.event.inputs.package_name }} to ${{ github.event.inputs.package_version }}"
-          body: |
-            ## Changes
-
-            PostHog Python SDK version ${{ github.event.inputs.package_version }} has been released. This updates the `posthoganalytics` and `posthog` dependency declarations to the same SDK version.
-
-            [GitHub releases](https://github.com/PostHog/posthog-python/releases) • [`posthoganalytics` on PyPI](https://pypi.org/project/posthoganalytics/#history) • [`posthog` on PyPI](https://pypi.org/project/posthog/#history)
+          title: ${{ steps.generate-pr-details.outputs.title }}
+          body: ${{ steps.generate-pr-details.outputs.body }}
 
       - name: Output pull request result
+        if: steps.generate-pr-details.outputs.skip == 'false'
         shell: bash
         env:
           PACKAGE_NAME: ${{ github.event.inputs.package_name }}
@@ -119,7 +220,21 @@ jobs:
         run: |
           echo "PostHog pull request for $PACKAGE_NAME version $PACKAGE_VERSION ready: $PR_URL"
 
+      - name: Update pull request metadata
+        if: steps.generate-pr-details.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ steps.upgrader.outputs.token }}
+          PR_BODY: ${{ steps.generate-pr-details.outputs.body }}
+          PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
+          PR_TITLE: ${{ steps.generate-pr-details.outputs.title }}
+        run: |
+          gh pr edit "$PR_NUMBER" \
+              --repo PostHog/posthog \
+              --title "$PR_TITLE" \
+              --body "$PR_BODY"
+
       - name: Assign reviewers
+        if: steps.generate-pr-details.outputs.skip == 'false'
         env:
           GH_TOKEN: ${{ steps.upgrader.outputs.token }}
           PR_NUMBER: ${{ steps.main-repo-pr.outputs.pull-request-number }}
