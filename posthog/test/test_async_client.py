@@ -13,7 +13,7 @@ import pytest
 
 from posthog import AsyncClient, AsyncPosthog, CaptureCompression
 from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
-from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
+from posthog.consumer import AI_MAX_MSG_SIZE, AI_MAX_PROPERTIES_SIZE, MAX_MSG_SIZE
 from posthog.contexts import (
     new_context,
     set_capture_exception_code_variables_context,
@@ -123,7 +123,10 @@ asyncio.run(main())
 
 
 @pytest.mark.asyncio
-async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
+@pytest.mark.parametrize("method_name", ["capture", "capture_ai"])
+async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission(
+    method_name,
+):
     client = AsyncPosthog("test-key", flush_interval=30)
     client._ensure_workers_started(client._analytics_lane)
     scheduled_callbacks = []
@@ -136,7 +139,7 @@ async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
     ):
         capture_thread = threading.Thread(
             target=lambda: capture_result.append(
-                client.capture("threaded event", distinct_id="user-1")
+                getattr(client, method_name)("threaded event", distinct_id="user-1")
             ),
             daemon=True,
         )
@@ -149,9 +152,12 @@ async def test_cross_thread_capture_rechecks_shutdown_before_queue_admission():
         capture_thread.join(timeout=1)
 
     assert capture_result == [None]
-    for task in client._analytics_lane.worker_tasks:
+    assert client._ai_lane.worker_tasks == []
+    assert client._pending_queue_items() == 0
+    worker_tasks = client._all_worker_tasks()
+    for task in worker_tasks:
         task.cancel()
-    await asyncio.gather(*client._analytics_lane.worker_tasks, return_exceptions=True)
+    await asyncio.gather(*worker_tasks, return_exceptions=True)
     await client._close_transport()
 
 
@@ -288,7 +294,8 @@ async def test_capture_immediate_supports_async_before_send():
     ("method_name", "client_kwargs", "payload_size", "sent"),
     [
         ("capture_immediate", {}, MAX_MSG_SIZE, False),
-        ("capture_ai_immediate", {}, MAX_MSG_SIZE, True),
+        ("capture_ai_immediate", {}, AI_MAX_PROPERTIES_SIZE, True),
+        ("capture_ai_immediate", {}, AI_MAX_MSG_SIZE, False),
         ("capture_ai_immediate", {"capture_ai_max_event_bytes": 1024}, 2048, False),
     ],
 )
@@ -359,7 +366,7 @@ async def test_ai_events_queue_on_their_own_lane_and_flush_drains_both():
         client.capture_ai(
             "$ai_generation",
             distinct_id="user-1",
-            properties={"$ai_input": "x" * MAX_MSG_SIZE},
+            properties={"$ai_input": "x" * AI_MAX_PROPERTIES_SIZE},
         )
         await client.flush(timeout_seconds=1)
         assert sent == {
@@ -813,23 +820,31 @@ async def test_capture_failure_inside_on_error_logs_instead_of_recursing(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("immediate", [False, True])
-async def test_failed_capture_does_not_log_server_response_detail(caplog, immediate):
+@pytest.mark.parametrize(
+    ("method_name", "path"),
+    [
+        ("capture", _CAPTURE_V1_PATH),
+        ("capture_immediate", _CAPTURE_V1_PATH),
+        ("capture_ai", _CAPTURE_AI_V1_PATH),
+        ("capture_ai_immediate", _CAPTURE_AI_V1_PATH),
+    ],
+)
+async def test_failed_capture_logs_one_loss_line_without_response_detail(
+    caplog, method_name, path
+):
     caplog.set_level(logging.DEBUG, logger="posthog")
     server_error = APIError(400, "password=server-secret")
 
     with patch_async_capture_send(side_effect=server_error):
         client = AsyncPosthog("test-key", flush_at=1, max_retries=0)
-        if immediate:
-            await client.capture_immediate("event", distinct_id="user-1")
-        else:
-            client.capture("event", distinct_id="user-1")
-            await client.flush(timeout_seconds=1)
+        result = getattr(client, method_name)("$ai_generation", distinct_id="user-1")
+        if method_name.endswith("_immediate"):
+            await result
+        await client.flush(timeout_seconds=1)
         await client.shutdown()
 
     assert "server-secret" not in caplog.text
-    assert "APIError" in caplog.text
-    assert "status=400" in caplog.text
+    assert f"1 event(s) not persisted by {path}: APIError (status=400)" in caplog.text
 
 
 @pytest.mark.asyncio
