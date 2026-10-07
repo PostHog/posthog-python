@@ -393,9 +393,9 @@ def test_basic_completion(mock_client, mock_openai_response):
         )
 
         assert response == mock_openai_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -440,9 +440,9 @@ def test_embeddings(mock_client, mock_embedding_response):
         )
 
         assert response == mock_embedding_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -470,9 +470,9 @@ def test_groups(mock_client, mock_openai_response):
         )
 
         assert response == mock_openai_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
 
         assert call_args["groups"] == {"company": "test_company"}
 
@@ -491,9 +491,9 @@ def test_privacy_mode_local(mock_client, mock_openai_response):
         )
 
         assert response == mock_openai_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
@@ -514,9 +514,9 @@ def test_privacy_mode_global(mock_client, mock_openai_response):
         )
 
         assert response == mock_openai_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
@@ -533,9 +533,9 @@ def test_error(mock_client, mock_openai_response):
                 model="gpt-4", messages=[{"role": "user", "content": "Hello"}]
             )
 
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_is_error"] is True
         assert props["$ai_error"] == "Test error"
@@ -555,9 +555,9 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         )
 
         assert response == mock_openai_response_with_cached_tokens
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -594,9 +594,9 @@ def test_null_token_details_do_not_crash(
         )
 
         assert response == mock_openai_response_with_null_token_details
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert props["$ai_input_tokens"] == 20
@@ -630,9 +630,9 @@ def test_tool_calls(mock_client, mock_openai_response_with_tool_calls):
         )
 
         assert response == mock_openai_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -701,9 +701,9 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         )
 
         assert response == mock_openai_response_tool_calls_only
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -756,9 +756,9 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         )
 
         assert response == mock_responses_api_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -825,9 +825,9 @@ def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
         assert chunks == streaming_tool_call_chunks
 
         # Verify the capture was called with the right arguments
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -901,9 +901,9 @@ def test_responses_api(mock_client, mock_openai_response_with_responses_api):
             posthog_properties={"foo": "bar"},
         )
         assert response == mock_openai_response_with_responses_api
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -966,9 +966,9 @@ def test_responses_parse(mock_client, mock_parsed_response):
         )
 
         assert response == mock_parsed_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1018,9 +1018,9 @@ def test_chat_completions_parse(mock_client, mock_openai_response):
         assert response == mock_openai_response
         assert mock_parse.call_count == 1
         assert "posthog_distinct_id" not in mock_parse.call_args.kwargs
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1059,9 +1059,9 @@ async def test_async_chat_completions_parse(mock_client, mock_openai_response):
         assert response == mock_openai_response
         mock_parse.assert_awaited_once()
         assert "posthog_distinct_id" not in mock_parse.call_args.kwargs
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1184,9 +1184,9 @@ def test_responses_api_streaming_with_tokens(mock_client):
         assert "stream_options" not in captured_kwargs
 
         # Verify capture was called
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify tokens are captured correctly from response.usage (not 0)
@@ -1249,8 +1249,8 @@ async def test_async_chat_streaming_with_tool_calls(
     assert len(chunks) == len(streaming_tool_call_chunks)
     assert chunks == streaming_tool_call_chunks
 
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -1317,8 +1317,8 @@ async def test_async_responses_streaming_with_tokens(mock_client):
     kwargs = captured_kwargs["kwargs"]
     assert "stream_options" not in kwargs
 
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -1347,9 +1347,9 @@ async def test_async_embeddings_create(mock_client, mock_embedding_response):
 
     assert response == mock_embedding_response
     assert mock_create.await_count == 1
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -1398,9 +1398,9 @@ def test_tool_definition(mock_client, mock_openai_response):
         )
 
         assert response == mock_openai_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1462,9 +1462,9 @@ def test_web_search_perplexity_style(mock_client):
         )
 
         assert response == mock_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is detected (binary detection)
@@ -1521,9 +1521,9 @@ def test_web_search_responses_api(mock_client):
         )
 
         assert result == mock_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify exact web search count
@@ -1608,9 +1608,9 @@ def test_streaming_with_web_search(mock_client, streaming_web_search_chunks):
 
         # Verify the chunks were returned correctly
         assert len(chunks) == 3
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured (binary detection = 1)
@@ -1644,9 +1644,9 @@ def test_streaming_with_web_search_on_non_usage_chunk(
 
         # Verify the chunks were returned correctly
         assert len(chunks) == 3
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured even though citations were on first chunk
@@ -1700,9 +1700,9 @@ async def test_async_chat_with_web_search(mock_client):
         )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is captured (binary detection = 1)
@@ -1749,9 +1749,9 @@ async def test_async_chat_streaming_with_web_search(
 
     # Verify the chunks were returned correctly
     assert len(chunks) == 3
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is captured (binary detection = 1)
@@ -1816,8 +1816,8 @@ def test_streaming_chat_extracts_model_from_chunk_when_not_in_kwargs(mock_client
         # Consume the generator
         list(response_generator)
 
-        assert mock_client.capture.call_count == 1
-        call_args = mock_client.capture.call_args[1]
+        assert mock_client.capture_ai.call_count == 1
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Model should be extracted from chunk, not kwargs
@@ -1861,7 +1861,7 @@ def test_streaming_chat_prefers_kwargs_model_over_chunk_model(mock_client):
 
         list(response_generator)
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # kwargs model should take precedence
@@ -1909,7 +1909,7 @@ def test_streaming_responses_api_extracts_model_from_response_object(mock_client
 
         list(response_generator)
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Model should be extracted from chunk.response.model
@@ -1983,7 +1983,7 @@ def test_streaming_responses_api_captures_usage_and_output_when_incomplete(
         )
         list(response_generator)
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] == "max_output_tokens"
     assert props["$ai_input_tokens"] == 20
     assert props["$ai_output_tokens"] == 16
@@ -2033,7 +2033,7 @@ def test_non_streaming_extracts_model_from_response(mock_client):
         )
 
         assert response == mock_response
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Model should be extracted from response.model
@@ -2093,7 +2093,7 @@ def test_non_streaming_responses_api_extracts_model_from_response(mock_client):
         )
 
         assert response == mock_response
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Model should be extracted from response.model
@@ -2139,7 +2139,7 @@ def test_non_streaming_returns_none_when_no_model(mock_client):
             posthog_distinct_id="test-id",
         )
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Should be None, NOT "unknown" (to avoid incorrect cost matching)
@@ -2178,7 +2178,7 @@ def test_streaming_falls_back_to_unknown_when_no_model(mock_client):
 
         list(response_generator)
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Should fall back to "unknown"
@@ -2231,7 +2231,7 @@ async def test_async_streaming_chat_extracts_model_from_chunk(mock_client):
         async for _ in response_stream:
             pass
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert props["$ai_model"] == "gpt-4o-async-stored"
@@ -2281,7 +2281,7 @@ async def test_async_streaming_responses_extracts_model_from_response(mock_clien
         async for _ in response_stream:
             pass
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert props["$ai_model"] == "gpt-4o-mini-async-stored"
@@ -2300,7 +2300,7 @@ def test_integration_stop_reason(mock_client):
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] in ("stop", "length")
     assert props["$ai_provider"] == "openai"
     assert props["$ai_input_tokens"] > 0
@@ -2334,8 +2334,8 @@ async def test_async_chat_streaming_supports_async_with(
                 chunks.append(chunk)
 
     assert chunks == streaming_tool_call_chunks
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert call_args["event"] == "$ai_generation"
     assert props["$ai_provider"] == "openai"
@@ -2369,7 +2369,7 @@ async def test_async_responses_streaming_supports_async_with(mock_client):
             received = [c async for c in stream]
 
     assert received == [chunk]
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -2400,25 +2400,7 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
                 break
 
     assert source.closed is True
-    assert mock_client.capture.call_count == 1
-
-
-def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_openai_response):
-    mock_client.enable_full_ai_capture = True
-    with patch(
-        "openai.resources.chat.completions.Completions.create",
-        return_value=mock_openai_response,
-    ):
-        client = OpenAI(api_key="test-key", posthog_client=mock_client)
-        client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": "Hello"}],
-            posthog_distinct_id="test-id",
-        )
-
-    mock_client.capture.assert_not_called()
     assert mock_client.capture_ai.call_count == 1
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
 
 
 def test_multimodal_client_skips_media_redaction(mock_client, mock_openai_response):
@@ -2481,8 +2463,8 @@ def test_provider_override_chat_completions(mock_client, mock_openai_response):
         # The override must never reach the underlying OpenAI request.
         assert "posthog_provider_override" not in mock_create.call_args.kwargs
 
-        assert mock_client.capture.call_count == 1
-        call_args = mock_client.capture.call_args[1]
+        assert mock_client.capture_ai.call_count == 1
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert props["$ai_provider"] == "deepseek"
@@ -2507,8 +2489,8 @@ def test_provider_override_omitted_defaults_to_openai(
             posthog_distinct_id="test-id",
         )
 
-        assert mock_client.capture.call_count == 1
-        props = mock_client.capture.call_args[1]["properties"]
+        assert mock_client.capture_ai.call_count == 1
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_provider"] == "openai"
 
 
@@ -2549,8 +2531,8 @@ def test_provider_override_streaming_chat_completions(mock_client):
         list(response_generator)
 
         assert "posthog_provider_override" not in mock_create.call_args.kwargs
-        assert mock_client.capture.call_count == 1
-        props = mock_client.capture.call_args[1]["properties"]
+        assert mock_client.capture_ai.call_count == 1
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_provider"] == "groq"
         assert props["$ai_model"] == "gpt-4"
 
@@ -2572,9 +2554,9 @@ def test_provider_override_responses_api(
 
         assert response == mock_openai_response_with_responses_api
         assert "posthog_provider_override" not in mock_create.call_args.kwargs
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_provider"] == "xai"
         assert props["$ai_model"] == "gpt-4o-mini"
@@ -2595,9 +2577,9 @@ def test_provider_override_embeddings(mock_client, mock_embedding_response):
 
         assert response == mock_embedding_response
         assert "posthog_provider_override" not in mock_create.call_args.kwargs
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_provider"] == "mistral"
         assert props["$ai_model"] == "text-embedding-3-small"
@@ -2620,9 +2602,9 @@ def test_provider_override_chat_completions_parse(mock_client, mock_openai_respo
         assert response == mock_openai_response
         assert mock_parse.call_count == 1
         assert "posthog_provider_override" not in mock_parse.call_args.kwargs
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_provider"] == "cerebras"
         assert props["$ai_model"] == "gpt-4"
@@ -2649,9 +2631,9 @@ async def test_async_provider_override_chat_completions(
     assert response == mock_openai_response
     mock_create.assert_awaited_once()
     assert "posthog_provider_override" not in mock_create.call_args.kwargs
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_provider"] == "together"
     assert props["$ai_model"] == "gpt-4"
 
@@ -2675,8 +2657,8 @@ async def test_async_provider_override_omitted_defaults_to_openai(
             posthog_distinct_id="test-id",
         )
 
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_provider"] == "openai"
 
 
@@ -2715,8 +2697,8 @@ async def test_async_provider_override_streaming_chat_completions(
     assert "posthog_provider_override" not in captured_kwargs["kwargs"]
     assert len(chunks) == len(streaming_tool_call_chunks)
 
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_provider"] == "fireworks"
     assert props["$ai_model"] == "gpt-4"
 
@@ -2738,9 +2720,9 @@ async def test_async_provider_override_embeddings(mock_client, mock_embedding_re
     assert response == mock_embedding_response
     assert mock_create.await_count == 1
     assert "posthog_provider_override" not in mock_create.call_args.kwargs
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_provider"] == "perplexity"
     assert props["$ai_model"] == "text-embedding-3-small"
 
@@ -2760,7 +2742,7 @@ def test_served_service_tier_lands_in_model_parameters(
             posthog_distinct_id="test-id",
         )
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_model_parameters"]["service_tier"] == "flex"
         assert props["$ai_service_tier"] == "flex"
 
@@ -2777,7 +2759,7 @@ def test_response_without_service_tier_omits_it(mock_client, mock_openai_respons
             posthog_distinct_id="test-id",
         )
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert "service_tier" not in props["$ai_model_parameters"]
         assert "$ai_service_tier" not in props
 

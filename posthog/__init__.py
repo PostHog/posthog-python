@@ -485,8 +485,8 @@ before_send = None  # type: Optional[BeforeSendCallback]
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
 flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
-# Routes AI SDK wrapper events through the dedicated AI capture lane, skips
-# truncation, and passes media unredacted. `privacy_mode` always wins.
+# Captures full AI content in AI SDK wrapper events: skips truncation and
+# passes media unredacted. `privacy_mode` always wins.
 enable_full_ai_capture = False  # type: bool
 # Deprecated aliases for `enable_full_ai_capture`.
 _use_ai_lane = False  # type: bool

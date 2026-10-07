@@ -188,9 +188,9 @@ def test_new_client_basic_generation(
     )
 
     assert response == mock_gemini_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -261,8 +261,8 @@ def test_new_client_streaming_with_generate_content_stream(
     assert chunks[1].text == "world!"
 
     # Check that the streaming event was captured
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -343,8 +343,8 @@ def test_new_client_streaming_with_tools(mock_client, mock_google_genai_client):
     assert chunks[1].text == "the weather"
 
     # Check that the streaming event was captured with tools
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -373,7 +373,7 @@ def test_new_client_groups(mock_client, mock_google_genai_client, mock_gemini_re
         posthog_groups={"company": "company_123"},
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     assert call_args["groups"] == {"company": "company_123"}
 
 
@@ -392,7 +392,7 @@ def test_new_client_privacy_mode_local(
         posthog_privacy_mode=True,
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] is None
     assert props["$ai_output_choices"] is None
@@ -414,7 +414,7 @@ def test_new_client_privacy_mode_global(
         posthog_distinct_id="test-id",
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] is None
     assert props["$ai_output_choices"] is None
@@ -432,7 +432,7 @@ def test_new_client_different_input_formats(
     client.models.generate_content(
         model="gemini-2.0-flash", contents="Hello", posthog_distinct_id="test-id"
     )
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "Hello"}]
 
@@ -443,7 +443,7 @@ def test_new_client_different_input_formats(
         contents=[{"role": "user", "parts": [{"text": "hey"}]}],
         posthog_distinct_id="test-id",
     )
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [
         {"role": "user", "content": [{"type": "text", "text": "hey"}]}
@@ -456,7 +456,7 @@ def test_new_client_different_input_formats(
         contents=[{"role": "user", "parts": [{"text": "Hello "}, {"text": "world"}]}],
         posthog_distinct_id="test-id",
     )
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [
         {
@@ -469,11 +469,11 @@ def test_new_client_different_input_formats(
     ]
 
     # Test list input with string
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
     client.models.generate_content(
         model="gemini-2.0-flash", contents=["List item"], posthog_distinct_id="test-id"
     )
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_input"] == [{"role": "user", "content": "List item"}]
 
@@ -494,7 +494,7 @@ def test_new_client_model_parameters(
         max_tokens=100,
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert props["$ai_model_parameters"]["temperature"] == 0.7
     assert props["$ai_model_parameters"]["max_tokens"] == 100
@@ -518,7 +518,7 @@ def test_new_client_default_settings(
     # Call without overriding defaults
     client.models.generate_content(model="gemini-2.0-flash", contents=["Hello"])
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "default_user"
@@ -551,7 +551,7 @@ def test_new_client_override_defaults(
         posthog_groups={"organization": "special_org"},
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Check overrides
@@ -676,9 +676,9 @@ def test_tool_use_response(mock_client, mock_google_genai_client, mock_gemini_re
     )
 
     assert response == mock_gemini_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -718,9 +718,9 @@ def test_function_calls_in_output_choices(
     )
 
     assert response == mock_gemini_response_with_function_calls
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -767,9 +767,9 @@ def test_function_calls_only_no_content(
     )
 
     assert response == mock_gemini_response_function_calls_only
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -826,9 +826,9 @@ def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
     )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Check that all token types are present
@@ -890,9 +890,9 @@ def test_streaming_cache_and_reasoning_tokens(mock_client, mock_google_genai_cli
     assert len(result) == 2
 
     # Check PostHog capture was called
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Check that all token types are present (should use final chunk's usage)
@@ -963,9 +963,9 @@ def test_web_search_grounding(mock_client, mock_google_genai_client):
     )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is detected (binary for grounding)
@@ -1034,9 +1034,9 @@ def test_streaming_with_web_search(mock_client, mock_google_genai_client):
 
     chunks = list(response)
     assert len(chunks) == 2
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is detected (binary for grounding)
@@ -1098,9 +1098,9 @@ def test_empty_grounding_metadata_no_web_search(mock_client, mock_google_genai_c
     )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is 0 (not present in properties when 0)
@@ -1161,9 +1161,9 @@ def test_empty_array_grounding_metadata_no_web_search(
     )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Verify web search count is 0 (not present in properties when 0)
@@ -1203,9 +1203,9 @@ def test_falsy_candidates_no_web_search(
     )
 
     assert response == mock_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Should not crash and web search count should not be present
@@ -1257,9 +1257,9 @@ def test_embed_content_basic(
     )
 
     assert response == mock_embed_content_response
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -1293,7 +1293,7 @@ def test_embed_content_with_token_counts(
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input_tokens"] == 13  # 5 + 8
 
 
@@ -1311,7 +1311,7 @@ def test_embed_content_without_token_counts(
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     # No embedding carried a token count, so the property is omitted, not 0.
     assert "$ai_input_tokens" not in props
 
@@ -1334,7 +1334,7 @@ def test_streaming_without_usage_omits_token_counts(
     )
     list(response)
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert "$ai_input_tokens" not in props
     assert "$ai_output_tokens" not in props
 
@@ -1354,7 +1354,7 @@ def test_embed_content_privacy_mode(
         posthog_privacy_mode=True,
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input"] is None
 
 
@@ -1371,7 +1371,7 @@ def test_embed_content_no_distinct_id(
         contents="Hello",
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     # Should fall back to trace_id as distinct_id
@@ -1400,7 +1400,7 @@ def test_embed_content_default_params(
         posthog_properties={"extra": "prop"},
     )
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "default-id"
@@ -1422,8 +1422,8 @@ def test_embed_content_error_handling(mock_client, mock_google_genai_client):
         )
 
     # Event should still be captured
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "API error"
     assert props["$ai_http_status"] == 0
@@ -1467,8 +1467,8 @@ def test_embed_content_integration(mock_client):
     assert all(isinstance(v, float) for v in response.embeddings[0].values)
 
     # Verify event captured
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert call_args["event"] == "$ai_embedding"
     assert props["$ai_provider"] == "gemini"
@@ -1531,7 +1531,7 @@ def test_stop_reason_captured(
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] == finish_reason_name
 
 
@@ -1580,8 +1580,8 @@ def test_stop_reason_streaming(mock_client, mock_google_genai_client):
 
     list(response)
 
-    assert mock_client.capture.call_count == 1
-    props = mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] == "STOP"
 
 
@@ -1597,26 +1597,8 @@ def test_integration_stop_reason(mock_client):
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] is not None
     assert isinstance(props["$ai_stop_reason"], str)
     assert props["$ai_provider"] == "gemini"
     assert props["$ai_input_tokens"] > 0
-
-
-def test_ai_lane_client_routes_through_capture_ai(
-    mock_client, mock_google_genai_client, mock_gemini_response
-):
-    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
-
-    mock_client.enable_full_ai_capture = True
-    client = Client(api_key="test-key", posthog_client=mock_client)
-    client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=["Tell me a fun fact about hedgehogs"],
-        posthog_distinct_id="test-id",
-    )
-
-    mock_client.capture.assert_not_called()
-    assert mock_client.capture_ai.call_count == 1
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
