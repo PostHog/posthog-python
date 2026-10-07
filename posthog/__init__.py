@@ -52,6 +52,12 @@ from posthog.contexts import (
 from posthog.contexts import (
     get_tags as inner_get_tags,
 )
+from posthog.contexts import (
+    set_context_option as inner_set_context_option,
+)
+from posthog.contexts import (
+    get_context_options as inner_get_context_options,
+)
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
@@ -299,6 +305,43 @@ def get_tags() -> Dict[str, Any]:
     return inner_get_tags()
 
 
+def set_context_option(key: str, value: Any) -> None:
+    """
+    Set a capture option for every event captured within the current context.
+
+    Context options override ``super_options``, and an event's own ``options``
+    override context options.
+
+    Args:
+        key: The option name, such as ``"process_person_profile"``
+        value: The option value, sent as given
+
+    Examples:
+        ```python
+        from posthog import new_context, set_context_option
+        with new_context():
+            set_context_option("process_person_profile", False)
+        ```
+
+    Category:
+        Contexts
+    """
+    return inner_set_context_option(key, value)
+
+
+def get_context_options() -> Dict[str, Any]:
+    """
+    Get all capture options from the current context.
+
+    Returns:
+        Dict of all capture options in the current context
+
+    Category:
+        Contexts
+    """
+    return inner_get_context_options()
+
+
 """Settings.
 
 These module-level settings configure the legacy global PostHog client used by
@@ -340,7 +383,11 @@ Attributes:
     feature_flags_request_max_retries: Number of retries for feature flag
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
-    super_properties: Properties merged into every captured event.
+    super_properties: Properties for every captured event. Context tags and
+        an event's own properties override them.
+    super_options: Capture options for every captured event, such as
+        ``{"cookieless_mode": True}``. Context options and an event's own
+        ``options`` override them.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
@@ -414,6 +461,7 @@ is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
+super_options = None  # type: Optional[Dict]
 metrics = None  # type: Optional[Dict]
 traces = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
@@ -1406,6 +1454,7 @@ def setup() -> Client:
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
+            super_options=super_options,
             metrics=metrics,
             traces=traces,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)

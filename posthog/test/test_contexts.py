@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 import posthog
 from posthog.client import Client
 from posthog.contexts import (
+    get_context_options,
     get_tags,
+    set_context_option,
     new_context,
     scoped,
     tag,
@@ -383,6 +385,26 @@ class TestContexts(unittest.TestCase):
                 {"parent-tag": "parent-value"},
             ),
         )
+
+    def test_context_options_inherit_like_tags(self):
+        with new_context(fresh=True):
+            set_context_option("cookieless_mode", True)
+            set_context_option("process_person_profile", False)
+
+            with new_context(fresh=False):
+                set_context_option("process_person_profile", True)
+                assert get_context_options() == {
+                    "cookieless_mode": True,
+                    "process_person_profile": True,
+                }
+
+            with new_context(fresh=True):
+                assert get_context_options() == {}
+
+            assert get_context_options() == {
+                "cookieless_mode": True,
+                "process_person_profile": False,
+            }
 
     def test_child_tags_override_parent_tags_in_non_fresh_context(self):
         with new_context(fresh=True):

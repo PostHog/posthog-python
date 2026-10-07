@@ -43,6 +43,7 @@ from .client import (
     Client as _SyncClient,
     _metadata_has_experiment,
     _parse_flag_payload,
+    _personless_options,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -55,6 +56,7 @@ from .contexts import (
     get_code_variables_mask_url_credentials_context,
     get_context_device_id as _get_context_device_id,
     get_context_distinct_id as _get_context_distinct_id,
+    get_context_options as _get_context_options,
     get_context_session_id as _get_context_session_id,
 )
 from .exception_utils import (
@@ -120,6 +122,7 @@ class AsyncClient:
         is_server: bool = True,
         historical_migration: bool = False,
         super_properties: Optional[dict[str, Any]] = None,
+        super_options: Optional[dict[str, Any]] = None,
         before_send=None,
         log_captured_exceptions: bool = False,
         project_root: Optional[str] = None,
@@ -154,6 +157,7 @@ class AsyncClient:
         self.is_server = is_server
         self.historical_migration = historical_migration
         self.super_properties = super_properties
+        self.super_options = super_options
         self._release_id = _resolve_release_id()
         self.capture_compression = _resolve_capture_compression(capture_compression)
         self.capture_trace_context = capture_trace_context
@@ -397,6 +401,7 @@ class AsyncClient:
         msg: dict[str, Any],
         disable_geoip: Optional[bool],
         property_allowlist=None,
+        derived_options: Optional[dict[str, Any]] = None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if self.disabled or not self._accepting:
             return None, None
@@ -423,7 +428,14 @@ class AsyncClient:
         if disable_geoip:
             properties["$geoip_disable"] = True
         if self.super_properties:
-            msg["properties"] = {**properties, **self.super_properties}
+            msg["properties"] = {**self.super_properties, **properties}
+        # Each layer overrides the one before it: values the SDK derives, such
+        # as personless, then super options, then context and event options.
+        msg["options"] = {
+            **(derived_options or {}),
+            **_event_options(self.super_options),
+            **(msg.get("options") or {}),
+        }
         if self._release_id is not None:
             msg["properties"].setdefault("$release_id", self._release_id)
         if self.is_server:
@@ -460,7 +472,7 @@ class AsyncClient:
 
     def _build_capture_event(
         self, event: str, kwargs: OptionalCaptureArgs
-    ) -> tuple[dict[str, Any], Optional[bool], Any]:
+    ) -> tuple[dict[str, Any], Optional[bool], Any, dict[str, Any]]:
         properties = {**(kwargs.get("properties") or {}), **system_context()}
         if self.capture_trace_context:
             properties = {**_get_current_otel_span_properties(), **properties}
@@ -468,8 +480,6 @@ class AsyncClient:
         assert properties is not None
 
         distinct_id, personless = _get_identity_state(kwargs.get("distinct_id"))
-        if personless and "$process_person_profile" not in properties:
-            properties["$process_person_profile"] = False
         groups = kwargs.get("groups")
         if groups:
             properties["$groups"] = groups
@@ -493,10 +503,14 @@ class AsyncClient:
                 "distinct_id": distinct_id,
                 "event": event,
                 "uuid": kwargs.get("uuid"),
-                "options": _event_options(kwargs.get("options")),
+                "options": {
+                    **_get_context_options(),
+                    **_event_options(kwargs.get("options")),
+                },
             },
             kwargs.get("disable_geoip"),
             kwargs.get("_property_allowlist"),
+            _personless_options(personless),
         )
 
     def capture(
@@ -504,11 +518,11 @@ class AsyncClient:
     ) -> Optional[str]:
         """Queue an event without blocking for network delivery."""
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, derived_options = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, derived_options
             )
             if prepared is None or sent_uuid is None:
                 return None
@@ -551,11 +565,11 @@ class AsyncClient:
         self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, derived_options = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, derived_options
             )
             if prepared is None or sent_uuid is None:
                 return None
@@ -612,7 +626,10 @@ class AsyncClient:
             property_key: properties,
             "event": event,
             "uuid": kwargs.get("uuid"),
-            "options": _event_options(kwargs.get("options")),
+            "options": {
+                **_get_context_options(),
+                **_event_options(kwargs.get("options")),
+            },
         }
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
