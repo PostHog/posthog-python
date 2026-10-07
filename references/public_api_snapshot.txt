@@ -909,6 +909,7 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INPUT_ALIASES_USED =
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INPUT_KEYS = '$mcp_input_keys'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT = '$mcp_intent'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTENT_SOURCE = '$mcp_intent_source'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.INTERFACE = '$mcp_interface'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.IS_ERROR = '$mcp_is_error'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.LISTED_TOOL_NAMES = '$mcp_listed_tool_names'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.LLM_MODEL = '$mcp_llm_model'
