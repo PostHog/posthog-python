@@ -13,6 +13,7 @@ from unittest import mock
 
 from parameterized import parameterized
 
+from posthog.capture_event import _to_v1_event
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
@@ -152,6 +153,34 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
         properties = self._flag_called_properties(captured)
         self.assertEqual(properties["$groups"], {"organization": "org-1"})
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+
+    @mock.patch("posthog.client.flags")
+    def test_gated_event_keeps_option_sources(self, patch_flags):
+        patch_flags.return_value = _flags_response(has_experiment=False, gate=True)
+        client, captured = self._make_client()
+        client.super_properties = {
+            "$cookieless_mode": True,
+            "$ignore_sent_at": True,
+            "$product_tour_id": "tour-1",
+            "$window_id": "w-1",
+            "app_version": "1.2.3",
+        }
+
+        client.get_feature_flag_result("person-flag", "some-distinct-id")
+
+        event = _to_v1_event(
+            next(m for m in captured if m["event"] == "$feature_flag_called")
+        )
+        self.assertEqual(
+            event["options"],
+            {
+                "cookieless_mode": True,
+                "disable_skew_correction": True,
+                "product_tour_id": "tour-1",
+            },
+        )
+        self.assertEqual(event["window_id"], "w-1")
+        self.assertNotIn("app_version", event["properties"])
 
     @mock.patch("posthog.client.flags")
     def test_remote_evaluation_uses_this_responses_gate_not_a_concurrent_update(

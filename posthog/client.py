@@ -34,6 +34,7 @@ from posthog.capture_compression import (
     _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
+from posthog.capture_event import _canonical_event_uuid, _event_options
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
@@ -267,22 +268,12 @@ def get_identity_state(passed) -> tuple[str, bool]:
 
 
 def _stringify_event_uuid(value) -> str:
-    if isinstance(value, UUID):
-        return str(value)
-
-    stringified = stringify_id(value)
-    if not stringified:
+    canonical = _canonical_event_uuid(value)
+    if canonical is None:
         raise ValueError(
             f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
         )
-
-    try:
-        # Canonical form, because capture keys per-event results by it.
-        return str(UUID(stringified))
-    except ValueError:
-        raise ValueError(
-            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
-        ) from None
+    return canonical
 
 
 def add_context_tags(properties):
@@ -352,8 +343,14 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         # Correctness-required
         "$groups",
         "$process_person_profile",
+        # Option sources: legacy properties move into options after this
+        # allowlist runs, so dropping them would drop the option.
+        "$cookieless_mode",
+        "$ignore_sent_at",
+        "$product_tour_id",
         # Linkage / SDK identity
         "$session_id",
+        "$window_id",
         "$lib",
         "$lib_version",
         "$is_server",
@@ -1636,6 +1633,10 @@ class Client(object):
                 evaluate_flags(). When truthy, evaluates flags during capture and
                 attaches them to the event.
             disable_geoip: Whether to disable GeoIP for this event.
+            options: Capture options for this event, such as
+                ``{"process_person_profile": False}``. Sent as given, for
+                PostHog to validate. An option wins over its legacy ``$``
+                property, such as ``$process_person_profile``.
 
         Examples:
             ```python
@@ -1710,6 +1711,7 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
+        options = _event_options(kwargs.get("options", None))
         # Internal, set for minimal $feature_flag_called events: a strict allowlist
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
@@ -1733,6 +1735,7 @@ class Client(object):
             "distinct_id": distinct_id,
             "event": event,
             "uuid": uuid,
+            "options": options,
         }
 
         if groups:
@@ -1918,6 +1921,7 @@ class Client(object):
             "$set": properties,
             "event": "$set",
             "uuid": uuid,
+            "options": _event_options(kwargs.get("options", None)),
         }
 
         return self._enqueue(msg, disable_geoip)
@@ -1967,6 +1971,7 @@ class Client(object):
             "$set_once": properties,
             "event": "$set_once",
             "uuid": uuid,
+            "options": _event_options(kwargs.get("options", None)),
         }
 
         return self._enqueue(msg, disable_geoip)
@@ -1981,6 +1986,7 @@ class Client(object):
         uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Identify a group and set its properties.
@@ -1998,6 +2004,7 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             distinct_id: The distinct ID of the user performing the action.
+            options: Capture options for this event, sent as given.
 
         Examples:
             ```python
@@ -2039,6 +2046,7 @@ class Client(object):
             "distinct_id": distinct_id,
             "timestamp": timestamp,
             "uuid": uuid,
+            "options": _event_options(options),
         }
 
         # NOTE - group_identify doesn't generally use context properties - should it?
@@ -2055,6 +2063,7 @@ class Client(object):
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
         disable_geoip: Optional[bool] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Create an alias between two distinct IDs.
@@ -2071,6 +2080,7 @@ class Client(object):
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
+            options: Capture options for this event, sent as given.
 
         Examples:
             ```python
@@ -2107,6 +2117,7 @@ class Client(object):
             "event": "$create_alias",
             "distinct_id": previous_id,
             "uuid": uuid,
+            "options": _event_options(options),
         }
 
         if get_context_session_id():
@@ -2251,6 +2262,7 @@ class Client(object):
                 flags=flags_snapshot,
                 send_feature_flags=send_feature_flags,
                 disable_geoip=disable_geoip,
+                options=kwargs.get("options", None),
             )
 
             # Mark the exception as captured to prevent duplicate captures
