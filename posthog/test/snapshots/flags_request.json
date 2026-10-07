@@ -28,5 +28,5 @@
     "User-Agent": "posthog-python/<SDK_VERSION>"
   },
   "timeout": 3,
-  "url": "https://example.posthog.test/flags/?v=2"
+  "url": "https://example.posthog.test/flags/?v=3"
 }

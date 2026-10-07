@@ -4635,6 +4635,7 @@ class Client(object):
                         ),
                         locally_evaluated=False,
                         has_experiment=_metadata_has_experiment(detail.metadata),
+                        details=detail,
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
