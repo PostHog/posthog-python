@@ -59,7 +59,9 @@ def _uuid7() -> UUID:
     SDK-generated event uuids sort the same way.
     """
     unix_ms = time.time_ns() // 1_000_000
-    value = ((unix_ms & ((1 << 48) - 1)) << 80) | int.from_bytes(os.urandom(10), "big")
+    # Python 3.10 requires the byte order; from 3.11 "big" is the default.
+    random_bits = int.from_bytes(os.urandom(10), "big")  # pragma: no mutate
+    value = ((unix_ms & ((1 << 48) - 1)) << 80) | random_bits
     value = (value & ~(0xF << 76)) | (0x7 << 76)
     value = (value & ~(0x3 << 62)) | (0x2 << 62)
     return UUID(int=value)
