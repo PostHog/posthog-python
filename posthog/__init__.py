@@ -638,6 +638,7 @@ def group_identify(
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
     distinct_id: Optional[ID_TYPES] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Set properties on a group.
@@ -653,6 +654,7 @@ def group_identify(
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
         distinct_id: Optional distinct ID of the user performing the action
+        options: Optional capture options for the event, sent as given
 
     Examples:
         ```python
@@ -676,6 +678,7 @@ def group_identify(
         uuid=uuid,
         disable_geoip=disable_geoip,
         distinct_id=distinct_id,
+        options=options,
     )
 
 
@@ -685,6 +688,7 @@ def alias(
     timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Associate user behaviour before and after they e.g. register, login, or perform some other identifying action.
@@ -696,6 +700,7 @@ def alias(
             datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
+        options: Optional capture options for the event, sent as given
 
     Details:
         To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after they e.g. register, login, or perform some other identifying action.
@@ -717,6 +722,7 @@ def alias(
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
+        options=options,
     )
 
 
@@ -730,7 +736,7 @@ def capture_exception(
     Args:
         exception: The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
         **kwargs: Optional capture arguments including distinct_id, properties,
-            timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.
+            timestamp, uuid, groups, flags, send_feature_flags, disable_geoip, and options.
 
     Details:
         Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog. This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception, if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context boundary (e.g. by existing a `with posthog.new_context():` block already). If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised and the point at which it is captured (the "traceback"). If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace captured will be the full stack trace at the moment the exception was captured. Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently, which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason. `capture_exception` takes the same set of optional arguments as `capture`.

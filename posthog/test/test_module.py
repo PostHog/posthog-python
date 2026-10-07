@@ -169,6 +169,7 @@ class TestModuleLevelWrappers(unittest.TestCase):
             "company_123",
             {"name": "Awesome Inc."},
             distinct_id="user_456",
+            options={"cookieless_mode": True},
         )
         self.mock_client.group_identify.assert_called_once_with(
             group_type="company",
@@ -178,6 +179,7 @@ class TestModuleLevelWrappers(unittest.TestCase):
             uuid=None,
             disable_geoip=None,
             distinct_id="user_456",
+            options={"cookieless_mode": True},
         )
 
     def test_group_identify_distinct_id_defaults_to_none(self):
