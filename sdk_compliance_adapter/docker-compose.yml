@@ -6,6 +6,9 @@ services:
     build:
       context: ..
       dockerfile: sdk_compliance_adapter/Dockerfile
+    environment:
+      # One of gzip, deflate or zstd; selects the encoding_<codec> test.
+      COMPRESSION: ${COMPRESSION:-gzip}
     ports:
       - "8080:8080"
     networks:
@@ -13,7 +16,7 @@ services:
 
   # Test harness
   test-harness:
-    image: ghcr.io/posthog/sdk-test-harness:1.1.1
+    image: ghcr.io/posthog/sdk-test-harness:1.13.1
     command: ["run", "--adapter-url", "http://sdk-adapter:8080", "--mock-url", "http://test-harness:8081"]
     networks:
       - test-network
