@@ -36,6 +36,7 @@ class Session:
         headers: dict[str, str],
         timeout: float,
         stream: bool = ...,
+        allow_redirects: bool = ...,
     ) -> Response: ...
     def get(
         self,
