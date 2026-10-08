@@ -1,3 +1,4 @@
+import inspect
 import logging
 
 import pytest
@@ -53,7 +54,10 @@ async def _async_wire_events(call, before_send=None, **config) -> list[dict]:
         async with AsyncPosthog(
             "test-key", before_send=before_send, **config
         ) as client:
-            assert call(client) is not None
+            result = call(client)
+            if inspect.isawaitable(result):
+                result = await result
+            assert result is not None
             await client.flush(timeout_seconds=1)
     return [_to_v1_event(msg) for batch in batches for msg in batch]
 
@@ -125,6 +129,7 @@ LAYER_CASES = {
     "context_beats_super": ({PP: True}, {PP: False}, {}, "u", {PP: False}),
     "event_beats_context": ({}, {PP: False}, {PP: True}, "u", {PP: True}),
     "event_beats_all": ({PP: False}, {PP: False}, {PP: True}, None, {PP: True}),
+    "null_event_option_is_filled": ({PP: True}, {}, {PP: None}, "u", {PP: True}),
     "layers_merge_by_key": (
         {"cookieless_mode": True},
         {"product_tour_id": "t"},
@@ -236,3 +241,96 @@ async def test_async_event_and_context_properties_beat_super_properties():
         properties["only_super"],
         properties["only_event"],
     ) == ("event", "context", 1, 1)
+
+
+DEFAULTS_CONFIG = {
+    "super_properties": {"shared": "super", "only_super": 1},
+    "super_options": {"cookieless_mode": True},
+}
+
+
+def _recording_hook(seen):
+    def hook(msg):
+        seen.append((dict(msg["properties"]), dict(msg["options"])))
+        properties = {**msg["properties"], "shared": "hook"}
+        return {**msg, "properties": properties, "options": {"cookieless_mode": False}}
+
+    return hook
+
+
+def _set_context_values():
+    tag("from_context", "context")
+    set_context_option("product_tour_id", "context-tour")
+
+
+def _context_capture(method):
+    def call(client):
+        if method == "capture":
+            with new_context(fresh=True):
+                _set_context_values()
+                return client.capture("e", distinct_id="u")
+
+        async def immediate():
+            with new_context(fresh=True):
+                _set_context_values()
+                return await client.capture_immediate("e", distinct_id="u")
+
+        return immediate()
+
+    return call
+
+
+def _assert_defaults_fill_after_hook(seen, events):
+    hook_properties, hook_options = seen[0]
+    assert not {"shared", "only_super", "from_context"} & hook_properties.keys()
+    assert hook_options == {}
+    properties = events[0]["properties"]
+    assert (
+        properties["shared"],
+        properties["only_super"],
+        properties["from_context"],
+    ) == ("hook", 1, "context")
+    assert events[0]["options"] == {
+        "cookieless_mode": False,
+        "product_tour_id": "context-tour",
+    }
+
+
+def test_sync_defaults_fill_after_before_send():
+    seen: list = []
+    events = _sync_wire_events(
+        _context_capture("capture"),
+        before_send=_recording_hook(seen),
+        **DEFAULTS_CONFIG,
+    )
+    _assert_defaults_fill_after_hook(seen, events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["capture", "capture_immediate"])
+async def test_async_defaults_fill_after_before_send(method):
+    seen: list = []
+    events = await _async_wire_events(
+        _context_capture(method), before_send=_recording_hook(seen), **DEFAULTS_CONFIG
+    )
+    _assert_defaults_fill_after_hook(seen, events)
+
+
+def test_late_options_replace_and_remove_legacy_properties():
+    def call(client):
+        with new_context(fresh=True):
+            set_context_option("product_tour_id", "context-tour")
+            return client.capture(
+                "e", distinct_id="u", properties={"$product_tour_id": "event-tour"}
+            )
+
+    events = _sync_wire_events(
+        call,
+        super_properties={"$cookieless_mode": False},
+        super_options={"cookieless_mode": True},
+    )
+    assert events[0]["options"] == {
+        "cookieless_mode": True,
+        "product_tour_id": "context-tour",
+    }
+    assert not {"$cookieless_mode", "$product_tour_id"} & events[0]["properties"].keys()

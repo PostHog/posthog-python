@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from ._async_request import async_send_v1_batch
 from .capture_compression import CaptureCompression
+from .capture_event import _EventDefaults
 from .capture_send import _CAPTURE_V1_PATH, _capture_loss_message
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
 from .request import DatetimeSerializer
@@ -37,6 +38,7 @@ async def _run_outside_processing_event(awaitable):
 class _QueuedEvent:
     event: dict[str, Any]
     context: contextvars.Context
+    defaults: Optional[_EventDefaults] = None
 
 
 async def _invoke_callback(callback, *args):
@@ -92,7 +94,10 @@ class _AsyncConsumer:
         *,
         host: Optional[str],
         on_error: Optional[Callable[[Exception, list[dict[str, Any]]], Any]],
-        process_event: Callable[[dict[str, Any]], Awaitable[Optional[dict[str, Any]]]],
+        process_event: Callable[
+            [dict[str, Any], Optional[_EventDefaults]],
+            Awaitable[Optional[dict[str, Any]]],
+        ],
         flush_at: int,
         flush_interval: float,
         retries: int,
@@ -158,11 +163,11 @@ class _AsyncConsumer:
         return None, False
 
     async def _process_queued_event(
-        self, event: dict[str, Any]
+        self, queued: _QueuedEvent
     ) -> Optional[dict[str, Any]]:
         token = _PROCESSING_EVENT.set(True)
         try:
-            return await self.process_event(event)
+            return await self.process_event(queued.event, queued.defaults)
         finally:
             _PROCESSING_EVENT.reset(token)
 
@@ -207,7 +212,7 @@ class _AsyncConsumer:
 
             try:
                 process_task = queued.context.run(
-                    asyncio.create_task, self._process_queued_event(queued.event)
+                    asyncio.create_task, self._process_queued_event(queued)
                 )
                 item = await process_task
             except Exception as error:
