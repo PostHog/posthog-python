@@ -18,7 +18,11 @@ if not settings.configured:
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 
-from posthog.contexts import new_context, tag
+from posthog.contexts import (
+    get_tags as get_context_properties,
+    new_context,
+    tag as set_context_property,
+)
 from posthog.integrations.drf import create_exception_handler, exception_handler
 
 
@@ -160,14 +164,12 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
 
         client.capture_exception.assert_not_called()
 
-    def test_capture_runs_inside_existing_django_request_context(self):
-        observed_context = []
+    def test_capture_includes_existing_django_request_properties(self):
+        observed_properties = []
         client = Mock()
 
         def capture_exception(*args, **kwargs):
-            from posthog.contexts import get_tags
-
-            observed_context.append(get_tags())
+            observed_properties.append(get_context_properties())
 
         client.capture_exception.side_effect = capture_exception
         handler = create_exception_handler(
@@ -175,10 +177,10 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
         )
 
         with new_context():
-            tag("$request_path", "/api/widgets")
+            set_context_property("$request_path", "/api/widgets")
             handler(RuntimeError("failed"), {})
 
-        self.assertEqual(observed_context, [{"$request_path": "/api/widgets"}])
+        self.assertEqual(observed_properties, [{"$request_path": "/api/widgets"}])
 
     def test_capture_failure_does_not_change_response(self):
         client = Mock()
