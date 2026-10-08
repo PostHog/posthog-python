@@ -1151,7 +1151,8 @@ class Client(object):
             or metrics_config.get("service_name"),
             resource_attributes=resource_attributes,
             is_enabled=lambda: (client := weak_self()) is not None
-            and not client.disabled,
+            and not client.disabled
+            and client.send,
             export_interval_seconds=metrics_config.get("flush_interval"),
         )
 
