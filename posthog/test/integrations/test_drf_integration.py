@@ -3,6 +3,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import django
+import posthog
 from django.conf import settings
 from django.test import override_settings
 
@@ -18,6 +19,7 @@ if not settings.configured:
 from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.response import Response
 
+from posthog.client import Client
 from posthog.contexts import (
     get_tags as get_context_properties,
     new_context,
@@ -152,6 +154,83 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         client.capture_exception.assert_called_once()
 
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=None)
+    def test_none_django_setting_inherits_explicit_client_default(self):
+        for enabled in (False, True):
+            with self.subTest(enable_exception_autocapture=enabled):
+                client = Mock(spec=Client)
+                client.enable_exception_autocapture = enabled
+                handler = create_exception_handler(client=client)
+
+                response = handler(ServiceUnavailable(), {})
+
+                self.assertEqual(response.status_code, 503)
+                if enabled:
+                    client.capture_exception.assert_called_once()
+                else:
+                    client.capture_exception.assert_not_called()
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=None)
+    def test_none_django_setting_inherits_configured_client_default(self):
+        drf_client = Mock(spec=Client)
+        drf_client.enable_exception_autocapture = False
+        middleware_client = Mock(spec=Client)
+        middleware_client.enable_exception_autocapture = True
+
+        with override_settings(
+            POSTHOG_DRF_CLIENT=drf_client,
+            POSTHOG_MW_CLIENT=middleware_client,
+        ):
+            response = exception_handler(ServiceUnavailable(), {})
+
+        self.assertEqual(response.status_code, 503)
+        drf_client.capture_exception.assert_not_called()
+        middleware_client.capture_exception.assert_not_called()
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=None)
+    def test_none_django_setting_inherits_global_client_default(self):
+        original_default_client = posthog.default_client
+
+        try:
+            for enabled in (False, True):
+                with self.subTest(enable_exception_autocapture=enabled):
+                    global_client = Mock(spec=Client)
+                    global_client.enable_exception_autocapture = enabled
+                    posthog.default_client = global_client
+
+                    with patch("posthog.capture_exception") as capture_exception:
+                        response = exception_handler(ServiceUnavailable(), {})
+
+                    self.assertEqual(response.status_code, 503)
+                    if enabled:
+                        capture_exception.assert_called_once()
+                    else:
+                        capture_exception.assert_not_called()
+        finally:
+            posthog.default_client = original_default_client
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=None)
+    def test_explicit_capture_setting_overrides_client_default(self):
+        client = Mock(spec=Client)
+        client.enable_exception_autocapture = False
+        handler = create_exception_handler(client=client, capture_exceptions=True)
+
+        response = handler(ServiceUnavailable(), {})
+
+        self.assertEqual(response.status_code, 503)
+        client.capture_exception.assert_called_once()
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS="invalid")
+    def test_malformed_django_capture_setting_preserves_legacy_default(self):
+        client = Mock(spec=Client)
+        client.enable_exception_autocapture = False
+        handler = create_exception_handler(client=client)
+
+        response = handler(ServiceUnavailable(), {})
+
+        self.assertEqual(response.status_code, 503)
+        client.capture_exception.assert_called_once()
+
     @override_settings(POSTHOG_MW_REQUEST_FILTER=lambda request: False)
     def test_django_middleware_request_filter_suppresses_capture(self):
         client = Mock()
@@ -207,6 +286,26 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
 
         handler(exception, {})
 
+        client.capture_exception.assert_not_called()
+
+    def test_capture_exclusion_preserves_existing_django_context(self):
+        observed_properties = []
+        client = Mock()
+
+        def delegate(exc, context):
+            observed_properties.append(get_context_properties())
+            return Response(status=503)
+
+        handler = create_exception_handler(
+            delegate, client=client, capture_exceptions=False
+        )
+
+        with new_context():
+            set_context_property("$request_path", "/api/widgets")
+            response = handler(RuntimeError("excluded"), {})
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(observed_properties, [{"$request_path": "/api/widgets"}])
         client.capture_exception.assert_not_called()
 
     def test_capture_includes_existing_django_request_properties(self):

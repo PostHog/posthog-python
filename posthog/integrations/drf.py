@@ -9,9 +9,17 @@ handled server errors while leaving DRF's response behavior unchanged::
         "EXCEPTION_HANDLER": "posthog.integrations.drf.exception_handler",
     }
 
-By default, only responses with a 5xx status are captured. Expected 4xx API
-errors are ignored. Set ``POSTHOG_MW_CAPTURE_EXCEPTIONS = False`` to keep the
-Django request context without capturing Django or DRF exceptions.
+This is an error-only handler: it captures handled response errors but does
+not create the request context. Keep :class:`PosthogContextMiddleware` enabled
+to attach Django request properties and capture exceptions that DRF re-raises.
+By default, only responses with a 5xx status are captured; expected 4xx API
+errors are ignored.
+
+``capture_exceptions`` follows the Django middleware setting. An explicit
+factory argument wins over ``POSTHOG_MW_CAPTURE_EXCEPTIONS``. A boolean setting
+wins next. Setting it explicitly to ``None`` inherits the effective PostHog
+client's ``enable_exception_autocapture`` option, while an omitted or malformed
+setting preserves the legacy Django default of ``True``.
 
 Projects that already have a custom DRF exception handler can wrap it in an
 application module::
@@ -30,6 +38,7 @@ import logging
 from typing import Any, Callable, Mapping, Optional, cast
 
 from ..client import Client
+from ..contexts import _default_capture_exceptions
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
@@ -69,19 +78,32 @@ def _configured_client(client: Optional[Client]) -> Optional[Client]:
     return None
 
 
-def _capture_exceptions_enabled(configured: Optional[bool]) -> bool:
-    """Resolve explicit configuration before the shared Django middleware setting."""
+def _capture_exceptions_enabled(
+    configured: Optional[bool], client: Optional[Client]
+) -> bool:
+    """Resolve explicit, Django, and client exception-capture configuration."""
     if configured is not None:
         return configured
 
     try:
         from django.conf import settings
 
-        django_setting = getattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS", None)
+        if not hasattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS"):
+            return True
+        django_setting = settings.POSTHOG_MW_CAPTURE_EXCEPTIONS
     except Exception:
         return True
 
-    return django_setting if isinstance(django_setting, bool) else True
+    if isinstance(django_setting, bool):
+        return django_setting
+    if django_setting is not None:
+        return True
+
+    try:
+        client_default = _default_capture_exceptions(client)
+    except Exception:
+        return True
+    return client_default if isinstance(client_default, bool) else True
 
 
 def _passes_django_request_filter(context: Mapping[str, Any]) -> bool:
@@ -107,9 +129,8 @@ def _capture_exception(client: Optional[Client], exc: Exception) -> None:
     if _exception_is_already_captured(exc):
         return
 
-    resolved_client = _configured_client(client)
-    if resolved_client is not None:
-        _capture_exception_with_metadata(resolved_client, exc, _CAPTURE_METADATA)
+    if client is not None:
+        _capture_exception_with_metadata(client, exc, _CAPTURE_METADATA)
     else:
         from .. import capture_exception
 
@@ -131,12 +152,14 @@ def create_exception_handler(
     Args:
         handler: Handler to delegate to. Defaults to DRF's standard exception
             handler. Its return value and raised exceptions are preserved.
-        client: Optional PostHog client. When omitted, ``POSTHOG_DRF_CLIENT`` or
-            ``POSTHOG_MW_CLIENT`` is used when configured, then the global
-            PostHog client.
-        capture_exceptions: Whether to capture handled DRF exceptions. When
-            omitted, inherits a boolean ``POSTHOG_MW_CAPTURE_EXCEPTIONS`` setting
-            and otherwise defaults to ``True``. An explicit value takes precedence.
+        client: Optional PostHog client. Client precedence is this argument,
+            the legacy ``POSTHOG_DRF_CLIENT`` alias, ``POSTHOG_MW_CLIENT``, then
+            the global PostHog client.
+        capture_exceptions: Whether to capture handled DRF exceptions. An
+            explicit value takes precedence over ``POSTHOG_MW_CAPTURE_EXCEPTIONS``.
+            A boolean setting is used directly; an explicit ``None`` setting
+            inherits the effective client's ``enable_exception_autocapture``.
+            An omitted or malformed setting preserves the legacy ``True`` default.
         capture_4xx: Also capture handled 4xx responses. Disabled by default to
             avoid reporting expected API errors.
         exception_filter: Optional final filter called with ``(exception,
@@ -156,7 +179,8 @@ def create_exception_handler(
         response = delegate(exc, context)
         if response is None:
             return None
-        if not _capture_exceptions_enabled(capture_exceptions):
+        resolved_client = _configured_client(client)
+        if not _capture_exceptions_enabled(capture_exceptions, resolved_client):
             return response
 
         try:
@@ -169,7 +193,7 @@ def create_exception_handler(
             if should_capture and exception_filter is not None:
                 should_capture = bool(exception_filter(exc, response, context))
             if should_capture:
-                _capture_exception(client, exc)
+                _capture_exception(resolved_client, exc)
         except Exception:
             # Error tracking must never alter DRF's exception response.
             _logger.exception("Failed to capture Django REST Framework exception")
