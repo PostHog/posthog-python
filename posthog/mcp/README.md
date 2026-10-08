@@ -34,7 +34,6 @@ but anyone wrapping a server already has it.
 MCP analytics events report `$lib: "posthog-python"` and the installed `posthog` package version in `$lib_version`, like every other event the client sends.
 PostHog sets both from the client's `PostHog-Sdk-Info` request header, so `instrument()` and `PostHogMCP` do not relabel the client.
 Filter MCP traffic by its `$mcp_*` events and properties instead.
-Use a client dedicated to MCP analytics if the application also captures unrelated events.
 
 ## Defaults and opt-outs
 
