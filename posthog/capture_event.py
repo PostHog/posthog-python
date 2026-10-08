@@ -40,6 +40,9 @@ _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
 # Top-level legacy keys relocated into properties (v1 has no top-level form).
 _RELOCATE_TO_PROPERTIES = ("$set", "$set_once")
 
+# Properties that defaults fill one level deep when both values are dicts.
+_NESTED_FILL_PROPERTIES = frozenset({"$set", "$set_once", "$groups", "$group_set"})
+
 # Properties dropped from v1 events (server injects them from PostHog-Sdk-Info).
 _STRIP_FROM_PROPERTIES = ("$lib", "$lib_version")
 
@@ -92,8 +95,8 @@ def _event_options(value: Any) -> dict[str, Any]:
 class _EventDefaults:
     """Context, global and SDK-derived values for one event, highest layer first.
 
-    They fill in after ``before_send``, so the hook never sees them, and the
-    event's own values and the hook's changes always win.
+    They fill in before ``before_send``, so the hook sees them and can change
+    or remove them. The event's own values win over every default.
     """
 
     property_layers: tuple[Mapping[str, Any], ...] = ()
@@ -132,7 +135,9 @@ def _fill_event_defaults(
     """Fill the keys an event left unset from ``defaults``, layer by layer.
 
     A property is unset only when its key is missing. An option is unset when
-    it is missing or ``None``, the same rule hoisting uses.
+    it is missing or ``None``, the same rule hoisting uses. ``$set``,
+    ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep when the
+    event's value and the default are both dicts.
     """
     if defaults is None:
         return
@@ -143,9 +148,18 @@ def _fill_event_defaults(
         msg["properties"] = properties
     for property_layer in defaults.property_layers:
         for key, value in property_layer.items():
-            if key in properties or (allowlist is not None and key not in allowlist):
+            if allowlist is not None and key not in allowlist:
                 continue
-            properties[key] = _clean(value)
+            if key not in properties:
+                properties[key] = _clean(value)
+                continue
+            existing = properties[key]
+            if (
+                key in _NESTED_FILL_PROPERTIES
+                and isinstance(existing, dict)
+                and isinstance(value, Mapping)
+            ):
+                properties[key] = {**_clean(dict(value)), **existing}
     options = _event_options(msg.get("options"))
     for option_layer in defaults.option_layers:
         for key, value in option_layer.items():
@@ -177,16 +191,16 @@ def _to_v1_event(msg: dict) -> dict:
     properties = dict(msg.get("properties") or {})
 
     # Relocate top-level $set/$set_once into properties; v1 has no top-level
-    # form. On the unusual collision where properties already carries the key,
-    # the properties value wins.
+    # form. The top-level value comes from the set() or set_once() call, so it
+    # wins key by key over a $set in properties, as ingestion merges them.
     for key in _RELOCATE_TO_PROPERTIES:
         top_val = msg.get(key)
         if top_val is None:
             continue
         existing = properties.get(key)
         if isinstance(top_val, dict) and isinstance(existing, dict):
-            properties[key] = {**top_val, **existing}
-        elif key not in properties:
+            properties[key] = {**existing, **top_val}
+        else:
             properties[key] = top_val
 
     for key in _STRIP_FROM_PROPERTIES:

@@ -823,14 +823,15 @@ class Client(object):
                 requests after network, transport, or timeout failures. Defaults
                 to 1. Set to 0 to disable retries.
             super_properties: Properties for every captured event. They fill
-                only keys the event leaves unset, after ``before_send`` runs.
-                An event's own properties, ``before_send`` changes and context
-                tags override them.
+                only keys the event leaves unset, before ``before_send`` runs.
+                ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill
+                one level deep. An event's own properties and context tags
+                override them, and ``before_send`` can change or remove them.
             super_options: Capture options for every captured event, such as
                 ``{"cookieless_mode": True}``. They fill only options the event
-                leaves unset, after ``before_send`` runs. An event's own
-                ``options``, ``before_send`` changes and context options
-                override them. They also win over an event's legacy property
+                leaves unset, before ``before_send`` runs. An event's own
+                ``options`` and context options override them, and
+                ``before_send`` can change them. They also win over an event's legacy property
                 for the same key, such as ``$cookieless_mode``, so pass
                 per-event overrides of that key as ``options``.
             enable_exception_autocapture: Automatically capture uncaught
@@ -847,9 +848,9 @@ class Client(object):
                 through unredacted. ``privacy_mode`` always wins. Defaults to
                 False.
             before_send: Optional callback that can modify or drop events before
-                upload. Return ``None`` to drop an event. It does not see
-                context tags, context options, ``super_properties`` or
-                ``super_options``. They fill in after it runs.
+                upload. Return ``None`` to drop an event. Context tags,
+                context options, ``super_properties`` and ``super_options``
+                fill in before it runs, so it can change or remove them.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -1357,9 +1358,10 @@ class Client(object):
         """
         Set a capture option for every event captured within the current context.
 
-        Context options fill options an event leaves unset, after
-        ``before_send`` runs. They override ``super_options``. An event's own
-        ``options`` and ``before_send`` changes override them.
+        Context options fill options an event leaves unset, before
+        ``before_send`` runs, so the hook sees them. They override
+        ``super_options``. An event's own ``options`` override them, and
+        ``before_send`` can change them.
 
         Args:
             key: The option name, such as ``"process_person_profile"``.
@@ -1703,7 +1705,7 @@ class Client(object):
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
-                ``super_options``, which fill in after ``before_send`` runs.
+                ``super_options``, which fill in before ``before_send`` runs.
                 An option set at any layer wins over its
                 legacy ``$`` property, such as ``$process_person_profile``,
                 set at any layer. A ``None`` option counts as unset.
@@ -2540,10 +2542,22 @@ class Client(object):
         if self.is_server:
             msg["properties"]["$is_server"] = True
 
-        # Applied after every enrichment step (system context, $lib/$lib_version)
-        # and again to the defaults filled in after before_send, so the final
-        # event shape is exactly the allowlist regardless of where a property
-        # came from.
+        _fill_event_defaults(
+            msg,
+            _build_event_defaults(
+                super_properties=self.super_properties,
+                super_options=self.super_options,
+                release_id=self._release_id,
+                context_properties=context_properties,
+                context_options=context_options,
+                derived_options=derived_options,
+                property_allowlist=property_allowlist,
+            ),
+        )
+
+        # Applied after every enrichment step (system context, $lib/$lib_version,
+        # filled defaults), so the final event shape is exactly the allowlist
+        # regardless of where a property came from.
         if property_allowlist is not None:
             msg["properties"] = {
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
@@ -2565,19 +2579,6 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 return None
-
-        _fill_event_defaults(
-            msg,
-            _build_event_defaults(
-                super_properties=self.super_properties,
-                super_options=self.super_options,
-                release_id=self._release_id,
-                context_properties=context_properties,
-                context_options=context_options,
-                derived_options=derived_options,
-                property_allowlist=property_allowlist,
-            ),
-        )
 
         # Re-normalized after before_send, which may have replaced or removed
         # msg["uuid"], so the returned uuid always matches the wire event.

@@ -204,7 +204,6 @@ class TestToV1Event(unittest.TestCase):
         self.assertNotIn(key, event)  # not a top-level v1 field
 
     def test_top_level_set_merges_with_existing_properties_set(self) -> None:
-        # properties wins on key collision.
         msg = _legacy_msg(
             properties={"$set": {"a": "from_props", "b": "props_only"}},
             **{"$set": {"a": "from_top", "c": "top_only"}},
@@ -212,7 +211,7 @@ class TestToV1Event(unittest.TestCase):
         event = _to_v1_event(msg)
         self.assertEqual(
             event["properties"]["$set"],
-            {"a": "from_props", "b": "props_only", "c": "top_only"},
+            {"a": "from_top", "b": "props_only", "c": "top_only"},
         )
 
     def test_groups_left_in_properties(self) -> None:

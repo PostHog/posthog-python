@@ -453,10 +453,8 @@ class AsyncClient:
     async def _process_event(
         self, msg: dict[str, Any], defaults: Optional[_EventDefaults]
     ) -> Optional[dict[str, Any]]:
-        processed = await self._run_before_send(msg)
-        if processed is not None:
-            _fill_event_defaults(processed, defaults)
-        return processed
+        _fill_event_defaults(msg, defaults)
+        return await self._run_before_send(msg)
 
     async def _run_before_send(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
         if self.before_send is None:
