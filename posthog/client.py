@@ -39,6 +39,7 @@ from posthog.capture_event import (
     _canonical_event_uuid,
     _event_options,
     _fill_event_defaults,
+    _merge_groups,
 )
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
@@ -812,10 +813,13 @@ class Client(object):
                 accepts a Project Secret API Key.
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
-                Defaults to True.
+                Defaults to True. Events get ``$geoip_disable`` only when the
+                event, context tags and ``super_properties`` leave it unset.
             is_server: Whether events are emitted from a server-side runtime.
                 Defaults to True; set to False when using the SDK as a client/CLI
-                so the device OS is attributed to the person normally.
+                so the device OS is attributed to the person normally. Events
+                get ``$is_server`` only when the event, context tags and
+                ``super_properties`` leave it unset.
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
@@ -849,8 +853,10 @@ class Client(object):
                 False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event. Context tags,
-                context options, ``super_properties`` and ``super_options``
-                fill in before it runs, so it can change or remove them.
+                context options, ``super_properties``, ``super_options`` and
+                the values the SDK adds, such as ``$is_server``,
+                ``$geoip_disable`` and ``$os``, fill in before it runs, so it
+                can change or remove them.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -1694,14 +1700,17 @@ class Client(object):
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
-            groups: A dictionary of group information.
+            groups: A dictionary of group information. It merges into a
+                ``$groups`` property and wins key by key.
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
                 request.
             send_feature_flags: Deprecated. Prefer flags=... from
                 evaluate_flags(). When truthy, evaluates flags during capture and
                 attaches them to the event.
-            disable_geoip: Whether to disable GeoIP for this event.
+            disable_geoip: Whether to disable GeoIP for this event. A
+                ``$geoip_disable`` property in the event, context tags or
+                ``super_properties`` wins.
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
@@ -1788,7 +1797,7 @@ class Client(object):
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
 
-        properties = {**(properties or {}), **system_context()}
+        properties = dict(properties or {})
 
         if self.capture_trace_context:
             properties = {**_get_current_otel_span_properties(), **properties}
@@ -1807,7 +1816,7 @@ class Client(object):
         }
 
         if groups:
-            properties["$groups"] = groups
+            _merge_groups(properties, groups)
 
         extra_properties: dict[str, Any] = {}
 
@@ -1908,6 +1917,7 @@ class Client(object):
             context_properties=_context_tag_defaults(),
             context_options=_context_get_context_options(),
             derived_options=_personless_options(personless),
+            system_properties=system_context(),
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2499,6 +2509,7 @@ class Client(object):
         context_properties=None,
         context_options=None,
         derived_options=None,
+        system_properties=None,
     ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -2532,15 +2543,7 @@ class Client(object):
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
 
-        if disable_geoip:
-            msg["properties"]["$geoip_disable"] = True
-
         msg["options"] = msg.get("options") or {}
-
-        # Super properties fill only keys the event left unset, so they cannot
-        # override this SDK's server classification.
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
 
         _fill_event_defaults(
             msg,
@@ -2552,6 +2555,9 @@ class Client(object):
                 context_options=context_options,
                 derived_options=derived_options,
                 property_allowlist=property_allowlist,
+                is_server=self.is_server,
+                disable_geoip=disable_geoip,
+                system_properties=system_properties,
             ),
         )
 
