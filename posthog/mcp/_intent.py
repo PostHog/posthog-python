@@ -55,6 +55,8 @@ async def resolve_tool_call_intent(
     data: MCPAnalyticsData,
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]] = None,
+    *,
+    allow_context_argument: bool = True,
 ) -> Optional[ResolvedIntent]:
     from ._instrumentation import (
         VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -71,6 +73,7 @@ async def resolve_tool_call_intent(
     missing_name = enabled_virtual_tool_names(data).get(VIRTUAL_TOOL_MISSING_CAPABILITY)
     if (
         is_context_enabled(data.options.context)
+        and allow_context_argument
         and (missing_name is None or name != missing_name)
         and context_argument
     ):

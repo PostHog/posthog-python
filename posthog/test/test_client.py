@@ -573,6 +573,45 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
+    def test_reserved_exception_property_overrides_are_deprecated(self):
+        custom_exception_list = [{"type": "CustomError", "value": "custom"}]
+        properties = {
+            "$exception_list": custom_exception_list,
+            "$exception_level": "warning",
+            "$exception_source": "custom.source",
+            "$exception_issue_id": "legacy-issue-id",
+        }
+
+        with (
+            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
+            self.assertWarnsRegex(
+                DeprecationWarning,
+                "Reserved exception properties.*next major version",
+            ),
+        ):
+            self.client.capture_exception(
+                Exception("test exception"), properties=properties
+            )
+
+        captured_properties = patch_capture.call_args.kwargs["properties"]
+        self.assertIs(captured_properties["$exception_list"], custom_exception_list)
+        self.assertEqual(captured_properties["$exception_level"], "warning")
+        self.assertEqual(captured_properties["$exception_source"], "custom.source")
+        self.assertEqual(captured_properties["$exception_issue_id"], "legacy-issue-id")
+
+    def test_reserved_exception_property_warning_cannot_drop_the_event(self):
+        with (
+            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+            self.client.capture_exception(
+                Exception("test exception"),
+                properties={"$exception_level": "warning"},
+            )
+
+        patch_capture.assert_called_once()
+
     @parameterized.expand(
         [
             (

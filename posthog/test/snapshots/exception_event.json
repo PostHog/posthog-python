@@ -6,10 +6,13 @@
         "distinct_id": "user-123",
         "event": "$exception",
         "properties": {
+          "$exception_level": "error",
           "$exception_list": [
             {
               "mechanism": {
+                "exception_id": 0,
                 "handled": true,
+                "synthetic": false,
                 "type": "generic"
               },
               "module": null,
@@ -71,8 +74,11 @@
             },
             {
               "mechanism": {
-                "handled": true,
-                "type": "generic"
+                "exception_id": 1,
+                "parent_id": 0,
+                "source": "cause",
+                "synthetic": false,
+                "type": "chained"
               },
               "module": null,
               "stacktrace": {

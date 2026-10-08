@@ -334,6 +334,8 @@ alias posthog.inner_set_code_variables_mask_url_credentials_context -> posthog.c
 alias posthog.inner_set_context_device_id -> posthog.contexts.set_context_device_id
 alias posthog.inner_set_context_session -> posthog.contexts.set_context_session
 alias posthog.inner_tag -> posthog.contexts.tag
+alias posthog.integrations.asgi.Client -> posthog.client.Client
+alias posthog.integrations.asgi.contexts -> posthog.contexts
 alias posthog.integrations.django.Client -> posthog.client.Client
 alias posthog.integrations.django.contexts -> posthog.contexts
 alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
@@ -862,6 +864,12 @@ attribute posthog.flag_definition_cache.FlagDefinitionCacheData.property_matchin
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.app = app
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.capture_exceptions = capture_exceptions
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.client = client
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.extra_properties = extra_properties
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.request_filter = request_filter
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.trust_tracing_headers = trust_tracing_headers
 attribute posthog.integrations.celery.PosthogCeleryIntegration.capture_exceptions = capture_exceptions
 attribute posthog.integrations.celery.PosthogCeleryIntegration.capture_task_lifecycle_events = capture_task_lifecycle_events
 attribute posthog.integrations.celery.PosthogCeleryIntegration.client = client
@@ -875,6 +883,10 @@ attribute posthog.integrations.django.PosthogContextMiddleware.get_response = ge
 attribute posthog.integrations.django.PosthogContextMiddleware.request_filter = cast('Optional[Callable[[HttpRequest], bool]]', settings.POSTHOG_MW_REQUEST_FILTER)
 attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = True
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)
+attribute posthog.integrations.flask.PosthogFlaskIntegration.capture_exceptions = capture_exceptions
+attribute posthog.integrations.flask.PosthogFlaskIntegration.client = client
+attribute posthog.integrations.flask.PosthogFlaskIntegration.extra_properties = extra_properties
+attribute posthog.integrations.flask.PosthogFlaskIntegration.request_filter = request_filter
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
 attribute posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware.app = app
@@ -970,6 +982,7 @@ attribute posthog.mcp.types.MCPAnalyticsOptions.logger: Optional[LoggerFn] = Non
 attribute posthog.mcp.types.MCPAnalyticsOptions.missing_capability_tool_name: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.report_missing: bool = False
 attribute posthog.mcp.types.MCPAnalyticsOptions.resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
+attribute posthog.mcp.types.MCPAnalyticsOptions.resolve_original_tool: Optional[Callable[[str], Any]] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.server_build: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
 attribute posthog.mcp.types.PreparedToolCall.args: Optional[JsonRecord] = None
@@ -1199,8 +1212,10 @@ class posthog.feature_flags.InconclusiveMatchError
 class posthog.feature_flags.RequiresServerEvaluation 
 class posthog.flag_definition_cache.FlagDefinitionCacheData 
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
+class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: bool = False)
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
+class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None)
 class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
@@ -1212,7 +1227,7 @@ class posthog.mcp.types.CollectFeedbackOptions(tool_name: Optional[str] = None, 
 class posthog.mcp.types.FeedbackReport(feedback_type: str = 'other', summary: str = '', sentiment: Optional[str] = None, friction_points: Optional[str] = None, suggested_improvement: Optional[str] = None, details: Optional[str] = None, tool_name: Optional[str] = None, task_completed: Optional[bool] = None, extras: JsonRecord = dict(), raw: JsonRecord = dict())
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = None)
-class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None, resolve_original_tool: Optional[Callable[[str], Any]] = None)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, _conversation_state: Optional[PreparedConversationState] = None)
 class posthog.mcp.types.ToolInputOptions(should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, input_aliases: Optional[InputAliasMap] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
@@ -1672,6 +1687,7 @@ method posthog.integrations.django.PosthogContextMiddleware.aextract_tags(reques
 method posthog.integrations.django.PosthogContextMiddleware.extract_request_user(request)
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
+method posthog.integrations.flask.PosthogFlaskIntegration.init_app(app: Flask) -> None
 method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
 method posthog.mcp.McpAnalytics.flush() -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
@@ -1785,8 +1801,10 @@ module posthog.feature_flag_evaluations
 module posthog.feature_flags
 module posthog.flag_definition_cache
 module posthog.integrations
+module posthog.integrations.asgi
 module posthog.integrations.celery
 module posthog.integrations.django
+module posthog.integrations.flask
 module posthog.mcp
 module posthog.mcp.asgi
 module posthog.mcp.constants

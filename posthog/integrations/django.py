@@ -1,8 +1,12 @@
 import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import contexts
 from ..client import Client
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
 
 try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
@@ -362,9 +366,14 @@ class PosthogContextMiddleware:
 
         # Context and tags already set by __call__ or __acall__
         # Just capture the exception
+        capture_metadata: _ExceptionCaptureMetadata = {
+            "level": "error",
+            "source": "django.middleware",
+            "mechanism": {"type": "middleware", "handled": False},
+        }
         if self.client:
-            self.client.capture_exception(exception)
+            _capture_exception_with_metadata(self.client, exception, capture_metadata)
         else:
             from posthog import capture_exception
 
-            capture_exception(exception)
+            cast(Any, capture_exception)(exception, _capture_metadata=capture_metadata)

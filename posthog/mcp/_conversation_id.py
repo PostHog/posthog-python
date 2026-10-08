@@ -35,7 +35,9 @@ def add_conversation_id_to_schema(
     input_schema: Optional[Dict[str, Any]], tool_name: str = "unknown"
 ) -> Optional[Dict[str, Any]]:
     """Return a new JSON Schema with an optional ``conversation_id`` string property.
-    Skips schemas that already define it or use ``oneOf``/``allOf``/``anyOf``."""
+    Skips schemas that already define it or use
+    ``$ref``/``oneOf``/``allOf``/``anyOf``.
+    """
     schema = input_schema
     if (
         schema
@@ -48,7 +50,7 @@ def add_conversation_id_to_schema(
             f"WARN: Tool \"{tool_name}\" already has '{CONVERSATION_ID_PARAM_NAME}'. Skipping injection."
         )
         return schema
-    if schema and (schema.get("oneOf") or schema.get("allOf") or schema.get("anyOf")):
+    if schema and any(schema.get(key) for key in ("$ref", "oneOf", "allOf", "anyOf")):
         log(
             f'WARN: Tool "{tool_name}" has complex schema. Skipping conversation_id injection.'
         )

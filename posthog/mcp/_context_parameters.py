@@ -48,10 +48,11 @@ def add_context_parameter_to_schema(
     """Return a new JSON Schema dict with a ``context`` string property added.
 
     Returns the input unchanged (logging a warning) for schemas that already
-    define ``context`` or use ``oneOf``/``allOf``/``anyOf``. ``required`` controls
-    whether ``context`` is added to the schema's ``required`` list — pass ``False``
-    where the advertised schema is also used to validate inbound calls (the
-    low-level server), so a call omitting ``context`` is not rejected."""
+    define ``context`` or use ``$ref``/``oneOf``/``allOf``/``anyOf``. ``required``
+    controls whether ``context`` is added to the schema's ``required`` list —
+    pass ``False`` where the advertised schema is also used to validate inbound
+    calls (the low-level server), so a call omitting ``context`` is not rejected.
+    """
     schema = input_schema
 
     if (
@@ -64,9 +65,10 @@ def add_context_parameter_to_schema(
         )
         return schema
 
-    if schema and (schema.get("oneOf") or schema.get("allOf") or schema.get("anyOf")):
+    if schema and any(schema.get(key) for key in ("$ref", "oneOf", "allOf", "anyOf")):
         log(
-            f'WARN: Tool "{tool_name}" has complex schema (oneOf/allOf/anyOf). Skipping context injection.'
+            f'WARN: Tool "{tool_name}" has complex schema '
+            "($ref/oneOf/allOf/anyOf). Skipping context injection."
         )
         return schema
 
