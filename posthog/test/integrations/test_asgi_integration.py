@@ -2,6 +2,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+import posthog
 from posthog import contexts
 from posthog.client import Client
 from posthog.integrations.asgi import PosthogASGIMiddleware
@@ -152,7 +153,7 @@ async def test_captures_exception_with_client_and_preserves_propagation():
         assert contexts.get_tags()["$request_path"] == "/api/items"
         raise error
 
-    middleware = PosthogASGIMiddleware(app, client=client)
+    middleware = PosthogASGIMiddleware(app, client=client, capture_exceptions=True)
 
     with pytest.raises(RuntimeError, match="application failed") as raised:
         await middleware(http_scope(), noop_receive, noop_send)
@@ -179,9 +180,9 @@ async def test_captured_event_uses_canonical_framework_boundary_metadata():
     try:
         with patch.object(client, "capture", return_value="event-id") as capture:
             with pytest.raises(RuntimeError, match="application failed"):
-                await PosthogASGIMiddleware(app, client=client)(
-                    http_scope(), noop_receive, noop_send
-                )
+                await PosthogASGIMiddleware(
+                    app, client=client, capture_exceptions=True
+                )(http_scope(), noop_receive, noop_send)
 
         properties = capture.call_args.kwargs["properties"]
         outermost = properties["$exception_list"][0]
@@ -206,7 +207,9 @@ async def test_captures_exception_with_global_client():
 
     with patch("posthog.capture_exception") as capture_exception:
         with pytest.raises(ValueError, match="bad request handler"):
-            await PosthogASGIMiddleware(app)(http_scope(), noop_receive, noop_send)
+            await PosthogASGIMiddleware(app, capture_exceptions=True)(
+                http_scope(), noop_receive, noop_send
+            )
 
     capture_exception.assert_called_once_with(
         error,
@@ -234,13 +237,92 @@ async def test_can_disable_exception_capture():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_exception_capture_defaults_to_custom_client_setting(enabled):
+    client = Mock(enable_exception_autocapture=enabled)
+
+    async def app(scope, receive, send):
+        raise RuntimeError("custom default")
+
+    with pytest.raises(RuntimeError, match="custom default"):
+        await PosthogASGIMiddleware(app, client=client)(
+            http_scope(), noop_receive, noop_send
+        )
+
+    if enabled:
+        client.capture_exception.assert_called_once()
+    else:
+        client.capture_exception.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_exception_capture_defaults_to_global_client_setting(enabled):
+    default_client = Mock(enable_exception_autocapture=enabled)
+
+    async def app(scope, receive, send):
+        raise RuntimeError("global default")
+
+    with (
+        patch.object(posthog, "default_client", default_client),
+        patch.object(posthog, "enable_exception_autocapture", not enabled),
+        patch("posthog.capture_exception") as capture_exception,
+        pytest.raises(RuntimeError, match="global default"),
+    ):
+        await PosthogASGIMiddleware(app)(http_scope(), noop_receive, noop_send)
+
+    if enabled:
+        capture_exception.assert_called_once()
+    else:
+        capture_exception.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_context_enriches_events_without_redirecting_capture_calls():
+    events = []
+
+    def record_event(event):
+        events.append(event)
+        return event
+
+    event_client = Client(
+        "event-api-key", send=False, sync_mode=True, before_send=record_event
+    )
+    exception_client = Mock(enable_exception_autocapture=False)
+
+    async def app(scope, receive, send):
+        event_client.capture(
+            "request event", distinct_id="event-user", properties={"source": "app"}
+        )
+
+    try:
+        await PosthogASGIMiddleware(
+            app,
+            client=exception_client,
+            extra_properties=lambda scope: {"tenant": "acme"},
+        )(http_scope(), noop_receive, noop_send)
+    finally:
+        event_client.shutdown()
+
+    assert len(events) == 1
+    assert events[0]["distinct_id"] == "event-user"
+    assert events[0]["properties"]["source"] == "app"
+    assert events[0]["properties"]["tenant"] == "acme"
+    assert events[0]["properties"]["$request_path"] == "/api/items"
+    assert {"tenant", "$request_path"} <= set(events[0]["properties"]["$context_tags"])
+    exception_client.capture.assert_not_called()
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("async_filter", [False, True])
 async def test_request_filter_bypasses_all_instrumentation(async_filter):
     observed = {}
+    client = Mock()
 
     async def app(scope, receive, send):
         observed["session_id"] = contexts.get_context_session_id()
         observed["properties"] = contexts.get_tags()
+        raise RuntimeError("filtered")
 
     if async_filter:
 
@@ -254,11 +336,16 @@ async def test_request_filter_bypasses_all_instrumentation(async_filter):
 
     with contexts.new_context(fresh=True):
         contexts.tag("existing", True)
-        await PosthogASGIMiddleware(app, request_filter=request_filter)(
-            http_scope(), noop_receive, noop_send
-        )
+        with pytest.raises(RuntimeError, match="filtered"):
+            await PosthogASGIMiddleware(
+                app,
+                client=client,
+                capture_exceptions=True,
+                request_filter=request_filter,
+            )(http_scope(), noop_receive, noop_send)
 
     assert observed == {"session_id": None, "properties": {"existing": True}}
+    client.capture_exception.assert_not_called()
 
 
 @pytest.mark.asyncio
