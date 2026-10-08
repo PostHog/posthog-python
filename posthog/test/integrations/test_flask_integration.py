@@ -64,6 +64,68 @@ def test_adds_request_context_and_restores_parent_context() -> None:
         assert parent.collect_tags() == {"outer": "must-not-leak-into-request"}
 
 
+def test_fresh_request_preserves_enclosing_exception_privacy_settings() -> None:
+    app = _app()
+    client = Mock()
+    observed = {}
+
+    def capture(exception, **kwargs):
+        scope = contexts._get_current_context()
+        assert scope is not None
+        observed.update(
+            capture_code_variables=contexts.get_capture_exception_code_variables_context(),
+            mask_patterns=contexts.get_code_variables_mask_patterns_context(),
+            ignore_patterns=contexts.get_code_variables_ignore_patterns_context(),
+            mask_url_credentials=contexts.get_code_variables_mask_url_credentials_context(),
+            detect_secrets=contexts.get_code_variables_detect_secrets_context(),
+            distinct_id=contexts.get_context_distinct_id(),
+            session_id=contexts.get_context_session_id(),
+            properties=scope.collect_tags(),
+        )
+        return "event-id"
+
+    client.capture_exception.side_effect = capture
+    PosthogFlaskIntegration(app, client=client)
+
+    @app.get("/privacy")
+    def privacy_failure():
+        raise ValueError("privacy settings")
+
+    with contexts.new_context():
+        contexts.set_capture_exception_code_variables_context(False)
+        contexts.set_code_variables_mask_patterns_context(["secret"])
+        contexts.set_code_variables_ignore_patterns_context(["ignored"])
+        contexts.set_code_variables_mask_url_credentials_context(True)
+        contexts.set_code_variables_detect_secrets_context(True)
+        contexts.identify_context("outer-person")
+        contexts.set_context_session("outer-session")
+        contexts.tag("outer-property", "must-not-leak")
+
+        with pytest.raises(ValueError, match="privacy settings"):
+            app.test_client().get("/privacy")
+
+        # Teardown restores the enclosing context unchanged.
+        assert contexts.get_capture_exception_code_variables_context() is False
+        assert contexts.get_code_variables_mask_patterns_context() == ["secret"]
+        assert contexts.get_code_variables_ignore_patterns_context() == ["ignored"]
+        assert contexts.get_code_variables_mask_url_credentials_context() is True
+        assert contexts.get_code_variables_detect_secrets_context() is True
+
+    properties = observed.pop("properties")
+    assert properties["$request_path"] == "/privacy"
+    assert "outer-property" not in properties
+    assert observed == {
+        "capture_code_variables": False,
+        "mask_patterns": ["secret"],
+        "ignore_patterns": ["ignored"],
+        "mask_url_credentials": True,
+        "detect_secrets": True,
+        # Identity remains isolated by the fresh scope.
+        "distinct_id": None,
+        "session_id": None,
+    }
+
+
 def test_captures_unhandled_exception_once_with_request_properties() -> None:
     app = _app()
     client = Mock()

@@ -57,6 +57,43 @@ class _RequestState:
     tracked: bool = True
 
 
+@dataclass(frozen=True)
+class _ExceptionPrivacySettings:
+    capture_code_variables: Optional[bool]
+    mask_patterns: Optional[list]
+    ignore_patterns: Optional[list]
+    mask_url_credentials: Optional[bool]
+    detect_secrets: Optional[bool]
+
+    @classmethod
+    def from_current_context(cls) -> _ExceptionPrivacySettings:
+        """Snapshot effective privacy controls before entering a fresh request scope."""
+        return cls(
+            capture_code_variables=contexts.get_capture_exception_code_variables_context(),
+            mask_patterns=contexts.get_code_variables_mask_patterns_context(),
+            ignore_patterns=contexts.get_code_variables_ignore_patterns_context(),
+            mask_url_credentials=contexts.get_code_variables_mask_url_credentials_context(),
+            detect_secrets=contexts.get_code_variables_detect_secrets_context(),
+        )
+
+    def apply(self) -> None:
+        """Apply inherited privacy controls without restoring identity or properties."""
+        if self.capture_code_variables is not None:
+            contexts.set_capture_exception_code_variables_context(
+                self.capture_code_variables
+            )
+        if self.mask_patterns is not None:
+            contexts.set_code_variables_mask_patterns_context(self.mask_patterns)
+        if self.ignore_patterns is not None:
+            contexts.set_code_variables_ignore_patterns_context(self.ignore_patterns)
+        if self.mask_url_credentials is not None:
+            contexts.set_code_variables_mask_url_credentials_context(
+                self.mask_url_credentials
+            )
+        if self.detect_secrets is not None:
+            contexts.set_code_variables_detect_secrets_context(self.detect_secrets)
+
+
 class PosthogFlaskIntegration:
     """Add PostHog request context and exception tracking to a Flask app.
 
@@ -122,6 +159,10 @@ class PosthogFlaskIntegration:
             setattr(g, _REQUEST_STATE_KEY, None)
             return
 
+        # A request gets fresh identity and event properties, but privacy controls
+        # must remain at least as strict as the effective enclosing context.
+        privacy_settings = _ExceptionPrivacySettings.from_current_context()
+
         # Flask handles application exceptions before returning control through
         # the request stack, so capture through got_request_exception rather than
         # through new_context. This also avoids duplicate capture.
@@ -131,6 +172,7 @@ class PosthogFlaskIntegration:
             client=self.client,
         )
         scope.__enter__()
+        privacy_settings.apply()
         setattr(g, _REQUEST_STATE_KEY, _RequestState(scope=scope))
 
         session_id = _sanitize_tracing_header_value(
