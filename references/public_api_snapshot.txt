@@ -334,6 +334,8 @@ alias posthog.inner_set_code_variables_mask_url_credentials_context -> posthog.c
 alias posthog.inner_set_context_device_id -> posthog.contexts.set_context_device_id
 alias posthog.inner_set_context_session -> posthog.contexts.set_context_session
 alias posthog.inner_tag -> posthog.contexts.tag
+alias posthog.integrations.asgi.Client -> posthog.client.Client
+alias posthog.integrations.asgi.contexts -> posthog.contexts
 alias posthog.integrations.django.Client -> posthog.client.Client
 alias posthog.integrations.django.contexts -> posthog.contexts
 alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
@@ -861,6 +863,12 @@ attribute posthog.flag_definition_cache.FlagDefinitionCacheData.property_matchin
 attribute posthog.flag_definition_cache_provider = None
 attribute posthog.host = None
 attribute posthog.in_app_modules = None
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.app = app
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.capture_exceptions = capture_exceptions
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.client = client
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.extra_properties = extra_properties
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.request_filter = request_filter
+attribute posthog.integrations.asgi.PosthogASGIMiddleware.trust_tracing_headers = trust_tracing_headers
 attribute posthog.integrations.celery.PosthogCeleryIntegration.capture_exceptions = capture_exceptions
 attribute posthog.integrations.celery.PosthogCeleryIntegration.capture_task_lifecycle_events = capture_task_lifecycle_events
 attribute posthog.integrations.celery.PosthogCeleryIntegration.client = client
@@ -1197,6 +1205,7 @@ class posthog.feature_flags.InconclusiveMatchError
 class posthog.feature_flags.RequiresServerEvaluation 
 class posthog.flag_definition_cache.FlagDefinitionCacheData 
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
+class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: bool = False)
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
 class posthog.mcp.McpAnalytics(key: Any)
@@ -1774,6 +1783,7 @@ module posthog.feature_flag_evaluations
 module posthog.feature_flags
 module posthog.flag_definition_cache
 module posthog.integrations
+module posthog.integrations.asgi
 module posthog.integrations.celery
 module posthog.integrations.django
 module posthog.mcp
