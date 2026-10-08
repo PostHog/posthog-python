@@ -28,13 +28,14 @@ from typing import Any, Callable, Mapping, Optional, cast
 
 from ..client import Client
 from ..exception_utils import (
+    _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
     exception_is_already_captured as _exception_is_already_captured,
 )
 
 _logger = logging.getLogger("posthog")
 
-_CAPTURE_METADATA = {
+_CAPTURE_METADATA: _ExceptionCaptureMetadata = {
     "level": "error",
     "source": "django_rest_framework.exception_handler",
     "mechanism": {"type": "middleware", "handled": True},
