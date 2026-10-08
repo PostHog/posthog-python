@@ -202,11 +202,7 @@ class PosthogASGIMiddleware:
     ) -> None:
         self.app = app
         self.client = client
-        self.capture_exceptions = (
-            contexts._default_capture_exceptions(client)
-            if capture_exceptions is None
-            else capture_exceptions
-        )
+        self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_properties = extra_properties
         self.trust_tracing_headers = trust_tracing_headers
@@ -248,7 +244,12 @@ class PosthogASGIMiddleware:
             try:
                 await self.app(scope, receive, send)
             except Exception as exception:
-                if self.capture_exceptions:
+                capture_exceptions = (
+                    self.capture_exceptions
+                    if self.capture_exceptions is not None
+                    else contexts._default_capture_exceptions(self.client)
+                )
+                if capture_exceptions:
                     if self.client:
                         _capture_exception_with_metadata(
                             self.client, exception, _CAPTURE_METADATA

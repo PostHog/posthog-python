@@ -142,11 +142,7 @@ class PosthogFlaskIntegration:
         trust_tracing_headers: bool = False,
     ) -> None:
         self.client = client
-        self.capture_exceptions = (
-            contexts._default_capture_exceptions(client)
-            if capture_exceptions is None
-            else capture_exceptions
-        )
+        self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_properties = extra_properties
         self.trust_tracing_headers = trust_tracing_headers
@@ -243,7 +239,14 @@ class PosthogFlaskIntegration:
     def _handle_unhandled_exception(
         self, sender: Flask, exception: BaseException, **kwargs: Any
     ) -> None:
-        if not self.capture_exceptions or not self._request_is_tracked():
+        if not self._request_is_tracked():
+            return
+        capture_exceptions = (
+            self.capture_exceptions
+            if self.capture_exceptions is not None
+            else contexts._default_capture_exceptions(self.client)
+        )
+        if not capture_exceptions:
             return
 
         capture_metadata: _ExceptionCaptureMetadata = {

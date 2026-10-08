@@ -248,21 +248,27 @@ def test_exception_capture_defaults_to_custom_client_setting(enabled: bool) -> N
 
 
 @pytest.mark.parametrize("enabled", [False, True])
-def test_exception_capture_defaults_to_global_client_setting(enabled: bool) -> None:
+@pytest.mark.parametrize("initialized", [False, True])
+def test_exception_capture_defaults_to_global_client_setting(
+    enabled: bool, initialized: bool
+) -> None:
     app = _app()
-    default_client = Mock(enable_exception_autocapture=enabled)
+    default_client = Mock(enable_exception_autocapture=enabled) if initialized else None
 
-    with (
-        patch.object(posthog, "default_client", default_client),
-        patch.object(posthog, "enable_exception_autocapture", not enabled),
-    ):
-        PosthogFlaskIntegration(app)
+    # App-factory setup may run before the global client is configured.
+    PosthogFlaskIntegration(app)
 
     @app.get("/failure")
     def failure():
         raise RuntimeError("global default")
 
     with (
+        patch.object(posthog, "default_client", default_client),
+        patch.object(
+            posthog,
+            "enable_exception_autocapture",
+            not enabled if initialized else enabled,
+        ),
         patch("posthog.capture_exception") as capture_exception,
         pytest.raises(RuntimeError, match="global default"),
     ):
