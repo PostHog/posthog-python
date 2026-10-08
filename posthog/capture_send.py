@@ -158,7 +158,11 @@ class CaptureError(APIError):
         """Count the undelivered events by verdict and reason, for example
         ``drop/billing_limit_exceeded=2, retry/not_persisted=1``.
 
-        Empty when no event got a failing verdict.
+        Counts the events in ``drops`` and ``retry_exhausted``: events the
+        server dropped, and events still pending retry after the last 2xx
+        response. A retry verdict followed by a failed request, for example a
+        503 on the last attempt, is not counted; ``event_results`` keeps it.
+        Empty when no event is counted.
         """
         counts: dict[str, int] = {}
         failed = [uid for uid, _ in self.drops] + self.retry_exhausted

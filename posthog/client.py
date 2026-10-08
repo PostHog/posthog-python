@@ -2454,6 +2454,8 @@ class Client(object):
                 admitted = lane.run_sync_if_open(send_sync)
             except Exception as e:
                 self._report_capture_failure(e, [msg], lane.endpoint)
+                if self.debug:
+                    raise
                 return None
             if admitted:
                 return sent_uuid

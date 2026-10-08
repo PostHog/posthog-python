@@ -2764,6 +2764,24 @@ class TestClient(unittest.TestCase):
             "\n".join(logs.output),
         )
 
+    @parameterized.expand([("capture",), ("capture_ai",)])
+    def test_sync_send_failure_in_debug_reports_once_then_raises(self, method_name):
+        errors = []
+        client = Client(
+            FAKE_TEST_API_KEY,
+            sync_mode=True,
+            debug=True,
+            on_error=lambda err, batch: errors.append(err),
+        )
+        failure = APIError(503, "unavailable")
+
+        with patch_capture_send("client", side_effect=failure):
+            with self.assertRaises(APIError) as raised:
+                getattr(client, method_name)("event", distinct_id="distinct_id")
+
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(errors, [failure])
+
     def test_sync_send_failure_without_on_error_logs_aggregate_line(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
