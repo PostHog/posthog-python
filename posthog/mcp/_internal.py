@@ -17,7 +17,7 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable, Dict, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Set, Tuple
 
 from .logger import log
 from ._sink import McpEventSink
@@ -91,6 +91,14 @@ class MCPAnalyticsData:
     # True only when PostHog added llm_model to this tool's advertised schema.
     # Missing/False fails closed so an application-owned field is never read or stripped.
     tool_model_parameter_injected: Dict[str, bool] = field(default_factory=dict)
+    # Ownership learned from tools/list on this instance has priority over the
+    # low-level resolver callback.
+    tool_analytics_parameter_ownership: Dict[str, FrozenSet[str]] = field(
+        default_factory=dict
+    )
+    # Original schemas used to resolve ownership. They also identify safe input
+    # names without recording argument values.
+    tool_input_schemas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under
