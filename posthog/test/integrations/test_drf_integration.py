@@ -220,6 +220,22 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         client.capture_exception.assert_called_once()
 
+    def test_omitted_django_capture_setting_preserves_legacy_default(self):
+        self.assertFalse(hasattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS"))
+        original_default_client = posthog.default_client
+        global_client = Mock(spec=Client)
+        global_client.enable_exception_autocapture = False
+        posthog.default_client = global_client
+
+        try:
+            with patch("posthog.capture_exception") as capture_exception:
+                response = exception_handler(ServiceUnavailable(), {})
+        finally:
+            posthog.default_client = original_default_client
+
+        self.assertEqual(response.status_code, 503)
+        capture_exception.assert_called_once()
+
     @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS="invalid")
     def test_malformed_django_capture_setting_preserves_legacy_default(self):
         client = Mock(spec=Client)
