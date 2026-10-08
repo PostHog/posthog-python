@@ -287,6 +287,8 @@ class TestAiLaneWireConfig(unittest.TestCase):
             ("queue_size_negative", "capture_ai_max_queue_size", -1),
             ("queue_size_string", "capture_ai_max_queue_size", "100"),
             ("timeout_zero", "capture_ai_timeout", 0),
+            ("timeout_nan", "capture_ai_timeout", float("nan")),
+            ("timeout_inf", "capture_ai_timeout", float("inf")),
             ("compression_unknown", "capture_ai_compression", "br"),
         ]
     )

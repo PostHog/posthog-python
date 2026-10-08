@@ -4,6 +4,7 @@ import inspect
 import json
 from contextlib import contextmanager
 import logging
+import math
 import os
 import sys
 import threading
@@ -233,13 +234,18 @@ def _get_atexit_deadline() -> float:
 def _positive_config_value(
     name: str, value, *, integer: bool = False, maximum: Optional[int] = None
 ):
-    """Return ``value`` if it is positive and no larger than ``maximum``.
+    """Return ``value`` if it is finite, positive and no larger than ``maximum``.
 
     Bad lane config is a programming error, so it raises instead of falling
     back to a default.
     """
     allowed = (int,) if integer else (int, float)
-    if isinstance(value, bool) or not isinstance(value, allowed) or value <= 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, allowed)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
         kind = "integer" if integer else "number"
         raise ValueError(f"{name} must be a positive {kind}, got {value!r}")
     if maximum is not None and value > maximum:
