@@ -610,7 +610,7 @@ class AsyncClient:
         return self._capture(event, self._ai_lane, kwargs)
 
     def _log_non_ai_event(self, event: str) -> None:
-        if not event.startswith("$ai_"):
+        if isinstance(event, str) and not event.startswith("$ai_"):
             self.log.debug(
                 "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
                 event,

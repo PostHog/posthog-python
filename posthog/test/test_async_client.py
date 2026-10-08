@@ -375,6 +375,19 @@ async def test_ai_events_queue_on_their_own_lane_and_flush_drains_both():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("event", [None, 123])
+async def test_ai_capture_handles_a_non_string_event_name_like_capture(event):
+    client = AsyncPosthog("test-key", send=False)
+    try:
+        expected = client.capture(event, distinct_id="user-1") is None
+        assert (client.capture_ai(event, distinct_id="user-1") is None) is expected
+        immediate = await client.capture_ai_immediate(event, distinct_id="user-1")
+        assert (immediate is None) is expected
+    finally:
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_send_false_accepts_without_starting_workers_or_transport():
     with mock.patch("posthog.async_client._build_client") as build_client:
         client = AsyncPosthog("test-key", send=False)
