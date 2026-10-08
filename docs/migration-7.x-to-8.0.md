@@ -35,11 +35,13 @@ An endpoint that is not served drops every event sent to it.
 | --- | --- |
 | `capture_mode`, `CaptureMode`, `POSTHOG_CAPTURE_MODE` | Nothing. Capture v1 is the only path. |
 | `gzip=True` | `capture_compression=CaptureCompression.GZIP`. The default is no compression. `POSTHOG_CAPTURE_COMPRESSION` still works. |
-| `CaptureV1Error` | `CaptureError`. There is no alias. |
+| `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
 | `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Nothing. Send events through a client. |
 | The `gzip` parameter of `request.post` and `request.flags` | Nothing. |
 | The `backoff` dependency | Add it to your own requirements if your code imports it. |
+
+The `posthoganalytics` package has the same changes. For example, import `CaptureError` from `posthoganalytics`.
 
 Constructor arguments after `host` are keyword-only:
 
