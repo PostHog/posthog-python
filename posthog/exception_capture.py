@@ -7,9 +7,13 @@
 import logging
 import sys
 import threading
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from posthog.bucketed_rate_limiter import BucketedRateLimiter
+from .exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
 
 if TYPE_CHECKING:
     from posthog.client import Client
@@ -80,7 +84,18 @@ class ExceptionCapture:
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
         if not self._closed:
-            self.capture_exception((exc_type, exc_value, exc_traceback))
+            capture_metadata: _ExceptionCaptureMetadata = {
+                "level": "fatal",
+                "source": "python.sys_excepthook",
+                "mechanism": {
+                    "type": "onuncaughtexception",
+                    "handled": False,
+                },
+            }
+            self._capture_exception(
+                (exc_type, exc_value, exc_traceback),
+                capture_metadata=capture_metadata,
+            )
         previous_hook = self._resolve_hook(
             self.original_excepthook,
             "exception_handler",
@@ -90,7 +105,18 @@ class ExceptionCapture:
 
     def thread_exception_handler(self, args):
         if not self._closed:
-            self.capture_exception((args.exc_type, args.exc_value, args.exc_traceback))
+            capture_metadata: _ExceptionCaptureMetadata = {
+                "level": "error",
+                "source": "python.threading_excepthook",
+                "mechanism": {
+                    "type": "onuncaughtexception",
+                    "handled": False,
+                },
+            }
+            self._capture_exception(
+                (args.exc_type, args.exc_value, args.exc_traceback),
+                capture_metadata=capture_metadata,
+            )
         previous_hook = self._resolve_hook(
             self._original_threading_excepthook,
             "thread_exception_handler",
@@ -117,6 +143,14 @@ class ExceptionCapture:
         self.capture_exception((exc_info[0], exc_info[1], exc_info[2]), metadata)
 
     def capture_exception(self, exception, metadata=None):
+        self._capture_exception(exception, metadata)
+
+    def _capture_exception(
+        self,
+        exception,
+        metadata=None,
+        capture_metadata: Optional[_ExceptionCaptureMetadata] = None,
+    ):
         try:
             if self._rate_limiter is not None:
                 exception_type = self._exception_type(exception)
@@ -127,7 +161,15 @@ class ExceptionCapture:
                     return
 
             distinct_id = metadata.get("distinct_id") if metadata else None
-            self.client.capture_exception(exception, distinct_id=distinct_id)
+            resolved_capture_metadata: _ExceptionCaptureMetadata = (
+                capture_metadata or {}
+            )
+            _capture_exception_with_metadata(
+                self.client,
+                exception,
+                resolved_capture_metadata,
+                distinct_id=distinct_id,
+            )
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
 
