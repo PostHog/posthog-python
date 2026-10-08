@@ -4,6 +4,7 @@ from unittest.mock import Mock, patch
 
 import django
 from django.conf import settings
+from django.test import override_settings
 
 if not settings.configured:
     settings.configure(
@@ -101,6 +102,35 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
             handler(RuntimeError("view failed"), {})
 
         client.capture_exception.assert_not_called()
+
+    @override_settings(POSTHOG_MW_REQUEST_FILTER=lambda request: False)
+    def test_django_middleware_request_filter_suppresses_capture(self):
+        client = Mock()
+        handler = create_exception_handler(
+            lambda exc, context: Response(status=500), client=client
+        )
+        django_request = object()
+        drf_request = Mock(_request=django_request)
+
+        response = handler(RuntimeError("filtered"), {"request": drf_request})
+
+        self.assertEqual(response.status_code, 500)
+        client.capture_exception.assert_not_called()
+
+    def test_django_middleware_request_filter_receives_underlying_request(self):
+        client = Mock()
+        request_filter = Mock(return_value=True)
+        handler = create_exception_handler(
+            lambda exc, context: Response(status=500), client=client
+        )
+        django_request = object()
+        drf_request = Mock(_request=django_request)
+
+        with override_settings(POSTHOG_MW_REQUEST_FILTER=request_filter):
+            handler(RuntimeError("tracked"), {"request": drf_request})
+
+        request_filter.assert_called_once_with(django_request)
+        client.capture_exception.assert_called_once()
 
     def test_exception_filter_can_suppress_capture(self):
         client = Mock()

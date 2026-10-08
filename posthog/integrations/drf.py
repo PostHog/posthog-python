@@ -66,6 +66,25 @@ def _configured_client(client: Optional[Client]) -> Optional[Client]:
     return None
 
 
+def _passes_django_request_filter(context: Mapping[str, Any]) -> bool:
+    """Apply the Django middleware request filter to the underlying request."""
+    try:
+        from django.conf import settings
+
+        request_filter = getattr(settings, "POSTHOG_MW_REQUEST_FILTER", None)
+    except Exception:
+        return True
+
+    request = context.get("request")
+    if not callable(request_filter) or request is None:
+        return True
+
+    # DRF wraps Django's HttpRequest. Pass the same object that
+    # PosthogContextMiddleware evaluates so filters behave consistently.
+    django_request = getattr(request, "_request", request)
+    return bool(request_filter(django_request))
+
+
 def _capture_exception(client: Optional[Client], exc: Exception) -> None:
     if _exception_is_already_captured(exc):
         return
@@ -101,6 +120,10 @@ def create_exception_handler(
         exception_filter: Optional final filter called with ``(exception,
             response, context)``. Returning ``False`` suppresses capture.
 
+    When ``POSTHOG_MW_REQUEST_FILTER`` is configured, it is also applied to the
+    underlying Django request before capture so handled errors cannot bypass the
+    middleware's per-request exclusion.
+
     The delegated handler is called first. A ``None`` response is never
     captured here because DRF will re-raise that exception, allowing Django's
     middleware to capture it as unhandled.
@@ -117,6 +140,8 @@ def create_exception_handler(
             should_capture = status_code >= 500 or (
                 capture_4xx and 400 <= status_code < 500
             )
+            if should_capture:
+                should_capture = _passes_django_request_filter(context)
             if should_capture and exception_filter is not None:
                 should_capture = bool(exception_filter(exc, response, context))
             if should_capture:
