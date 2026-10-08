@@ -1,5 +1,11 @@
 # posthog
 
+## 7.65.0 — 2026-10-08
+
+### Minor changes
+
+- [6d6cc3d](https://github.com/posthog/posthog-python/commit/6d6cc3dac989569f3c571308e4db9b9f6ecf7b36) Standardize exception capture metadata, including severity, capture source, typed integration metadata, mechanism semantics, bounded exception-group traversal, and deterministic cause linkage. Application overrides of reserved exception properties remain supported during a deprecation period, emit a warning, and will be removed in the next major version. — Thanks @hpouillot!
+
 ## 7.64.1 — 2026-10-06
 
 ### Patch changes
