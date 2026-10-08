@@ -25,7 +25,10 @@ from typing import Any, Optional, Union, cast
 
 from .. import contexts
 from ..client import Client
-from ..exception_utils import _capture_exception_with_metadata
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
 
 _ASGIApp = Callable[
     [
@@ -45,7 +48,7 @@ _ExtraTags = Callable[[dict[str, Any]], _ExtraTagsResult]
 _MAX_HEADER_LENGTH = 1000
 _MAX_PATH_LENGTH = 2048
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-_CAPTURE_METADATA = {
+_CAPTURE_METADATA: _ExceptionCaptureMetadata = {
     "level": "error",
     "source": "asgi.middleware",
     "mechanism": {"type": "middleware", "handled": False},
