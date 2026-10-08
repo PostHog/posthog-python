@@ -16,6 +16,7 @@ You need to change code if your app does any of these:
 - sets `$process_person_profile` to turn person processing on for events without a distinct ID
 - passes strings such as `"true"` for `$cookieless_mode`, `$ignore_sent_at` or `$process_person_profile`
 - expects `super_properties` to override properties passed to a single call
+- reads or removes context tags, `super_properties` or `$release_id` in `before_send`
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
 
@@ -92,21 +93,23 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - `super_options` sets options on every event, like `super_properties`.
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`.
 - Options are sent as given. PostHog validates them.
-- The legacy properties `$cookieless_mode`, `$ignore_sent_at`, `$product_tour_id` and `$process_person_profile` still work. They move into options after `before_send`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
+- The legacy properties `$cookieless_mode`, `$ignore_sent_at`, `$product_tour_id` and `$process_person_profile` still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
-- A `None` option counts as unset.
+- A `None` option counts as unset, so a later step can fill it.
 
-Values apply in this order, and each layer overrides the ones before it:
+Values apply in this order. After `before_send`, each step fills only the options and properties that the steps before it left unset:
 
-1. options the SDK sets, such as turning off person processing for events without a distinct ID
-2. `super_options` and `super_properties`
+1. the `options` and `properties` of the call
+2. `before_send`
 3. context options and tags
-4. the `options` and `properties` of the call
-5. `before_send`
+4. `super_options` and `super_properties`
+5. values the SDK sets: `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+6. legacy properties, which fill unset options and are then removed
 
-Two changes follow from this order:
+Three changes follow from this order:
 
 - Properties passed to a call now override `super_properties`. `super_properties` can no longer change `$lib`, `$lib_version` or `$geoip_disable`.
+- `before_send` no longer sees context tags, context options, `super_properties`, `super_options` or `$release_id`. They fill in after it runs, so it cannot read or remove them, and its own changes win over them. To keep a super property off one event, set that key in the call's `properties` or in `before_send`.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
 
 ## AI capture
