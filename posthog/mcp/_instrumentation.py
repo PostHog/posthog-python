@@ -10,11 +10,12 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy
 import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Literal, Optional, Set
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -434,6 +435,7 @@ class ToolCallLifecycle:
     arguments: Optional[Dict[str, Any]]
     request_meta: Optional[Dict[str, Any]]
     allow_self_reported_model: bool
+    analytics_owned_parameters: Optional[FrozenSet[str]]
     request: Dict[str, Any]
     extra: Dict[str, Any]
     mcp_session_id: Optional[str]
@@ -541,6 +543,7 @@ class ToolCallLifecycle:
             arguments=self.arguments,
             request_meta=self.request_meta,
             allow_self_reported_model=self.allow_self_reported_model,
+            analytics_owned_parameters=self.analytics_owned_parameters,
             error=error,
             duration_ms=duration_ms,
             client_name=self.client_name,
@@ -563,6 +566,7 @@ class ToolCallLifecycle:
             arguments=self.arguments,
             request_meta=self.request_meta,
             allow_self_reported_model=self.allow_self_reported_model,
+            analytics_owned_parameters=self.analytics_owned_parameters,
             result=result,
             duration_ms=duration_ms,
             client_name=self.client_name,
@@ -588,6 +592,7 @@ def start_tool_call_lifecycle(
     protocol_version: Optional[str],
     extra: Dict[str, Any],
     input_schema: Any = None,
+    analytics_owned_parameters: Optional[FrozenSet[str]] = None,
 ) -> ToolCallLifecycle:
     """Resolve adapter-independent policy for a tool call without dispatching it."""
     enabled = enabled_virtual_tool_names(data)
@@ -597,7 +602,12 @@ def start_tool_call_lifecycle(
     # running the host's `on_feedback` handler read the configured options.
     feedback_options = resolve_collect_feedback_options(data.options.collect_feedback)
     conversation_id, minted = resolve_conversation_id(
-        data.options.enable_conversation_id, arguments
+        data.options.enable_conversation_id
+        and (
+            analytics_owned_parameters is None
+            or "conversation_id" in analytics_owned_parameters
+        ),
+        arguments,
     )
     # A carried session stays stable until the agent supplies its own handle.
     has_carried_session = token is not None or bool(mcp_session_id)
@@ -609,6 +619,7 @@ def start_tool_call_lifecycle(
         arguments=arguments,
         request_meta=request_meta,
         allow_self_reported_model=allow_self_reported_model,
+        analytics_owned_parameters=analytics_owned_parameters,
         request=build_tool_call_request(name, arguments),
         extra=extra,
         mcp_session_id=mcp_session_id,
@@ -642,6 +653,7 @@ async def record_tool_call(
     conversation_id: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
     input_schema: Any = None,
+    analytics_owned_parameters: Optional[FrozenSet[str]] = None,
 ) -> None:
     # Analytics must never change what the tool returns or raises: any failure
     # building/publishing the event is logged and swallowed here.
@@ -654,7 +666,13 @@ async def record_tool_call(
             "tool_description": data.tool_descriptions.get(name),
             "tool_category": data.tool_categories.get(name),
             "parameters": build_captured_mcp_parameters(
-                request, strip_llm_model=allow_self_reported_model
+                request,
+                strip_llm_model=allow_self_reported_model,
+                strip_argument_names=(
+                    set(analytics_owned_parameters)
+                    if analytics_owned_parameters is not None
+                    else None
+                ),
             ),
             "duration": duration_ms,
             "client_name": client_name,
@@ -663,7 +681,18 @@ async def record_tool_call(
             "conversation_id": conversation_id,
             "is_error": False,
         }
-        set_event_intent(event, await resolve_tool_call_intent(data, request, extra))
+        set_event_intent(
+            event,
+            await resolve_tool_call_intent(
+                data,
+                request,
+                extra,
+                allow_context_argument=(
+                    analytics_owned_parameters is None
+                    or "context" in analytics_owned_parameters
+                ),
+            ),
+        )
         if is_capture_model_enabled(data.options.capture_model):
             model, source = resolve_model(
                 request_meta,
@@ -712,6 +741,17 @@ def extract_tools(result: Any) -> list:
     """Pull the tool list out of a ListTools ServerResult, as a copy."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
+
+
+def copy_tools_list_result(result: Any) -> Any:
+    """Copy a tool listing before schema injection changes its descriptors."""
+    try:
+        return result.model_copy(deep=True)
+    except Exception:  # noqa: BLE001 - analytics must not break a listing
+        try:
+            return copy.deepcopy(result)
+        except Exception:  # noqa: BLE001
+            return result
 
 
 def tools_list_envelope(result: Any) -> Optional[Dict[str, Any]]:

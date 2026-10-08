@@ -242,6 +242,10 @@ class MCPAnalyticsOptions:
     # Return the alternative names that one tool accepts. The SDK records alias
     # use but does not change tool arguments.
     resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
+    # Return the original tool descriptor for a low-level server. The SDK uses
+    # its input schema to remove only PostHog-owned arguments on a fresh server
+    # instance that did not serve tools/list.
+    resolve_original_tool: Optional[Callable[[str], Any]] = None
 
 
 @dataclass
