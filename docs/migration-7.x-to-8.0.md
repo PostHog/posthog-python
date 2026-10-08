@@ -67,7 +67,7 @@ An event can be dropped, for example by billing limits or quotas, inside a 2xx r
   - `verdict_summary()`: counts such as `drop/billing=1, retry/not_persisted=1`
 - `on_error(error, batch)` receives every failure, including in `sync_mode` and from `AsyncPosthog.capture_immediate`.
 - Without `on_error`, the SDK logs one line per failed batch, for example `2 event(s) not persisted by /i/v1/analytics/events: ...`. The line never contains event content or the server's response text.
-- In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`.
+- In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`. With `debug=True` it calls `on_error` and then re-raises the error.
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
 - A `429` response is not retried.
 - Retries start at 100 ms and double each attempt, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
