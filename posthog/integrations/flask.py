@@ -183,8 +183,8 @@ class PosthogFlaskIntegration:
 
         capture_metadata = {
             "level": "error",
-            "source": "flask.integration",
-            "mechanism": {"type": "flask", "handled": False},
+            "source": "flask.got_request_exception",
+            "mechanism": {"type": "middleware", "handled": False},
         }
         if self.client is not None:
             _capture_exception_with_metadata(self.client, exception, capture_metadata)

@@ -92,8 +92,8 @@ def test_captures_unhandled_exception_once_with_request_tags() -> None:
     assert kwargs == {
         "_capture_metadata": {
             "level": "error",
-            "source": "flask.integration",
-            "mechanism": {"type": "flask", "handled": False},
+            "source": "flask.got_request_exception",
+            "mechanism": {"type": "middleware", "handled": False},
         }
     }
     assert tags["$request_path"] == "/failure"
@@ -117,8 +117,8 @@ def test_uses_global_client_when_custom_client_is_not_provided() -> None:
         error,
         _capture_metadata={
             "level": "error",
-            "source": "flask.integration",
-            "mechanism": {"type": "flask", "handled": False},
+            "source": "flask.got_request_exception",
+            "mechanism": {"type": "middleware", "handled": False},
         },
     )
 
