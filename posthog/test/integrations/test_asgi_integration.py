@@ -40,13 +40,13 @@ async def noop_send(message):
 
 
 @pytest.mark.asyncio
-async def test_adds_request_tags_and_tracing_context_then_restores_parent():
+async def test_adds_request_properties_and_tracing_context_then_restores_parent():
     observed = {}
 
     async def app(scope, receive, send):
         observed["session_id"] = contexts.get_context_session_id()
         observed["distinct_id"] = contexts.get_context_distinct_id()
-        observed["tags"] = contexts.get_tags()
+        observed["properties"] = contexts.get_tags()
         await send({"type": "http.response.start", "status": 204, "headers": []})
         await send({"type": "http.response.body", "body": b""})
 
@@ -57,18 +57,18 @@ async def test_adds_request_tags_and_tracing_context_then_restores_parent():
 
     with contexts.new_context(fresh=True):
         contexts.identify_context("parent-user")
-        contexts.tag("parent-tag", "kept")
+        contexts.tag("parent-property", "kept")
         middleware = PosthogASGIMiddleware(app, trust_tracing_headers=True)
         await middleware(http_scope(method="POST"), noop_receive, send)
 
         assert contexts.get_context_distinct_id() == "parent-user"
         assert contexts.get_context_session_id() is None
-        assert contexts.get_tags() == {"parent-tag": "kept"}
+        assert contexts.get_tags() == {"parent-property": "kept"}
 
     assert observed["session_id"] == "session-123"
     assert observed["distinct_id"] == "user-456"
-    assert observed["tags"] == {
-        "parent-tag": "kept",
+    assert observed["properties"] == {
+        "parent-property": "kept",
         "$request_method": "POST",
         "$request_path": "/api/items",
         "$user_agent": "test-agent/1.0",
@@ -80,7 +80,7 @@ async def test_adds_request_tags_and_tracing_context_then_restores_parent():
         {"type": "http.response.start", "status": 204, "headers": []},
         {"type": "http.response.body", "body": b""},
     ]
-    assert "secret" not in observed["tags"]["$current_url"]
+    assert "secret" not in observed["properties"]["$current_url"]
 
 
 @pytest.mark.asyncio
@@ -103,7 +103,7 @@ async def test_sanitizes_tracing_headers_and_uses_socket_ip_fallback():
     async def app(scope, receive, send):
         observed["session_id"] = contexts.get_context_session_id()
         observed["distinct_id"] = contexts.get_context_distinct_id()
-        observed["tags"] = contexts.get_tags()
+        observed["properties"] = contexts.get_tags()
 
     scope = http_scope(
         headers=[
@@ -118,7 +118,7 @@ async def test_sanitizes_tracing_headers_and_uses_socket_ip_fallback():
 
     assert observed["session_id"] == "session-123"
     assert observed["distinct_id"] == "user-456"
-    assert observed["tags"]["$ip"] == "198.51.100.8"
+    assert observed["properties"]["$ip"] == "198.51.100.8"
 
 
 @pytest.mark.asyncio
@@ -240,7 +240,7 @@ async def test_request_filter_bypasses_all_instrumentation(async_filter):
 
     async def app(scope, receive, send):
         observed["session_id"] = contexts.get_context_session_id()
-        observed["tags"] = contexts.get_tags()
+        observed["properties"] = contexts.get_tags()
 
     if async_filter:
 
@@ -258,32 +258,32 @@ async def test_request_filter_bypasses_all_instrumentation(async_filter):
             http_scope(), noop_receive, noop_send
         )
 
-    assert observed == {"session_id": None, "tags": {"existing": True}}
+    assert observed == {"session_id": None, "properties": {"existing": True}}
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("async_tags", [False, True])
-async def test_extra_tags_supports_sync_and_async_callbacks(async_tags):
+@pytest.mark.parametrize("async_properties", [False, True])
+async def test_extra_properties_supports_sync_and_async_callbacks(async_properties):
     observed = {}
 
     async def app(scope, receive, send):
         observed.update(contexts.get_tags())
 
-    if async_tags:
+    if async_properties:
 
-        async def extra_tags(scope):
+        async def extra_properties(scope):
             return {"framework": "fastapi"}
 
     else:
 
-        def extra_tags(scope):
+        def extra_properties(scope):
             return {"framework": "starlette"}
 
-    await PosthogASGIMiddleware(app, extra_tags=extra_tags)(
+    await PosthogASGIMiddleware(app, extra_properties=extra_properties)(
         http_scope(), noop_receive, noop_send
     )
 
-    assert observed["framework"] == ("fastapi" if async_tags else "starlette")
+    assert observed["framework"] == ("fastapi" if async_properties else "starlette")
 
 
 @pytest.mark.asyncio
@@ -309,13 +309,13 @@ async def test_lifespan_scope_passes_through_without_context():
 
     async def app(received_scope, receive, send):
         observed["scope"] = received_scope
-        observed["tags"] = contexts.get_tags()
+        observed["properties"] = contexts.get_tags()
 
     with contexts.new_context(fresh=True):
         contexts.tag("existing", "value")
         await PosthogASGIMiddleware(app)(scope, noop_receive, noop_send)
 
-    assert observed == {"scope": scope, "tags": {"existing": "value"}}
+    assert observed == {"scope": scope, "properties": {"existing": "value"}}
 
 
 @pytest.mark.asyncio

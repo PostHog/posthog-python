@@ -45,10 +45,10 @@ _ASGIApp = Callable[
 ]
 _RequestFilterResult = Union[bool, Awaitable[bool]]
 _RequestFilter = Callable[[dict[str, Any]], _RequestFilterResult]
-_ExtraTagsResult = Union[
+_ExtraPropertiesResult = Union[
     Optional[Mapping[str, Any]], Awaitable[Optional[Mapping[str, Any]]]
 ]
-_ExtraTags = Callable[[dict[str, Any]], _ExtraTagsResult]
+_ExtraProperties = Callable[[dict[str, Any]], _ExtraPropertiesResult]
 
 _MAX_HEADER_LENGTH = 1000
 _MAX_PATH_LENGTH = 2048
@@ -115,23 +115,23 @@ def _server_host(scope: Mapping[str, Any]) -> Optional[str]:
     return hostname if default_port else f"{hostname}:{port}"
 
 
-def _extract_tags(
+def _extract_properties(
     scope: Mapping[str, Any], headers: Mapping[bytes, bytes]
 ) -> dict[str, Any]:
-    tags: dict[str, Any] = {}
+    properties: dict[str, Any] = {}
 
     method = _sanitize_text(scope.get("method"), max_length=32)
     if method:
-        tags["$request_method"] = method
+        properties["$request_method"] = method
 
     path = _sanitize_text(scope.get("path"), max_length=_MAX_PATH_LENGTH)
     if path:
-        tags["$request_path"] = path
+        properties["$request_path"] = path
 
     user_agent = _decode_header(headers.get(b"user-agent"))
     if user_agent:
-        tags["$user_agent"] = user_agent
-        tags["$raw_user_agent"] = user_agent
+        properties["$user_agent"] = user_agent
+        properties["$raw_user_agent"] = user_agent
 
     forwarded_for = _decode_header(headers.get(b"x-forwarded-for"))
     if forwarded_for:
@@ -146,16 +146,16 @@ def _extract_tags(
             else None
         )
     if ip_address:
-        tags["$ip"] = ip_address
+        properties["$ip"] = ip_address
 
     scheme = _sanitize_text(scope.get("scheme"), max_length=16)
     host = _decode_header(headers.get(b"host")) or _server_host(scope)
     if scheme and host and path:
         # Deliberately omit query strings: they commonly contain secrets and
         # high-cardinality values. The path remains available separately.
-        tags["$current_url"] = f"{scheme}://{host}{path}"
+        properties["$current_url"] = f"{scheme}://{host}{path}"
 
-    return tags
+    return properties
 
 
 async def _resolve_callback_result(value):
@@ -173,8 +173,8 @@ class PosthogASGIMiddleware:
         capture_exceptions: Capture exceptions escaping the downstream app.
         request_filter: Optional sync or async callback receiving the ASGI scope.
             Returning ``False`` bypasses all instrumentation for that scope.
-        extra_tags: Optional sync or async callback receiving the ASGI scope and
-            returning additional context tags.
+        extra_properties: Optional sync or async callback receiving the ASGI scope and
+            returning additional event properties.
         trust_tracing_headers: Use client-provided PostHog distinct and session ID
             headers as analytics context. Disabled by default because these headers
             are not authenticated. Enable only when deliberately accepting browser
@@ -188,14 +188,14 @@ class PosthogASGIMiddleware:
         client: Optional[Client] = None,
         capture_exceptions: bool = True,
         request_filter: Optional[_RequestFilter] = None,
-        extra_tags: Optional[_ExtraTags] = None,
+        extra_properties: Optional[_ExtraProperties] = None,
         trust_tracing_headers: bool = False,
     ) -> None:
         self.app = app
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
-        self.extra_tags = extra_tags
+        self.extra_properties = extra_properties
         self.trust_tracing_headers = trust_tracing_headers
 
     async def __call__(self, scope, receive, send) -> None:
@@ -222,12 +222,14 @@ class PosthogASGIMiddleware:
                 if distinct_id:
                     contexts.identify_context(distinct_id)
 
-            tags = _extract_tags(scope, headers)
-            if self.extra_tags:
-                extra_tags = await _resolve_callback_result(self.extra_tags(scope))
-                if extra_tags:
-                    tags.update(extra_tags)
-            for key, value in tags.items():
+            properties = _extract_properties(scope, headers)
+            if self.extra_properties:
+                extra_properties = await _resolve_callback_result(
+                    self.extra_properties(scope)
+                )
+                if extra_properties:
+                    properties.update(extra_properties)
+            for key, value in properties.items():
                 contexts.tag(key, value)
 
             try:
