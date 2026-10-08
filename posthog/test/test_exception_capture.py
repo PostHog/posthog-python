@@ -443,3 +443,75 @@ def test_exception_group_serializes_a_repeated_object_only_once():
         "group",
         "shared",
     ]
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_exception_group_member_inspection_budget_counts_duplicates():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    shared = _LeafOne("shared")
+    excluded = _LeafTwo("after-budget")
+    group = ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+        "group", [shared] * 1_000 + [excluded]
+    )
+
+    exceptions = exceptions_from_error_tuple((type(group), group, None))
+
+    assert [exception["value"] for exception in exceptions] == ["group", "shared"]
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_nested_exception_groups_share_member_inspection_budget():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    shared = _LeafOne("shared")
+    inner_excluded = _LeafTwo("inner-after-budget")
+    outer_excluded = _LeafTwo("outer-after-budget")
+    inner = ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+        "inner", [shared] * 999 + [inner_excluded]
+    )
+    outer = ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+        "outer", [inner, outer_excluded]
+    )
+
+    exceptions = exceptions_from_error_tuple((type(outer), outer, None))
+
+    assert [exception["value"] for exception in exceptions] == [
+        "outer",
+        "inner",
+        "shared",
+    ]
+
+
+@pytest.mark.skipif(
+    sys.version_info < (3, 11),
+    reason="ExceptionGroup requires Python 3.11+",
+)
+def test_last_inspected_group_member_retains_its_cause_chain():
+    from posthog.exception_utils import exceptions_from_error_tuple
+
+    shared = _LeafOne("shared")
+    cause = _RootError("cause")
+    final_member = _LeafTwo("last-inspected")
+    final_member.__cause__ = cause
+    excluded = _LeafTwo("after-budget")
+    group = ExceptionGroup(  # noqa: F821 -- builtin on 3.11+
+        "group", [shared] * 999 + [final_member, excluded]
+    )
+
+    exceptions = exceptions_from_error_tuple((type(group), group, None))
+
+    assert [exception["value"] for exception in exceptions] == [
+        "group",
+        "shared",
+        "last-inspected",
+        "cause",
+    ]
+    assert exceptions[-1]["mechanism"]["source"] == "cause"
+    assert exceptions[-1]["mechanism"]["parent_id"] == 2

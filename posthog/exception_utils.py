@@ -532,6 +532,23 @@ def _valid_mechanism(mechanism):
     return result
 
 
+class _ExceptionMechanismMetadata(TypedDict, total=False):
+    """Typed common mechanism fields accepted from SDK-owned integrations."""
+
+    type: str
+    handled: bool
+    source: str
+    synthetic: bool
+
+
+class _ExceptionCaptureMetadata(TypedDict, total=False):
+    """Typed capture-boundary metadata for SDK-owned integrations."""
+
+    level: Literal["fatal", "error", "warning", "log", "info", "debug"]
+    source: str
+    mechanism: _ExceptionMechanismMetadata
+
+
 _EXCEPTION_LEVELS = {
     "fatal": "fatal",
     "critical": "fatal",
@@ -554,7 +571,7 @@ def _normalize_exception_level(level):
 
 
 def _capture_exception_with_metadata(client, exception, capture_metadata, **kwargs):
-    # type: (Any, ExceptionArg, Dict[str, Any], **Any) -> Optional[str]
+    # type: (Any, ExceptionArg, _ExceptionCaptureMetadata, **Any) -> Optional[str]
     """Call capture_exception through the SDK-internal typed integration channel."""
     capture = client.capture_exception  # type: Any
     return capture(exception, _capture_metadata=capture_metadata, **kwargs)
@@ -674,6 +691,16 @@ else:
         yield exc_info
 
 
+_MAX_EXCEPTION_ENTRIES = 50
+_MAX_EXCEPTION_GROUP_MEMBER_INSPECTIONS = 1_000
+
+
+@dataclasses.dataclass
+class _ExceptionTraversalState:
+    seen_exception_ids: Set[int] = dataclasses.field(default_factory=set)
+    inspected_group_members: int = 0
+
+
 def _exceptions_from_error(
     exc_type,  # type: Optional[type]
     exc_value,  # type: Optional[BaseException]
@@ -682,20 +709,20 @@ def _exceptions_from_error(
     exception_id=0,  # type: int
     parent_id=0,  # type: int
     source=None,  # type: Optional[str]
-    seen_exception_ids=None,  # type: Optional[Set[int]]
+    traversal_state=None,  # type: Optional[_ExceptionTraversalState]
 ):
     # type: (...) -> Tuple[int, List[Dict[str, Any]]]
-    """
-    Creates the list of exceptions.
-    This can include chained exceptions and exceptions from an ExceptionGroup.
-    """
+    """Build a bounded, depth-first flattened exception tree."""
 
-    if seen_exception_ids is None:
-        seen_exception_ids = set()
+    if traversal_state is None:
+        traversal_state = _ExceptionTraversalState()
     if exc_value is not None:
-        if id(exc_value) in seen_exception_ids or exception_id >= 50:
+        if (
+            id(exc_value) in traversal_state.seen_exception_ids
+            or exception_id >= _MAX_EXCEPTION_ENTRIES
+        ):
             return (exception_id, [])
-        seen_exception_ids.add(id(exc_value))
+        traversal_state.seen_exception_ids.add(id(exc_value))
 
     parent = single_exception_from_error_tuple(
         exc_type=exc_type,
@@ -723,7 +750,7 @@ def _exceptions_from_error(
         causing_exception = getattr(exc_value, "__context__", None)
         relationship = "context"
 
-    if causing_exception is not None and exception_id < 50:
+    if causing_exception is not None and exception_id < _MAX_EXCEPTION_ENTRIES:
         (exception_id, child_exceptions) = _exceptions_from_error(
             exc_type=type(causing_exception),
             exc_value=causing_exception,
@@ -732,18 +759,31 @@ def _exceptions_from_error(
             exception_id=exception_id,
             parent_id=parent_id,
             source=relationship,
-            seen_exception_ids=seen_exception_ids,
+            traversal_state=traversal_state,
         )
         exceptions.extend(child_exceptions)
 
-    # Add exceptions from an ExceptionGroup.
+    # Aggregate-member inspection has its own shared budget. Duplicate and cyclic
+    # references still consume it even though they do not produce output entries.
+    # Cause/context traversal does not consume this budget, so the final inspected
+    # member can retain its complete cause chain within the output limit.
     is_exception_group = BaseExceptionGroup is not None and isinstance(
         exc_value, BaseExceptionGroup
     )
     if is_exception_group:
-        for e in exc_value.exceptions:  # type: ignore
-            if exception_id >= 50:
-                break
+        members = exc_value.exceptions  # type: ignore
+        member_index = 0
+        while (
+            member_index < len(members)
+            and exception_id < _MAX_EXCEPTION_ENTRIES
+            and traversal_state.inspected_group_members
+            < _MAX_EXCEPTION_GROUP_MEMBER_INSPECTIONS
+        ):
+            # Charge before reading the member, as required by the canonical
+            # exception metadata traversal contract.
+            traversal_state.inspected_group_members += 1
+            e = members[member_index]
+            member_index += 1
             (exception_id, child_exceptions) = _exceptions_from_error(
                 exc_type=type(e),
                 exc_value=e,
@@ -752,7 +792,7 @@ def _exceptions_from_error(
                 exception_id=exception_id,
                 parent_id=parent_id,
                 source="member",
-                seen_exception_ids=seen_exception_ids,
+                traversal_state=traversal_state,
             )
             exceptions.extend(child_exceptions)
 

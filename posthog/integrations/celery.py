@@ -71,7 +71,10 @@ from typing import Any, Callable, Optional, cast
 
 from .. import contexts
 from ..client import Client
-from ..exception_utils import _capture_exception_with_metadata
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
 
 
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
@@ -476,7 +479,7 @@ class PosthogCeleryIntegration:
             capture(event, properties=properties)
 
     def _capture_exception(self, exception: Exception) -> None:
-        capture_metadata = {
+        capture_metadata: _ExceptionCaptureMetadata = {
             "level": "error",
             "source": "celery.task_failure",
             "mechanism": {"type": "task", "handled": False},
