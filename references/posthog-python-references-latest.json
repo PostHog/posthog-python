@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.64.1",
+    "version": "7.65.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -2294,7 +2294,7 @@
           "params": [
             {
               "name": "exception",
-              "description": "The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`     **kwargs: Optional capture arguments including distinct_id, properties,         timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.",
+              "description": "The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`     **kwargs: Optional capture arguments including distinct_id, properties,         timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.         Overriding reserved exception properties through ``properties`` is         deprecated and will stop working in the next major version.",
               "isOptional": false,
               "type": "BaseException"
             },
