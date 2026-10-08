@@ -252,7 +252,10 @@ DEFAULTS_CONFIG = {
 def _recording_hook(seen):
     def hook(msg):
         seen.append((dict(msg["properties"]), dict(msg["options"])))
-        properties = {**msg["properties"], "shared": "hook"}
+        properties = {
+            **{k: v for k, v in msg["properties"].items() if k != "only_super"},
+            "shared": "hook",
+        }
         return {**msg, "properties": properties, "options": {"cookieless_mode": False}}
 
     return hook
@@ -280,40 +283,71 @@ def _context_capture(method):
     return call
 
 
-def _assert_defaults_fill_after_hook(seen, events):
+def _assert_hook_sees_defaults_and_has_final_say(seen, events):
     hook_properties, hook_options = seen[0]
-    assert not {"shared", "only_super", "from_context"} & hook_properties.keys()
-    assert hook_options == {}
-    properties = events[0]["properties"]
     assert (
-        properties["shared"],
-        properties["only_super"],
-        properties["from_context"],
-    ) == ("hook", 1, "context")
-    assert events[0]["options"] == {
-        "cookieless_mode": False,
-        "product_tour_id": "context-tour",
-    }
+        hook_properties["shared"],
+        hook_properties["only_super"],
+        hook_properties["from_context"],
+    ) == ("super", 1, "context")
+    assert hook_options == {"cookieless_mode": True, "product_tour_id": "context-tour"}
+    properties = events[0]["properties"]
+    assert (properties["shared"], properties["from_context"]) == ("hook", "context")
+    assert "only_super" not in properties
+    assert events[0]["options"] == {"cookieless_mode": False}
 
 
-def test_sync_defaults_fill_after_before_send():
+def test_sync_defaults_fill_before_before_send():
     seen: list = []
     events = _sync_wire_events(
         _context_capture("capture"),
         before_send=_recording_hook(seen),
         **DEFAULTS_CONFIG,
     )
-    _assert_defaults_fill_after_hook(seen, events)
+    _assert_hook_sees_defaults_and_has_final_say(seen, events)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["capture", "capture_immediate"])
-async def test_async_defaults_fill_after_before_send(method):
+async def test_async_defaults_fill_before_before_send(method):
     seen: list = []
     events = await _async_wire_events(
         _context_capture(method), before_send=_recording_hook(seen), **DEFAULTS_CONFIG
     )
-    _assert_defaults_fill_after_hook(seen, events)
+    _assert_hook_sees_defaults_and_has_final_say(seen, events)
+
+
+NESTED_SUPER_PROPERTIES = {
+    "$set": {"plan": "free", "source": "super"},
+    "$groups": {"company": "acme", "team": "core"},
+    "$unset": ["stale"],
+}
+
+
+def test_nested_properties_fill_one_level_deep():
+    events = _sync_wire_events(
+        lambda c: c.capture(
+            "e",
+            distinct_id="u",
+            properties={"$set": {"plan": "pro"}, "$unset": ["other"]},
+            groups={"company": "posthog"},
+        ),
+        super_properties=NESTED_SUPER_PROPERTIES,
+    )
+    properties = events[0]["properties"]
+    assert properties["$set"] == {"plan": "pro", "source": "super"}
+    assert properties["$groups"] == {"company": "posthog", "team": "core"}
+    assert properties["$unset"] == ["other"]
+
+
+@pytest.mark.parametrize("method", ["set", "set_once"])
+def test_set_call_wins_over_super_person_properties(method):
+    key = f"${method}"
+    events = _sync_wire_events(
+        lambda c: getattr(c, method)(distinct_id="u", properties={"plan": "pro"}),
+        super_properties={key: {"plan": "free", "source": "super"}},
+    )
+    assert events[0]["properties"][key] == {"plan": "pro", "source": "super"}
 
 
 def test_late_options_replace_and_remove_legacy_properties():

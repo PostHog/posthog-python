@@ -309,9 +309,9 @@ def set_context_option(key: str, value: Any) -> None:
     """
     Set a capture option for every event captured within the current context.
 
-    Context options fill options an event leaves unset, after ``before_send``
-    runs. They override ``super_options``. An event's own ``options`` and
-    ``before_send`` changes override them.
+    Context options fill options an event leaves unset, before ``before_send``
+    runs, so the hook sees them. They override ``super_options``. An event's
+    own ``options`` override them, and ``before_send`` can change them.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
@@ -385,12 +385,14 @@ Attributes:
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
     super_properties: Properties for every captured event. They fill only
-        keys the event leaves unset, after ``before_send`` runs. An event's own
-        properties, ``before_send`` changes and context tags override them.
+        keys the event leaves unset, before ``before_send`` runs. ``$set``,
+        ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep. An
+        event's own properties and context tags override them, and
+        ``before_send`` can change or remove them.
     super_options: Capture options for every captured event, such as
         ``{"cookieless_mode": True}``. They fill only options the event leaves
-        unset, after ``before_send`` runs. An event's own ``options``,
-        ``before_send`` changes and context options override them. They also
+        unset, before ``before_send`` runs. An event's own ``options`` and
+        context options override them, and ``before_send`` can change them. They also
         win over an event's legacy property for the same key, such as
         ``$cookieless_mode``, so pass per-event overrides of that key as
         ``options``.
@@ -417,9 +419,9 @@ Attributes:
     project_root: Root path used to determine in-app exception stack frames.
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
-        Return ``None`` to drop an event. It does not see context tags, context
-        options, ``super_properties`` or ``super_options``. They fill in after
-        it runs.
+        Return ``None`` to drop an event. Context tags, context options,
+        ``super_properties`` and ``super_options`` fill in before it runs, so
+        it can change or remove them.
     enable_local_evaluation: Whether to poll feature flag definitions for local
         evaluation when a personal API key is configured.
     flag_definition_cache_provider: Optional external cache provider for sharing
