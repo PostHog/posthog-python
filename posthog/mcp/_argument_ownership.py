@@ -2,24 +2,20 @@
 
 from __future__ import annotations
 
-import copy
 import inspect
 from collections.abc import Mapping
-from typing import Any, FrozenSet, Optional
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 from ._context_parameters import is_context_enabled, schema_has_param
 from ._model_parameters import is_capture_model_enabled
 from .logger import log
 
 _COMPLEX_SCHEMA_KEYS = ("$ref", "oneOf", "allOf", "anyOf")
-_OWNERSHIP_MARKER = "__posthog_mcp_argument_ownership__"
 
 
 def analytics_owned_parameters(
     options: Any,
     input_schema: Any,
-    *,
-    previously_owned: FrozenSet[str] = frozenset(),
 ) -> FrozenSet[str]:
     """Return the enabled arguments that PostHog can add to this schema."""
     enabled = set()
@@ -35,9 +31,7 @@ def analytics_owned_parameters(
     ):
         return frozenset()
     return frozenset(
-        name
-        for name in enabled
-        if name in previously_owned or not schema_has_param(input_schema, name)
+        name for name in enabled if not schema_has_param(input_schema, name)
     )
 
 
@@ -49,81 +43,46 @@ def cache_listed_tool_ownership(
     if not isinstance(name, str):
         return frozenset()
     schema = getattr(tool, schema_attribute, None)
-    previously_owned = _marked_parameter_ownership(tool, schema)
-    ownership = analytics_owned_parameters(
-        data.options, schema, previously_owned=previously_owned
-    )
+    ownership = analytics_owned_parameters(data.options, schema)
     data.tool_analytics_parameter_ownership[name] = ownership
-    if "llm_model" in previously_owned:
-        data.tool_model_parameter_injected[name] = True
+    if isinstance(schema, dict):
+        data.tool_input_schemas[name] = schema
+    else:
+        data.tool_input_schemas.pop(name, None)
     return ownership
-
-
-def mark_listed_tool_ownership(
-    tool: Any, ownership: FrozenSet[str], *, schema_attribute: str
-) -> None:
-    """Mark injected fields without adding data to the serialized descriptor."""
-    schema = getattr(tool, schema_attribute, None)
-    properties = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(properties, dict):
-        return
-
-    existing = getattr(tool, _OWNERSHIP_MARKER, None)
-    marked = dict(existing) if isinstance(existing, Mapping) else {}
-    for name in ownership:
-        if name not in properties:
-            continue
-        try:
-            marked[name] = copy.deepcopy(properties[name])
-        except Exception:  # noqa: BLE001 - ownership tracking must not break listing
-            marked[name] = properties[name]
-    try:
-        setattr(tool, _OWNERSHIP_MARKER, marked)
-    except Exception:  # noqa: BLE001 - some tool models may reject private fields
-        return
-
-
-def _marked_parameter_ownership(tool: Any, schema: Any) -> FrozenSet[str]:
-    """Read fields that this SDK added to a reused tool descriptor."""
-    marked = getattr(tool, _OWNERSHIP_MARKER, None)
-    properties = schema.get("properties") if isinstance(schema, dict) else None
-    if not isinstance(marked, Mapping) or not isinstance(properties, dict):
-        return frozenset()
-    return frozenset(
-        name
-        for name, declaration in marked.items()
-        if isinstance(name, str) and properties.get(name) == declaration
-    )
 
 
 async def resolve_lowlevel_tool_ownership(
     data: Any, name: str
-) -> Optional[FrozenSet[str]]:
+) -> Tuple[Optional[FrozenSet[str]], Optional[Dict[str, Any]]]:
     """Resolve one raw tool. A served listing on this instance has priority."""
     if name in data.tool_analytics_parameter_ownership:
-        return data.tool_analytics_parameter_ownership[name]
+        return (
+            data.tool_analytics_parameter_ownership[name],
+            data.tool_input_schemas.get(name),
+        )
 
     resolver = data.options.resolve_original_tool
     if resolver is None:
-        return None
+        return None, None
 
     try:
         descriptor = resolver(name)
         if inspect.isawaitable(descriptor):
             descriptor = await descriptor
         if descriptor is None:
-            return None
+            return None, None
         schema = _descriptor_input_schema(descriptor)
         if not isinstance(schema, dict):
             log(
                 f"Warning: resolve_original_tool failed for tool {name!r}: "
                 "resolver returned no usable input schema"
             )
-            return None
-        return analytics_owned_parameters(data.options, schema)
+            return None, None
+        return analytics_owned_parameters(data.options, schema), schema
     except Exception as error:  # noqa: BLE001 - analytics must not break dispatch
         log(f"Warning: resolve_original_tool failed for tool {name!r}: {error}")
-        return None
+        return None, None
 
 
 def _descriptor_input_schema(descriptor: Any) -> Any:
@@ -133,7 +92,7 @@ def _descriptor_input_schema(descriptor: Any) -> Any:
             return descriptor["inputSchema"]
         return descriptor.get("input_schema")
 
-    schema = getattr(descriptor, "inputSchema", None)
+    schema = getattr(descriptor, "input_schema", None)
     if schema is not None:
         return schema
-    return getattr(descriptor, "input_schema", None)
+    return getattr(descriptor, "inputSchema", None)

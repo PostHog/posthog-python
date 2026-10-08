@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import copy
 import os
 import threading
 from dataclasses import dataclass
@@ -740,6 +741,17 @@ def extract_tools(result: Any) -> list:
     """Pull the tool list out of a ListTools ServerResult, as a copy."""
     root = getattr(result, "root", result)
     return list(getattr(root, "tools", []) or [])
+
+
+def copy_tools_list_result(result: Any) -> Any:
+    """Copy a tool listing before schema injection changes its descriptors."""
+    try:
+        return result.model_copy(deep=True)
+    except Exception:  # noqa: BLE001 - analytics must not break a listing
+        try:
+            return copy.deepcopy(result)
+        except Exception:  # noqa: BLE001
+            return result
 
 
 def tools_list_envelope(result: Any) -> Optional[Dict[str, Any]]:

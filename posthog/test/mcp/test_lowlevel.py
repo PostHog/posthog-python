@@ -413,7 +413,7 @@ def _make_strict_ownership_server(input_schema):
     return server, seen
 
 
-async def test_reused_tool_descriptor_keeps_posthog_argument_ownership():
+async def test_listing_does_not_mutate_tool_used_by_fresh_resolver():
     schema = {
         "type": "object",
         "properties": {"query": {"type": "string"}},
@@ -441,11 +441,16 @@ async def test_reused_tool_descriptor_keeps_posthog_argument_ownership():
     await first.request_handlers[mcp_types.ListToolsRequest](
         mcp_types.ListToolsRequest(method="tools/list")
     )
+    assert tool.inputSchema == schema
 
     second, seen = make_server()
-    instrument(second, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=False))
-    await second.request_handlers[mcp_types.ListToolsRequest](
-        mcp_types.ListToolsRequest(method="tools/list")
+    instrument(
+        second,
+        FakeClient(),
+        MCPAnalyticsOptions(
+            enable_conversation_id=False,
+            resolve_original_tool=lambda _name: tool,
+        ),
     )
     await second.request_handlers[mcp_types.CallToolRequest](
         _call_request(
@@ -511,6 +516,7 @@ async def test_fresh_lowlevel_resolver_strips_posthog_arguments():
     props = _events(client, "$mcp_tool_call")[0]["properties"]
     assert props["$mcp_intent"] == "find docs"
     assert props["$mcp_llm_model"] == "model-a"
+    assert props["$mcp_input_keys"] == ["query"]
 
 
 async def test_fresh_lowlevel_resolver_preserves_tool_owned_context():

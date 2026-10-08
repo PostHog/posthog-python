@@ -826,6 +826,59 @@ async def test_v2_fresh_lowlevel_resolver_strips_posthog_arguments():
     props = _events(client, "$mcp_tool_call")[0]["properties"]
     assert props["$mcp_intent"] == "find docs"
     assert props["$mcp_llm_model"] == "model-a"
+    assert props["$mcp_input_keys"] == ["query"]
+
+
+async def test_v2_listing_does_not_mutate_tool_used_by_fresh_resolver():
+    schema = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "additionalProperties": False,
+    }
+    tool = mcp_types.Tool(name="search_docs", input_schema=schema)
+
+    def make_server():
+        seen = []
+
+        async def on_call_tool(ctx, params):
+            seen.append(dict(params.arguments or {}))
+            return mcp_types.CallToolResult(
+                content=[mcp_types.TextContent(type="text", text="ok")]
+            )
+
+        async def on_list_tools(ctx, params):
+            return mcp_types.ListToolsResult(tools=[tool])
+
+        return (
+            Server(
+                "reused-tool-v2",
+                on_call_tool=on_call_tool,
+                on_list_tools=on_list_tools,
+            ),
+            seen,
+        )
+
+    first, _ = make_server()
+    instrument(first, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=False))
+    await _list_tools(first)
+    assert tool.input_schema == schema
+
+    second, seen = make_server()
+    instrument(
+        second,
+        FakeClient(),
+        MCPAnalyticsOptions(
+            enable_conversation_id=False,
+            resolve_original_tool=lambda _name: tool,
+        ),
+    )
+    await _call_tool(
+        second,
+        "search_docs",
+        {"query": "flags", "context": "find docs", "llm_model": "model-a"},
+    )
+
+    assert seen == [{"query": "flags"}]
 
 
 async def test_v2_lowlevel_keeps_top_level_reference_schema_unchanged():

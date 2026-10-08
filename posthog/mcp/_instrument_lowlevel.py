@@ -24,7 +24,6 @@ import mcp.types as mcp_types
 
 from ._argument_ownership import (
     cache_listed_tool_ownership,
-    mark_listed_tool_ownership,
     resolve_lowlevel_tool_ownership,
 )
 from ._context_parameters import is_context_enabled, schema_has_param
@@ -34,6 +33,7 @@ from ._instrumentation import (
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
+    copy_tools_list_result,
     extract_tools,
     is_first_listing_page,
     mutate_tool_schema,
@@ -59,9 +59,11 @@ _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 
 def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
-    """Instrument a raw ``mcp.server.Server``. ``context`` is injected as an
-    optional schema property and NOT stripped — that schema is also the call's
-    validation schema, and a typical ``(name, arguments)`` handler ignores extra keys."""
+    """Instrument a raw ``mcp.server.Server``.
+
+    The adapter removes arguments that a listing or resolver proves PostHog
+    owns. Unknown arguments pass through unchanged.
+    """
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
     _wrap_call_tool(server, data, strip_injected=False)
@@ -197,8 +199,9 @@ def _wrap_call_tool(
                 data, high_level, name, req.params.meta
             )
         else:
-            parameter_ownership = await resolve_lowlevel_tool_ownership(data, name)
-            input_schema = None
+            parameter_ownership, input_schema = await resolve_lowlevel_tool_ownership(
+                data, name
+            )
             strip = set(parameter_ownership or ())
             model_ours = (
                 "llm_model" in parameter_ownership
@@ -342,6 +345,7 @@ def _wrap_call_tool(
 
 
 def _inject_tool_schemas(
+    server: Any,
     data: MCPAnalyticsData,
     tools: list,
     *,
@@ -360,9 +364,7 @@ def _inject_tool_schemas(
     verdicts: Dict[str, bool] = {}
     for tool in tools:
         schema = getattr(tool, "inputSchema", None)
-        ownership = cache_listed_tool_ownership(
-            data, tool, schema_attribute="inputSchema"
-        )
+        cache_listed_tool_ownership(data, tool, schema_attribute="inputSchema")
         mutate_tool_schema(
             data,
             tool,
@@ -372,7 +374,6 @@ def _inject_tool_schemas(
             is_sdk_virtual_tool=False,
             inject_model=inject_model,
         )
-        mark_listed_tool_ownership(tool, ownership, schema_attribute="inputSchema")
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
             continue
@@ -381,6 +382,11 @@ def _inject_tool_schemas(
             # lists a middleware tool beside the registered one it shadows).
             # Which one dispatches is unknown, so the strip fails closed.
             data.tool_model_parameter_injected[tool.name] = False
+
+    cache = getattr(server, "_tool_cache", None)
+    if isinstance(cache, dict):
+        for tool in tools:
+            cache[tool.name] = tool
 
 
 def _wrap_list_tools(
@@ -423,16 +429,18 @@ def _wrap_list_tools(
                     "registering your handlers."
                 )
             return None
-        result = await original(mcp_types.ListToolsRequest(method="tools/list"))
+        result = copy_tools_list_result(
+            await original(mcp_types.ListToolsRequest(method="tools/list"))
+        )
         tools = extract_tools(result)
-        # `original` is usually the SDK's own list_tools decorator, which rebuilds
-        # `Server._tool_cache` from these un-injected schemas every time it runs.
-        # That cache is what the SDK validates real tool arguments against, so
-        # without re-injecting here the next real call is rejected for sending the
-        # `context` we advertised. Same reason the `req is None` branch below
-        # injects.
+        # Resolve ownership from the host listing. Apply injection only to the
+        # copy so a shared host descriptor remains original.
         _inject_tool_schemas(
-            data, tools, context_required=context_required, high_level=high_level
+            server,
+            data,
+            tools,
+            context_required=context_required,
+            high_level=high_level,
         )
         return advertised_tool_names(tools)
 
@@ -440,17 +448,17 @@ def _wrap_list_tools(
 
     async def handler(req: Any) -> Any:
         # The server calls the handler with None to populate its tool cache.
-        # Skip analytics there — but still inject, because that cache is the
-        # schema the SDK validates calls against. This adapter advertises
-        # `context`/`conversation_id` without stripping them, so a cache built
-        # from un-injected schemas rejects the very arguments we told the agent
-        # to send ("Additional properties are not allowed") on any tool with
-        # `additionalProperties: false`.
+        # Skip analytics there, but return the same injected schema as a client
+        # listing.
         if req is None:
-            result = await original(req)
+            result = copy_tools_list_result(await original(req))
             tools = extract_tools(result)
             _inject_tool_schemas(
-                data, tools, context_required=context_required, high_level=high_level
+                server,
+                data,
+                tools,
+                context_required=context_required,
+                high_level=high_level,
             )
             return result
 
@@ -483,7 +491,7 @@ def _wrap_list_tools(
 
         start = time.monotonic()
         try:
-            result = await original(req)
+            result = copy_tools_list_result(await original(req))
         except Exception as error:
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
@@ -500,7 +508,11 @@ def _wrap_list_tools(
         )
 
         _inject_tool_schemas(
-            data, tools, context_required=context_required, high_level=high_level
+            server,
+            data,
+            tools,
+            context_required=context_required,
+            high_level=high_level,
         )
 
         result = apply_virtual_tool_injection(

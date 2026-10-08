@@ -39,7 +39,6 @@ import mcp.types as mcp_types
 
 from ._argument_ownership import (
     cache_listed_tool_ownership,
-    mark_listed_tool_ownership,
     resolve_lowlevel_tool_ownership,
 )
 from ._context_parameters import is_context_enabled, schema_has_param
@@ -49,6 +48,7 @@ from ._instrumentation import (
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
+    copy_tools_list_result,
     is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
@@ -520,7 +520,9 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 parameter_ownership = injected
                 analytics_owns_model = "llm_model" in injected
         else:
-            parameter_ownership = await resolve_lowlevel_tool_ownership(data, name)
+            parameter_ownership, input_schema = await resolve_lowlevel_tool_ownership(
+                data, name
+            )
             if parameter_ownership is not None:
                 analytics_owns_model = "llm_model" in parameter_ownership
         if parameter_ownership is not None:
@@ -713,7 +715,7 @@ def _wrap_v2_list_tools(
 
         start = time.monotonic()
         try:
-            result = await original(ctx, params)
+            result = copy_tools_list_result(await original(ctx, params))
         except Exception as error:
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
@@ -728,9 +730,7 @@ def _wrap_v2_list_tools(
 
         for tool in tools:
             schema = getattr(tool, "input_schema", None)
-            ownership = cache_listed_tool_ownership(
-                data, tool, schema_attribute="input_schema"
-            )
+            cache_listed_tool_ownership(data, tool, schema_attribute="input_schema")
             owns_context = (
                 _tool_owns_param_v2(high_level, tool.name, "context")
                 if high_level is not None
@@ -744,8 +744,6 @@ def _wrap_v2_list_tools(
                 context_required=context_required,
                 is_sdk_virtual_tool=False,
             )
-            mark_listed_tool_ownership(tool, ownership, schema_attribute="input_schema")
-
         result = apply_virtual_tool_injection(
             result, injection, names, data, schema_field="input_schema"
         )

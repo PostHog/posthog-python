@@ -96,6 +96,9 @@ class MCPAnalyticsData:
     tool_analytics_parameter_ownership: Dict[str, FrozenSet[str]] = field(
         default_factory=dict
     )
+    # Original schemas used to resolve ownership. They also identify safe input
+    # names without recording argument values.
+    tool_input_schemas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
     # Which tools got `_mcp_instructions` declared on their advertised output
     # schema at tools/list. Only those may be mirrored into on a call — writing
     # an undeclared key fails the customer's whole result under
