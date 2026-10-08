@@ -58,7 +58,7 @@ async def test_adds_request_tags_and_tracing_context_then_restores_parent():
     with contexts.new_context(fresh=True):
         contexts.identify_context("parent-user")
         contexts.tag("parent-tag", "kept")
-        middleware = PosthogASGIMiddleware(app)
+        middleware = PosthogASGIMiddleware(app, trust_tracing_headers=True)
         await middleware(http_scope(method="POST"), noop_receive, send)
 
         assert contexts.get_context_distinct_id() == "parent-user"
@@ -84,6 +84,19 @@ async def test_adds_request_tags_and_tracing_context_then_restores_parent():
 
 
 @pytest.mark.asyncio
+async def test_ignores_client_controlled_tracing_headers_by_default():
+    observed = {}
+
+    async def app(scope, receive, send):
+        observed["session_id"] = contexts.get_context_session_id()
+        observed["distinct_id"] = contexts.get_context_distinct_id()
+
+    await PosthogASGIMiddleware(app)(http_scope(), noop_receive, noop_send)
+
+    assert observed == {"session_id": None, "distinct_id": None}
+
+
+@pytest.mark.asyncio
 async def test_sanitizes_tracing_headers_and_uses_socket_ip_fallback():
     observed = {}
 
@@ -99,7 +112,9 @@ async def test_sanitizes_tracing_headers_and_uses_socket_ip_fallback():
             (b"x-posthog-distinct-id", b" user\t-456 "),
         ]
     )
-    await PosthogASGIMiddleware(app)(scope, noop_receive, noop_send)
+    await PosthogASGIMiddleware(app, trust_tracing_headers=True)(
+        scope, noop_receive, noop_send
+    )
 
     assert observed["session_id"] == "session-123"
     assert observed["distinct_id"] == "user-456"
@@ -121,7 +136,9 @@ async def test_malformed_and_duplicate_headers_are_handled_safely():
             (b"incomplete",),
         ]
     )
-    await PosthogASGIMiddleware(app)(scope, noop_receive, noop_send)
+    await PosthogASGIMiddleware(app, trust_tracing_headers=True)(
+        scope, noop_receive, noop_send
+    )
 
     assert observed["distinct_id"] == "first"
 
@@ -278,7 +295,9 @@ async def test_websocket_scope_is_instrumented():
         observed["path"] = contexts.get_tags()["$request_path"]
 
     scope = http_scope(type="websocket", scheme="wss", method=None, path="/socket")
-    await PosthogASGIMiddleware(app)(scope, noop_receive, noop_send)
+    await PosthogASGIMiddleware(app, trust_tracing_headers=True)(
+        scope, noop_receive, noop_send
+    )
 
     assert observed == {"session_id": "session-123", "path": "/socket"}
 

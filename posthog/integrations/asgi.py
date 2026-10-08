@@ -16,6 +16,11 @@ It can also wrap an application directly::
 
 Only HTTP and WebSocket connections are instrumented. Lifespan and custom ASGI
 scope types pass through unchanged.
+
+``X-PostHog-Distinct-ID`` and ``X-PostHog-Session-ID`` are client-controlled
+analytics context, not authentication. They are ignored by default. Set
+``trust_tracing_headers=True`` only when deliberately accepting browser analytics
+attribution or when a trusted upstream strips and replaces incoming values.
 """
 
 import inspect
@@ -170,6 +175,11 @@ class PosthogASGIMiddleware:
             Returning ``False`` bypasses all instrumentation for that scope.
         extra_tags: Optional sync or async callback receiving the ASGI scope and
             returning additional context tags.
+        trust_tracing_headers: Use client-provided PostHog distinct and session ID
+            headers as analytics context. Disabled by default because these headers
+            are not authenticated. Enable only when deliberately accepting browser
+            attribution or when a trusted upstream replaces incoming values. Never
+            use these identifiers for authorization.
     """
 
     def __init__(
@@ -179,12 +189,14 @@ class PosthogASGIMiddleware:
         capture_exceptions: bool = True,
         request_filter: Optional[_RequestFilter] = None,
         extra_tags: Optional[_ExtraTags] = None,
+        trust_tracing_headers: bool = False,
     ) -> None:
         self.app = app
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_tags = extra_tags
+        self.trust_tracing_headers = trust_tracing_headers
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") not in {"http", "websocket"}:
@@ -201,13 +213,14 @@ class PosthogASGIMiddleware:
         # metadata is preserved. The context itself must not capture a second time.
         with contexts.new_context(capture_exceptions=False, client=self.client):
             headers = _headers_from_scope(scope)
-            session_id = _decode_header(headers.get(b"x-posthog-session-id"))
-            if session_id:
-                contexts.set_context_session(session_id)
+            if self.trust_tracing_headers:
+                session_id = _decode_header(headers.get(b"x-posthog-session-id"))
+                if session_id:
+                    contexts.set_context_session(session_id)
 
-            distinct_id = _decode_header(headers.get(b"x-posthog-distinct-id"))
-            if distinct_id:
-                contexts.identify_context(distinct_id)
+                distinct_id = _decode_header(headers.get(b"x-posthog-distinct-id"))
+                if distinct_id:
+                    contexts.identify_context(distinct_id)
 
             tags = _extract_tags(scope, headers)
             if self.extra_tags:
