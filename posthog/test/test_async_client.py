@@ -844,7 +844,14 @@ async def test_failed_capture_logs_one_loss_line_without_response_detail(
         await client.shutdown()
 
     assert "server-secret" not in caplog.text
-    assert f"1 event(s) not persisted by {path}: APIError (status=400)" in caplog.text
+    loss_lines = [
+        r.getMessage()
+        for r in caplog.records
+        if "event(s) not persisted by" in r.getMessage()
+    ]
+    assert loss_lines == [
+        f"[PostHog] 1 event(s) not persisted by {path}: APIError (status=400)"
+    ]
 
 
 @pytest.mark.asyncio
