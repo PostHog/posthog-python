@@ -68,6 +68,7 @@ dev = [
 ]
 test = [
     "freezegun==1.5.1",
+    "flask>=2.2",
     "python-dateutil>=2.9.0.post0",
     "tzdata",
     "coverage",
