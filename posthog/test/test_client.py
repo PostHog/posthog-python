@@ -2789,9 +2789,14 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNone(result)
         output = "\n".join(logs.output)
-        self.assertIn(
-            f"1 event(s) not persisted by {path}: APIError (status=400)",
-            output,
+        loss_lines = [
+            r.getMessage()
+            for r in logs.records
+            if "event(s) not persisted by" in r.getMessage()
+        ]
+        self.assertEqual(
+            loss_lines,
+            [f"[PostHog] 1 event(s) not persisted by {path}: APIError (status=400)"],
         )
         self.assertNotIn("server-secret", output)
 
