@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from posthog.capture_event import _merge_groups
+
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
     PostHogMCPAnalyticsEvent,
@@ -63,9 +65,9 @@ def _build_capture_event(event: Event) -> PostHogCaptureEvent:
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
     _add_person_processing(event, properties)
-    _add_groups(event, properties)
     _add_common_properties(event, properties)
     _add_custom_properties(event, properties)
+    _add_groups(event, properties)
     _add_server_build(event, properties)
 
     event_name = (
@@ -92,9 +94,10 @@ def _add_conversation_id(event: Event, properties: Dict[str, Any]) -> None:
 
 
 def _add_groups(event: Event, properties: Dict[str, Any]) -> None:
+    """Merge the typed groups over a custom ``$groups`` property, key by key."""
     groups = event.get("groups")
     if groups:
-        properties["$groups"] = groups
+        _merge_groups(properties, groups)
 
 
 def _add_person_processing(event: Event, properties: Dict[str, Any]) -> None:

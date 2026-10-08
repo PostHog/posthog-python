@@ -925,6 +925,7 @@ def test_identity_enables_person_processing_and_set():
         "identify_actor_given_id": "user_1",
         "identify_actor_data": {"email": "a@b.com"},
         "groups": {"organization": "org_1"},
+        "properties": {"$groups": {"organization": "custom", "project": "p1"}},
         "timestamp": datetime.now(timezone.utc),
     }
     [capture] = build_posthog_capture_events(event)
@@ -932,7 +933,7 @@ def test_identity_enables_person_processing_and_set():
     assert capture["distinct_id"] == "user_1"
     assert "$process_person_profile" not in props
     assert props["$set"] == {"email": "a@b.com"}
-    assert props["$groups"] == {"organization": "org_1"}
+    assert props["$groups"] == {"organization": "org_1", "project": "p1"}
 
 
 def test_listed_tool_names_only_on_tools_list():

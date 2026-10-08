@@ -252,8 +252,9 @@ DEFAULTS_CONFIG = {
 def _recording_hook(seen):
     def hook(msg):
         seen.append((dict(msg["properties"]), dict(msg["options"])))
+        removed = {"only_super", "$is_server"}
         properties = {
-            **{k: v for k, v in msg["properties"].items() if k != "only_super"},
+            **{k: v for k, v in msg["properties"].items() if k not in removed},
             "shared": "hook",
         }
         return {**msg, "properties": properties, "options": {"cookieless_mode": False}}
@@ -289,11 +290,14 @@ def _assert_hook_sees_defaults_and_has_final_say(seen, events):
         hook_properties["shared"],
         hook_properties["only_super"],
         hook_properties["from_context"],
-    ) == ("super", 1, "context")
+        hook_properties["$is_server"],
+        hook_properties["$geoip_disable"],
+    ) == ("super", 1, "context", True, True)
+    assert "$os" in hook_properties
     assert hook_options == {"cookieless_mode": True, "product_tour_id": "context-tour"}
     properties = events[0]["properties"]
     assert (properties["shared"], properties["from_context"]) == ("hook", "context")
-    assert "only_super" not in properties
+    assert not {"only_super", "$is_server"} & properties.keys()
     assert events[0]["options"] == {"cookieless_mode": False}
 
 
@@ -319,25 +323,107 @@ async def test_async_defaults_fill_before_before_send(method):
 
 NESTED_SUPER_PROPERTIES = {
     "$set": {"plan": "free", "source": "super"},
-    "$groups": {"company": "acme", "team": "core"},
+    "$groups": {"company": "acme", "team": "core", "region": "us"},
     "$unset": ["stale"],
 }
 
 
-def test_nested_properties_fill_one_level_deep():
-    events = _sync_wire_events(
-        lambda c: c.capture(
-            "e",
-            distinct_id="u",
-            properties={"$set": {"plan": "pro"}, "$unset": ["other"]},
-            groups={"company": "posthog"},
-        ),
-        super_properties=NESTED_SUPER_PROPERTIES,
+def _nested_capture(client):
+    return client.capture(
+        "e",
+        distinct_id="u",
+        properties={
+            "$set": {"plan": "pro"},
+            "$unset": ["other"],
+            "$groups": {"company": "event", "team": "event"},
+        },
+        groups={"company": "posthog"},
     )
+
+
+def _assert_nested_properties(events):
     properties = events[0]["properties"]
     assert properties["$set"] == {"plan": "pro", "source": "super"}
-    assert properties["$groups"] == {"company": "posthog", "team": "core"}
+    assert properties["$groups"] == {
+        "company": "posthog",
+        "team": "event",
+        "region": "us",
+    }
     assert properties["$unset"] == ["other"]
+
+
+def test_nested_properties_fill_one_level_deep():
+    events = _sync_wire_events(
+        _nested_capture, super_properties=NESTED_SUPER_PROPERTIES
+    )
+    _assert_nested_properties(events)
+
+
+@pytest.mark.asyncio
+async def test_async_nested_properties_fill_one_level_deep():
+    events = await _async_wire_events(
+        _nested_capture, super_properties=NESTED_SUPER_PROPERTIES
+    )
+    _assert_nested_properties(events)
+
+
+CALLER_SDK_VALUES = {"$is_server": False, "$geoip_disable": False, "$os": "caller-os"}
+SDK_FLAGS = {"$is_server": False, "$geoip_disable": False}
+
+
+def _capture_with_caller_sdk_values(source):
+    def call(client):
+        with new_context(fresh=True):
+            if source == "context":
+                for key, value in CALLER_SDK_VALUES.items():
+                    tag(key, value)
+            properties = CALLER_SDK_VALUES if source == "event" else None
+            return client.capture("e", distinct_id="u", properties=properties)
+
+    return call
+
+
+def _sdk_value_config(source):
+    return {"super_properties": CALLER_SDK_VALUES} if source == "super" else {}
+
+
+def _assert_caller_values(events, expected):
+    properties = events[0]["properties"]
+    assert {key: properties.get(key) for key in expected} == expected
+
+
+@pytest.mark.parametrize("source", ["event", "context", "super"])
+def test_sync_caller_values_beat_sdk_values(source):
+    events = _sync_wire_events(
+        _capture_with_caller_sdk_values(source), **_sdk_value_config(source)
+    )
+    _assert_caller_values(events, CALLER_SDK_VALUES)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["event", "context", "super"])
+async def test_async_caller_values_beat_sdk_values(source):
+    events = await _async_wire_events(
+        _capture_with_caller_sdk_values(source), **_sdk_value_config(source)
+    )
+    _assert_caller_values(events, CALLER_SDK_VALUES)
+
+
+@pytest.mark.parametrize("method", list(CAPTURE_CALLS))
+def test_sync_super_properties_beat_sdk_values_on_every_path(method):
+    events = _sync_wire_events(
+        lambda c: CAPTURE_CALLS[method](c, None), super_properties=SDK_FLAGS
+    )
+    _assert_caller_values(events, SDK_FLAGS)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", list(ASYNC_CAPTURE_CALLS))
+async def test_async_super_properties_beat_sdk_values_on_every_path(method):
+    events = await _async_wire_events(
+        lambda c: ASYNC_CAPTURE_CALLS[method](c, None), super_properties=SDK_FLAGS
+    )
+    _assert_caller_values(events, SDK_FLAGS)
 
 
 @pytest.mark.parametrize("method", ["set", "set_once"])
