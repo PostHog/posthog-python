@@ -15,8 +15,7 @@ You need to change code if your app does any of these:
 - reuses one event `uuid` for more than one event
 - sets `$process_person_profile` to turn person processing on for events without a distinct ID
 - passes strings such as `"true"` for `$cookieless_mode`, `$ignore_sent_at` or `$process_person_profile`
-- expects `super_properties` to override properties passed to a single call
-- reads or removes context tags, `super_properties` or `$release_id` in `before_send`
+- expects `super_properties` to override properties passed to a single call, including `$set` and `$groups`
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
 
@@ -97,20 +96,26 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
 - A `None` option counts as unset, so a later step can fill it.
 
-Values apply in this order. After `before_send`, each step fills only the options and properties that the steps before it left unset:
+Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
 1. the `options` and `properties` of the call
-2. `before_send`
-3. context options and tags
-4. `super_options` and `super_properties`
-5. values the SDK sets: `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+2. context options and tags
+3. `super_options` and `super_properties`
+4. values the SDK sets: `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+5. `before_send`, which sees the result of steps 1 to 4 and can change or remove any of it
 6. legacy properties, which fill unset options and are then removed
 
-Three changes follow from this order:
+A property set to `None` counts as set, so no later step fills it.
+`$set`, `$set_once`, `$groups` and `$group_set` fill one level deep.
+When the call and a later step both set one of them to a dict, the later step adds only the keys the call left out.
+For example, `super_properties={"$set": {"plan": "free", "source": "web"}}` and a call with `properties={"$set": {"plan": "pro"}}` send `{"plan": "pro", "source": "web"}`.
+
+These changes follow from this order:
 
 - Properties passed to a call now override `super_properties`. `super_properties` can no longer change `$lib`, `$lib_version` or `$geoip_disable`.
-- `before_send` no longer sees context tags, context options, `super_properties`, `super_options` or `$release_id`. They fill in after it runs, so it cannot read or remove them, and its own changes win over them. To keep a super property off one event, set that key in the call's `properties` or in `before_send`.
+- A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
+- To change an option in `before_send`, edit `options`. A legacy property that `before_send` adds does not replace an option that is already set.
 
 ## AI capture
 
