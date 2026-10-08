@@ -27,7 +27,7 @@ class ServiceUnavailable(APIException):
 
 
 class TestDjangoRestFrameworkIntegration(unittest.TestCase):
-    def test_default_handler_captures_handled_5xx(self):
+    def test_default_handler_captures_5xx_with_canonical_metadata(self):
         client = Mock()
         handler = create_exception_handler(client=client)
         exception = ServiceUnavailable()
@@ -41,7 +41,7 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
                 "level": "error",
                 "source": "django_rest_framework.exception_handler",
                 "mechanism": {
-                    "type": "django_rest_framework",
+                    "type": "middleware",
                     "handled": True,
                 },
             },
@@ -174,7 +174,7 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
                 "level": "error",
                 "source": "django_rest_framework.exception_handler",
                 "mechanism": {
-                    "type": "django_rest_framework",
+                    "type": "middleware",
                     "handled": True,
                 },
             },

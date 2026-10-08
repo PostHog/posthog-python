@@ -37,7 +37,7 @@ _logger = logging.getLogger("posthog")
 _CAPTURE_METADATA = {
     "level": "error",
     "source": "django_rest_framework.exception_handler",
-    "mechanism": {"type": "django_rest_framework", "handled": True},
+    "mechanism": {"type": "middleware", "handled": True},
 }
 
 
