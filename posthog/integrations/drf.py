@@ -10,8 +10,11 @@ handled server errors while leaving DRF's response behavior unchanged::
     }
 
 By default, only responses with a 5xx status are captured. Expected 4xx API
-errors are ignored. Projects that already have a custom DRF exception handler
-can wrap it in an application module::
+errors are ignored. Set ``POSTHOG_MW_CAPTURE_EXCEPTIONS = False`` to keep the
+Django request context without capturing Django or DRF exceptions.
+
+Projects that already have a custom DRF exception handler can wrap it in an
+application module::
 
     from myapp.api import existing_exception_handler
     from posthog.integrations.drf import create_exception_handler
@@ -66,6 +69,21 @@ def _configured_client(client: Optional[Client]) -> Optional[Client]:
     return None
 
 
+def _capture_exceptions_enabled(configured: Optional[bool]) -> bool:
+    """Resolve explicit configuration before the shared Django middleware setting."""
+    if configured is not None:
+        return configured
+
+    try:
+        from django.conf import settings
+
+        django_setting = getattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS", None)
+    except Exception:
+        return True
+
+    return django_setting if isinstance(django_setting, bool) else True
+
+
 def _passes_django_request_filter(context: Mapping[str, Any]) -> bool:
     """Apply the Django middleware request filter to the underlying request."""
     try:
@@ -102,6 +120,7 @@ def create_exception_handler(
     handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None,
     *,
     client: Optional[Client] = None,
+    capture_exceptions: Optional[bool] = None,
     capture_4xx: bool = False,
     exception_filter: Optional[
         Callable[[Exception, Any, Mapping[str, Any]], bool]
@@ -115,6 +134,9 @@ def create_exception_handler(
         client: Optional PostHog client. When omitted, ``POSTHOG_DRF_CLIENT`` or
             ``POSTHOG_MW_CLIENT`` is used when configured, then the global
             PostHog client.
+        capture_exceptions: Whether to capture handled DRF exceptions. When
+            omitted, inherits a boolean ``POSTHOG_MW_CAPTURE_EXCEPTIONS`` setting
+            and otherwise defaults to ``True``. An explicit value takes precedence.
         capture_4xx: Also capture handled 4xx responses. Disabled by default to
             avoid reporting expected API errors.
         exception_filter: Optional final filter called with ``(exception,
@@ -134,6 +156,8 @@ def create_exception_handler(
         response = delegate(exc, context)
         if response is None:
             return None
+        if not _capture_exceptions_enabled(capture_exceptions):
+            return response
 
         try:
             status_code = int(response.status_code)

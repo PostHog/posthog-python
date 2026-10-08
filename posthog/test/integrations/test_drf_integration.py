@@ -107,6 +107,51 @@ class TestDjangoRestFrameworkIntegration(unittest.TestCase):
 
         client.capture_exception.assert_not_called()
 
+    def test_explicit_capture_opt_out_preserves_response_without_running_filters(self):
+        client = Mock()
+        response = Response({"detail": "unavailable"}, status=503)
+        delegate = Mock(return_value=response)
+        exception_filter = Mock(return_value=True)
+        request_filter = Mock(return_value=True)
+        handler = create_exception_handler(
+            delegate,
+            client=client,
+            capture_exceptions=False,
+            exception_filter=exception_filter,
+        )
+        exception = RuntimeError("upstream failed")
+        context = {"request": object()}
+
+        with override_settings(POSTHOG_MW_REQUEST_FILTER=request_filter):
+            returned_response = handler(exception, context)
+
+        self.assertIs(returned_response, response)
+        delegate.assert_called_once_with(exception, context)
+        request_filter.assert_not_called()
+        exception_filter.assert_not_called()
+        client.capture_exception.assert_not_called()
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=False)
+    def test_module_handler_inherits_django_capture_opt_out(self):
+        exception = ServiceUnavailable()
+
+        with patch("posthog.capture_exception") as capture_exception:
+            response = exception_handler(exception, {})
+
+        self.assertEqual(response.status_code, 503)
+        capture_exception.assert_not_called()
+
+    @override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=False)
+    def test_explicit_capture_setting_overrides_django_opt_out(self):
+        client = Mock()
+        handler = create_exception_handler(client=client, capture_exceptions=True)
+        exception = ServiceUnavailable()
+
+        response = handler(exception, {})
+
+        self.assertEqual(response.status_code, 503)
+        client.capture_exception.assert_called_once()
+
     @override_settings(POSTHOG_MW_REQUEST_FILTER=lambda request: False)
     def test_django_middleware_request_filter_suppresses_capture(self):
         client = Mock()
