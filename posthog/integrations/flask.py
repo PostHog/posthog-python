@@ -21,7 +21,10 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
 
 from .. import contexts
 from ..client import Client
-from ..exception_utils import _capture_exception_with_metadata
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
 
 if TYPE_CHECKING:
     from flask import Flask, Request
@@ -181,7 +184,7 @@ class PosthogFlaskIntegration:
         if not self.capture_exceptions or not self._request_is_tracked():
             return
 
-        capture_metadata = {
+        capture_metadata: _ExceptionCaptureMetadata = {
             "level": "error",
             "source": "flask.got_request_exception",
             "mechanism": {"type": "middleware", "handled": False},
