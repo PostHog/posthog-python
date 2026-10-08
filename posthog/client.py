@@ -34,7 +34,12 @@ from posthog.capture_compression import (
     _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
-from posthog.capture_event import _canonical_event_uuid, _event_options
+from posthog.capture_event import (
+    _build_event_defaults,
+    _canonical_event_uuid,
+    _event_options,
+    _fill_event_defaults,
+)
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
@@ -293,10 +298,22 @@ def add_context_tags(properties):
         context_tags.update(properties)
         properties = context_tags
 
+    return _add_context_session_id(properties)
+
+
+def _add_context_session_id(properties):
     if "$session_id" not in properties and get_context_session_id():
         properties["$session_id"] = get_context_session_id()
-
     return properties
+
+
+def _context_tag_defaults() -> dict[str, Any]:
+    """The current context's tags, as event property defaults."""
+    current_context = _get_current_context()
+    if not current_context:
+        return {}
+    context_tags = current_context.collect_tags()
+    return {**context_tags, "$context_tags": set(context_tags.keys())}
 
 
 def no_throw(default_return=None):
@@ -805,13 +822,17 @@ class Client(object):
             feature_flags_request_max_retries: Number of retries for feature flag
                 requests after network, transport, or timeout failures. Defaults
                 to 1. Set to 0 to disable retries.
-            super_properties: Properties for every captured event. Context
-                tags and an event's own properties override them.
+            super_properties: Properties for every captured event. They fill
+                only keys the event leaves unset, after ``before_send`` runs.
+                An event's own properties, ``before_send`` changes and context
+                tags override them.
             super_options: Capture options for every captured event, such as
-                ``{"cookieless_mode": True}``. Context options and an event's
-                own ``options`` override them. They also win over an event's
-                legacy property for the same key, such as ``$cookieless_mode``,
-                so pass per-event overrides of that key as ``options``.
+                ``{"cookieless_mode": True}``. They fill only options the event
+                leaves unset, after ``before_send`` runs. An event's own
+                ``options``, ``before_send`` changes and context options
+                override them. They also win over an event's legacy property
+                for the same key, such as ``$cookieless_mode``, so pass
+                per-event overrides of that key as ``options``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -826,7 +847,9 @@ class Client(object):
                 through unredacted. ``privacy_mode`` always wins. Defaults to
                 False.
             before_send: Optional callback that can modify or drop events before
-                upload. Return ``None`` to drop an event.
+                upload. Return ``None`` to drop an event. It does not see
+                context tags, context options, ``super_properties`` or
+                ``super_options``. They fill in after it runs.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -1334,8 +1357,9 @@ class Client(object):
         """
         Set a capture option for every event captured within the current context.
 
-        Context options override ``super_options``. An event's own ``options``
-        override context options.
+        Context options fill options an event leaves unset, after
+        ``before_send`` runs. They override ``super_options``. An event's own
+        ``options`` and ``before_send`` changes override them.
 
         Args:
             key: The option name, such as ``"process_person_profile"``.
@@ -1679,7 +1703,8 @@ class Client(object):
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
-                ``super_options``. An option set at any layer wins over its
+                ``super_options``, which fill in after ``before_send`` runs.
+                An option set at any layer wins over its
                 legacy ``$`` property, such as ``$process_person_profile``,
                 set at any layer. A ``None`` option counts as unset.
 
@@ -1756,10 +1781,7 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
-        options = {
-            **_context_get_context_options(),
-            **_event_options(kwargs.get("options", None)),
-        }
+        options = _event_options(kwargs.get("options", None))
         # Internal, set for minimal $feature_flag_called events: a strict allowlist
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
@@ -1769,8 +1791,7 @@ class Client(object):
         if self.capture_trace_context:
             properties = {**_get_current_otel_span_properties(), **properties}
 
-        properties = add_context_tags(properties)
-        assert properties is not None  # Type hint for mypy
+        properties = _add_context_session_id(properties)
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
@@ -1882,6 +1903,8 @@ class Client(object):
             disable_geoip,
             lane,
             property_allowlist=property_allowlist,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
             derived_options=_personless_options(personless),
         )
 
@@ -1970,13 +1993,12 @@ class Client(object):
             "$set": properties,
             "event": "$set",
             "uuid": uuid,
-            "options": {
-                **_context_get_context_options(),
-                **_event_options(kwargs.get("options", None)),
-            },
+            "options": _event_options(kwargs.get("options", None)),
         }
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg, disable_geoip, context_options=_context_get_context_options()
+        )
 
     @no_throw()
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -2023,13 +2045,12 @@ class Client(object):
             "$set_once": properties,
             "event": "$set_once",
             "uuid": uuid,
-            "options": {
-                **_context_get_context_options(),
-                **_event_options(kwargs.get("options", None)),
-            },
+            "options": _event_options(kwargs.get("options", None)),
         }
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg, disable_geoip, context_options=_context_get_context_options()
+        )
 
     @no_throw()
     def group_identify(
@@ -2473,6 +2494,8 @@ class Client(object):
         disable_geoip,
         lane=None,
         property_allowlist=None,
+        context_properties=None,
+        context_options=None,
         derived_options=None,
     ):
         # type: (...) -> Optional[str]
@@ -2510,30 +2533,17 @@ class Client(object):
         if disable_geoip:
             msg["properties"]["$geoip_disable"] = True
 
-        if self.super_properties:
-            msg["properties"] = {**self.super_properties, **msg["properties"]}
+        msg["options"] = msg.get("options") or {}
 
-        # Each layer overrides the one before it: values the SDK derives, such
-        # as personless, then super options, then context and event options.
-        msg["options"] = {
-            **(derived_options or {}),
-            **_event_options(self.super_options),
-            **(msg.get("options") or {}),
-        }
-
-        # Set after the super_properties merge so an explicit `$release_id` from
-        # the caller's properties or the super properties wins over the env var.
-        if self._release_id is not None:
-            msg["properties"].setdefault("$release_id", self._release_id)
-
-        # Set after the super_properties merge so this SDK's server classification
-        # can't be silently overridden by a user-provided super property.
+        # Super properties fill only keys the event left unset, so they cannot
+        # override this SDK's server classification.
         if self.is_server:
             msg["properties"]["$is_server"] = True
 
-        # Applied after every enrichment step (system context, context tags, super
-        # properties, $lib/$lib_version) so the final event shape is exactly the
-        # allowlist regardless of where a property came from.
+        # Applied after every enrichment step (system context, $lib/$lib_version)
+        # and again to the defaults filled in after before_send, so the final
+        # event shape is exactly the allowlist regardless of where a property
+        # came from.
         if property_allowlist is not None:
             msg["properties"] = {
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
@@ -2555,6 +2565,19 @@ class Client(object):
             except Exception as e:
                 self.log.exception(f"Error in before_send callback: {e}")
                 return None
+
+        _fill_event_defaults(
+            msg,
+            _build_event_defaults(
+                super_properties=self.super_properties,
+                super_options=self.super_options,
+                release_id=self._release_id,
+                context_properties=context_properties,
+                context_options=context_options,
+                derived_options=derived_options,
+                property_allowlist=property_allowlist,
+            ),
+        )
 
         # Re-normalized after before_send, which may have replaced or removed
         # msg["uuid"], so the returned uuid always matches the wire event.

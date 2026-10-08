@@ -309,8 +309,9 @@ def set_context_option(key: str, value: Any) -> None:
     """
     Set a capture option for every event captured within the current context.
 
-    Context options override ``super_options``, and an event's own ``options``
-    override context options.
+    Context options fill options an event leaves unset, after ``before_send``
+    runs. They override ``super_options``. An event's own ``options`` and
+    ``before_send`` changes override them.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
@@ -383,13 +384,16 @@ Attributes:
     feature_flags_request_max_retries: Number of retries for feature flag
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
-    super_properties: Properties for every captured event. Context tags and
-        an event's own properties override them.
+    super_properties: Properties for every captured event. They fill only
+        keys the event leaves unset, after ``before_send`` runs. An event's own
+        properties, ``before_send`` changes and context tags override them.
     super_options: Capture options for every captured event, such as
-        ``{"cookieless_mode": True}``. Context options and an event's own
-        ``options`` override them. They also win over an event's legacy
-        property for the same key, such as ``$cookieless_mode``, so pass
-        per-event overrides of that key as ``options``.
+        ``{"cookieless_mode": True}``. They fill only options the event leaves
+        unset, after ``before_send`` runs. An event's own ``options``,
+        ``before_send`` changes and context options override them. They also
+        win over an event's legacy property for the same key, such as
+        ``$cookieless_mode``, so pass per-event overrides of that key as
+        ``options``.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
@@ -413,7 +417,9 @@ Attributes:
     project_root: Root path used to determine in-app exception stack frames.
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
-        Return ``None`` to drop an event.
+        Return ``None`` to drop an event. It does not see context tags, context
+        options, ``super_properties`` or ``super_options``. They fill in after
+        it runs.
     enable_local_evaluation: Whether to poll feature flag definitions for local
         evaluation when a personal API key is configured.
     flag_definition_cache_provider: Optional external cache provider for sharing

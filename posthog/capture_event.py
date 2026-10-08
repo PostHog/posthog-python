@@ -20,11 +20,14 @@ encodes:
 
 import logging
 import re
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from posthog.utils import _normalize_timestamp
+from posthog.utils import clean as _clean
 
 log = logging.getLogger("posthog")
 
@@ -83,6 +86,72 @@ def _event_options(value: Any) -> dict[str, Any]:
         )
         return {}
     return dict(value)
+
+
+@dataclass(frozen=True)
+class _EventDefaults:
+    """Context, global and SDK-derived values for one event, highest layer first.
+
+    They fill in after ``before_send``, so the hook never sees them, and the
+    event's own values and the hook's changes always win.
+    """
+
+    property_layers: tuple[Mapping[str, Any], ...] = ()
+    option_layers: tuple[Mapping[str, Any], ...] = ()
+    property_allowlist: Optional[Collection[str]] = None
+
+
+def _build_event_defaults(
+    *,
+    super_properties: Optional[Mapping[str, Any]],
+    super_options: Any,
+    release_id: Optional[str],
+    context_properties: Optional[Mapping[str, Any]] = None,
+    context_options: Optional[Mapping[str, Any]] = None,
+    derived_options: Optional[Mapping[str, Any]] = None,
+    property_allowlist: Optional[Collection[str]] = None,
+) -> _EventDefaults:
+    """Order the layers: context, then global, then values the SDK derives."""
+    # An explicit `$release_id` in the event or in super properties wins over
+    # the environment value.
+    release = {"$release_id": release_id} if release_id is not None else {}
+    return _EventDefaults(
+        property_layers=(context_properties or {}, super_properties or {}, release),
+        option_layers=(
+            context_options or {},
+            _event_options(super_options),
+            derived_options or {},
+        ),
+        property_allowlist=property_allowlist,
+    )
+
+
+def _fill_event_defaults(
+    msg: dict[str, Any], defaults: Optional[_EventDefaults]
+) -> None:
+    """Fill the keys an event left unset from ``defaults``, layer by layer.
+
+    A property is unset only when its key is missing. An option is unset when
+    it is missing or ``None``, the same rule hoisting uses.
+    """
+    if defaults is None:
+        return
+    allowlist = defaults.property_allowlist
+    properties = msg.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        msg["properties"] = properties
+    for property_layer in defaults.property_layers:
+        for key, value in property_layer.items():
+            if key in properties or (allowlist is not None and key not in allowlist):
+                continue
+            properties[key] = _clean(value)
+    options = _event_options(msg.get("options"))
+    for option_layer in defaults.option_layers:
+        for key, value in option_layer.items():
+            if options.get(key) is None:
+                options[key] = _clean(value)
+    msg["options"] = options
 
 
 def _v1_timestamp(timestamp: Any) -> str:

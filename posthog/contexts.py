@@ -303,9 +303,10 @@ def set_context_option(key: str, value: Any) -> None:
     """
     Set a capture option for every event captured within the current context.
 
-    Context options override the client's ``super_options``. An event's own
-    ``options`` override context options. Child contexts inherit them unless
-    they are fresh.
+    Context options fill options an event leaves unset, after ``before_send``
+    runs. They override the client's ``super_options``. An event's own
+    ``options`` and ``before_send`` changes override them. Child contexts
+    inherit them unless they are fresh.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
