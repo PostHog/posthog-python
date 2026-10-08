@@ -70,8 +70,8 @@ class PosthogFlaskIntegration:
         request_filter: Optional callback receiving Flask's request object. A
             false return value disables both context and exception capture for
             that request.
-        extra_tags: Optional callback returning additional context tags. This
-            is useful for application-specific metadata such as an authenticated
+        extra_properties: Optional callback returning additional event properties.
+            This is useful for application-specific metadata such as an authenticated
             user's role. Values should not contain secrets or request bodies.
 
     The integration intentionally does not capture exceptions handled by an
@@ -88,12 +88,12 @@ class PosthogFlaskIntegration:
         client: Optional[Client] = None,
         capture_exceptions: bool = True,
         request_filter: Optional[Callable[[Request], bool]] = None,
-        extra_tags: Optional[Callable[[Request], Mapping[str, Any]]] = None,
+        extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None,
     ) -> None:
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
-        self.extra_tags = extra_tags
+        self.extra_properties = extra_properties
 
         if app is not None:
             self.init_app(app)
@@ -145,18 +145,18 @@ class PosthogFlaskIntegration:
         if distinct_id:
             contexts.identify_context(distinct_id)
 
-        for key, value in self._request_tags(request).items():
+        for key, value in self._request_properties(request).items():
             contexts.tag(key, value)
 
-        if self.extra_tags is not None:
-            extra_tags = self.extra_tags(request)
-            if extra_tags:
-                for key, value in extra_tags.items():
+        if self.extra_properties is not None:
+            extra_properties = self.extra_properties(request)
+            if extra_properties:
+                for key, value in extra_properties.items():
                     contexts.tag(key, value)
 
     @staticmethod
-    def _request_tags(request: Request) -> dict[str, Any]:
-        tags: dict[str, Any] = {
+    def _request_properties(request: Request) -> dict[str, Any]:
+        properties: dict[str, Any] = {
             # base_url deliberately excludes query strings, which commonly
             # contain credentials, tokens, and other sensitive values.
             "$current_url": request.base_url,
@@ -165,18 +165,18 @@ class PosthogFlaskIntegration:
         }
 
         if request.remote_addr:
-            tags["$ip"] = request.remote_addr
+            properties["$ip"] = request.remote_addr
 
         user_agent = request.headers.get("User-Agent")
         if user_agent:
-            tags["$user_agent"] = user_agent
-            tags["$raw_user_agent"] = user_agent
+            properties["$user_agent"] = user_agent
+            properties["$raw_user_agent"] = user_agent
 
         url_rule = getattr(request, "url_rule", None)
         if url_rule is not None:
-            tags["$request_route"] = str(url_rule)
+            properties["$request_route"] = str(url_rule)
 
-        return tags
+        return properties
 
     def _handle_unhandled_exception(
         self, sender: Flask, exception: BaseException, **kwargs: Any

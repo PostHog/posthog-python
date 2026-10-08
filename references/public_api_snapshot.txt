@@ -876,7 +876,7 @@ attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = Tr
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)
 attribute posthog.integrations.flask.PosthogFlaskIntegration.capture_exceptions = capture_exceptions
 attribute posthog.integrations.flask.PosthogFlaskIntegration.client = client
-attribute posthog.integrations.flask.PosthogFlaskIntegration.extra_tags = extra_tags
+attribute posthog.integrations.flask.PosthogFlaskIntegration.extra_properties = extra_properties
 attribute posthog.integrations.flask.PosthogFlaskIntegration.request_filter = request_filter
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
@@ -1203,7 +1203,7 @@ class posthog.flag_definition_cache.FlagDefinitionCacheData
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
-class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[Callable[[Request], bool]] = None, extra_tags: Optional[Callable[[Request], Mapping[str, Any]]] = None)
+class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None)
 class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 

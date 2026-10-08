@@ -20,7 +20,7 @@ def _app() -> Flask:
 
 def test_adds_request_context_and_restores_parent_context() -> None:
     app = _app()
-    PosthogFlaskIntegration(app, extra_tags=lambda request: {"tenant": "acme"})
+    PosthogFlaskIntegration(app, extra_properties=lambda request: {"tenant": "acme"})
 
     @app.get("/users/<user_id>")
     def view(user_id: str):
@@ -29,7 +29,7 @@ def test_adds_request_context_and_restores_parent_context() -> None:
         return jsonify(
             distinct_id=contexts.get_context_distinct_id(),
             session_id=contexts.get_context_session_id(),
-            tags=scope.collect_tags(),
+            properties=scope.collect_tags(),
         )
 
     with contexts.new_context():
@@ -47,7 +47,7 @@ def test_adds_request_context_and_restores_parent_context() -> None:
         payload = response.get_json()
         assert payload["distinct_id"] == "person-1"
         assert payload["session_id"] == "session-1"
-        assert payload["tags"] == {
+        assert payload["properties"] == {
             "$current_url": "http://localhost/users/123",
             "$ip": "203.0.113.10",
             "$raw_user_agent": "integration-test/1.0",
@@ -57,14 +57,14 @@ def test_adds_request_context_and_restores_parent_context() -> None:
             "$user_agent": "integration-test/1.0",
             "tenant": "acme",
         }
-        assert "secret" not in payload["tags"]["$current_url"]
+        assert "secret" not in payload["properties"]["$current_url"]
 
         parent = contexts._get_current_context()
         assert parent is not None
         assert parent.collect_tags() == {"outer": "must-not-leak-into-request"}
 
 
-def test_captures_unhandled_exception_once_with_request_tags() -> None:
+def test_captures_unhandled_exception_once_with_request_properties() -> None:
     app = _app()
     client = Mock()
     captures = []
@@ -87,7 +87,7 @@ def test_captures_unhandled_exception_once_with_request_tags() -> None:
         app.test_client().get("/failure")
 
     assert len(captures) == 1
-    exception, kwargs, tags = captures[0]
+    exception, kwargs, properties = captures[0]
     assert exception is error
     assert kwargs == {
         "_capture_metadata": {
@@ -96,7 +96,7 @@ def test_captures_unhandled_exception_once_with_request_tags() -> None:
             "mechanism": {"type": "middleware", "handled": False},
         }
     }
-    assert tags["$request_path"] == "/failure"
+    assert properties["$request_path"] == "/failure"
     assert contexts._get_current_context() is None
 
 
