@@ -238,7 +238,7 @@ def test_in_flight_full_evaluation_keeps_matching_snapshot(client):
         "posthog.client.match_feature_flag_properties",
         side_effect=reload_during_evaluation,
     ):
-        result, fallback = client._get_all_flags_and_payloads_locally(
+        result, fallback, _ = client._get_all_flags_and_payloads_locally(
             "user",
             groups={"company": "company-id"},
             person_properties={"value": "banana"},
