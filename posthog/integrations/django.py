@@ -1,4 +1,5 @@
 import json
+import math
 import re
 import time
 from typing import TYPE_CHECKING, Any, Optional, cast
@@ -60,6 +61,8 @@ def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
 
 
 _POSTHOG_COOKIE_NAME_RE = re.compile(r"^ph_.+_posthog$")
+_POSTHOG_CONSENT_COOKIE_PREFIX = "__ph_opt_in_out_"
+_POSTHOG_CONSENT_NO_VALUES = ("false", "0", "no")
 # posthog-js defaults. The browser starts a new session after this much inactivity or session length.
 _COOKIE_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 _COOKIE_SESSION_MAX_LENGTH_MS = 24 * 60 * 60 * 1000
@@ -69,7 +72,23 @@ def _default_api_key() -> Optional[str]:
     # Read at call time, because the app sets the module-level keys after it imports this module.
     from .. import api_key, project_api_key
 
-    return project_api_key or api_key
+    return (project_api_key or "").strip() or (api_key or "").strip() or None
+
+
+def _posthog_cookie_name(api_key: str) -> str:
+    # posthog-js replaces these characters in the token when it names the cookie.
+    sanitized = api_key.replace("+", "PL").replace("/", "SL").replace("=", "EQ")
+    return f"ph_{sanitized}_posthog"
+
+
+def _is_recent(timestamp_ms, now_ms: float, max_age_ms: int) -> bool:
+    # abs, like posthog-js, so a browser clock that runs ahead cannot keep a session alive.
+    return (
+        isinstance(timestamp_ms, (int, float))
+        and not isinstance(timestamp_ms, bool)
+        and math.isfinite(timestamp_ms)
+        and abs(now_ms - timestamp_ms) <= max_age_ms
+    )
 
 
 def _read_posthog_cookie(request, api_key) -> "tuple[Optional[str], Optional[str]]":
@@ -79,19 +98,32 @@ def _read_posthog_cookie(request, api_key) -> "tuple[Optional[str], Optional[str
     cookie, and the browser sends it on every same-site request. This links backend events to the
     browser session without `tracing_headers`. A session that is past the posthog-js idle timeout or
     length cap is not returned, because the browser starts a new session on its next activity.
+    Nothing is returned when the visitor's posthog-js consent cookie opts out.
     """
     try:
         cookies = getattr(request, "COOKIES", None) or {}
-        raw = cookies.get(f"ph_{api_key}_posthog") if api_key else None
-        if raw is None:
-            # A custom persistence name or an unknown key: use the cookie only when it is the only one.
+        api_key = (api_key or "").strip()
+        if api_key:
+            raw = cookies.get(_posthog_cookie_name(api_key))
+            consent_values = [cookies.get(_POSTHOG_CONSENT_COOKIE_PREFIX + api_key)]
+        else:
+            # The project is unknown: use the cookie only when it is the only PostHog cookie.
             matches = [
                 value
                 for name, value in cookies.items()
                 if _POSTHOG_COOKIE_NAME_RE.match(name)
             ]
             raw = matches[0] if len(matches) == 1 else None
-        if not raw:
+            consent_values = [
+                value
+                for name, value in cookies.items()
+                if name.startswith(_POSTHOG_CONSENT_COOKIE_PREFIX)
+            ]
+        if not raw or any(
+            isinstance(value, str)
+            and value.strip().lower() in _POSTHOG_CONSENT_NO_VALUES
+            for value in consent_values
+        ):
             return None, None
 
         data = json.loads(unquote(raw))
@@ -104,12 +136,9 @@ def _read_posthog_cookie(request, api_key) -> "tuple[Optional[str], Optional[str
         if isinstance(session, list) and len(session) == 3:
             last_activity_ms, candidate, session_start_ms = session
             now_ms = time.time() * 1000
-            if (
-                isinstance(last_activity_ms, (int, float))
-                and isinstance(session_start_ms, (int, float))
-                and now_ms - last_activity_ms <= _COOKIE_SESSION_IDLE_TIMEOUT_MS
-                and now_ms - session_start_ms <= _COOKIE_SESSION_MAX_LENGTH_MS
-            ):
+            if _is_recent(
+                last_activity_ms, now_ms, _COOKIE_SESSION_IDLE_TIMEOUT_MS
+            ) and _is_recent(session_start_ms, now_ms, _COOKIE_SESSION_MAX_LENGTH_MS):
                 session_id = _sanitize_tracing_header_value(candidate)
         return distinct_id, session_id
     except Exception:

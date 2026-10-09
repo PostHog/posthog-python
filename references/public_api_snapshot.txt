@@ -880,6 +880,7 @@ attribute posthog.integrations.django.PosthogContextMiddleware.capture_exception
 attribute posthog.integrations.django.PosthogContextMiddleware.client = cast('Optional[Client]', settings.POSTHOG_MW_CLIENT)
 attribute posthog.integrations.django.PosthogContextMiddleware.extra_tags = cast('Optional[Callable[[HttpRequest], Dict[str, Any]]]', settings.POSTHOG_MW_EXTRA_TAGS)
 attribute posthog.integrations.django.PosthogContextMiddleware.get_response = get_response
+attribute posthog.integrations.django.PosthogContextMiddleware.read_posthog_cookie = settings.POSTHOG_MW_READ_POSTHOG_COOKIE
 attribute posthog.integrations.django.PosthogContextMiddleware.request_filter = cast('Optional[Callable[[HttpRequest], bool]]', settings.POSTHOG_MW_REQUEST_FILTER)
 attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = True
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)

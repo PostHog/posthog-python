@@ -26,6 +26,8 @@ if not settings.configured:
 
 from posthog.integrations.django import PosthogContextMiddleware
 
+MINUTE_MS = 60 * 1000
+
 
 class MockRequest:
     """Mock Django HttpRequest object"""
@@ -59,6 +61,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         tag_map=None,
         capture_exceptions=True,
         get_response=None,
+        read_posthog_cookie=None,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -71,6 +74,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_TAG_MAP = tag_map
             mock_settings.POSTHOG_MW_CAPTURE_EXCEPTIONS = capture_exceptions
             mock_settings.POSTHOG_MW_CLIENT = None
+            mock_settings.POSTHOG_MW_READ_POSTHOG_COOKIE = read_posthog_cookie
 
             # Make hasattr work correctly
             def mock_hasattr(obj, name):
@@ -80,7 +84,10 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                     "POSTHOG_MW_TAG_MAP",
                     "POSTHOG_MW_CAPTURE_EXCEPTIONS",
                     "POSTHOG_MW_CLIENT",
-                ]
+                ] or (
+                    name == "POSTHOG_MW_READ_POSTHOG_COOKIE"
+                    and read_posthog_cookie is not None
+                )
 
             with patch("builtins.hasattr", side_effect=mock_hasattr):
                 middleware = PosthogContextMiddleware(get_response)
@@ -147,7 +154,8 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 "live_session",
                 {},
                 None,
-                60_000,
+                {},
+                True,
                 "session-from-cookie",
                 "anon-from-cookie",
             ),
@@ -158,43 +166,100 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                     "X-POSTHOG-DISTINCT-ID": "user-from-header",
                 },
                 None,
-                60_000,
+                {},
+                True,
                 "session-from-header",
                 "user-from-header",
             ),
-            ("authenticated_user_wins", {}, 42, 60_000, "session-from-cookie", "42"),
-            ("idle_session_dropped", {}, None, 31 * 60_000, None, "anon-from-cookie"),
+            ("authenticated_user_wins", {}, 42, {}, True, "session-from-cookie", "42"),
+            (
+                "idle_session_dropped",
+                {},
+                None,
+                {"idle_ms": 31 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "long_session_dropped",
+                {},
+                None,
+                {"length_ms": 25 * 60 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "future_activity_dropped",
+                {},
+                None,
+                {"idle_ms": -40 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "other_project_cookie_ignored",
+                {},
+                None,
+                {"cookie_key": "other-token"},
+                True,
+                None,
+                None,
+            ),
+            ("opted_out", {}, None, {"consent": "0"}, True, None, None),
+            ("reading_disabled", {}, None, {}, False, None, None),
         ]
     )
     def test_extract_tags_reads_posthog_js_cookie(
-        self, _name, headers, user_id, idle_ms, expected_session, expected_distinct
+        self,
+        _name,
+        headers,
+        user_pk,
+        cookie_options,
+        read_cookie,
+        expected_session,
+        expected_distinct,
     ):
         now_ms = 1_700_000_000_000
-        cookie = quote(
-            json.dumps(
-                {
-                    "distinct_id": "anon-from-cookie",
-                    "$sesid": [
-                        now_ms - idle_ms,
-                        "session-from-cookie",
-                        now_ms - idle_ms,
-                    ],
-                }
+        idle_ms = cookie_options.get("idle_ms", MINUTE_MS)
+        length_ms = cookie_options.get("length_ms", MINUTE_MS)
+        cookie_key = cookie_options.get("cookie_key", "test-token")
+        cookies = {
+            f"ph_{cookie_key}_posthog": quote(
+                json.dumps(
+                    {
+                        "distinct_id": "anon-from-cookie",
+                        "$sesid": [
+                            now_ms - idle_ms,
+                            "session-from-cookie",
+                            now_ms - length_ms,
+                        ],
+                    }
+                )
             )
-        )
-        with new_context(), patch("time.time", return_value=now_ms / 1000):
-            middleware = self.create_middleware()
-            request = MockRequest(
-                headers=headers, cookies={"ph_test-token_posthog": cookie}
-            )
-            if user_id is not None:
-                request.user = Mock(pk=user_id, is_authenticated=True, email=None)
+        }
+        if "consent" in cookie_options:
+            cookies["__ph_opt_in_out_test-token"] = cookie_options["consent"]
 
-            middleware.extract_tags(
-                request
-            ) if user_id is None else middleware._build_tags(
-                request, str(user_id), None
-            )
+        with (
+            new_context(),
+            patch("time.time", return_value=now_ms / 1000),
+            patch(
+                "posthog.integrations.django._default_api_key",
+                return_value="test-token",
+            ),
+        ):
+            middleware = self.create_middleware(read_posthog_cookie=read_cookie)
+            request = MockRequest(headers=headers, cookies=cookies)
+            if user_pk is not None:
+                user = Mock()
+                user.is_authenticated = True
+                user.pk = user_pk
+                request.user = user
+
+            middleware.extract_tags(request)
 
             self.assertEqual(get_context_session_id(), expected_session)
             self.assertEqual(get_context_distinct_id(), expected_distinct)
