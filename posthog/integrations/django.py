@@ -1,5 +1,9 @@
+import json
+import math
 import re
+import time
 from typing import TYPE_CHECKING, Any, Optional, cast
+from urllib.parse import unquote
 
 from .. import contexts
 from ..client import Client
@@ -56,12 +60,119 @@ def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
         return None
 
 
+_POSTHOG_COOKIE_NAME_RE = re.compile(r"^ph_.+_posthog$")
+_POSTHOG_CONSENT_COOKIE_PREFIX = "__ph_opt_in_out_"
+_POSTHOG_CONSENT_NO_VALUES = ("false", "0", "no")
+# posthog-js defaults. The browser starts a new session after this much inactivity or session length.
+_COOKIE_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000
+_COOKIE_SESSION_MAX_LENGTH_MS = 24 * 60 * 60 * 1000
+
+
+def _default_api_key() -> Optional[str]:
+    # Read at call time, because the app sets the module-level keys after it imports this module.
+    from .. import api_key, project_api_key
+
+    return (project_api_key or "").strip() or (api_key or "").strip() or None
+
+
+def _posthog_cookie_name(api_key: str) -> str:
+    # posthog-js replaces these characters in the token when it names the cookie.
+    sanitized = api_key.replace("+", "PL").replace("/", "SL").replace("=", "EQ")
+    return f"ph_{sanitized}_posthog"
+
+
+def _is_recent(timestamp_ms, now_ms: float, max_age_ms: int) -> bool:
+    # abs, like posthog-js, so a browser clock that runs ahead cannot keep a session alive.
+    return (
+        isinstance(timestamp_ms, (int, float))
+        and not isinstance(timestamp_ms, bool)
+        and math.isfinite(timestamp_ms)
+        and abs(now_ms - timestamp_ms) <= max_age_ms
+    )
+
+
+def _read_posthog_cookie(
+    request,
+    api_key,
+    session_idle_timeout_ms: int = _COOKIE_SESSION_IDLE_TIMEOUT_MS,
+    opt_out_by_default: bool = False,
+) -> "tuple[Optional[str], Optional[str]]":
+    """Return the identified distinct ID and the live session ID from the posthog-js cookie, if present.
+
+    With its default persistence, posthog-js writes `ph_<project token>_posthog` as a first-party
+    cookie, and the browser sends it on every same-site request. This links backend events to the
+    browser session without `tracing_headers`. A session that is past the posthog-js idle timeout or
+    length cap is not returned, because the browser starts a new session on its next activity.
+    An anonymous distinct ID is not returned, so backend events for anonymous visitors stay
+    personless. Nothing is returned when the visitor's posthog-js consent cookie opts out.
+    """
+    try:
+        cookies = getattr(request, "COOKIES", None) or {}
+        api_key = (api_key or "").strip()
+        if api_key:
+            raw = cookies.get(_posthog_cookie_name(api_key))
+            consent_values = [
+                value
+                for value in [cookies.get(_POSTHOG_CONSENT_COOKIE_PREFIX + api_key)]
+                if value is not None
+            ]
+        else:
+            # The project is unknown: use the cookie only when it is the only PostHog cookie.
+            matches = [
+                value
+                for name, value in cookies.items()
+                if _POSTHOG_COOKIE_NAME_RE.match(name)
+            ]
+            raw = matches[0] if len(matches) == 1 else None
+            consent_values = [
+                value
+                for name, value in cookies.items()
+                if name.startswith(_POSTHOG_CONSENT_COOKIE_PREFIX)
+            ]
+        opted_out = (
+            any(
+                isinstance(value, str)
+                and value.strip().lower() in _POSTHOG_CONSENT_NO_VALUES
+                for value in consent_values
+            )
+            # Like posthog-js, a visitor with no consent cookie counts as opted out under this default.
+            or (opt_out_by_default and not consent_values)
+        )
+        if not raw or opted_out:
+            return None, None
+
+        data = json.loads(unquote(raw))
+        if not isinstance(data, dict):
+            return None, None
+
+        distinct_id = (
+            _sanitize_tracing_header_value(data.get("distinct_id"))
+            if data.get("$user_state") == "identified"
+            else None
+        )
+        session_id = None
+        session = data.get("$sesid")
+        if isinstance(session, list) and len(session) in (2, 3):
+            # Older posthog-js versions stored [last activity, session id] and start the session then.
+            last_activity_ms, candidate = session[0], session[1]
+            session_start_ms = session[2] if len(session) == 3 else last_activity_ms
+            now_ms = time.time() * 1000
+            if _is_recent(
+                last_activity_ms, now_ms, session_idle_timeout_ms
+            ) and _is_recent(session_start_ms, now_ms, _COOKIE_SESSION_MAX_LENGTH_MS):
+                session_id = _sanitize_tracing_header_value(candidate)
+        return distinct_id, session_id
+    except Exception:
+        return None, None
+
+
 class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
     This middleware wraps all calls with a posthog context. It attempts to extract the following from the request:
-    - Session ID, (extracted from `X-POSTHOG-SESSION-ID`)
-    - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`, falling back to the authenticated request user ID)
+    - Session ID, (extracted from `X-POSTHOG-SESSION-ID`, optionally falling back to the posthog-js cookie)
+    - Distinct ID, (extracted from `X-POSTHOG-DISTINCT-ID`, falling back to the authenticated request user ID,
+      then optionally to the posthog-js cookie)
     - Authenticated user email as `email`
     - Request URL as `$current_url`
     - Request method as `$request_method`
@@ -72,6 +183,15 @@ class PosthogContextMiddleware:
     The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
     `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings. The exceptions are captured using the
     global client, unless the setting `POSTHOG_MW_CLIENT` is set to a custom client instance
+
+    Set `POSTHOG_MW_READ_POSTHOG_COOKIE` to `True` to read the session ID, and the distinct ID of an identified
+    user, from the posthog-js cookie (`ph_<project token>_posthog`) when a request has neither tracing header.
+    The browser sends that cookie on same-site requests without any frontend configuration. Turn it on only when
+    posthog-js stores opt-out consent in a cookie, or when you do not use opt-out: the server cannot read an
+    opt-out that posthog-js keeps in localStorage. It needs cookie-backed posthog-js persistence, the default
+    cookie name (no `persistence_name`), and the default `__ph_opt_in_out_<token>` consent cookie name. Set
+    `POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS` when posthog-js uses a custom `session_idle_timeout_seconds`,
+    and set `POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT` to `True` when posthog-js uses `opt_out_capturing_by_default`.
 
     The middleware behaviour is customisable through 3 additional functions:
     - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
@@ -157,6 +277,31 @@ class PosthogContextMiddleware:
         else:
             self.client = None
 
+        if hasattr(settings, "POSTHOG_MW_READ_POSTHOG_COOKIE") and isinstance(
+            settings.POSTHOG_MW_READ_POSTHOG_COOKIE, bool
+        ):
+            self.read_posthog_cookie = settings.POSTHOG_MW_READ_POSTHOG_COOKIE
+        else:
+            self.read_posthog_cookie = False
+
+        self.cookie_opt_out_by_default = (
+            getattr(settings, "POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT", False) is True
+        )
+
+        idle_timeout_seconds = getattr(
+            settings, "POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS", None
+        )
+        # The same bounds posthog-js applies to session_idle_timeout_seconds.
+        self.cookie_session_idle_timeout_ms = (
+            int(min(max(idle_timeout_seconds, 60), 10 * 60 * 60) * 1000)
+            if isinstance(idle_timeout_seconds, (int, float))
+            and not isinstance(idle_timeout_seconds, bool)
+            and math.isfinite(idle_timeout_seconds)
+            # Zero falls back to the default, like posthog-js.
+            and idle_timeout_seconds != 0
+            else _COOKIE_SESSION_IDLE_TIMEOUT_MS
+        )
+
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
         """Extract tags from request in sync context."""
@@ -172,15 +317,33 @@ class PosthogContextMiddleware:
         """
         tags = {}
 
-        # Extract session ID from X-POSTHOG-SESSION-ID header
-        session_id = _get_sanitized_tracing_header(request, "X-POSTHOG-SESSION-ID")
+        header_session_id = _get_sanitized_tracing_header(
+            request, "X-POSTHOG-SESSION-ID"
+        )
+        header_distinct_id = _get_sanitized_tracing_header(
+            request, "X-POSTHOG-DISTINCT-ID"
+        )
+        # The cookie is read only without tracing headers, so one request never mixes two identities.
+        cookie_distinct_id, cookie_session_id = (
+            _read_posthog_cookie(
+                request,
+                self.client.api_key if self.client else _default_api_key(),
+                self.cookie_session_idle_timeout_ms,
+                self.cookie_opt_out_by_default,
+            )
+            if self.read_posthog_cookie
+            and header_session_id is None
+            and header_distinct_id is None
+            else (None, None)
+        )
+
+        # Extract session ID from X-POSTHOG-SESSION-ID header or the posthog-js cookie
+        session_id = header_session_id or cookie_session_id
         if session_id:
             contexts.set_context_session(session_id)
 
-        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
-        distinct_id = (
-            _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID") or user_id
-        )
+        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header, request user id, or the posthog-js cookie
+        distinct_id = header_distinct_id or user_id or cookie_distinct_id
         if distinct_id:
             contexts.identify_context(distinct_id)
 

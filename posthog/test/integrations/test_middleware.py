@@ -7,6 +7,8 @@ from posthog.contexts import (
 import unittest
 from unittest.mock import Mock, patch
 import asyncio
+import json
+from urllib.parse import quote
 from parameterized import parameterized
 
 # Configure Django settings before importing middleware
@@ -24,6 +26,8 @@ if not settings.configured:
 
 from posthog.integrations.django import PosthogContextMiddleware
 
+MINUTE_MS = 60 * 1000
+
 
 class MockRequest:
     """Mock Django HttpRequest object"""
@@ -35,8 +39,10 @@ class MockRequest:
         path="/test",
         host="example.com",
         is_secure=False,
+        cookies=None,
     ):
         self.headers = headers or {}
+        self.COOKIES = cookies or {}
         self.method = method
         self.path = path
         self._host = host
@@ -55,6 +61,9 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         tag_map=None,
         capture_exceptions=True,
         get_response=None,
+        read_posthog_cookie=None,
+        cookie_session_idle_timeout_seconds=None,
+        cookie_opt_out_by_default=None,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -67,6 +76,13 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_TAG_MAP = tag_map
             mock_settings.POSTHOG_MW_CAPTURE_EXCEPTIONS = capture_exceptions
             mock_settings.POSTHOG_MW_CLIENT = None
+            mock_settings.POSTHOG_MW_READ_POSTHOG_COOKIE = read_posthog_cookie
+            mock_settings.POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS = (
+                cookie_session_idle_timeout_seconds
+            )
+            mock_settings.POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT = (
+                cookie_opt_out_by_default
+            )
 
             # Make hasattr work correctly
             def mock_hasattr(obj, name):
@@ -76,7 +92,10 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                     "POSTHOG_MW_TAG_MAP",
                     "POSTHOG_MW_CAPTURE_EXCEPTIONS",
                     "POSTHOG_MW_CLIENT",
-                ]
+                ] or (
+                    name == "POSTHOG_MW_READ_POSTHOG_COOKIE"
+                    and read_posthog_cookie is not None
+                )
 
             with patch("builtins.hasattr", side_effect=mock_hasattr):
                 middleware = PosthogContextMiddleware(get_response)
@@ -136,6 +155,199 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             self.assertEqual(get_context_session_id(), "session-only")
             self.assertIsNone(get_context_distinct_id())
             self.assertEqual(tags["$request_method"], "PUT")
+
+    @parameterized.expand(
+        [
+            (
+                "live_session",
+                {},
+                None,
+                {},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
+                "headers_win",
+                {
+                    "X-POSTHOG-SESSION-ID": "session-from-header",
+                    "X-POSTHOG-DISTINCT-ID": "user-from-header",
+                },
+                None,
+                {},
+                True,
+                "session-from-header",
+                "user-from-header",
+            ),
+            ("authenticated_user_wins", {}, 42, {}, True, "session-from-cookie", "42"),
+            (
+                "idle_session_dropped",
+                {},
+                None,
+                {"idle_ms": 31 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "long_session_dropped",
+                {},
+                None,
+                {"length_ms": 25 * 60 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "future_activity_dropped",
+                {},
+                None,
+                {"idle_ms": -40 * MINUTE_MS},
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "other_project_cookie_ignored",
+                {},
+                None,
+                {"cookie_key": "other-token"},
+                True,
+                None,
+                None,
+            ),
+            ("opted_out", {}, None, {"consent": "0"}, True, None, None),
+            (
+                "opted_out_by_default",
+                {},
+                None,
+                {"opt_out_by_default": True},
+                True,
+                None,
+                None,
+            ),
+            (
+                "opted_in_under_opt_out_default",
+                {},
+                None,
+                {"opt_out_by_default": True, "consent": "1"},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            ("reading_disabled", {}, None, {}, False, None, None),
+            ("off_by_default", {}, None, {}, None, None, None),
+            (
+                "idle_timeout_over_ten_hours_is_clamped",
+                {},
+                None,
+                {
+                    "idle_ms": 11 * 60 * MINUTE_MS,
+                    "length_ms": 11 * 60 * MINUTE_MS,
+                    "idle_timeout_seconds": 24 * 60 * 60,
+                },
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
+                "zero_idle_timeout_uses_default",
+                {},
+                None,
+                {"idle_ms": 20 * MINUTE_MS, "idle_timeout_seconds": 0},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
+                "longer_idle_timeout_keeps_session",
+                {},
+                None,
+                {"idle_ms": 45 * MINUTE_MS, "idle_timeout_seconds": 60 * 60},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
+                "anonymous_visitor_gets_session_only",
+                {},
+                None,
+                {"user_state": "anonymous"},
+                True,
+                "session-from-cookie",
+                None,
+            ),
+            (
+                "older_two_item_session",
+                {},
+                None,
+                {"two_item_session": True},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+        ]
+    )
+    def test_extract_tags_reads_posthog_js_cookie(
+        self,
+        _name,
+        headers,
+        user_pk,
+        cookie_options,
+        read_cookie,
+        expected_session,
+        expected_distinct,
+    ):
+        now_ms = 1_700_000_000_000
+        idle_ms = cookie_options.get("idle_ms", MINUTE_MS)
+        length_ms = cookie_options.get("length_ms", MINUTE_MS)
+        cookie_key = cookie_options.get("cookie_key", "test-token")
+        cookies = {
+            f"ph_{cookie_key}_posthog": quote(
+                json.dumps(
+                    {
+                        "distinct_id": "anon-from-cookie",
+                        "$user_state": cookie_options.get("user_state", "identified"),
+                        "$sesid": [now_ms - idle_ms, "session-from-cookie"]
+                        if cookie_options.get("two_item_session")
+                        else [
+                            now_ms - idle_ms,
+                            "session-from-cookie",
+                            now_ms - length_ms,
+                        ],
+                    }
+                )
+            )
+        }
+        if "consent" in cookie_options:
+            cookies["__ph_opt_in_out_test-token"] = cookie_options["consent"]
+
+        with (
+            new_context(),
+            patch("time.time", return_value=now_ms / 1000),
+            patch(
+                "posthog.integrations.django._default_api_key",
+                return_value="test-token",
+            ),
+        ):
+            middleware = self.create_middleware(
+                read_posthog_cookie=read_cookie,
+                cookie_session_idle_timeout_seconds=cookie_options.get(
+                    "idle_timeout_seconds"
+                ),
+                cookie_opt_out_by_default=cookie_options.get("opt_out_by_default"),
+            )
+            request = MockRequest(headers=headers, cookies=cookies)
+            if user_pk is not None:
+                user = Mock()
+                user.is_authenticated = True
+                user.pk = user_pk
+                request.user = user
+
+            middleware.extract_tags(request)
+
+            self.assertEqual(get_context_session_id(), expected_session)
+            self.assertEqual(get_context_distinct_id(), expected_distinct)
 
     @parameterized.expand(
         [
