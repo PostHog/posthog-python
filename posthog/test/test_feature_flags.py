@@ -72,6 +72,7 @@ class TestCohortMatching(unittest.TestCase):
     def test_only_canonical_empty_groups_match(self):
         self.assertTrue(match_property_group({}, {}, {}))
         self.assertTrue(match_property_group({"type": "AND", "values": []}, {}, {}))
+        self.assertFalse(match_property_group({"type": "OR", "values": []}, {}, {}))
         self.assertTrue(
             match_property_group(
                 {"type": "AND", "values": [{"type": "AND", "values": []}, {}]},
@@ -92,6 +93,16 @@ class TestCohortMatching(unittest.TestCase):
             with self.subTest(group=group):
                 with self.assertRaises(RequiresServerEvaluation):
                     match_property_group(group, {}, {})
+
+    @parameterized.expand([("AND",), ("OR",)])
+    def test_nested_empty_or_group_does_not_match(self, group_type):
+        self.assertFalse(
+            match_property_group(
+                {"type": group_type, "values": [{"type": "OR", "values": []}]},
+                {},
+                {},
+            )
+        )
 
     def test_missing_nested_cohort_always_requires_server_evaluation(self):
         matching_leaf = {
@@ -1664,6 +1675,52 @@ class TestLocalEvaluation(unittest.TestCase):
         )
 
         self.assertEqual(feature_flag_match, True)
+
+    @parameterized.expand(
+        [
+            ("default_single", None, False, False),
+            ("in_single", "in", False, False),
+            ("not_in_single", "not_in", True, False),
+            ("default_bulk", None, False, True),
+            ("in_bulk", "in", False, True),
+            ("not_in_bulk", "not_in", True, True),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_empty_or_cohort_local_evaluation(
+        self, _name, operator, expected, bulk, patch_flags
+    ):
+        self.client.feature_flags = [
+            {
+                "id": 1,
+                "key": "empty-cohort",
+                "active": True,
+                "filters": {
+                    "groups": [
+                        {
+                            "properties": [
+                                {
+                                    "key": "id",
+                                    "value": 42,
+                                    "type": "cohort",
+                                    "operator": operator,
+                                }
+                            ],
+                            "rollout_percentage": 100,
+                        }
+                    ]
+                },
+            }
+        ]
+        self.client.cohorts = {"42": {"type": "OR", "values": []}}
+
+        if bulk:
+            result = self.client.evaluate_flags("user-1").get_flag("empty-cohort")
+        else:
+            result = self.client.get_feature_flag("empty-cohort", "user-1")
+
+        self.assertIs(result, expected)
+        patch_flags.assert_not_called()
 
     @mock.patch("posthog.client.flags")
     def test_feature_flags_local_evaluation_for_cohorts(self, patch_flags):
