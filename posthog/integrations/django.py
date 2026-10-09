@@ -297,6 +297,8 @@ class PosthogContextMiddleware:
             if isinstance(idle_timeout_seconds, (int, float))
             and not isinstance(idle_timeout_seconds, bool)
             and math.isfinite(idle_timeout_seconds)
+            # Zero falls back to the default, like posthog-js.
+            and idle_timeout_seconds != 0
             else _COOKIE_SESSION_IDLE_TIMEOUT_MS
         )
 

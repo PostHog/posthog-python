@@ -251,6 +251,15 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 "anon-from-cookie",
             ),
             (
+                "zero_idle_timeout_uses_default",
+                {},
+                None,
+                {"idle_ms": 20 * MINUTE_MS, "idle_timeout_seconds": 0},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
                 "longer_idle_timeout_keeps_session",
                 {},
                 None,
