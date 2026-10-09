@@ -1,5 +1,11 @@
 # posthog
 
+## 7.67.0 — 2026-10-09
+
+### Minor changes
+
+- [9baf8a5](https://github.com/posthog/posthog-python/commit/9baf8a5a84545568952490ff9397f599e0d6c9b4) Add a Django REST Framework error-only exception handler that captures handled 5xx API exceptions while preserving DRF responses, leaves expected 4xx errors excluded by default, and consistently inherits Django middleware, client, request-filter, and exception-autocapture configuration. — Thanks @hpouillot!
+
 ## 7.66.0 — 2026-10-08
 
 ### Minor changes
