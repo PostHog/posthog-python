@@ -885,6 +885,7 @@ def test_build_tool_call_event_properties():
     props = capture["properties"]
     assert capture["event"] == PostHogMCPAnalyticsEvent.TOOL_CALL
     assert capture["distinct_id"] == "ses_abc"
+    assert props[PostHogMCPAnalyticsProperty.INTERFACE] == "mcp"
     assert props[PostHogMCPAnalyticsProperty.SOURCE] == POSTHOG_MCP_ANALYTICS_SOURCE
     assert props[PostHogMCPAnalyticsProperty.TOOL_NAME] == "search_events"
     assert props[PostHogMCPAnalyticsProperty.TOOL_CATEGORY] == "Logs"
@@ -912,6 +913,7 @@ def test_protocol_version_on_primary_and_exception_events():
     # Both the primary $mcp_tool_call and the $exception sibling carry it.
     assert len(captures) == 2
     for capture in captures:
+        assert capture["properties"][PostHogMCPAnalyticsProperty.INTERFACE] == "mcp"
         assert (
             capture["properties"][PostHogMCPAnalyticsProperty.PROTOCOL_VERSION]
             == "2025-06-18"
