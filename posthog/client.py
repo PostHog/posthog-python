@@ -721,6 +721,7 @@ class Client(object):
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
+        should_capture: Optional[Callable[[], bool]] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -788,6 +789,12 @@ class Client(object):
                 False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event.
+            should_capture: Optional synchronous callback for context-based event
+                filtering. Runs in the caller's context before payload cleaning;
+                receives no event and must return ``True`` to allow capture.
+                Any other result or an exception drops the event. Applies to
+                analytics and AI events, not metrics or tracing spans. Use
+                ``before_send`` when filtering depends on event contents.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -1050,6 +1057,7 @@ class Client(object):
             )
 
         self._set_before_send(before_send)
+        self.should_capture = should_capture
 
         if self.enable_exception_autocapture:
             self.exception_capture = ExceptionCapture(
@@ -1675,6 +1683,10 @@ class Client(object):
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
 
+        # Checked before flag evaluation, so a rejected event makes no `/flags` request.
+        if not self._should_capture_event():
+            return None
+
         properties = {**(properties or {}), **system_context()}
 
         if self.capture_trace_context:
@@ -1791,7 +1803,11 @@ class Client(object):
             msg["properties"] = properties
 
         return self._enqueue(
-            msg, disable_geoip, lane, property_allowlist=property_allowlist
+            msg,
+            disable_geoip,
+            lane,
+            property_allowlist=property_allowlist,
+            admitted=True,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2394,14 +2410,34 @@ class Client(object):
             # Always send a uuid, so we can always return one
             msg["uuid"] = stringify_id(uuid4())
 
-    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
+    def _should_capture_event(self) -> bool:
+        """Run the `should_capture` callback; any result but `True`, or an error, drops the event."""
+        if self.should_capture is None:
+            return True
+        try:
+            if self.should_capture() is True:
+                return True
+            self.log.debug("Event dropped by should_capture callback")
+        except Exception:
+            self.log.warning("Error in should_capture callback; dropping event")
+        return False
+
+    def _enqueue(
+        self, msg, disable_geoip, lane=None, property_allowlist=None, admitted=False
+    ):
         # type: (...) -> Optional[str]
-        """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
+        """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None.
+
+        `admitted` means the caller already ran the `should_capture` callback.
+        """
 
         if lane is None:
             lane = self._analytics_lane
 
         if self.disabled:
+            return None
+
+        if not admitted and not self._should_capture_event():
             return None
 
         timestamp = msg["timestamp"]
@@ -4267,7 +4303,7 @@ class Client(object):
                 _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
             )
 
-        self.capture(
+        event_uuid = self.capture(
             "$feature_flag_called",
             distinct_id=distinct_id,
             properties=properties,
@@ -4275,7 +4311,9 @@ class Client(object):
             disable_geoip=disable_geoip,
             **extra_capture_kwargs,
         )
-        reported_flags.add(feature_flag_reported_key)
+        # A dropped event was not reported, so a later allowed call must still send it.
+        if event_uuid is not None:
+            reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         """
