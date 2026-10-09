@@ -210,6 +210,25 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             ),
             ("opted_out", {}, None, {"consent": "0"}, True, None, None),
             ("reading_disabled", {}, None, {}, False, None, None),
+            ("off_by_default", {}, None, {}, None, None, None),
+            (
+                "anonymous_visitor_gets_session_only",
+                {},
+                None,
+                {"user_state": "anonymous"},
+                True,
+                "session-from-cookie",
+                None,
+            ),
+            (
+                "older_two_item_session",
+                {},
+                None,
+                {"two_item_session": True},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
         ]
     )
     def test_extract_tags_reads_posthog_js_cookie(
@@ -231,7 +250,10 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 json.dumps(
                     {
                         "distinct_id": "anon-from-cookie",
-                        "$sesid": [
+                        "$user_state": cookie_options.get("user_state", "identified"),
+                        "$sesid": [now_ms - idle_ms, "session-from-cookie"]
+                        if cookie_options.get("two_item_session")
+                        else [
                             now_ms - idle_ms,
                             "session-from-cookie",
                             now_ms - length_ms,
