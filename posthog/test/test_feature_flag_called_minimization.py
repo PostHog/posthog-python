@@ -391,6 +391,92 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
             response["minimalFlagCalledEvents"] = gate
         return response
 
+    @parameterized.expand([("api",), ("cache",)])
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_lazy_local_snapshot_retains_loaded_minimal_gate(
+        self, source, patch_get, patch_flags
+    ):
+        definitions = {
+            "flags": [_local_flag_definition(False)],
+            "group_type_mapping": {},
+            "cohorts": {},
+            "minimal_flag_called_events": True,
+        }
+        patch_get.return_value = GetResponse(data=definitions, etag='"etag-1"')
+        provider = None
+        if source == "cache":
+            provider = mock.Mock()
+            provider.should_fetch_flag_definitions.return_value = False
+            provider.get_flag_definitions.return_value = definitions
+            provider.shutdown.return_value = None
+        client, captured = self._make_client(
+            secret_key="personal-key",
+            enable_local_evaluation=False,
+            flag_definition_cache_provider=provider,
+        )
+        self.addCleanup(client.shutdown)
+
+        snapshot = client.evaluate_flags("user-1")
+        self.assertTrue(snapshot.get_flag("person-flag"))
+
+        properties = self._flag_called_properties(captured)
+        self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self.assertNotIn("app_version", properties)
+        self.assertIs(properties["locally_evaluated"], True)
+        patch_flags.assert_not_called()
+        if source == "cache":
+            patch_get.assert_not_called()
+        else:
+            patch_get.assert_called_once()
+
+    @parameterized.expand([("gate_on", True), ("gate_off", False)])
+    @mock.patch("posthog.client.flags")
+    @mock.patch("posthog.client.get")
+    def test_local_snapshot_retains_metadata_when_definitions_refresh_during_evaluation(
+        self, _name, gate, patch_get, patch_flags
+    ):
+        definitions = {
+            "flags": [_local_flag_definition(False)],
+            "group_type_mapping": {},
+            "cohorts": {},
+            "minimal_flag_called_events": gate,
+        }
+        patch_get.return_value = GetResponse(data=definitions, etag='"etag-1"')
+        client, captured = self._make_client(
+            secret_key="personal-key", enable_local_evaluation=False
+        )
+        self.addCleanup(client.shutdown)
+        original_compute = client._compute_flag_locally
+
+        def evaluate_then_refresh(*args, **kwargs):
+            value = original_compute(*args, **kwargs)
+            # A poll publishes new tracking metadata while this evaluation is
+            # still using the previous definition snapshot.
+            client._update_flag_state(
+                {
+                    **definitions,
+                    "flags": [_local_flag_definition(True)],
+                    "minimal_flag_called_events": not gate,
+                }
+            )
+            return value
+
+        with mock.patch.object(
+            client, "_compute_flag_locally", side_effect=evaluate_then_refresh
+        ):
+            snapshot = client.evaluate_flags("user-1")
+        self.assertTrue(snapshot.get_flag("person-flag"))
+
+        properties = self._flag_called_properties(captured)
+        self.assertIs(properties["$feature_flag_has_experiment"], False)
+        if gate:
+            self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+            self.assertNotIn("app_version", properties)
+        else:
+            self.assertEqual(properties["app_version"], "1.2.3")
+        patch_flags.assert_not_called()
+
     @mock.patch("posthog.client.flags")
     def test_gated_non_experiment_flag_sends_exactly_the_allowlist(self, patch_flags):
         patch_flags.return_value = self._snapshot_response(
