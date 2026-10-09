@@ -62,6 +62,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         capture_exceptions=True,
         get_response=None,
         read_posthog_cookie=None,
+        cookie_session_idle_timeout_seconds=None,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -75,6 +76,9 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_CAPTURE_EXCEPTIONS = capture_exceptions
             mock_settings.POSTHOG_MW_CLIENT = None
             mock_settings.POSTHOG_MW_READ_POSTHOG_COOKIE = read_posthog_cookie
+            mock_settings.POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS = (
+                cookie_session_idle_timeout_seconds
+            )
 
             # Make hasattr work correctly
             def mock_hasattr(obj, name):
@@ -212,6 +216,15 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             ("reading_disabled", {}, None, {}, False, None, None),
             ("off_by_default", {}, None, {}, None, None, None),
             (
+                "longer_idle_timeout_keeps_session",
+                {},
+                None,
+                {"idle_ms": 45 * MINUTE_MS, "idle_timeout_seconds": 60 * 60},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
                 "anonymous_visitor_gets_session_only",
                 {},
                 None,
@@ -273,7 +286,12 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 return_value="test-token",
             ),
         ):
-            middleware = self.create_middleware(read_posthog_cookie=read_cookie)
+            middleware = self.create_middleware(
+                read_posthog_cookie=read_cookie,
+                cookie_session_idle_timeout_seconds=cookie_options.get(
+                    "idle_timeout_seconds"
+                ),
+            )
             request = MockRequest(headers=headers, cookies=cookies)
             if user_pk is not None:
                 user = Mock()

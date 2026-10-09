@@ -91,7 +91,9 @@ def _is_recent(timestamp_ms, now_ms: float, max_age_ms: int) -> bool:
     )
 
 
-def _read_posthog_cookie(request, api_key) -> "tuple[Optional[str], Optional[str]]":
+def _read_posthog_cookie(
+    request, api_key, session_idle_timeout_ms: int = _COOKIE_SESSION_IDLE_TIMEOUT_MS
+) -> "tuple[Optional[str], Optional[str]]":
     """Return the identified distinct ID and the live session ID from the posthog-js cookie, if present.
 
     With its default persistence, posthog-js writes `ph_<project token>_posthog` as a first-party
@@ -144,7 +146,7 @@ def _read_posthog_cookie(request, api_key) -> "tuple[Optional[str], Optional[str
             session_start_ms = session[2] if len(session) == 3 else last_activity_ms
             now_ms = time.time() * 1000
             if _is_recent(
-                last_activity_ms, now_ms, _COOKIE_SESSION_IDLE_TIMEOUT_MS
+                last_activity_ms, now_ms, session_idle_timeout_ms
             ) and _is_recent(session_start_ms, now_ms, _COOKIE_SESSION_MAX_LENGTH_MS):
                 session_id = _sanitize_tracing_header_value(candidate)
         return distinct_id, session_id
@@ -174,7 +176,9 @@ class PosthogContextMiddleware:
     user, from the posthog-js cookie (`ph_<project token>_posthog`) when a request has neither tracing header.
     The browser sends that cookie on same-site requests without any frontend configuration. Turn it on only when
     posthog-js stores opt-out consent in a cookie, or when you do not use opt-out: the server cannot read an
-    opt-out that posthog-js keeps in localStorage.
+    opt-out that posthog-js keeps in localStorage. It needs cookie-backed posthog-js persistence, the default
+    cookie name (no `persistence_name`), and the default `__ph_opt_in_out_<token>` consent cookie name. Set
+    `POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS` when posthog-js uses a custom `session_idle_timeout_seconds`.
 
     The middleware behaviour is customisable through 3 additional functions:
     - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
@@ -267,6 +271,18 @@ class PosthogContextMiddleware:
         else:
             self.read_posthog_cookie = False
 
+        idle_timeout_seconds = getattr(
+            settings, "POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS", None
+        )
+        self.cookie_session_idle_timeout_ms = (
+            int(idle_timeout_seconds * 1000)
+            if isinstance(idle_timeout_seconds, (int, float))
+            and not isinstance(idle_timeout_seconds, bool)
+            and math.isfinite(idle_timeout_seconds)
+            and idle_timeout_seconds > 0
+            else _COOKIE_SESSION_IDLE_TIMEOUT_MS
+        )
+
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
         """Extract tags from request in sync context."""
@@ -291,7 +307,9 @@ class PosthogContextMiddleware:
         # The cookie is read only without tracing headers, so one request never mixes two identities.
         cookie_distinct_id, cookie_session_id = (
             _read_posthog_cookie(
-                request, self.client.api_key if self.client else _default_api_key()
+                request,
+                self.client.api_key if self.client else _default_api_key(),
+                self.cookie_session_idle_timeout_ms,
             )
             if self.read_posthog_cookie
             and header_session_id is None
