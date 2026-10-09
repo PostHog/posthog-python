@@ -1,0 +1,211 @@
+"""Django REST Framework exception handling integration.
+
+Django REST Framework (DRF) converts many exceptions into ``Response`` objects
+before Django's middleware can observe them. Configure this module's
+``exception_handler`` alongside :class:`PosthogContextMiddleware` to capture
+handled server errors while leaving DRF's response behavior unchanged::
+
+    REST_FRAMEWORK = {
+        "EXCEPTION_HANDLER": "posthog.integrations.drf.exception_handler",
+    }
+
+This is an error-only handler: it captures handled response errors but does
+not create the request context. Keep :class:`PosthogContextMiddleware` enabled
+to attach Django request properties and capture exceptions that DRF re-raises.
+By default, only responses with a 5xx status are captured; expected 4xx API
+errors are ignored.
+
+``capture_exceptions`` follows the Django middleware setting. An explicit
+factory argument wins over ``POSTHOG_MW_CAPTURE_EXCEPTIONS``. A boolean setting
+wins next. Setting it explicitly to ``None`` inherits the effective PostHog
+client's ``enable_exception_autocapture`` option, while an omitted or malformed
+setting preserves the legacy Django default of ``True``.
+
+Projects that already have a custom DRF exception handler can wrap it in an
+application module::
+
+    from myapp.api import existing_exception_handler
+    from posthog.integrations.drf import create_exception_handler
+
+    exception_handler = create_exception_handler(existing_exception_handler)
+
+Then point ``REST_FRAMEWORK["EXCEPTION_HANDLER"]`` at that application-level
+``exception_handler``. DRF is imported lazily, so importing the PostHog SDK does
+not require DRF to be installed.
+"""
+
+import logging
+from typing import Any, Callable, Mapping, Optional, cast
+
+from ..client import Client
+from ..contexts import _default_capture_exceptions
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+    exception_is_already_captured as _exception_is_already_captured,
+)
+
+_logger = logging.getLogger("posthog")
+
+_CAPTURE_METADATA: _ExceptionCaptureMetadata = {
+    "level": "error",
+    "source": "django_rest_framework.exception_handler",
+    "mechanism": {"type": "middleware", "handled": True},
+}
+
+
+def _default_exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any:
+    from rest_framework.views import exception_handler as drf_exception_handler
+
+    return drf_exception_handler(exc, context)
+
+
+def _configured_client(client: Optional[Client]) -> Optional[Client]:
+    if client is not None:
+        return client
+
+    try:
+        from django.conf import settings
+
+        for setting_name in ("POSTHOG_DRF_CLIENT", "POSTHOG_MW_CLIENT"):
+            configured_client = getattr(settings, setting_name, None)
+            if isinstance(configured_client, Client):
+                return configured_client
+    except Exception:
+        # Django may not be configured when a handler is created at import time.
+        pass
+
+    return None
+
+
+def _capture_exceptions_enabled(
+    configured: Optional[bool], client: Optional[Client]
+) -> bool:
+    """Resolve explicit, Django, and client exception-capture configuration."""
+    if configured is not None:
+        return configured
+
+    try:
+        from django.conf import settings
+
+        if not hasattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS"):
+            return True
+        django_setting = settings.POSTHOG_MW_CAPTURE_EXCEPTIONS
+    except Exception:
+        return True
+
+    if isinstance(django_setting, bool):
+        return django_setting
+    if django_setting is not None:
+        return True
+
+    try:
+        client_default = _default_capture_exceptions(client)
+    except Exception:
+        return True
+    return client_default if isinstance(client_default, bool) else True
+
+
+def _passes_django_request_filter(context: Mapping[str, Any]) -> bool:
+    """Apply the Django middleware request filter to the underlying request."""
+    try:
+        from django.conf import settings
+
+        request_filter = getattr(settings, "POSTHOG_MW_REQUEST_FILTER", None)
+    except Exception:
+        return True
+
+    request = context.get("request")
+    if not callable(request_filter) or request is None:
+        return True
+
+    # DRF wraps Django's HttpRequest. Pass the same object that
+    # PosthogContextMiddleware evaluates so filters behave consistently.
+    django_request = getattr(request, "_request", request)
+    return bool(request_filter(django_request))
+
+
+def _capture_exception(client: Optional[Client], exc: Exception) -> None:
+    if _exception_is_already_captured(exc):
+        return
+
+    if client is not None:
+        _capture_exception_with_metadata(client, exc, _CAPTURE_METADATA)
+    else:
+        from .. import capture_exception
+
+        cast(Any, capture_exception)(exc, _capture_metadata=_CAPTURE_METADATA)
+
+
+def create_exception_handler(
+    handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None,
+    *,
+    client: Optional[Client] = None,
+    capture_exceptions: Optional[bool] = None,
+    capture_4xx: bool = False,
+    exception_filter: Optional[
+        Callable[[Exception, Any, Mapping[str, Any]], bool]
+    ] = None,
+) -> Callable[[Exception, Mapping[str, Any]], Any]:
+    """Create a PostHog-instrumented DRF exception handler.
+
+    Args:
+        handler: Handler to delegate to. Defaults to DRF's standard exception
+            handler. Its return value and raised exceptions are preserved.
+        client: Optional PostHog client. Client precedence is this argument,
+            the legacy ``POSTHOG_DRF_CLIENT`` alias, ``POSTHOG_MW_CLIENT``, then
+            the global PostHog client.
+        capture_exceptions: Whether to capture handled DRF exceptions. An
+            explicit value takes precedence over ``POSTHOG_MW_CAPTURE_EXCEPTIONS``.
+            A boolean setting is used directly; an explicit ``None`` setting
+            inherits the effective client's ``enable_exception_autocapture``.
+            An omitted or malformed setting preserves the legacy ``True`` default.
+        capture_4xx: Also capture handled 4xx responses. Disabled by default to
+            avoid reporting expected API errors.
+        exception_filter: Optional final filter called with ``(exception,
+            response, context)``. Returning ``False`` suppresses capture.
+
+    When ``POSTHOG_MW_REQUEST_FILTER`` is configured, it is also applied to the
+    underlying Django request before capture so handled errors cannot bypass the
+    middleware's per-request exclusion.
+
+    The delegated handler is called first. A ``None`` response is never
+    captured here because DRF will re-raise that exception, allowing Django's
+    middleware to capture it as unhandled.
+    """
+    delegate = handler or _default_exception_handler
+
+    def posthog_exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any:
+        response = delegate(exc, context)
+        if response is None:
+            return None
+        resolved_client = _configured_client(client)
+        if not _capture_exceptions_enabled(capture_exceptions, resolved_client):
+            return response
+
+        try:
+            status_code = int(response.status_code)
+            should_capture = status_code >= 500 or (
+                capture_4xx and 400 <= status_code < 500
+            )
+            if should_capture:
+                should_capture = _passes_django_request_filter(context)
+            if should_capture and exception_filter is not None:
+                should_capture = bool(exception_filter(exc, response, context))
+            if should_capture:
+                _capture_exception(resolved_client, exc)
+        except Exception:
+            # Error tracking must never alter DRF's exception response.
+            _logger.exception("Failed to capture Django REST Framework exception")
+
+        return response
+
+    return posthog_exception_handler
+
+
+def exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any:
+    """Capture handled DRF 5xx exceptions using DRF's default handler."""
+    return _DEFAULT_EXCEPTION_HANDLER(exc, context)
+
+
+_DEFAULT_EXCEPTION_HANDLER = create_exception_handler()

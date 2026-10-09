@@ -332,6 +332,7 @@ alias posthog.integrations.asgi.Client -> posthog.client.Client
 alias posthog.integrations.asgi.contexts -> posthog.contexts
 alias posthog.integrations.django.Client -> posthog.client.Client
 alias posthog.integrations.django.contexts -> posthog.contexts
+alias posthog.integrations.drf.Client -> posthog.client.Client
 alias posthog.mcp.CaptureEventData -> posthog.mcp.types.CaptureEventData
 alias posthog.mcp.CollectFeedbackOptions -> posthog.mcp.types.CollectFeedbackOptions
 alias posthog.mcp.FeedbackReport -> posthog.mcp.types.FeedbackReport
@@ -1421,6 +1422,8 @@ function posthog.get_tags() -> Dict[str, Any]
 function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
+function posthog.integrations.drf.create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
+function posthog.integrations.drf.exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
 function posthog.join() -> None
 function posthog.load_feature_flags()
 function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
@@ -1803,6 +1806,7 @@ module posthog.integrations
 module posthog.integrations.asgi
 module posthog.integrations.celery
 module posthog.integrations.django
+module posthog.integrations.drf
 module posthog.integrations.flask
 module posthog.mcp
 module posthog.mcp.asgi

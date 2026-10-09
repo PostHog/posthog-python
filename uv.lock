@@ -822,6 +822,18 @@ wheels = [
 ]
 
 [[package]]
+name = "djangorestframework"
+version = "3.18.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "django" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/8a/2e/b3ce9d449b1ed9f9dd74fb7dfbc5f20860d5f40c2b4b10a2c3eabd8ff579/djangorestframework-3.18.1.tar.gz", hash = "sha256:605d79fa2ec2f02905492e5ea13d903c2d842d0b4c915a57f7bf02ab9f3c91dd", size = 915653, upload-time = "2026-09-07T18:04:08.288Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/83/5ed615e47339d8e65f62eb1a8133f8f046492eb3a25ad40d90acb9a208b3/djangorestframework-3.18.1-py3-none-any.whl", hash = "sha256:f1409d698967aaf82d5d98d76b549c8fba8bd92ebd0d83d24454508f72168dc2", size = 901373, upload-time = "2026-09-07T18:04:06.237Z" },
+]
+
+[[package]]
 name = "dnspython"
 version = "2.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2850,6 +2862,7 @@ test = [
     { name = "claude-agent-sdk" },
     { name = "coverage" },
     { name = "django" },
+    { name = "djangorestframework" },
     { name = "fastmcp" },
     { name = "flask" },
     { name = "freezegun" },
@@ -2895,6 +2908,7 @@ requires-dist = [
     { name = "distro", specifier = ">=1.5.0" },
     { name = "django", marker = "extra == 'test'", specifier = ">=5.2.15,<6.0" },
     { name = "django-stubs", marker = "extra == 'dev'" },
+    { name = "djangorestframework", marker = "extra == 'test'", specifier = ">=3.15,<4" },
     { name = "fastmcp", marker = "extra == 'test'", specifier = ">=2.0" },
     { name = "flask", marker = "extra == 'test'", specifier = ">=2.2" },
     { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
