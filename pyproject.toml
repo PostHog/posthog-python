@@ -49,6 +49,15 @@ otel = [
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
 ]
+# Metrics autocapture (`metrics={"autocapture": True}`). Library instrumentors
+# (requests, Django, psycopg, ...) are separate packages: `opentelemetry-bootstrap
+# -a install` adds the ones that match the installed libraries.
+metrics = [
+    "opentelemetry-sdk>=1.20.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "opentelemetry-instrumentation>=0.41b0",
+    "opentelemetry-instrumentation-system-metrics>=0.41b0",
+]
 dev = [
     "django-stubs",
     "griffe",
@@ -97,6 +106,11 @@ test = [
     "fastmcp>=2.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
+    "opentelemetry-instrumentation>=0.41b0",
+    "opentelemetry-instrumentation-system-metrics>=0.41b0",
+    "opentelemetry-instrumentation-requests>=0.41b0",
+    "opentelemetry-instrumentation-sqlite3>=0.41b0",
+    "opentelemetry-instrumentation-wsgi>=0.41b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.

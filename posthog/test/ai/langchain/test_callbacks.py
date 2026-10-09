@@ -1403,9 +1403,10 @@ def test_tool_calls(mock_client):
     )
 
 
-async def test_async_traces(mock_client):
+@pytest.mark.parametrize("delay", [0, 0.1])
+async def test_async_traces(mock_client, delay):
     async def sleep(x):  # -> Any:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(delay)
         return x
 
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
@@ -1422,18 +1423,22 @@ async def test_async_traces(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
     assert mock_client.capture.call_count == 4
 
-    first_call, second_call, third_call, fourth_call = (
-        mock_client.capture.call_args_list
-    )
-    assert first_call[1]["event"] == "$ai_span"
-    assert second_call[1]["event"] == "$ai_generation"
-    assert third_call[1]["event"] == "$ai_trace"
-    assert third_call[1]["properties"]["$ai_span_name"] == "RunnableSequence"
-    assert fourth_call[1]["event"] == "$ai_trace"
-    assert fourth_call[1]["properties"]["$ai_span_name"] == "sleep"
+    calls = [call.kwargs for call in mock_client.capture.call_args_list]
+    assert sorted(call["event"] for call in calls) == [
+        "$ai_generation",
+        "$ai_span",
+        "$ai_trace",
+        "$ai_trace",
+    ]
+    traces = {
+        call["properties"]["$ai_span_name"]: call["properties"]
+        for call in calls
+        if call["event"] == "$ai_trace"
+    }
+    assert set(traces) == {"RunnableSequence", "sleep"}
     assert (
         min(approximate_latency - 1, 0)
-        <= math.floor(third_call[1]["properties"]["$ai_latency"])
+        <= math.floor(traces["RunnableSequence"]["$ai_latency"])
         <= approximate_latency
     )
 

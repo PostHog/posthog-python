@@ -1109,6 +1109,13 @@ class Client(object):
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
 
+        self._metrics_autocapture = None
+        autocapture = metrics.get("autocapture") if isinstance(metrics, dict) else None
+        if autocapture and not self.disabled:
+            self._metrics_autocapture = self._start_metrics_autocapture(
+                metrics or {}, autocapture if isinstance(autocapture, dict) else {}
+            )
+
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
             os.register_at_fork(
@@ -1116,6 +1123,38 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    def _start_metrics_autocapture(self, metrics_config: dict, areas: dict):
+        # Imported here, so a client without autocapture never loads OpenTelemetry.
+        from .metrics_autocapture import start_metrics_autocapture
+
+        resource_attributes = metrics_config.get("resource_attributes")
+        resource_attributes = (
+            dict(resource_attributes) if isinstance(resource_attributes, dict) else {}
+        )
+        for key, attribute in (
+            ("service_version", "service.version"),
+            ("environment", "deployment.environment"),
+        ):
+            if metrics_config.get(key) and attribute not in resource_attributes:
+                resource_attributes[attribute] = metrics_config[key]
+        weak_self = weakref.ref(self)
+        return start_metrics_autocapture(
+            host=self.host,
+            api_key=self.api_key,
+            areas={
+                "http": areas.get("http", True),
+                "db": areas.get("db", True),
+                "runtime": areas.get("runtime", True),
+            },
+            service_name=resource_attributes.get("service.name")
+            or metrics_config.get("service_name"),
+            resource_attributes=resource_attributes,
+            is_enabled=lambda: (client := weak_self()) is not None
+            and not client.disabled
+            and client.send,
+            export_interval_seconds=metrics_config.get("flush_interval"),
+        )
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -2976,6 +3015,14 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
+        if self._metrics_autocapture is not None:
+            # Exports the last window, then removes the instrumentation.
+            self._run_lifecycle_cleanup(
+                "Failed to shut down metrics autocapture",
+                self._metrics_autocapture.shutdown,
+                errors,
+            )
+            self._metrics_autocapture = None
         with self._traces_lock:
             traces = self._traces
         if traces is not None:
