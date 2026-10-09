@@ -63,6 +63,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         get_response=None,
         read_posthog_cookie=None,
         cookie_session_idle_timeout_seconds=None,
+        cookie_opt_out_by_default=None,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -78,6 +79,9 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_READ_POSTHOG_COOKIE = read_posthog_cookie
             mock_settings.POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS = (
                 cookie_session_idle_timeout_seconds
+            )
+            mock_settings.POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT = (
+                cookie_opt_out_by_default
             )
 
             # Make hasattr work correctly
@@ -213,6 +217,24 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 None,
             ),
             ("opted_out", {}, None, {"consent": "0"}, True, None, None),
+            (
+                "opted_out_by_default",
+                {},
+                None,
+                {"opt_out_by_default": True},
+                True,
+                None,
+                None,
+            ),
+            (
+                "opted_in_under_opt_out_default",
+                {},
+                None,
+                {"opt_out_by_default": True, "consent": "1"},
+                True,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
             ("reading_disabled", {}, None, {}, False, None, None),
             ("off_by_default", {}, None, {}, None, None, None),
             (
@@ -304,6 +326,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
                 cookie_session_idle_timeout_seconds=cookie_options.get(
                     "idle_timeout_seconds"
                 ),
+                cookie_opt_out_by_default=cookie_options.get("opt_out_by_default"),
             )
             request = MockRequest(headers=headers, cookies=cookies)
             if user_pk is not None:

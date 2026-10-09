@@ -92,7 +92,10 @@ def _is_recent(timestamp_ms, now_ms: float, max_age_ms: int) -> bool:
 
 
 def _read_posthog_cookie(
-    request, api_key, session_idle_timeout_ms: int = _COOKIE_SESSION_IDLE_TIMEOUT_MS
+    request,
+    api_key,
+    session_idle_timeout_ms: int = _COOKIE_SESSION_IDLE_TIMEOUT_MS,
+    opt_out_by_default: bool = False,
 ) -> "tuple[Optional[str], Optional[str]]":
     """Return the identified distinct ID and the live session ID from the posthog-js cookie, if present.
 
@@ -108,7 +111,11 @@ def _read_posthog_cookie(
         api_key = (api_key or "").strip()
         if api_key:
             raw = cookies.get(_posthog_cookie_name(api_key))
-            consent_values = [cookies.get(_POSTHOG_CONSENT_COOKIE_PREFIX + api_key)]
+            consent_values = [
+                value
+                for value in [cookies.get(_POSTHOG_CONSENT_COOKIE_PREFIX + api_key)]
+                if value is not None
+            ]
         else:
             # The project is unknown: use the cookie only when it is the only PostHog cookie.
             matches = [
@@ -122,11 +129,16 @@ def _read_posthog_cookie(
                 for name, value in cookies.items()
                 if name.startswith(_POSTHOG_CONSENT_COOKIE_PREFIX)
             ]
-        if not raw or any(
-            isinstance(value, str)
-            and value.strip().lower() in _POSTHOG_CONSENT_NO_VALUES
-            for value in consent_values
-        ):
+        opted_out = (
+            any(
+                isinstance(value, str)
+                and value.strip().lower() in _POSTHOG_CONSENT_NO_VALUES
+                for value in consent_values
+            )
+            # Like posthog-js, a visitor with no consent cookie counts as opted out under this default.
+            or (opt_out_by_default and not consent_values)
+        )
+        if not raw or opted_out:
             return None, None
 
         data = json.loads(unquote(raw))
@@ -178,7 +190,8 @@ class PosthogContextMiddleware:
     posthog-js stores opt-out consent in a cookie, or when you do not use opt-out: the server cannot read an
     opt-out that posthog-js keeps in localStorage. It needs cookie-backed posthog-js persistence, the default
     cookie name (no `persistence_name`), and the default `__ph_opt_in_out_<token>` consent cookie name. Set
-    `POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS` when posthog-js uses a custom `session_idle_timeout_seconds`.
+    `POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS` when posthog-js uses a custom `session_idle_timeout_seconds`,
+    and set `POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT` to `True` when posthog-js uses `opt_out_capturing_by_default`.
 
     The middleware behaviour is customisable through 3 additional functions:
     - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
@@ -271,6 +284,10 @@ class PosthogContextMiddleware:
         else:
             self.read_posthog_cookie = False
 
+        self.cookie_opt_out_by_default = (
+            getattr(settings, "POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT", False) is True
+        )
+
         idle_timeout_seconds = getattr(
             settings, "POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS", None
         )
@@ -310,6 +327,7 @@ class PosthogContextMiddleware:
                 request,
                 self.client.api_key if self.client else _default_api_key(),
                 self.cookie_session_idle_timeout_ms,
+                self.cookie_opt_out_by_default,
             )
             if self.read_posthog_cookie
             and header_session_id is None
