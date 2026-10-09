@@ -876,17 +876,21 @@ attribute posthog.integrations.celery.PosthogCeleryIntegration.client = client
 attribute posthog.integrations.celery.PosthogCeleryIntegration.propagate_context = propagate_context
 attribute posthog.integrations.celery.PosthogCeleryIntegration.task_filter = task_filter
 attribute posthog.integrations.django.PosthogContextMiddleware.async_capable = True
-attribute posthog.integrations.django.PosthogContextMiddleware.capture_exceptions = settings.POSTHOG_MW_CAPTURE_EXCEPTIONS
+attribute posthog.integrations.django.PosthogContextMiddleware.capture_exceptions: Optional[bool] = capture_exceptions if (capture_exceptions is None or isinstance(capture_exceptions, bool)) else True
 attribute posthog.integrations.django.PosthogContextMiddleware.client = cast('Optional[Client]', settings.POSTHOG_MW_CLIENT)
-attribute posthog.integrations.django.PosthogContextMiddleware.extra_tags = cast('Optional[Callable[[HttpRequest], Dict[str, Any]]]', settings.POSTHOG_MW_EXTRA_TAGS)
+attribute posthog.integrations.django.PosthogContextMiddleware.extra_properties = cast('Callable[[HttpRequest], Dict[str, Any]]', extra_properties) if callable(extra_properties) else None
+attribute posthog.integrations.django.PosthogContextMiddleware.extra_tags
 attribute posthog.integrations.django.PosthogContextMiddleware.get_response = get_response
+attribute posthog.integrations.django.PosthogContextMiddleware.properties_map = cast('Callable[[Dict[str, Any]], Dict[str, Any]]', properties_map) if callable(properties_map) else None
 attribute posthog.integrations.django.PosthogContextMiddleware.request_filter = cast('Optional[Callable[[HttpRequest], bool]]', settings.POSTHOG_MW_REQUEST_FILTER)
 attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = True
-attribute posthog.integrations.django.PosthogContextMiddleware.tag_map = cast('Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]', settings.POSTHOG_MW_TAG_MAP)
+attribute posthog.integrations.django.PosthogContextMiddleware.tag_map
+attribute posthog.integrations.django.PosthogContextMiddleware.trust_tracing_headers = trust_tracing_headers if isinstance(trust_tracing_headers, bool) else False
 attribute posthog.integrations.flask.PosthogFlaskIntegration.capture_exceptions = capture_exceptions
 attribute posthog.integrations.flask.PosthogFlaskIntegration.client = client
 attribute posthog.integrations.flask.PosthogFlaskIntegration.extra_properties = extra_properties
 attribute posthog.integrations.flask.PosthogFlaskIntegration.request_filter = request_filter
+attribute posthog.integrations.flask.PosthogFlaskIntegration.trust_tracing_headers = trust_tracing_headers
 attribute posthog.is_server = True
 attribute posthog.log_captured_exceptions = False
 attribute posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware.app = app
@@ -1211,10 +1215,10 @@ class posthog.feature_flags.InconclusiveMatchError
 class posthog.feature_flags.RequiresServerEvaluation 
 class posthog.flag_definition_cache.FlagDefinitionCacheData 
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
-class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: bool = False)
+class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: bool = False)
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
-class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: bool = True, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None)
+class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None, trust_tracing_headers: bool = False)
 class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
@@ -1680,8 +1684,10 @@ method posthog.flag_definition_cache.FlagDefinitionCacheProvider.shutdown() -> O
 method posthog.integrations.celery.PosthogCeleryIntegration.instrument() -> None
 method posthog.integrations.celery.PosthogCeleryIntegration.shutdown() -> None
 method posthog.integrations.celery.PosthogCeleryIntegration.uninstrument() -> None
+method posthog.integrations.django.PosthogContextMiddleware.aextract_properties(request)
 method posthog.integrations.django.PosthogContextMiddleware.aextract_request_user(request)
 method posthog.integrations.django.PosthogContextMiddleware.aextract_tags(request)
+method posthog.integrations.django.PosthogContextMiddleware.extract_properties(request)
 method posthog.integrations.django.PosthogContextMiddleware.extract_request_user(request)
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
