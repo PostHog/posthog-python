@@ -25,7 +25,7 @@ from posthog.feature_flags import (
     relative_date_parse_for_feature_flag_matching,
 )
 from posthog.request import APIError, GetResponse
-from posthog.types import FeatureFlagEvaluationRuntime
+from posthog.types import FeatureFlagEvaluationRuntime, UnresolvedFlagReason
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.utils import FlagCache
 
@@ -5266,6 +5266,48 @@ class TestMatchProperties(unittest.TestCase):
             result.update({"operator": operator})
 
         return result
+
+    @parameterized.expand(
+        [
+            ("unknown_operator", "x", "bogus", {"key": "x"}, "UNSUPPORTED_DEFINITION"),
+            ("missing_property", "x", "exact", {}, "MISSING_CONTEXT"),
+            (
+                "invalid_flag_date",
+                "not-a-date",
+                "is_date_before",
+                {"key": "2024-01-01"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_property_date",
+                "2024-01-01",
+                "is_date_before",
+                {"key": "not-a-date"},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "invalid_flag_semver",
+                "x.y",
+                "semver_gt",
+                {"key": "1.2.3"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_property_semver",
+                "1.2.3",
+                "semver_gt",
+                {"key": "x.y"},
+                "MISSING_CONTEXT",
+            ),
+        ]
+    )
+    def test_inconclusive_match_reports_reason(
+        self, _name, value, operator, properties, reason
+    ):
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_property(self.property("key", value, operator), properties)
+
+        self.assertEqual(ctx.exception.reason, UnresolvedFlagReason[reason])
 
     def test_every_supported_operator_has_a_dispatch_branch(self):
         # PROPERTY_OPERATORS gates local evaluation, but match_property dispatches

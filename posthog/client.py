@@ -114,6 +114,7 @@ from .types import (
     FlagsResponse,
     FlagValue,
     SendFeatureFlagsOptions,
+    UnresolvedFlagReason,
     normalize_flags_response,
     to_flags_and_payloads,
     to_payloads,
@@ -925,6 +926,9 @@ class Client(object):
         self._flag_definition_cache_generation = 0
         self._flag_definition_publication_lock = threading.RLock()
         self._flag_definition_cache_write_lock = threading.RLock()
+        # Flag key -> definition of flags already warned about as never resolvable
+        # locally, so each warning fires once until the definition changes.
+        self._warned_unresolvable_flags: Dict[str, str] = {}
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
             _BackgroundEventLoopRunner
@@ -3227,6 +3231,7 @@ class Client(object):
             self._minimal_flag_called_events = (
                 data.get("minimal_flag_called_events") is True
             )
+            self._warn_unresolvable_flags(data["flags"])
 
             if fingerprint != self._flag_definition_fingerprint:
                 self._flag_definition_fingerprint = fingerprint
@@ -3239,6 +3244,21 @@ class Client(object):
                     )
                 return old_fingerprint
         return None
+
+    def _warn_unresolvable_flags(self, flags: List[Dict[str, Any]]) -> None:
+        for flag in flags or []:
+            if not flag.get("active") or not flag.get("ensure_experience_continuity"):
+                continue
+            key = flag["key"]
+            definition = json.dumps(flag, sort_keys=True, default=str)
+            if self._warned_unresolvable_flags.get(key) == definition:
+                continue
+            self._warned_unresolvable_flags[key] = definition
+            self.log.warning(
+                f"[FEATURE FLAGS] Flag '{key}' can't be evaluated locally "
+                f"(reason: {UnresolvedFlagReason.EXPERIENCE_CONTINUITY.value}); "
+                "it is resolved only by remote evaluation"
+            )
 
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
@@ -3544,11 +3564,14 @@ class Client(object):
         # Create evaluation cache for flag dependencies
         evaluation_cache: dict[str, Optional[FlagValue]] = {}
 
-        if feature_flag.get("ensure_experience_continuity", False):
-            raise InconclusiveMatchError("Flag has experience continuity enabled")
-
         if not feature_flag.get("active"):
             return False
+
+        if feature_flag.get("ensure_experience_continuity", False):
+            raise InconclusiveMatchError(
+                "Flag has experience continuity enabled",
+                reason=UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+            )
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
@@ -3562,7 +3585,10 @@ class Client(object):
                     f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
                 )
                 # failover to `/flags`
-                raise InconclusiveMatchError("Flag has unknown group type index")
+                raise InconclusiveMatchError(
+                    "Flag has unknown group type index",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                )
 
             if group_name not in groups:
                 # Group flags are never enabled in `groups` aren't passed in
@@ -3579,7 +3605,8 @@ class Client(object):
 
             if group_name not in group_properties:
                 raise InconclusiveMatchError(
-                    f"Flag has no group properties for group '{group_name}'"
+                    f"Flag has no group properties for group '{group_name}'",
+                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
                 )
             focused_group_properties = group_properties[group_name]
             group_key = groups[group_name]
@@ -4587,6 +4614,7 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
+        unresolved: Dict[str, UnresolvedFlagReason] = {}
         # Source the gate the same way as has_experiment below; see
         # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
         # current state; a successful remote fallback overwrites it with that
@@ -4604,6 +4632,7 @@ class Client(object):
             group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys,
             device_id=device_id,
+            unresolved=unresolved,
         )
 
         feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
@@ -4708,6 +4737,9 @@ class Client(object):
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
             minimal_flag_called_events=minimal_flag_called_events,
+            unresolved_flags={
+                key: reason for key, reason in unresolved.items() if key not in records
+            },
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
@@ -4730,6 +4762,7 @@ class Client(object):
         warn_on_unknown_groups=False,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        unresolved: Optional[Dict[str, UnresolvedFlagReason]] = None,
     ) -> tuple[FlagsAndPayloads, bool]:
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -4770,9 +4803,11 @@ class Client(object):
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
-                except InconclusiveMatchError:
+                except (InconclusiveMatchError, RequiresServerEvaluation) as e:
                     # No need to log this, since it's just telling us to fall back to `/flags`
                     fallback_to_flags = True
+                    if unresolved is not None:
+                        unresolved[flag["key"]] = e.reason
                 except Exception as e:
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant and payload: {e}"
