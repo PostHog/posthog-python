@@ -216,6 +216,19 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             ("reading_disabled", {}, None, {}, False, None, None),
             ("off_by_default", {}, None, {}, None, None, None),
             (
+                "idle_timeout_over_ten_hours_is_clamped",
+                {},
+                None,
+                {
+                    "idle_ms": 11 * 60 * MINUTE_MS,
+                    "length_ms": 11 * 60 * MINUTE_MS,
+                    "idle_timeout_seconds": 24 * 60 * 60,
+                },
+                True,
+                None,
+                "anon-from-cookie",
+            ),
+            (
                 "longer_idle_timeout_keeps_session",
                 {},
                 None,

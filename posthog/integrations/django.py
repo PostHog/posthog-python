@@ -274,12 +274,12 @@ class PosthogContextMiddleware:
         idle_timeout_seconds = getattr(
             settings, "POSTHOG_MW_COOKIE_SESSION_IDLE_TIMEOUT_SECONDS", None
         )
+        # The same bounds posthog-js applies to session_idle_timeout_seconds.
         self.cookie_session_idle_timeout_ms = (
-            int(idle_timeout_seconds * 1000)
+            int(min(max(idle_timeout_seconds, 60), 10 * 60 * 60) * 1000)
             if isinstance(idle_timeout_seconds, (int, float))
             and not isinstance(idle_timeout_seconds, bool)
             and math.isfinite(idle_timeout_seconds)
-            and idle_timeout_seconds > 0
             else _COOKIE_SESSION_IDLE_TIMEOUT_MS
         )
 
