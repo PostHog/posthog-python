@@ -7,6 +7,8 @@ from posthog.contexts import (
 import unittest
 from unittest.mock import Mock, patch
 import asyncio
+import json
+from urllib.parse import quote
 from parameterized import parameterized
 
 # Configure Django settings before importing middleware
@@ -35,8 +37,10 @@ class MockRequest:
         path="/test",
         host="example.com",
         is_secure=False,
+        cookies=None,
     ):
         self.headers = headers or {}
+        self.COOKIES = cookies or {}
         self.method = method
         self.path = path
         self._host = host
@@ -136,6 +140,64 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             self.assertEqual(get_context_session_id(), "session-only")
             self.assertIsNone(get_context_distinct_id())
             self.assertEqual(tags["$request_method"], "PUT")
+
+    @parameterized.expand(
+        [
+            (
+                "live_session",
+                {},
+                None,
+                60_000,
+                "session-from-cookie",
+                "anon-from-cookie",
+            ),
+            (
+                "headers_win",
+                {
+                    "X-POSTHOG-SESSION-ID": "session-from-header",
+                    "X-POSTHOG-DISTINCT-ID": "user-from-header",
+                },
+                None,
+                60_000,
+                "session-from-header",
+                "user-from-header",
+            ),
+            ("authenticated_user_wins", {}, 42, 60_000, "session-from-cookie", "42"),
+            ("idle_session_dropped", {}, None, 31 * 60_000, None, "anon-from-cookie"),
+        ]
+    )
+    def test_extract_tags_reads_posthog_js_cookie(
+        self, _name, headers, user_id, idle_ms, expected_session, expected_distinct
+    ):
+        now_ms = 1_700_000_000_000
+        cookie = quote(
+            json.dumps(
+                {
+                    "distinct_id": "anon-from-cookie",
+                    "$sesid": [
+                        now_ms - idle_ms,
+                        "session-from-cookie",
+                        now_ms - idle_ms,
+                    ],
+                }
+            )
+        )
+        with new_context(), patch("time.time", return_value=now_ms / 1000):
+            middleware = self.create_middleware()
+            request = MockRequest(
+                headers=headers, cookies={"ph_test-token_posthog": cookie}
+            )
+            if user_id is not None:
+                request.user = Mock(pk=user_id, is_authenticated=True, email=None)
+
+            middleware.extract_tags(
+                request
+            ) if user_id is None else middleware._build_tags(
+                request, str(user_id), None
+            )
+
+            self.assertEqual(get_context_session_id(), expected_session)
+            self.assertEqual(get_context_distinct_id(), expected_distinct)
 
     @parameterized.expand(
         [
