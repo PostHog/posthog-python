@@ -178,8 +178,8 @@ async def test_sync_client_aio_models_tracks_generations(
     assert response is gemini_response
     provider_client.aio.models.generate_content.assert_awaited_once()
 
-    assert posthog_client.capture.call_count == 1
-    call_args = posthog_client.capture.call_args[1]
+    assert posthog_client.capture_ai.call_count == 1
+    call_args = posthog_client.capture_ai.call_args[1]
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert call_args["properties"]["$ai_model"] == "gemini-2.0-flash"
