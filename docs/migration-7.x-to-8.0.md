@@ -34,7 +34,7 @@ An endpoint that is not served drops every event sent to it.
 
 | Removed | Use instead |
 | --- | --- |
-| `capture_mode`, `CaptureMode`, `POSTHOG_CAPTURE_MODE` | Nothing. Capture v1 is the only path. |
+| `capture_mode`, `CaptureMode`, `POSTHOG_CAPTURE_MODE` | Nothing. Capture v1 is the only path. Setting `posthog.capture_mode` on the module has no effect. |
 | `gzip=True` | `capture_compression=CaptureCompression.GZIP`. The default is no compression. `POSTHOG_CAPTURE_COMPRESSION` still works. |
 | `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
@@ -61,18 +61,21 @@ An event can be dropped inside a 2xx response, for example when it is over a pro
 8.0 reports those events as failures.
 When the whole request is over the billing limit, capture returns a `402` with no per-event results instead.
 
-- Every capture failure is a `CaptureError`. It has these fields:
-  - `status`: the HTTP status, or `0` when the request never got a response
+- Every capture failure is a `CaptureError`, a subclass of `APIError`. It has these fields:
+  - `status`: the HTTP status, or `0` when the request never got a response. With `0`, `__cause__` holds the network error. In 7.x, `on_error` received the raw `requests` exception.
   - `endpoint`, `request_id` and `attempts`
-  - `drops` and `retry_exhausted`: the uuids that were dropped or ran out of retries
-  - `event_results`: a `CaptureEventResult(result, details)` for each uuid, from `posthog.capture_send`
+  - `drops`: `(uuid, details)` pairs for the events capture dropped in a 2xx response
+  - `retry_exhausted`: the uuids still waiting for a retry after the last attempt
+  - `event_results`: a `CaptureEventResult(result, details)` for each uuid that got a result in a 2xx response, from `posthog.capture_send`. An event missing from it never got a result.
   - `verdict_summary()`: counts such as `drop/llm_events_over_quota=1, retry/not_persisted=1`
 - `on_error(error, batch)` receives every failure, including in `sync_mode` and from `AsyncPosthog.capture_immediate`.
+- With `on_error` set, the SDK logs nothing for a failed batch.
 - Without `on_error`, the SDK logs one line per failed batch, for example `2 event(s) not persisted by /i/v1/analytics/events: ...`. The line never contains event content or the server's response text.
+- The 7.x lines `error uploading: ...`, `async capture upload failed (...)` and `Immediate async capture failed (...)` are gone. Update any log-based alerts that match them.
 - In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`. With `debug=True` it calls `on_error` and then re-raises the error.
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
-- A `429` response is not retried.
-- Retries start at 100 ms and double each attempt, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
+- The SDK retries `408`, `500`, `502`, `503` and `504` responses and network errors. Other error statuses fail the batch at once, including `429` and the other 5xx codes. 7.x also retried `429` and every 5xx. Capture itself does not return `429`; a proxy in front of it can.
+- Retries start at 100 ms and double each attempt, up to 30 seconds. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
 
 ## Event uuids
 
@@ -80,6 +83,15 @@ When the whole request is over the billing limit, capture returns a `402` with n
 - The SDK accepts a uuid with hyphens, 32 hex digits, `{...}` braces or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
 - Any other value is replaced with a generated uuid, and the SDK logs an error. This applies to `AsyncPosthog` too.
 - Generated uuids are UUIDv7.
+
+## Session and window IDs
+
+Capture v1 sends `$session_id` and `$window_id` as top-level event fields, not as properties.
+The SDK moves them out of `properties` for you.
+
+- A string is sent as given, including `""`.
+- `None` counts as unset and is removed.
+- Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property.
 
 ## Event options
 
@@ -91,10 +103,20 @@ Capture v1 sends processing options in an `options` object, next to `properties`
   posthog.capture("signed_up", distinct_id="user-1", options={"cookieless_mode": True})
   ```
 
-- `super_options` sets options on every event, like `super_properties`.
-- `set_context_option(key, value)` sets an option for the current context, like `tag()`.
+- `super_options`, a new `Client`, `AsyncPosthog` and module setting, sets options on every event, like `super_properties`.
+- `set_context_option(key, value)` sets an option for the current context, like `tag()`. `get_context_options()` returns the options of the current context. Both exist on `Client` and as module functions. `AsyncPosthog` has no context methods, like it has no `tag()`, so call the module functions. They apply to every client in the context.
+- Context tags and options reach `capture`, `capture_ai` and `capture_exception`. Context options also reach `set` and `set_once`. Neither reaches `alias` or `group_identify`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them.
-- The legacy properties `$cookieless_mode`, `$ignore_sent_at`, `$product_tour_id` and `$process_person_profile` still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
+- An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
+- The legacy properties still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
+
+  | Legacy property | Option |
+  | --- | --- |
+  | `$cookieless_mode` | `cookieless_mode` |
+  | `$ignore_sent_at` | `disable_skew_correction` |
+  | `$product_tour_id` | `product_tour_id` |
+  | `$process_person_profile` | `process_person_profile` |
+
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
 - A `None` option counts as unset, so a later step can fill it.
 
@@ -120,21 +142,26 @@ These changes follow from this order:
 - A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
 - To change an option in `before_send`, edit `options`. A legacy property that `before_send` adds does not replace an option that is already set.
+- When the server enables minimal `$feature_flag_called` events, those events now keep `$window_id`, `$cookieless_mode`, `$ignore_sent_at` and `$product_tour_id`, so their options still apply.
 
 ## AI capture
 
 - `capture_ai` and every built-in AI integration send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
-- The AI integrations call your client's `capture_ai`, and pass `options=`. A client object without `capture_ai` gets `capture` calls instead. A custom client must accept the `options` keyword argument.
+- The AI integrations call your client's `capture_ai`. A client object without `capture_ai` gets `capture` calls instead. A custom client must accept the `options` keyword argument.
 - Tests that pass a `Mock` client to an AI integration must assert on `mock.capture_ai`, not `mock.capture`.
-- When an AI integration or MCP falls back to a trace, run or session ID, it turns person processing off with a per-event option. A `$process_person_profile: true` property no longer turns it back on. `before_send` can still change it.
+- When an AI integration or MCP falls back to a trace, run or session ID, it turns person processing off with a per-event option. This is the only option the integrations pass. It wins over `super_options`, context options and a `$process_person_profile: true` property. `before_send` can still change it.
+- The AI integrations have no `options` argument. To set options on their events, use `set_context_option`, `super_options`, or a legacy property such as `$cookieless_mode` in `posthog_properties`.
 - MCP's `PostHogCaptureEvent` has an `options` key.
 - New `Client` and `AsyncPosthog` arguments for the AI lane:
   - `capture_ai_compression`: default none. `POSTHOG_CAPTURE_COMPRESSION` does not apply to it.
   - `capture_ai_max_queue_size`: default 1000
   - `capture_ai_timeout`: default 30 seconds
   - `capture_ai_max_event_bytes`: default 8 MiB plus 64 KiB. You can only lower it.
+- The AI lane does not use `max_queue_size`, `timeout` or `capture_compression`. An invalid `capture_ai_*` value raises `ValueError` when you create the client.
+- The module-level client has no AI lane settings. To change them, create a `Client`.
 - `AsyncPosthog` has `capture_ai` and `capture_ai_immediate`.
+- `AsyncPosthog` sends events with `requests` in a worker thread. It uses `httpx` only for feature flags and remote config.
 - `AsyncPosthog` accepts `privacy_mode` and `enable_full_ai_capture`, with the same meaning as on `Client`. An AI integration given an `AsyncPosthog` client used to always truncate and redact media.
 
 ## Batching and size limits
