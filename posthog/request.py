@@ -219,7 +219,6 @@ def post(
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
-    user_agent = kwargs.pop("_user_agent", USER_AGENT)
     body = kwargs
     body["sent_at"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
@@ -232,7 +231,7 @@ def post(
             json.dumps({**body, "api_key": "[redacted]"}, cls=DatetimeSerializer),
             url,
         )
-    headers = {"Content-Type": "application/json", "User-Agent": user_agent}
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
 
     res = (session or _get_session()).post(
         url, data=data, headers=headers, timeout=timeout
@@ -304,7 +303,6 @@ def flags(
     **kwargs,
 ) -> Any:
     """Post the kwargs to the flags API endpoint with bounded transient retries."""
-    user_agent = kwargs.pop("_user_agent", USER_AGENT)
     retries = max(0, max_retries)
     failed_attempt = 0
 
@@ -316,7 +314,6 @@ def flags(
                 "/flags/?v=2",
                 timeout,
                 session=_get_flags_session(),
-                _user_agent=user_agent,
                 **kwargs,
             )
             return _process_response(
@@ -343,24 +340,11 @@ def remote_config(
     timeout: int = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return _remote_config(personal_api_key, project_api_key, host, key, timeout)
-
-
-def _remote_config(
-    personal_api_key: str,
-    project_api_key: str,
-    host: Optional[str] = None,
-    key: str = "",
-    timeout: int = 15,
-    *,
-    _user_agent: str = USER_AGENT,
-) -> Any:
-    response = _get(
+    response = get(
         personal_api_key,
         f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
-        _user_agent=_user_agent,
     )
     return response.data
 
@@ -379,25 +363,10 @@ def get(
     - not_modified=True and data=None if server returns 304
     - not_modified=False and data=response if server returns 200
     """
-    return _get(api_key, url, host, timeout, etag)
-
-
-def _get(
-    api_key: str,
-    url: str,
-    host: Optional[str] = None,
-    timeout: Optional[int] = None,
-    etag: Optional[str] = None,
-    *,
-    _user_agent: str = USER_AGENT,
-) -> GetResponse:
     log = logging.getLogger("posthog")
     trimmed_host = remove_trailing_slash(normalize_host(host))
     full_url = trimmed_host + url
-    headers = {
-        "Authorization": "Bearer %s" % api_key,
-        "User-Agent": _user_agent,
-    }
+    headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
 
     if etag:
         headers["If-None-Match"] = etag
