@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from posthog.utils import _normalize_timestamp
+from posthog.utils import _normalize_timestamp, _uuid7
 from posthog.utils import clean as _clean
 
 log = logging.getLogger("posthog")
@@ -76,6 +76,24 @@ def _canonical_event_uuid(value: Any) -> Optional[str]:
     if not isinstance(value, str) or not _EVENT_UUID_PATTERN.fullmatch(value):
         return None
     return str(UUID(value.lower()))
+
+
+def _resolve_event_uuid(value: Any) -> str:
+    """Return the canonical form of a caller's event uuid, or a generated one.
+
+    A missing or empty uuid is generated silently. An invalid one is replaced
+    and logs one warning. The warning names the rule and not the value,
+    because callers can put their own data in the uuid field.
+    """
+    if value is not None and value != "":
+        canonical = _canonical_event_uuid(value)
+        if canonical is not None:
+            return canonical
+        log.warning(
+            "Event uuid is not a valid UUID string or uuid.UUID. "
+            "Sending the event with a generated UUID."
+        )
+    return str(_uuid7())
 
 
 def _json_type_name(value: Any) -> str:

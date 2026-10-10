@@ -102,7 +102,7 @@ When the whole request is over the billing limit, capture returns a `402` with n
 
 - Each event needs its own uuid. Capture rejects a whole batch that contains the same uuid twice, so the other events in that batch are lost too.
 - The SDK accepts a uuid with hyphens, 32 hex digits, `{...}` braces or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
-- Any other value is replaced with a generated uuid, and the SDK logs an error. This applies to `AsyncPosthog` too.
+- Any other value is replaced with a generated uuid, and the SDK logs one warning that names the rule, not the value. An empty string counts as unset, so the SDK generates a uuid without a warning. This applies to `AsyncPosthog` too.
 - Generated uuids are UUIDv7.
 
 ## Session and window IDs

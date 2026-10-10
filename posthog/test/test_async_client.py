@@ -72,6 +72,26 @@ async def test_capture_is_a_synchronous_queue_write_and_flushes():
     assert event["uuid"] == event_uuid
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "supplied, warnings",
+    [("not-a-uuid-secret-1", 1), (123, 1), ("", 0), (None, 0)],
+)
+async def test_capture_replaces_unusable_uuid_and_warns_only_when_invalid(
+    caplog, supplied, warnings
+):
+    client = AsyncPosthog("test-key", send=False)
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        event_uuid = client.capture("async event", distinct_id="user-1", uuid=supplied)
+    await client.shutdown()
+
+    assert UUID(event_uuid).version == 7
+    logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(logged) == warnings
+    assert all(r.levelname == "WARNING" for r in logged)
+    assert all(str(supplied) not in r.getMessage() for r in logged)
+
+
 def test_capture_from_worker_thread_wakes_loop_bound_queue():
     script = r"""
 import asyncio
