@@ -15,8 +15,8 @@ from flask import Flask, jsonify, request
 
 from posthog import Client
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_v1 import _CAPTURE_V1_PATH
-from posthog.capture_v1 import _post_v1 as original_post_v1
+from posthog.capture_send import _CAPTURE_V1_PATH
+from posthog.capture_send import _post_v1 as original_post_v1
 from posthog.request import USER_AGENT
 from posthog.version import VERSION
 
@@ -212,9 +212,9 @@ def patched_post_v1(
 # Patch the capture-v1 submitter. `_send_v1_batch` resolves `_post_v1` as a module
 # global at call time, so patching it here covers both the async consumer and the
 # sync client paths.
-import posthog.capture_v1  # noqa: E402
+import posthog.capture_send  # noqa: E402
 
-posthog.capture_v1._post_v1 = patched_post_v1
+posthog.capture_send._post_v1 = patched_post_v1
 
 
 @app.route("/health", methods=["GET"])

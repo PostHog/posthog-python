@@ -1,8 +1,8 @@
 """Intercept capture uploads at the batch submitter for client-level tests.
 
 Patching the submitter (not the HTTP layer) lets tests assert on the event
-dicts the SDK built, before the wire encoding in ``capture_v1``. Wire shape is
-covered by ``test_capture_v1``.
+dicts the SDK built, before the wire encoding in ``capture_event``. Wire shape is
+covered by ``test_capture_event``.
 """
 
 import json

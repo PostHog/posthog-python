@@ -12,7 +12,7 @@ except ImportError:
     from Queue import Queue
 
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
+from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.consumer import MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.logging_helpers import capture_message_only_logs

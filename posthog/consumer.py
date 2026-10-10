@@ -6,7 +6,7 @@ from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_v1 import _CAPTURE_V1_PATH, _send_v1_batch
+from posthog.capture_send import _CAPTURE_V1_PATH, _send_v1_batch
 from posthog.request import (
     USER_AGENT as _USER_AGENT,
     DatetimeSerializer,

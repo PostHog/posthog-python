@@ -10,6 +10,7 @@ from posthog.args import (
     OptionalSetArgs,
 )
 from posthog.capture_compression import CaptureCompression as CaptureCompression
+from posthog.capture_send import CaptureError as CaptureError
 from posthog.client import Client
 from posthog.tracing.span import Span as Span
 from posthog.async_client import AsyncClient as AsyncClient

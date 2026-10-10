@@ -31,7 +31,7 @@ from posthog.capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
-from posthog.capture_v1 import (
+from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
     _CAPTURE_V1_PATH,
     _send_v1_batch,

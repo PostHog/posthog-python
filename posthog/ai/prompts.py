@@ -14,7 +14,7 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union, overload
 
-from posthog.capture_v1 import _parse_retry_after
+from posthog.capture_send import _parse_retry_after
 from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
 
