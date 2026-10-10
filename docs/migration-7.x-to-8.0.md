@@ -57,15 +57,16 @@ Posthog("<api_key>", host="https://us.i.posthog.com", debug=True)
 ## Errors and `on_error`
 
 Capture v1 returns a result for every event, even when the request succeeds.
-An event can be dropped, for example by billing limits or quotas, inside a 2xx response.
+An event can be dropped inside a 2xx response, for example when it is over a product quota.
 8.0 reports those events as failures.
+When the whole request is over the billing limit, capture returns a `402` with no per-event results instead.
 
 - Every capture failure is a `CaptureError`. It has these fields:
   - `status`: the HTTP status, or `0` when the request never got a response
   - `endpoint`, `request_id` and `attempts`
   - `drops` and `retry_exhausted`: the uuids that were dropped or ran out of retries
   - `event_results`: a `CaptureEventResult(result, details)` for each uuid, from `posthog.capture_send`
-  - `verdict_summary()`: counts such as `drop/billing=1, retry/not_persisted=1`
+  - `verdict_summary()`: counts such as `drop/llm_events_over_quota=1, retry/not_persisted=1`
 - `on_error(error, batch)` receives every failure, including in `sync_mode` and from `AsyncPosthog.capture_immediate`.
 - Without `on_error`, the SDK logs one line per failed batch, for example `2 event(s) not persisted by /i/v1/analytics/events: ...`. The line never contains event content or the server's response text.
 - In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`. With `debug=True` it calls `on_error` and then re-raises the error.

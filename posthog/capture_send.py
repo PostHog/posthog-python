@@ -91,7 +91,7 @@ class CaptureEventResult:
 
     ``result`` is ``ok``, ``warning``, ``drop`` or ``retry``, or a value newer
     than this SDK, which counts as success. ``details`` is the server's reason
-    tag, such as ``billing_limit_exceeded``.
+    tag, such as ``llm_events_over_quota``.
     """
 
     result: Optional[str]
@@ -156,7 +156,7 @@ class CaptureError(APIError):
 
     def verdict_summary(self) -> str:
         """Count the undelivered events by verdict and reason, for example
-        ``drop/billing_limit_exceeded=2, retry/not_persisted=1``.
+        ``drop/llm_events_over_quota=2, retry/not_persisted=1``.
 
         Counts the events in ``drops`` and ``retry_exhausted``: events the
         server dropped, and events still pending retry after the last 2xx
