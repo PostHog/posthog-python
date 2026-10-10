@@ -1443,10 +1443,10 @@ function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[b
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
-function posthog.request.flags(api_key: str, host: Optional[str] = None, timeout: int = 15, max_retries: int = 1, **kwargs) -> Any
+function posthog.request.flags(api_key: str, host: Optional[str] = None, *, timeout: int = 15, max_retries: int = 1, **kwargs) -> Any
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
 function posthog.request.normalize_host(host: Optional[str]) -> str
-function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
+function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, *, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None

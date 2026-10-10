@@ -213,6 +213,7 @@ def post(
     api_key: str,
     host: Optional[str] = None,
     path: Optional[str] = None,
+    *,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
     **kwargs,
@@ -298,6 +299,7 @@ def _feature_flags_retry_delay(failed_attempt: int) -> float:
 def flags(
     api_key: str,
     host: Optional[str] = None,
+    *,
     timeout: int = 15,
     max_retries: int = 1,
     **kwargs,
@@ -312,7 +314,7 @@ def flags(
                 api_key,
                 host,
                 "/flags/?v=2",
-                timeout,
+                timeout=timeout,
                 session=_get_flags_session(),
                 **kwargs,
             )
