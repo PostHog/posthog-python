@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from posthog.utils import _normalize_timestamp
+from posthog.utils import _normalize_timestamp, _uuid7
 from posthog.utils import clean as _clean
 
 log = logging.getLogger("posthog")
@@ -78,6 +78,37 @@ def _canonical_event_uuid(value: Any) -> Optional[str]:
     return str(UUID(value.lower()))
 
 
+def _resolve_event_uuid(value: Any) -> str:
+    """Return the canonical form of a caller's event uuid, or a generated one.
+
+    A missing or empty uuid is generated silently. An invalid one is replaced
+    and logs one warning. The warning names the rule and not the value,
+    because callers can put their own data in the uuid field.
+    """
+    if value is not None and value != "":
+        canonical = _canonical_event_uuid(value)
+        if canonical is not None:
+            return canonical
+        log.warning(
+            "Event uuid is not a valid UUID string or uuid.UUID. "
+            "Sending the event with a generated UUID."
+        )
+    return str(_uuid7())
+
+
+def _json_type_name(value: Any) -> str:
+    """Name a value's JSON type, the same names posthog-go and posthog-rs log."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return type(value).__name__
+
+
 def _event_options(value: Any) -> dict[str, Any]:
     """Return a copy of a caller's ``options``, or ``{}`` when it is not a dict."""
     if value is None:
@@ -93,7 +124,7 @@ def _event_options(value: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class _EventDefaults:
-    """Context, global and SDK-derived values for one event, highest layer first.
+    """Per-call, context, global and SDK-derived values for one event, highest layer first.
 
     They fill in before ``before_send``, so the hook sees them and can change
     or remove them. The event's own values win over every default.
@@ -115,9 +146,18 @@ def _build_event_defaults(
     property_allowlist: Optional[Collection[str]] = None,
     is_server: bool = False,
     disable_geoip: bool = False,
+    call_disable_geoip: Optional[bool] = None,
     system_properties: Optional[Mapping[str, Any]] = None,
 ) -> _EventDefaults:
-    """Order the layers: context, then global, then values the SDK derives."""
+    """Order the layers: per-call arguments, context, global, then SDK values.
+
+    ``disable_geoip`` is the client setting, an SDK value. ``call_disable_geoip``
+    is the argument of one call: it is a value of that event, so only the
+    event's own ``$geoip_disable`` property beats it.
+    """
+    call_properties = (
+        {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
+    )
     # A value in the event, the context or super properties wins over every
     # value the SDK adds, including `$is_server` and `$geoip_disable`.
     sdk_properties = dict(system_properties or {})
@@ -129,6 +169,7 @@ def _build_event_defaults(
         sdk_properties["$geoip_disable"] = True
     return _EventDefaults(
         property_layers=(
+            call_properties,
             context_properties or {},
             super_properties or {},
             sdk_properties,
@@ -242,10 +283,16 @@ def _to_v1_event(msg: dict) -> dict:
         if prop_key not in properties:
             continue
         # Always removed. A non-string value would fail the whole batch, so it
-        # is dropped.
+        # is dropped. None counts as unset and drops silently.
         value = properties.pop(prop_key)
         if isinstance(value, str):
             top_level[field_name] = value
+        elif value is not None:
+            log.warning(
+                "dropping %s: a %s value is not a string",
+                prop_key,
+                _json_type_name(value),
+            )
 
     event = {
         "event": msg["event"],

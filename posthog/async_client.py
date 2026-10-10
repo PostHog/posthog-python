@@ -39,11 +39,11 @@ from .capture_compression import (
 )
 from .capture_event import (
     _build_event_defaults,
-    _canonical_event_uuid,
     _event_options,
     _EventDefaults,
     _fill_event_defaults,
     _merge_groups,
+    _resolve_event_uuid,
 )
 from .capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from .client import (
@@ -76,7 +76,9 @@ from .exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
+    _exception_level,
     _get_current_otel_span_properties,
+    _without_reserved_exception_properties,
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
@@ -96,7 +98,6 @@ from .types import FlagMetadata, FlagValue, normalize_flags_response
 from .utils import (
     SizeLimitedDict,
     _normalize_timestamp,
-    _uuid7,
     clean,
     system_context,
 )
@@ -445,18 +446,7 @@ class AsyncClient:
         return admitted.result()
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
-        raw_uuid = msg.pop("uuid", None)
-        if raw_uuid is not None:
-            normalized = _canonical_event_uuid(raw_uuid)
-            if normalized is None:
-                self.log.error(
-                    "Invalid UUID %r. Falling back to a generated UUID.", raw_uuid
-                )
-            else:
-                msg["uuid"] = normalized
-                return normalized
-
-        normalized = str(_uuid7())
+        normalized = _resolve_event_uuid(msg.pop("uuid", None))
         msg["uuid"] = normalized
         return normalized
 
@@ -531,8 +521,6 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         system_properties: Optional[dict[str, Any]] = None,
     ) -> _EventDefaults:
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
         return _build_event_defaults(
             super_properties=self.super_properties,
             super_options=self.super_options,
@@ -542,7 +530,8 @@ class AsyncClient:
             derived_options=derived_options,
             property_allowlist=property_allowlist,
             is_server=self.is_server,
-            disable_geoip=disable_geoip,
+            disable_geoip=self.disable_geoip,
+            call_disable_geoip=disable_geoip,
             system_properties=system_properties,
         )
 
@@ -873,9 +862,16 @@ class AsyncClient:
     def capture_exception(
         self,
         exception: Optional[ExceptionArg] = None,
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
-        """Capture an exception. This method never raises, including in debug mode."""
+        """Capture an exception. This method never raises, including in debug mode.
+
+        ``level`` sets ``$exception_level`` and defaults to ``"error"``. An unknown
+        value counts as unset. Reserved exception properties in ``properties``,
+        such as ``$exception_list`` and ``$exception_level``, are ignored.
+        """
         try:
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
@@ -897,8 +893,9 @@ class AsyncClient:
             )
             exceptions = event["exception"]["values"]
             properties = {
+                **_without_reserved_exception_properties(kwargs.get("properties")),
                 "$exception_list": exceptions,
-                **(kwargs.get("properties") or {}),
+                "$exception_level": _exception_level(None, level),
             }
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()

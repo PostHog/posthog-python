@@ -72,6 +72,26 @@ async def test_capture_is_a_synchronous_queue_write_and_flushes():
     assert event["uuid"] == event_uuid
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "supplied, warnings",
+    [("not-a-uuid-secret-1", 1), (123, 1), ("", 0), (None, 0)],
+)
+async def test_capture_replaces_unusable_uuid_and_warns_only_when_invalid(
+    caplog, supplied, warnings
+):
+    client = AsyncPosthog("test-key", send=False)
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        event_uuid = client.capture("async event", distinct_id="user-1", uuid=supplied)
+    await client.shutdown()
+
+    assert UUID(event_uuid).version == 7
+    logged = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert len(logged) == warnings
+    assert all(r.levelname == "WARNING" for r in logged)
+    assert all(str(supplied) not in r.getMessage() for r in logged)
+
+
 def test_capture_from_worker_thread_wakes_loop_bound_queue():
     script = r"""
 import asyncio
@@ -720,6 +740,32 @@ async def test_capture_exception_never_raises_in_debug_mode():
     client = AsyncPosthog("test-key", send=False, debug=True)
     with mock.patch.object(client, "capture", side_effect=RuntimeError("broken")):
         assert client.capture_exception(ValueError("boom")) is None
+    await client.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "expected"), [(None, "error"), ("warning", "warning")]
+)
+async def test_capture_exception_sets_level_and_ignores_reserved_properties(
+    level, expected
+):
+    client = AsyncPosthog("test-key", send=False)
+    with mock.patch.object(client, "capture", return_value="uuid") as capture:
+        client.capture_exception(
+            ValueError("boom"),
+            level=level,
+            properties={
+                "$exception_list": [],
+                "$exception_level": "fatal",
+                "plan": "pro",
+            },
+        )
+
+    properties = capture.call_args.kwargs["properties"]
+    assert properties["$exception_list"][0]["type"] == "ValueError"
+    assert properties["$exception_level"] == expected
+    assert properties["plan"] == "pro"
     await client.shutdown()
 
 

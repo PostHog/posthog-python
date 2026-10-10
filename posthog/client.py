@@ -36,10 +36,10 @@ from posthog.capture_compression import (
 )
 from posthog.capture_event import (
     _build_event_defaults,
-    _canonical_event_uuid,
     _event_options,
     _fill_event_defaults,
     _merge_groups,
+    _resolve_event_uuid,
 )
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
@@ -78,10 +78,11 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
+    _exception_level,
     _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
-    _normalize_exception_level,
+    _without_reserved_exception_properties,
     try_attach_code_variables_to_frames,
 )
 from posthog.feature_flag_evaluations import (
@@ -136,7 +137,6 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
-    _uuid7,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -271,15 +271,6 @@ def get_identity_state(passed) -> tuple[str, bool]:
         return (context_id, False)
 
     return (str(uuid4()), True)
-
-
-def _stringify_event_uuid(value) -> str:
-    canonical = _canonical_event_uuid(value)
-    if canonical is None:
-        raise ValueError(
-            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
-        )
-    return canonical
 
 
 def _personless_options(personless: bool) -> dict[str, Any]:
@@ -1691,9 +1682,10 @@ class Client(object):
             send_feature_flags: Deprecated. Prefer flags=... from
                 evaluate_flags(). When truthy, evaluates flags during capture and
                 attaches them to the event.
-            disable_geoip: Whether to disable GeoIP for this event. A
-                ``$geoip_disable`` property in the event, context tags or
-                ``super_properties`` wins.
+            disable_geoip: Whether to disable GeoIP for this event. It wins
+                over a ``$geoip_disable`` in context tags or
+                ``super_properties``. A ``$geoip_disable`` property in this
+                call's ``properties`` wins over it.
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
@@ -2199,6 +2191,8 @@ class Client(object):
     def capture_exception(
         self,
         exception: Optional[ExceptionArg],
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
         """
@@ -2209,10 +2203,12 @@ class Client(object):
 
         Args:
             exception: The exception to capture.
+            level: The ``$exception_level``, such as ``"warning"`` or ``"fatal"``.
+                Defaults to ``"error"``. An unknown value counts as unset.
             distinct_id: The distinct ID of the user.
-            properties: A dictionary of additional properties. Overriding reserved
-                exception properties is deprecated and will stop working in the next
-                major version.
+            properties: A dictionary of additional properties. Reserved exception
+                properties, such as ``$exception_list`` and ``$exception_level``,
+                are ignored.
             flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
                 Attaches those exact flag values to the captured `$exception` event.
             send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
@@ -2278,52 +2274,18 @@ class Client(object):
             )
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
-            reserved_properties = {
-                "$exception_list",
-                "$exception_level",
-                "$exception_source",
-                "$debug_images",
-                "$exception_handled",
-                "$exception_types",
-                "$exception_values",
-                "$exception_sources",
-                "$exception_functions",
-                "$exception_fingerprint_version",
-                "$exception_fingerprint_record",
-                "$exception_issue_id",
-                "$exception_release",
-                "$cymbal_errors",
-            }
-            reserved_property_overrides = reserved_properties.intersection(properties)
-            if reserved_property_overrides:
-                try:
-                    warnings.warn(
-                        "Reserved exception properties passed through "
-                        "`capture_exception(properties=...)` currently override "
-                        "SDK-owned metadata, but this behavior is deprecated and will "
-                        "be removed in the next major version: "
-                        + ", ".join(sorted(reserved_property_overrides)),
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                except DeprecationWarning:
-                    # capture_exception must not drop an event when applications
-                    # promote deprecation warnings to errors.
-                    pass
-
             caller_properties = properties
             properties = {
                 **_get_current_otel_span_properties(),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_level": _normalize_exception_level(
-                    capture_metadata.get("level")
-                )
-                or "error",
+                "$exception_level": _exception_level(
+                    capture_metadata.get("level"), level
+                ),
             }
             source = capture_metadata.get("source")
             if isinstance(source, str) and source:
                 properties["$exception_source"] = source
-            properties.update(caller_properties)
+            properties.update(_without_reserved_exception_properties(caller_properties))
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
@@ -2504,17 +2466,8 @@ class Client(object):
     def _normalize_event_uuid(self, msg):
         # type: (...) -> None
         """Ensure `msg["uuid"]` is a valid uuid string, generating one if missing or invalid."""
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = str(_uuid7())
+        # Always send a uuid, so we can always return one
+        msg["uuid"] = _resolve_event_uuid(msg.pop("uuid", None))
 
     def _report_capture_failure(
         self, error: Exception, batch: list[dict], endpoint: str
@@ -2575,9 +2528,6 @@ class Client(object):
         msg["properties"]["$lib"] = self._library_id
         msg["properties"]["$lib_version"] = self._library_version
 
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-
         msg["options"] = msg.get("options") or {}
 
         _fill_event_defaults(
@@ -2591,7 +2541,8 @@ class Client(object):
                 derived_options=derived_options,
                 property_allowlist=property_allowlist,
                 is_server=self.is_server,
-                disable_geoip=disable_geoip,
+                disable_geoip=self.disable_geoip,
+                call_disable_geoip=disable_geoip,
                 system_properties=system_properties,
             ),
         )

@@ -410,6 +410,59 @@ async def test_async_caller_values_beat_sdk_values(source):
     _assert_caller_values(events, CALLER_SDK_VALUES)
 
 
+GEOIP_CALL_CASES = [
+    pytest.param(True, "context", False, True, id="call_beats_context"),
+    pytest.param(True, "super", False, True, id="call_beats_super"),
+    pytest.param(False, "super", True, False, id="call_false_beats_super"),
+    pytest.param(False, None, None, False, id="call_false_beats_client_setting"),
+    pytest.param(True, "event", False, False, id="event_property_beats_call"),
+]
+
+
+def _capture_with_call_geoip(call_value, source, layer_value):
+    def call(client):
+        with new_context(fresh=True):
+            if source == "context":
+                tag("$geoip_disable", layer_value)
+            properties = {"$geoip_disable": layer_value} if source == "event" else None
+            return client.capture(
+                "e", distinct_id="u", properties=properties, disable_geoip=call_value
+            )
+
+    return call
+
+
+def _geoip_layer_config(source, layer_value):
+    if source == "super":
+        return {"super_properties": {"$geoip_disable": layer_value}}
+    return {}
+
+
+@pytest.mark.parametrize("call_value, source, layer_value, expected", GEOIP_CALL_CASES)
+def test_sync_call_disable_geoip_is_an_event_value(
+    call_value, source, layer_value, expected
+):
+    events = _sync_wire_events(
+        _capture_with_call_geoip(call_value, source, layer_value),
+        disable_geoip=True,
+        **_geoip_layer_config(source, layer_value),
+    )
+    assert events[0]["properties"]["$geoip_disable"] is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_value, source, layer_value, expected", GEOIP_CALL_CASES)
+async def test_async_call_disable_geoip_is_an_event_value(
+    call_value, source, layer_value, expected
+):
+    events = await _async_wire_events(
+        _capture_with_call_geoip(call_value, source, layer_value),
+        disable_geoip=True,
+        **_geoip_layer_config(source, layer_value),
+    )
+    assert events[0]["properties"]["$geoip_disable"] is expected
+
+
 @pytest.mark.parametrize("method", list(CAPTURE_CALLS))
 def test_sync_super_properties_beat_sdk_values_on_every_path(method):
     events = _sync_wire_events(

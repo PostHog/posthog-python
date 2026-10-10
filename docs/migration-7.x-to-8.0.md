@@ -9,6 +9,8 @@ Read the checklist first, then the sections that apply to you.
 You need to change code if your app does any of these:
 
 - passes `Client` or `AsyncPosthog` constructor arguments by position after `host`
+- calls `posthog.request.post` or `posthog.request.flags` with positional arguments after `path` or `host`
+- sets `$exception_level` or another reserved exception property in `capture_exception(properties=...)`
 - sets `capture_mode`, `POSTHOG_CAPTURE_MODE` or `gzip`
 - imports `CaptureV1Error`, `posthog.capture_v1`, `request.batch_post`, `EVENTS_ENDPOINT` or `AI_EVENTS_ENDPOINT`
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
@@ -58,7 +60,7 @@ To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$l
 | `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
 | `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Nothing. Send events through a client. |
-| The `gzip` parameter of `request.post` and `request.flags` | Nothing. |
+| The `gzip` parameter of `request.post` and `request.flags` | Nothing. The parameters after `path` in `post` and after `host` in `flags` are keyword-only, so a 7.x call that passes them by position raises `TypeError`. |
 | The `backoff` dependency | Add it to your own requirements if your code imports it. |
 
 The `posthoganalytics` package has the same changes. For example, import `CaptureError` from `posthoganalytics`.
@@ -100,7 +102,7 @@ When the whole request is over the billing limit, capture returns a `402` with n
 
 - Each event needs its own uuid. Capture rejects a whole batch that contains the same uuid twice, so the other events in that batch are lost too.
 - The SDK accepts a uuid with hyphens, 32 hex digits, `{...}` braces or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
-- Any other value is replaced with a generated uuid, and the SDK logs an error. This applies to `AsyncPosthog` too.
+- Any other value is replaced with a generated uuid, and the SDK logs one warning that names the rule, not the value. An empty string counts as unset, so the SDK generates a uuid without a warning. This applies to `AsyncPosthog` too.
 - Generated uuids are UUIDv7.
 
 ## Session and window IDs
@@ -110,7 +112,13 @@ The SDK moves them out of `properties` for you.
 
 - A string is sent as given, including `""`.
 - `None` counts as unset and is removed.
-- Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property.
+- Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property. The SDK logs a warning for each one, with the key and the value's type but not the value.
+
+## Exceptions
+
+- `capture_exception` takes a `level=` argument on `Client`, `AsyncPosthog` and the module. It sets `$exception_level`, for example `"warning"` or `"fatal"`. The default is `"error"`, and an unknown value counts as unset.
+- `capture_exception` ignores reserved exception properties in `properties`, such as `$exception_list`, `$exception_level` and `$exception_source`. In 7.x they overrode the SDK's values, with a `DeprecationWarning`. Use `level=` instead of `$exception_level`.
+- `AsyncPosthog.capture_exception` now sends `$exception_level`.
 
 ## Event options
 
@@ -141,10 +149,10 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. the `options` and `properties` of the call
+1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
 2. context options and tags
 3. `super_options` and `super_properties`
-4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from `disable_geoip`, system properties such as `$os` and `$python_version`, `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
 5. `before_send`, which sees the result of steps 1 to 4 and can change or remove any of it
 6. legacy properties, which fill unset options and are then removed
 
@@ -157,6 +165,7 @@ These changes follow from this order:
 
 - Properties passed to a call now override `super_properties`. `super_properties` can no longer change `$lib` or `$lib_version`.
 - A `$is_server`, `$geoip_disable` or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x the SDK overwrote it. `super_properties` win over the SDK's value too, so `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
+- A `disable_geoip` argument to a call belongs to that event, so it wins over context tags and `super_properties`. A `$geoip_disable` in the call's own `properties` still wins over it. `disable_geoip=False` now sends `$geoip_disable: false`. In 7.x it sent no `$geoip_disable` property.
 - The `groups` argument merges into a `$groups` property of the call, and wins key by key. In 7.x it replaced the property. MCP events merge their identity's groups into a custom `$groups` property the same way.
 - A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
