@@ -19,11 +19,11 @@ from agents.tracing.span_data import (
     TranscriptionSpanData,
 )
 
-from posthog import setup
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
 from posthog.ai.utils import (
     _capture_processor_event,
+    _resolve_ai_client,
     finalize_ai_content,
     with_privacy_mode as _with_privacy_mode,
 )
@@ -88,7 +88,7 @@ class PostHogTracingProcessor(TracingProcessor):
             groups: Optional PostHog groups to associate with all events.
             properties: Optional additional properties to include with all events.
         """
-        self._client = client or setup()
+        self._client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}

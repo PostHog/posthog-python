@@ -2082,7 +2082,7 @@ def test_openai_reasoning_tokens_o4_mini(mock_client):
 
 def test_callback_handler_without_client():
     """Test that CallbackHandler works properly when no PostHog client is passed."""
-    with patch("posthog.ai.langchain.callbacks.setup") as mock_setup:
+    with patch("posthog.ai.utils.setup") as mock_setup:
         mock_client = mock_setup.return_value
 
         callbacks = CallbackHandler()

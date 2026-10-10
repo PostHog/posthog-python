@@ -3,7 +3,7 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from posthog import get_tags, identify_context, new_context, tag, contexts
+from posthog import get_tags, identify_context, new_context, setup, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import redact_media
 from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
@@ -82,11 +82,22 @@ def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwar
             **(kwargs.get("options") or {}),
             "process_person_profile": False,
         }
-    # Clients without capture_ai, such as custom stand-ins, keep the analytics lane.
-    capture_ai = getattr(ph_client, "capture_ai", None)
-    if callable(capture_ai):
-        return capture_ai(event=event, **kwargs)
-    return ph_client.capture(event=event, **kwargs)
+    return ph_client.capture_ai(event=event, **kwargs)
+
+
+def _resolve_ai_client(posthog_client: Optional[PostHogClient]) -> PostHogClient:
+    """Return the client an AI integration sends through, or the global client.
+
+    The check runs when the integration is built. A client object without
+    ``capture_ai`` then fails at setup, and not after a provider call that the
+    user already paid for.
+    """
+    client = posthog_client or setup()
+    if not callable(getattr(client, "capture_ai", None)):
+        raise TypeError(
+            "The PostHog client for an AI integration must implement capture_ai()"
+        )
+    return client
 
 
 def _capture_processor_event(
@@ -101,8 +112,7 @@ def _capture_processor_event(
 ) -> None:
     """Apply the shared capture policy used by AI SDK processors."""
     try:
-        capture = getattr(ph_client, "capture", None)
-        if not callable(capture):
+        if not callable(getattr(ph_client, "capture_ai", None)):
             return
 
         _capture_ai_event(
@@ -605,7 +615,7 @@ def call_llm_and_track_usage(
                 )
 
             # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+            if callable(getattr(ph_client, "capture_ai", None)):
                 sdk_tags = get_tags()
                 merged_properties = {
                     **sdk_tags,
@@ -770,7 +780,7 @@ async def call_llm_and_track_usage_async(
                 )
 
             # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+            if callable(getattr(ph_client, "capture_ai", None)):
                 sdk_tags = get_tags()
                 merged_properties = {
                     **sdk_tags,
@@ -970,7 +980,7 @@ def capture_streaming_event(
         )
 
     # Send event to PostHog
-    if hasattr(ph_client, "capture"):
+    if callable(getattr(ph_client, "capture_ai", None)):
         _capture_ai_event(
             ph_client,
             "$ai_generation",

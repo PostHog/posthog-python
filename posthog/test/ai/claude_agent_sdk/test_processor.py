@@ -173,7 +173,7 @@ class TestPostHogClaudeAgentProcessor:
         assert proc._properties == {"env": "test"}
 
     def test_initialization_defaults(self):
-        with patch("posthog.ai.claude_agent_sdk.processor.setup") as mock_setup:
+        with patch("posthog.ai.utils.setup") as mock_setup:
             mock_setup.return_value = MagicMock()
             proc = PostHogClaudeAgentProcessor()
             assert proc._distinct_id is None
@@ -507,7 +507,7 @@ class TestPrivacyMode:
 
     @pytest.mark.asyncio
     async def test_client_without_privacy_mode_captures_content(self):
-        client = SimpleNamespace(capture=MagicMock())
+        client = SimpleNamespace(capture_ai=MagicMock())
         proc = PostHogClaudeAgentProcessor(client=client, distinct_id="user")
         messages = [_make_message_start(), _make_message_stop()]
 
@@ -518,7 +518,7 @@ class TestPrivacyMode:
             async for _ in proc.query(prompt="visible", options=ClaudeAgentOptions()):
                 pass
 
-        properties = client.capture.call_args.kwargs["properties"]
+        properties = client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] == [{"role": "user", "content": "visible"}]
 
     @pytest.mark.asyncio
@@ -701,10 +701,9 @@ class TestCapturePolicy:
             "$ai_trace_id": "trace-id",
         }
 
-    def test_client_without_capture_capability_is_ignored(self):
-        proc = PostHogClaudeAgentProcessor(client=object())
-
-        proc._capture_event("$ai_trace", {})
+    def test_client_without_capture_ai_is_rejected_at_construction(self):
+        with pytest.raises(TypeError, match="capture_ai"):
+            PostHogClaudeAgentProcessor(client=object())
 
     def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
         mock_client.capture_ai.side_effect = RuntimeError("capture failed")

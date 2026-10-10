@@ -51,7 +51,6 @@ alias posthog.ai.anthropic.anthropic.handle_anthropic_content_block_start -> pos
 alias posthog.ai.anthropic.anthropic.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
 alias posthog.ai.anthropic.anthropic_async.PostHogClient -> posthog.client.Client
 alias posthog.ai.anthropic.anthropic_async.StreamingContentBlock -> posthog.ai.types.StreamingContentBlock
@@ -64,7 +63,6 @@ alias posthog.ai.anthropic.anthropic_async.handle_anthropic_content_block_start 
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic_async.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.anthropic.anthropic_converter.FormattedFunctionCall -> posthog.ai.types.FormattedFunctionCall
 alias posthog.ai.anthropic.anthropic_converter.FormattedMessage -> posthog.ai.types.FormattedMessage
@@ -77,7 +75,6 @@ alias posthog.ai.anthropic.anthropic_converter.to_plain -> posthog.ai.media.to_p
 alias posthog.ai.anthropic.anthropic_providers.AsyncWrappedMessages -> posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages
 alias posthog.ai.anthropic.anthropic_providers.PostHogClient -> posthog.client.Client
 alias posthog.ai.anthropic.anthropic_providers.WrappedMessages -> posthog.ai.anthropic.anthropic.WrappedMessages
-alias posthog.ai.anthropic.anthropic_providers.setup -> posthog.setup
 alias posthog.ai.anthropic.extract_anthropic_tools -> posthog.ai.anthropic.anthropic_converter.extract_anthropic_tools
 alias posthog.ai.anthropic.format_anthropic_input -> posthog.ai.anthropic.anthropic_converter.format_anthropic_input
 alias posthog.ai.anthropic.format_anthropic_response -> posthog.ai.anthropic.anthropic_converter.format_anthropic_response
@@ -94,7 +91,6 @@ alias posthog.ai.claude_agent_sdk.processor.Client -> posthog.client.Client
 alias posthog.ai.claude_agent_sdk.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.claude_agent_sdk.processor.format_assistant_blocks -> posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks
 alias posthog.ai.claude_agent_sdk.processor.format_tool_result_content -> posthog.ai.claude_agent_sdk.formatting.format_tool_result_content
-alias posthog.ai.claude_agent_sdk.processor.setup -> posthog.setup
 alias posthog.ai.gemini.AsyncClient -> posthog.ai.gemini.gemini_async.AsyncClient
 alias posthog.ai.gemini.Client -> posthog.ai.gemini.gemini.Client
 alias posthog.ai.gemini.extract_gemini_tools -> posthog.ai.gemini.gemini_converter.extract_gemini_tools
@@ -143,7 +139,6 @@ alias posthog.ai.langchain.CallbackHandler -> posthog.ai.langchain.callbacks.Cal
 alias posthog.ai.langchain.callbacks.Client -> posthog.client.Client
 alias posthog.ai.langchain.callbacks.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.langchain.callbacks.get_model_params -> posthog.ai.utils.get_model_params
-alias posthog.ai.langchain.callbacks.setup -> posthog.setup
 alias posthog.ai.langchain.callbacks.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.ai.langchain.callbacks.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.AsyncAzureOpenAI -> posthog.ai.openai.openai_providers.AsyncAzureOpenAI
@@ -165,7 +160,6 @@ alias posthog.ai.openai.openai.extract_openai_usage_from_chunk -> posthog.ai.ope
 alias posthog.ai.openai.openai.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.openai.openai.merge_provider_override -> posthog.ai.openai.wrapper_utils.merge_provider_override
 alias posthog.ai.openai.openai.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai.setup -> posthog.setup
 alias posthog.ai.openai.openai.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
 alias posthog.ai.openai.openai_async.PostHogClient -> posthog.client.Client
@@ -182,7 +176,6 @@ alias posthog.ai.openai.openai_async.format_openai_streaming_output -> posthog.a
 alias posthog.ai.openai.openai_async.get_model_params -> posthog.ai.utils.get_model_params
 alias posthog.ai.openai.openai_async.merge_provider_override -> posthog.ai.openai.wrapper_utils.merge_provider_override
 alias posthog.ai.openai.openai_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai_async.setup -> posthog.setup
 alias posthog.ai.openai.openai_async.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.openai.openai_converter.FormattedFunctionCall -> posthog.ai.types.FormattedFunctionCall
@@ -201,11 +194,9 @@ alias posthog.ai.openai.openai_providers.WrappedBeta -> posthog.ai.openai.openai
 alias posthog.ai.openai.openai_providers.WrappedChat -> posthog.ai.openai.openai.WrappedChat
 alias posthog.ai.openai.openai_providers.WrappedEmbeddings -> posthog.ai.openai.openai.WrappedEmbeddings
 alias posthog.ai.openai.openai_providers.WrappedResponses -> posthog.ai.openai.openai.WrappedResponses
-alias posthog.ai.openai.openai_providers.setup -> posthog.setup
 alias posthog.ai.openai_agents.PostHogTracingProcessor -> posthog.ai.openai_agents.processor.PostHogTracingProcessor
 alias posthog.ai.openai_agents.processor.Client -> posthog.client.Client
 alias posthog.ai.openai_agents.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
-alias posthog.ai.openai_agents.processor.setup -> posthog.setup
 alias posthog.ai.otel.PostHogSpanProcessor -> posthog.ai.otel.processor.PostHogSpanProcessor
 alias posthog.ai.otel.PostHogTraceExporter -> posthog.ai.otel.exporter.PostHogTraceExporter
 alias posthog.ai.otel.exporter.DEFAULT_HOST -> posthog.ai.otel.spans.DEFAULT_HOST
@@ -228,6 +219,7 @@ alias posthog.ai.utils.identify_context -> posthog.identify_context
 alias posthog.ai.utils.new_context -> posthog.new_context
 alias posthog.ai.utils.redact_media -> posthog.ai.sanitization.redact_media
 alias posthog.ai.utils.sanitize_messages -> posthog.ai.sanitization.sanitize_messages
+alias posthog.ai.utils.setup -> posthog.setup
 alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
