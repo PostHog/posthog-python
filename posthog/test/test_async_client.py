@@ -724,6 +724,32 @@ async def test_capture_exception_never_raises_in_debug_mode():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("level", "expected"), [(None, "error"), ("warning", "warning")]
+)
+async def test_capture_exception_sets_level_and_ignores_reserved_properties(
+    level, expected
+):
+    client = AsyncPosthog("test-key", send=False)
+    with mock.patch.object(client, "capture", return_value="uuid") as capture:
+        client.capture_exception(
+            ValueError("boom"),
+            level=level,
+            properties={
+                "$exception_list": [],
+                "$exception_level": "fatal",
+                "plan": "pro",
+            },
+        )
+
+    properties = capture.call_args.kwargs["properties"]
+    assert properties["$exception_list"][0]["type"] == "ValueError"
+    assert properties["$exception_level"] == expected
+    assert properties["plan"] == "pro"
+    await client.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_capture_exception_uses_context_code_variable_settings():
     client = AsyncPosthog(
         "test-key",

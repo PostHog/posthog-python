@@ -78,10 +78,11 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
+    _exception_level,
     _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
-    _normalize_exception_level,
+    _without_reserved_exception_properties,
     try_attach_code_variables_to_frames,
 )
 from posthog.feature_flag_evaluations import (
@@ -2199,6 +2200,8 @@ class Client(object):
     def capture_exception(
         self,
         exception: Optional[ExceptionArg],
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
         """
@@ -2209,10 +2212,12 @@ class Client(object):
 
         Args:
             exception: The exception to capture.
+            level: The ``$exception_level``, such as ``"warning"`` or ``"fatal"``.
+                Defaults to ``"error"``. An unknown value counts as unset.
             distinct_id: The distinct ID of the user.
-            properties: A dictionary of additional properties. Overriding reserved
-                exception properties is deprecated and will stop working in the next
-                major version.
+            properties: A dictionary of additional properties. Reserved exception
+                properties, such as ``$exception_list`` and ``$exception_level``,
+                are ignored.
             flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
                 Attaches those exact flag values to the captured `$exception` event.
             send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
@@ -2278,52 +2283,18 @@ class Client(object):
             )
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
-            reserved_properties = {
-                "$exception_list",
-                "$exception_level",
-                "$exception_source",
-                "$debug_images",
-                "$exception_handled",
-                "$exception_types",
-                "$exception_values",
-                "$exception_sources",
-                "$exception_functions",
-                "$exception_fingerprint_version",
-                "$exception_fingerprint_record",
-                "$exception_issue_id",
-                "$exception_release",
-                "$cymbal_errors",
-            }
-            reserved_property_overrides = reserved_properties.intersection(properties)
-            if reserved_property_overrides:
-                try:
-                    warnings.warn(
-                        "Reserved exception properties passed through "
-                        "`capture_exception(properties=...)` currently override "
-                        "SDK-owned metadata, but this behavior is deprecated and will "
-                        "be removed in the next major version: "
-                        + ", ".join(sorted(reserved_property_overrides)),
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                except DeprecationWarning:
-                    # capture_exception must not drop an event when applications
-                    # promote deprecation warnings to errors.
-                    pass
-
             caller_properties = properties
             properties = {
                 **_get_current_otel_span_properties(),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_level": _normalize_exception_level(
-                    capture_metadata.get("level")
-                )
-                or "error",
+                "$exception_level": _exception_level(
+                    capture_metadata.get("level"), level
+                ),
             }
             source = capture_metadata.get("source")
             if isinstance(source, str) and source:
                 properties["$exception_source"] = source
-            properties.update(caller_properties)
+            properties.update(_without_reserved_exception_properties(caller_properties))
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()

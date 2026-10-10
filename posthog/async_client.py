@@ -76,7 +76,9 @@ from .exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
+    _exception_level,
     _get_current_otel_span_properties,
+    _without_reserved_exception_properties,
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
@@ -873,9 +875,16 @@ class AsyncClient:
     def capture_exception(
         self,
         exception: Optional[ExceptionArg] = None,
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
-        """Capture an exception. This method never raises, including in debug mode."""
+        """Capture an exception. This method never raises, including in debug mode.
+
+        ``level`` sets ``$exception_level`` and defaults to ``"error"``. An unknown
+        value counts as unset. Reserved exception properties in ``properties``,
+        such as ``$exception_list`` and ``$exception_level``, are ignored.
+        """
         try:
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
@@ -897,8 +906,9 @@ class AsyncClient:
             )
             exceptions = event["exception"]["values"]
             properties = {
+                **_without_reserved_exception_properties(kwargs.get("properties")),
                 "$exception_list": exceptions,
-                **(kwargs.get("properties") or {}),
+                "$exception_level": _exception_level(None, level),
             }
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
