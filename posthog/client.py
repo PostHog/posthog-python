@@ -931,6 +931,9 @@ class Client(object):
         ] = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
         self.disabled = disabled or not self.api_key
+        # Runtime consent gate, separate from the constructor-time `disabled`
+        # kill switch, toggled by opt_out_capturing()/opt_in_capturing().
+        self._opted_out = False
         self.disable_geoip = disable_geoip
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
@@ -2401,7 +2404,7 @@ class Client(object):
         if lane is None:
             lane = self._analytics_lane
 
-        if self.disabled:
+        if self.disabled or self._opted_out:
             return None
 
         timestamp = msg["timestamp"]
@@ -2712,6 +2715,67 @@ class Client(object):
             Tracing
         """
         return self._active_span_var.get()
+
+    def opt_out_capturing(self) -> None:
+        """
+        Stop capturing events until ``opt_in_capturing()`` is called.
+
+        Details:
+            While opted out, ``capture()`` and every other event-producing API
+            drop their event silently and make no network request. Feature flag
+            evaluation and other non-capture APIs are unaffected. The state is
+            held in memory on this client only, so it does not survive a process
+            restart; persist the user's choice yourself and re-apply it on
+            startup. This is separate from the constructor-time ``disabled``
+            kill switch, which cannot be toggled at runtime.
+
+        Examples:
+            ```python
+            posthog.opt_out_capturing()
+            ```
+
+        Category:
+            Client management
+        """
+        self._opted_out = True
+
+    def opt_in_capturing(self) -> None:
+        """
+        Resume capturing events after ``opt_out_capturing()``.
+
+        Details:
+            Events dropped while opted out are not recovered. A client that was
+            constructed with ``disabled=True`` stays disabled.
+
+        Examples:
+            ```python
+            posthog.opt_in_capturing()
+            ```
+
+        Category:
+            Client management
+        """
+        self._opted_out = False
+
+    def is_opted_out(self) -> bool:
+        """
+        Whether capture is currently suppressed by ``opt_out_capturing()``.
+
+        Returns:
+            ``True`` when the client is opted out. This reports the runtime
+            consent gate only; a client disabled at construction returns
+            ``False`` unless it was also opted out.
+
+        Examples:
+            ```python
+            if not posthog.is_opted_out():
+                posthog.capture("page_viewed", distinct_id="user_123")
+            ```
+
+        Category:
+            Client management
+        """
+        return self._opted_out
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """

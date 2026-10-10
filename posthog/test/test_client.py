@@ -3587,6 +3587,56 @@ class TestClient(unittest.TestCase):
         self.assertIsNone(msg_uuid)
         self.assertFalse(self.failed)
 
+    def test_opt_out_capturing_drops_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+        self.assertFalse(client.is_opted_out())
+
+        client.opt_out_capturing()
+        self.assertTrue(client.is_opted_out())
+        with mock.patch("posthog.client.batch_post") as patch_post:
+            self.assertIsNone(
+                client.capture("ignored event", distinct_id="distinct_id")
+            )
+            self.assertIsNone(
+                client.set(distinct_id="distinct_id", properties={"plan": "pro"})
+            )
+            self.assertIsNone(client.alias("distinct_id", "other_id"))
+            self.assertIsNone(
+                client.group_identify("company", "id:5", {"name": "PostHog"})
+            )
+            patch_post.assert_not_called()
+        self.assertFalse(self.failed)
+
+    def test_opt_in_capturing_resumes_events(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        client.opt_out_capturing()
+        self.assertIsNone(client.capture("ignored event", distinct_id="distinct_id"))
+
+        client.opt_in_capturing()
+        self.assertFalse(client.is_opted_out())
+        msg_uuid = client.capture("python test event", distinct_id="distinct_id")
+        self.assertIsNotNone(msg_uuid)
+        client.shutdown()
+        self.assertFalse(self.failed)
+
+    def test_opt_in_capturing_does_not_re_enable_a_disabled_client(self):
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)
+        client.opt_in_capturing()
+        self.assertIsNone(
+            client.capture("python test event", distinct_id="distinct_id")
+        )
+        self.assertFalse(self.failed)
+
+    @mock.patch("posthog.client.flags")
+    def test_opt_out_capturing_leaves_feature_flags_working(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"beta-feature": True}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail)
+        client.opt_out_capturing()
+
+        self.assertTrue(client.feature_enabled("beta-feature", "12345"))
+        patch_flags.assert_called()
+        self.assertFalse(self.failed)
+
     @mock.patch("posthog.client.flags")
     def test_disabled_with_feature_flags(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)

@@ -1224,6 +1224,62 @@ def load_feature_flags():
     return _proxy("load_feature_flags")
 
 
+def opt_out_capturing() -> None:
+    """
+    Stop capturing events on the global client until ``opt_in_capturing()`` is called.
+
+    While opted out, ``capture()`` and every other event-producing API drop
+    their event silently and make no network request. Feature flag evaluation is
+    unaffected. The state is held in memory, so it does not survive a process
+    restart; persist the user's choice yourself and re-apply it on startup.
+
+    Examples:
+        ```python
+        from posthog import opt_out_capturing
+        opt_out_capturing()
+        ```
+
+    Category:
+        Client management
+    """
+    _proxy("opt_out_capturing")
+
+
+def opt_in_capturing() -> None:
+    """
+    Resume capturing events on the global client after ``opt_out_capturing()``.
+
+    Events dropped while opted out are not recovered.
+
+    Examples:
+        ```python
+        from posthog import opt_in_capturing
+        opt_in_capturing()
+        ```
+
+    Category:
+        Client management
+    """
+    _proxy("opt_in_capturing")
+
+
+def is_opted_out() -> bool:
+    """
+    Whether the global client is currently opted out of capturing.
+
+    Examples:
+        ```python
+        from posthog import is_opted_out
+        if not is_opted_out():
+            ...
+        ```
+
+    Category:
+        Client management
+    """
+    return _proxy("is_opted_out")
+
+
 def flush(timeout_seconds: Optional[float] = 10) -> None:
     """
     Tell the client to flush all queued events.
