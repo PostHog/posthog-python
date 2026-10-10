@@ -11,7 +11,7 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
@@ -740,7 +740,10 @@ def _sanitize_resource_block(block: Dict[str, Any]) -> Any:
 
 
 def build_captured_mcp_parameters(
-    request: Any, *, strip_llm_model: bool = False
+    request: Any,
+    *,
+    strip_llm_model: bool = False,
+    strip_argument_names: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Build the sanitized ``$mcp_parameters`` payload from a request, stripping
     the injected ``context`` argument before logging."""
@@ -752,35 +755,45 @@ def build_captured_mcp_parameters(
         if key in request:
             captured_request[key] = sanitize_captured_value(request[key])
 
+    names_to_strip = strip_argument_names
+    if names_to_strip is None:
+        names_to_strip = set(_INJECTED_ARGUMENT_NAMES)
+        if strip_llm_model:
+            names_to_strip.add("llm_model")
+
     if "params" in request:
         captured_request["params"] = _build_captured_mcp_params(
-            request["params"], strip_llm_model=strip_llm_model
+            request["params"], strip_argument_names=names_to_strip
         )
 
     return {"request": captured_request}
 
 
-def _build_captured_mcp_params(params: Any, *, strip_llm_model: bool) -> Any:
+def _build_captured_mcp_params(params: Any, *, strip_argument_names: Set[str]) -> Any:
     if not _is_record(params):
         return sanitize_captured_value(params)
 
     captured: Dict[str, Any] = {}
     for key, value in params.items():
         captured[key] = (
-            _build_captured_mcp_arguments(value, strip_llm_model=strip_llm_model)
+            _build_captured_mcp_arguments(
+                value, strip_argument_names=strip_argument_names
+            )
             if key == "arguments"
             else sanitize_captured_value(value)
         )
     return captured
 
 
-def _build_captured_mcp_arguments(arguments: Any, *, strip_llm_model: bool) -> Any:
+def _build_captured_mcp_arguments(
+    arguments: Any, *, strip_argument_names: Set[str]
+) -> Any:
     if not _is_record(arguments):
         return sanitize_captured_value(arguments)
 
     captured: Dict[str, Any] = {}
     for key, value in arguments.items():
-        if key in _INJECTED_ARGUMENT_NAMES or (strip_llm_model and key == "llm_model"):
+        if key in strip_argument_names:
             continue
         captured[key] = sanitize_captured_value(value)
     return captured

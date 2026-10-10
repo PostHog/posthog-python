@@ -1,5 +1,27 @@
 # posthog
 
+## 7.67.0 — 2026-10-09
+
+### Minor changes
+
+- [9baf8a5](https://github.com/posthog/posthog-python/commit/9baf8a5a84545568952490ff9397f599e0d6c9b4) Add a Django REST Framework error-only exception handler that captures handled 5xx API exceptions while preserving DRF responses, leaves expected 4xx errors excluded by default, and consistently inherits Django middleware, client, request-filter, and exception-autocapture configuration. — Thanks @hpouillot!
+
+## 7.66.0 — 2026-10-08
+
+### Minor changes
+
+- [127009d](https://github.com/posthog/posthog-python/commit/127009dc394af6638a3ea8a88bdb0dcae46db0c3) Add `resolve_original_tool` for low-level MCP servers. Fresh server instances can now remove PostHog-owned arguments before strict tool validation.
+  
+  Raw low-level servers also remove PostHog-owned arguments after `tools/list`. A tool-owned `context` remains tool data. — Thanks @gesh!
+- [1c6a47a](https://github.com/posthog/posthog-python/commit/1c6a47ae235c127329c38db02cb6837a7f1c6434) Add framework-independent ASGI middleware for automatic request context and unhandled exception capture, supporting FastAPI, Starlette, Litestar, WebSockets, sync or async filters, additional request properties, and opt-in PostHog tracing headers without requiring a framework dependency. — Thanks @hpouillot!
+- [292855d](https://github.com/posthog/posthog-python/commit/292855d1f267ad50e9c3b8341c9fbc839b36cf5c) Add a Flask integration that creates isolated request contexts, attaches safe request metadata and tracing identity, and automatically captures unhandled application exceptions without changing Flask's error behavior. — Thanks @hpouillot!
+
+## 7.65.0 — 2026-10-08
+
+### Minor changes
+
+- [6d6cc3d](https://github.com/posthog/posthog-python/commit/6d6cc3dac989569f3c571308e4db9b9f6ecf7b36) Standardize exception capture metadata, including severity, capture source, typed integration metadata, mechanism semantics, bounded exception-group traversal, and deterministic cause linkage. Application overrides of reserved exception properties remain supported during a deprecation period, emit a warning, and will be removed in the next major version. — Thanks @hpouillot!
+
 ## 7.64.1 — 2026-10-06
 
 ### Patch changes
