@@ -12,8 +12,8 @@ except ImportError:
         "Please install the OpenAI SDK to use this feature: 'pip install openai'"
     )
 
-from posthog import setup
 from posthog.ai.utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage_async,
     extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content as finalize_ai_content,
@@ -66,7 +66,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         """
 
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
 

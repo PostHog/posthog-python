@@ -17,6 +17,7 @@ from ..types import (
     ToolInProgress as ToolInProgress,
 )
 from ..utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage as call_llm_and_track_usage,
     merge_usage_stats as merge_usage_stats,
 )
@@ -29,7 +30,6 @@ from .anthropic_converter import (
     handle_anthropic_tool_delta as handle_anthropic_tool_delta,
 )
 from posthog.client import Client as PostHogClient
-from posthog import setup
 
 
 class Anthropic(anthropic.Anthropic):
@@ -46,7 +46,7 @@ class Anthropic(anthropic.Anthropic):
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = WrappedMessages(self)
 
 

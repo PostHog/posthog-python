@@ -38,7 +38,7 @@ def _capture_embedding_event(
         **(properties or {}),
     }
 
-    if hasattr(posthog_client, "capture"):
+    if callable(getattr(posthog_client, "capture_ai", None)):
         _capture_ai_event(
             posthog_client,
             "$ai_embedding",

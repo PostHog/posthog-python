@@ -10,7 +10,6 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from posthog import setup
 from ..stream import AsyncStreamWrapper as AsyncStreamWrapper
 from ..types import (
     StreamingContentBlock as StreamingContentBlock,
@@ -18,6 +17,7 @@ from ..types import (
     ToolInProgress as ToolInProgress,
 )
 from ..utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage_async as call_llm_and_track_usage_async,
     merge_usage_stats as merge_usage_stats,
 )
@@ -46,7 +46,7 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = AsyncWrappedMessages(self)
 
 

@@ -41,11 +41,11 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
-from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
+    _resolve_ai_client,
     finalize_ai_content,
     get_model_params,
     _responses_stop_reason,
@@ -145,7 +145,7 @@ class CallbackHandler(BaseCallbackHandler):
             privacy_mode: Whether to redact the input and output of the trace.
             groups: Optional additional PostHog groups to use for the trace.
         """
-        self._ph_client = client or setup()
+        self._ph_client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}

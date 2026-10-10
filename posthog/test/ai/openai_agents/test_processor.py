@@ -440,7 +440,7 @@ class TestPostHogTracingProcessor:
         assert properties["$ai_output_choices"] is None
 
     def test_client_without_privacy_mode_captures_content(self, mock_span):
-        client = SimpleNamespace(capture=MagicMock())
+        client = SimpleNamespace(capture_ai=MagicMock())
         processor = PostHogTracingProcessor(client=client)
         mock_span.span_data = GenerationSpanData(
             input=[{"role": "user", "content": "Visible message"}],
@@ -450,7 +450,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        properties = client.capture.call_args.kwargs["properties"]
+        properties = client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] == [
             {"role": "user", "content": "Visible message"}
         ]

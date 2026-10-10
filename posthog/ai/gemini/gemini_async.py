@@ -7,6 +7,7 @@ from ..stream import AsyncStreamWrapper
 from ..types import StreamingEventData as StreamingEventData
 from ..types import TokenUsage
 from ..utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage_async,
     capture_streaming_event as capture_streaming_event,
     finalize_ai_content as finalize_ai_content,
@@ -18,7 +19,6 @@ from ._shared import (
     _GeminiAioNamespace,
     _GeminiModelsPolicy,
     _build_gemini_client,
-    _resolve_posthog_client,
 )
 from .gemini_converter import (
     extract_gemini_content_from_chunk,
@@ -87,7 +87,7 @@ class AsyncClient:
             **kwargs: Additional arguments (for future compatibility)
         """
 
-        self._ph_client = _resolve_posthog_client(posthog_client)
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         # Built once here and shared by every surface, so `models`, `aio.models`
         # and `files` all go through a single provider client.
