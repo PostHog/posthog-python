@@ -6,6 +6,7 @@ from ...client import Client as PostHogClient
 from ..types import StreamingEventData as StreamingEventData
 from ..types import TokenUsage
 from ..utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage,
     capture_streaming_event as capture_streaming_event,
     finalize_ai_content as finalize_ai_content,
@@ -17,7 +18,6 @@ from ._shared import (
     _GeminiAioNamespace,
     _GeminiModelsPolicy,
     _build_gemini_client,
-    _resolve_posthog_client,
 )
 from .gemini_async import AsyncModels
 from .gemini_converter import (
@@ -92,7 +92,7 @@ class Client:
             **kwargs: Additional arguments (for future compatibility)
         """
 
-        self._ph_client = _resolve_posthog_client(posthog_client)
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         # Built once here and shared by every surface, so a client that uses both
         # `models` and `aio.models` still opens a single provider client.
