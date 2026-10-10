@@ -580,44 +580,47 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
-    def test_reserved_exception_property_overrides_are_deprecated(self):
-        custom_exception_list = [{"type": "CustomError", "value": "custom"}]
+    def test_capture_exception_ignores_reserved_properties(self):
         properties = {
-            "$exception_list": custom_exception_list,
+            "$exception_list": [{"type": "CustomError", "value": "custom"}],
             "$exception_level": "warning",
             "$exception_source": "custom.source",
-            "$exception_issue_id": "legacy-issue-id",
+            "$exception_issue_id": "custom-issue-id",
+            "plan": "pro",
         }
 
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            self.assertWarnsRegex(
-                DeprecationWarning,
-                "Reserved exception properties.*next major version",
-            ),
-        ):
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"), properties=properties
             )
 
         captured_properties = patch_capture.call_args.kwargs["properties"]
-        self.assertIs(captured_properties["$exception_list"], custom_exception_list)
-        self.assertEqual(captured_properties["$exception_level"], "warning")
-        self.assertEqual(captured_properties["$exception_source"], "custom.source")
-        self.assertEqual(captured_properties["$exception_issue_id"], "legacy-issue-id")
+        self.assertEqual(captured_properties["$exception_list"][0]["type"], "Exception")
+        self.assertEqual(captured_properties["$exception_level"], "error")
+        self.assertNotIn("$exception_source", captured_properties)
+        self.assertNotIn("$exception_issue_id", captured_properties)
+        self.assertEqual(captured_properties["plan"], "pro")
 
-    def test_reserved_exception_property_warning_cannot_drop_the_event(self):
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            warnings.catch_warnings(),
-        ):
-            warnings.simplefilter("error", DeprecationWarning)
+    @parameterized.expand(
+        [
+            ("default", None, None, "error"),
+            ("caller_level", None, "warning", "warning"),
+            ("alias", None, "WARN", "warning"),
+            ("unknown_level", None, "loud", "error"),
+            ("integration_level_wins", "fatal", "warning", "fatal"),
+        ]
+    )
+    def test_capture_exception_level(self, _name, integration_level, level, expected):
+        capture_metadata = {"level": integration_level} if integration_level else {}
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"),
-                properties={"$exception_level": "warning"},
+                level=level,
+                _capture_metadata=capture_metadata,
             )
 
-        patch_capture.assert_called_once()
+        captured_properties = patch_capture.call_args.kwargs["properties"]
+        self.assertEqual(captured_properties["$exception_level"], expected)
 
     @parameterized.expand(
         [

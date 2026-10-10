@@ -632,6 +632,47 @@ def _normalize_exception_level(level):
     return _EXCEPTION_LEVELS.get(level.lower()) if isinstance(level, str) else None
 
 
+# Exception properties the SDK or PostHog owns. A caller's per-call
+# `properties` cannot set them.
+_RESERVED_EXCEPTION_PROPERTIES = frozenset(
+    {
+        "$exception_list",
+        "$exception_level",
+        "$exception_source",
+        "$debug_images",
+        "$exception_handled",
+        "$exception_types",
+        "$exception_values",
+        "$exception_sources",
+        "$exception_functions",
+        "$exception_fingerprint_version",
+        "$exception_fingerprint_record",
+        "$exception_issue_id",
+        "$exception_release",
+        "$cymbal_errors",
+    }
+)
+
+
+def _exception_level(integration_level, level):
+    # type: (Any, Any) -> str
+    """An integration's level wins over the caller's ``level=``; an invalid value counts as unset."""
+    return (
+        _normalize_exception_level(integration_level)
+        or _normalize_exception_level(level)
+        or "error"
+    )
+
+
+def _without_reserved_exception_properties(properties):
+    # type: (Optional[Dict[str, Any]]) -> Dict[str, Any]
+    return {
+        key: value
+        for key, value in (properties or {}).items()
+        if key not in _RESERVED_EXCEPTION_PROPERTIES
+    }
+
+
 def _capture_exception_with_metadata(client, exception, capture_metadata, **kwargs):
     # type: (Any, ExceptionArg, _ExceptionCaptureMetadata, **Any) -> Optional[str]
     """Call capture_exception through the SDK-internal typed integration channel."""
