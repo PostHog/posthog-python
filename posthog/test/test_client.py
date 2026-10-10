@@ -476,18 +476,17 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("empty string", ""),
-            ("invalid string", "not-a-uuid"),
+            ("invalid string", "not-a-uuid-secret-1"),
             ("short string", "1234"),
             ("integer", 123),
         ]
     )
-    def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
+    def test_capture_with_invalid_uuid_warns_and_falls_back_to_generated_uuid(
         self, _name, invalid_uuid
     ):
         with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR") as logs:
+            with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
@@ -498,18 +497,24 @@ class TestClient(unittest.TestCase):
             msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["uuid"], msg_uuid)
             self.assertNotEqual(msg["uuid"], str(invalid_uuid))
-            self.assertTrue(
-                any(
-                    f"Invalid event uuid {invalid_uuid!r}" in message
-                    and "Expected a valid UUID string or uuid.UUID instance" in message
-                    and "Falling back to a generated UUID" in message
-                    for message in logs.output
+            uuid_warnings = [r for r in logs.records if "Event uuid" in r.getMessage()]
+            self.assertEqual(len(uuid_warnings), 1)
+            self.assertEqual(uuid_warnings[0].levelname, "WARNING")
+            self.assertNotIn(str(invalid_uuid), uuid_warnings[0].getMessage())
+
+    def test_capture_with_empty_uuid_generates_one_without_logging(self):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertNoLogs("posthog", level="WARNING"):
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=""
                 )
-            )
+
+            self.assertEqual(UUID(msg_uuid).version, 7)
+            self.assertEqual(sent_batch(mock_post)[0]["uuid"], msg_uuid)
 
     @parameterized.expand(
         [
-            ("empty string", ""),
             ("invalid string", "not-a-uuid"),
             ("short string", "1234"),
             ("integer", 123),
@@ -518,7 +523,7 @@ class TestClient(unittest.TestCase):
     def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
         with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR"):
+            with self.assertLogs("posthog", level="WARNING"):
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
