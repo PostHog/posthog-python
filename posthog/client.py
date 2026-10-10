@@ -1682,9 +1682,10 @@ class Client(object):
             send_feature_flags: Deprecated. Prefer flags=... from
                 evaluate_flags(). When truthy, evaluates flags during capture and
                 attaches them to the event.
-            disable_geoip: Whether to disable GeoIP for this event. A
-                ``$geoip_disable`` property in the event, context tags or
-                ``super_properties`` wins.
+            disable_geoip: Whether to disable GeoIP for this event. It wins
+                over a ``$geoip_disable`` in context tags or
+                ``super_properties``. A ``$geoip_disable`` property in this
+                call's ``properties`` wins over it.
             options: Capture options for this event, such as
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
@@ -2527,9 +2528,6 @@ class Client(object):
         msg["properties"]["$lib"] = self._library_id
         msg["properties"]["$lib_version"] = self._library_version
 
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-
         msg["options"] = msg.get("options") or {}
 
         _fill_event_defaults(
@@ -2543,7 +2541,8 @@ class Client(object):
                 derived_options=derived_options,
                 property_allowlist=property_allowlist,
                 is_server=self.is_server,
-                disable_geoip=disable_geoip,
+                disable_geoip=self.disable_geoip,
+                call_disable_geoip=disable_geoip,
                 system_properties=system_properties,
             ),
         )

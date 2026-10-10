@@ -149,10 +149,10 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. the `options` and `properties` of the call
+1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
 2. context options and tags
 3. `super_options` and `super_properties`
-4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from `disable_geoip`, system properties such as `$os` and `$python_version`, `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
 5. `before_send`, which sees the result of steps 1 to 4 and can change or remove any of it
 6. legacy properties, which fill unset options and are then removed
 
@@ -165,6 +165,7 @@ These changes follow from this order:
 
 - Properties passed to a call now override `super_properties`. `super_properties` can no longer change `$lib` or `$lib_version`.
 - A `$is_server`, `$geoip_disable` or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x the SDK overwrote it. `super_properties` win over the SDK's value too, so `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
+- A `disable_geoip` argument to a call belongs to that event, so it wins over context tags and `super_properties`. A `$geoip_disable` in the call's own `properties` still wins over it. `disable_geoip=False` now sends `$geoip_disable: false`. In 7.x it sent no `$geoip_disable` property.
 - The `groups` argument merges into a `$groups` property of the call, and wins key by key. In 7.x it replaced the property. MCP events merge their identity's groups into a custom `$groups` property the same way.
 - A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.

@@ -521,8 +521,6 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         system_properties: Optional[dict[str, Any]] = None,
     ) -> _EventDefaults:
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
         return _build_event_defaults(
             super_properties=self.super_properties,
             super_options=self.super_options,
@@ -532,7 +530,8 @@ class AsyncClient:
             derived_options=derived_options,
             property_allowlist=property_allowlist,
             is_server=self.is_server,
-            disable_geoip=disable_geoip,
+            disable_geoip=self.disable_geoip,
+            call_disable_geoip=disable_geoip,
             system_properties=system_properties,
         )
 
