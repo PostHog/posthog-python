@@ -18,7 +18,7 @@ from parameterized import parameterized
 import pytest
 
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_send import _CAPTURE_V1_PATH
+from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.client import Client
 from posthog.contexts import get_context_session_id, new_context, set_context_session
 from posthog.request import APIError, GetResponse
@@ -2768,20 +2768,35 @@ class TestClient(unittest.TestCase):
         self.assertIs(raised.exception, failure)
         self.assertEqual(errors, [failure])
 
-    def test_sync_send_failure_without_on_error_logs_aggregate_line(self):
+    @parameterized.expand(
+        [
+            ("analytics", "capture", _CAPTURE_V1_PATH),
+            ("ai", "capture_ai", _CAPTURE_AI_V1_PATH),
+        ]
+    )
+    def test_sync_send_failure_without_on_error_logs_aggregate_line(
+        self, _name, method_name, path
+    ):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
         with patch_capture_send(
             "client", side_effect=APIError(400, "password=server-secret")
         ):
             with self.assertLogs("posthog", level="ERROR") as logs:
-                result = client.capture("event", distinct_id="distinct_id")
+                result = getattr(client, method_name)(
+                    "$ai_generation", distinct_id="distinct_id"
+                )
 
         self.assertIsNone(result)
         output = "\n".join(logs.output)
-        self.assertIn(
-            "1 event(s) not persisted by /i/v1/analytics/events: APIError (status=400)",
-            output,
+        loss_lines = [
+            r.getMessage()
+            for r in logs.records
+            if "event(s) not persisted by" in r.getMessage()
+        ]
+        self.assertEqual(
+            loss_lines,
+            [f"[PostHog] 1 event(s) not persisted by {path}: APIError (status=400)"],
         )
         self.assertNotIn("server-secret", output)
 
@@ -3405,12 +3420,21 @@ class TestClient(unittest.TestCase):
 
         self.assertLess(time.monotonic() - start, 1)
 
-    def test_shutdown_waits_for_racing_enqueue_before_draining(self):
+    @parameterized.expand(
+        [
+            ("analytics", "capture", "_analytics_lane", _CAPTURE_V1_PATH),
+            ("ai_first_event", "capture_ai", "_ai_lane", _CAPTURE_AI_V1_PATH),
+        ]
+    )
+    def test_shutdown_waits_for_racing_enqueue_before_draining(
+        self, _name, method_name, lane_attr, path
+    ):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        lane = getattr(client, lane_attr)
         put_started = threading.Event()
         release_put = threading.Event()
         shutdown_done = threading.Event()
-        original_put = client.queue.put
+        original_put = lane.queue.put
         capture_result = []
 
         def blocking_put(*args, **kwargs):
@@ -3420,14 +3444,17 @@ class TestClient(unittest.TestCase):
 
         capture_thread = threading.Thread(
             target=lambda: capture_result.append(
-                client.capture("racing event", distinct_id="distinct_id")
+                getattr(client, method_name)("$ai_racing", distinct_id="distinct_id")
             )
         )
         shutdown_thread = threading.Thread(
             target=lambda: (client.shutdown(), shutdown_done.set())
         )
 
-        with mock.patch.object(client.queue, "put", side_effect=blocking_put):
+        with (
+            patch_capture_send("consumer") as mock_send,
+            mock.patch.object(lane.queue, "put", side_effect=blocking_put),
+        ):
             capture_thread.start()
             self.assertTrue(put_started.wait(2))
             shutdown_thread.start()
@@ -3443,7 +3470,17 @@ class TestClient(unittest.TestCase):
         self.assertFalse(shutdown_thread.is_alive())
         self.assertTrue(shutdown_done.is_set())
         self.assertIsNotNone(capture_result[0])
-        self.assertTrue(client.queue.empty())
+        self.assertTrue(lane.queue.empty())
+        self.assertEqual(
+            [
+                (call.kwargs["path"], len(sent_batch(mock_send, i)))
+                for i, call in enumerate(mock_send.call_args_list)
+            ],
+            [(path, 1)],
+        )
+        self.assertFalse(
+            any(c.is_alive() for lane in client._lanes for c in lane.consumers)
+        )
 
     def test_shutdown_waits_for_sync_send_and_rejects_later_sends(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
