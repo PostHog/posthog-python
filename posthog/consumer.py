@@ -7,7 +7,7 @@ from threading import Thread
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
-from posthog.capture_v1 import _backoff, _send_v1_batch
+from posthog.capture_v1 import _CAPTURE_V1_PATH, _backoff, _send_v1_batch
 from posthog.request import (
     EVENTS_ENDPOINT,
     USER_AGENT as _USER_AGENT,
@@ -113,9 +113,9 @@ class Consumer(Thread):
         retries=10,
         timeout=15,
         historical_migration=False,
-        endpoint=EVENTS_ENDPOINT,
+        endpoint=None,
         max_msg_size=MAX_MSG_SIZE,
-        capture_mode=CaptureMode.V0,
+        capture_mode=CaptureMode.V1,
         capture_compression=CaptureCompression.NONE,
     ):
         """Create a consumer thread."""
@@ -129,6 +129,12 @@ class Consumer(Thread):
         self.on_error = on_error
         self.queue = queue
         self.gzip = gzip
+        # Without an explicit endpoint, post to the analytics path of the
+        # selected protocol.
+        if endpoint is None:
+            endpoint = (
+                _CAPTURE_V1_PATH if capture_mode == CaptureMode.V1 else EVENTS_ENDPOINT
+            )
         self.endpoint = endpoint
         self.max_msg_size = max_msg_size
         self.capture_mode = capture_mode
@@ -288,10 +294,10 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Upload the batch via the wire protocol selected by `capture_mode`.
+        """Upload the batch to this consumer's `endpoint` via the wire protocol
+        selected by `capture_mode`.
 
-        V1 uses the partial-retry submitter (which posts to its own path); V0
-        posts the batch to this consumer's `endpoint`.
+        V1 uses the partial-retry submitter; V0 posts the whole batch.
         """
         if self.capture_mode == CaptureMode.V1:
             _send_v1_batch(
@@ -303,6 +309,7 @@ class Consumer(Thread):
                 max_retries=self.retries,
                 historical_migration=self.historical_migration,
                 sdk_info=self._sdk_info,
+                path=self.endpoint,
             )
             return
         self._send(batch, self.endpoint)

@@ -6,18 +6,21 @@ from unittest import mock
 import posthog
 
 from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
+from posthog.capture_compression import CaptureCompression
 from posthog.capture_mode import CaptureMode
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
-from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT
+from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
+from posthog.request import EVENTS_ENDPOINT
 from posthog.version import VERSION
+from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.test_utils import TEST_API_KEY
 
 
-def _events_by_path(mock_post):
+def _events_by_path(mock_send):
     by_path: dict[str, list] = {}
-    for call in mock_post.call_args_list:
-        by_path.setdefault(call.kwargs["path"], []).extend(call.kwargs["batch"])
+    for index, call in enumerate(mock_send.call_args_list):
+        by_path.setdefault(call.kwargs["path"], []).extend(sent_batch(mock_send, index))
     return by_path
 
 
@@ -29,24 +32,24 @@ class TestLaneRouting(unittest.TestCase):
 
     def test_capture_ai_and_capture_ride_separate_lanes(self):
         client = self._client()
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client.capture("button_clicked", distinct_id="d")
             client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         by_path = _events_by_path(mock_post)
-        self.assertEqual(set(by_path), {EVENTS_ENDPOINT, AI_EVENTS_ENDPOINT})
+        self.assertEqual(set(by_path), {_CAPTURE_V1_PATH, _CAPTURE_AI_V1_PATH})
         self.assertEqual(
-            [e["event"] for e in by_path[EVENTS_ENDPOINT]], ["button_clicked"]
+            [e["event"] for e in by_path[_CAPTURE_V1_PATH]], ["button_clicked"]
         )
         self.assertEqual(
-            [e["event"] for e in by_path[AI_EVENTS_ENDPOINT]], ["$ai_generation"]
+            [e["event"] for e in by_path[_CAPTURE_AI_V1_PATH]], ["$ai_generation"]
         )
-        for call in mock_post.call_args_list:
-            events = {e["event"] for e in call.kwargs["batch"]}
+        for index, call in enumerate(mock_post.call_args_list):
+            events = {e["event"] for e in sent_batch(mock_post, index)}
             expected = (
                 {"$ai_generation"}
-                if call.kwargs["path"] == AI_EVENTS_ENDPOINT
+                if call.kwargs["path"] == _CAPTURE_AI_V1_PATH
                 else {"button_clicked"}
             )
             self.assertEqual(events, expected)
@@ -55,13 +58,13 @@ class TestLaneRouting(unittest.TestCase):
         # The two-lane rule: `capture()` never special-cases AI events, no
         # matter their name. Only `capture_ai()` reaches the AI lane.
         client = self._client()
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client.capture("$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertEqual(
             [call.kwargs["path"] for call in mock_post.call_args_list],
-            [EVENTS_ENDPOINT],
+            [_CAPTURE_V1_PATH],
         )
 
     def test_capture_ai_returns_event_uuid_like_capture(self):
@@ -71,21 +74,21 @@ class TestLaneRouting(unittest.TestCase):
 
     def test_sync_mode_capture_ai_posts_single_event_batch_to_ai_endpoint(self):
         client = Client(TEST_API_KEY, sync_mode=True)
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client.capture_ai("$ai_generation", distinct_id="d")
 
         mock_post.assert_called_once()
-        self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
-        batch = mock_post.call_args.kwargs["batch"]
+        self.assertEqual(mock_post.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
+        batch = sent_batch(mock_post)
         self.assertEqual([e["event"] for e in batch], ["$ai_generation"])
 
     def test_multimodal_client_routes_wrapper_captures_to_ai_lane(self):
         client = self._client(enable_full_ai_capture=True)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
             client.flush()
         by_path = _events_by_path(mock_post)
-        self.assertEqual(set(by_path), {AI_EVENTS_ENDPOINT})
+        self.assertEqual(set(by_path), {_CAPTURE_AI_V1_PATH})
 
     def test_disabled_client_never_starts_ai_lane(self):
         client = Client(TEST_API_KEY, disabled=True)
@@ -122,7 +125,7 @@ class TestAnalyticsLaneUnchanged(unittest.TestCase):
         self.assertEqual(len(consumers), 2)
         for consumer in consumers:
             self.assertIs(consumer.queue, client.queue)
-            self.assertEqual(consumer.endpoint, EVENTS_ENDPOINT)
+            self.assertEqual(consumer.endpoint, _CAPTURE_V1_PATH)
             self.assertEqual(consumer.max_msg_size, MAX_MSG_SIZE)
             self.assertEqual(consumer.flush_at, 7)
             self.assertEqual(consumer.flush_interval, 0.5)
@@ -136,15 +139,15 @@ class TestAnalyticsLaneUnchanged(unittest.TestCase):
 
     def test_analytics_traffic_posts_to_single_endpoint(self):
         client = Client(TEST_API_KEY, flush_interval=0.05)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client.capture("event_a", distinct_id="d")
             client.capture("event_b", distinct_id="d")
             client.flush()
 
         by_path = _events_by_path(mock_post)
-        self.assertEqual(set(by_path), {EVENTS_ENDPOINT})
+        self.assertEqual(set(by_path), {_CAPTURE_V1_PATH})
         self.assertEqual(
-            sorted(e["event"] for e in by_path[EVENTS_ENDPOINT]),
+            sorted(e["event"] for e in by_path[_CAPTURE_V1_PATH]),
             ["event_a", "event_b"],
         )
         client.join()
@@ -152,9 +155,9 @@ class TestAnalyticsLaneUnchanged(unittest.TestCase):
     def test_sync_mode_analytics_path_unchanged(self):
         client = Client(TEST_API_KEY, sync_mode=True)
         self.assertIsNone(client.consumers)
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client.capture("button_clicked", distinct_id="d")
-        self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
+        self.assertEqual(mock_post.call_args.kwargs["path"], _CAPTURE_V1_PATH)
 
 
 class TestLaneSizeCaps(unittest.TestCase):
@@ -192,48 +195,68 @@ class TestLaneSizeCaps(unittest.TestCase):
         self.assertTrue(client.queue.empty())
 
 
-class TestAiLaneV0Pinned(unittest.TestCase):
-    """The AI endpoint has no v1 form: the AI lane ignores `capture_mode=v1`."""
+class TestAiLaneAlwaysV1(unittest.TestCase):
+    """The AI lane posts capture v1 to the AI endpoint whatever `capture_mode`."""
 
-    def test_ai_lane_consumers_pin_v0_and_ai_endpoint(self):
-        client = Client(TEST_API_KEY, send=False, capture_mode="v1", thread=2)
+    def test_ai_lane_consumers_use_v1_and_ai_endpoint(self):
+        client = Client(TEST_API_KEY, send=False, capture_mode="v0", thread=2)
         client._ai_lane.start()
         self.assertEqual(len(client._ai_lane.consumers), 2)
         for consumer in client._ai_lane.consumers:
             self.assertIs(consumer.queue, client._ai_lane.queue)
-            self.assertEqual(consumer.endpoint, AI_EVENTS_ENDPOINT)
+            self.assertEqual(consumer.endpoint, _CAPTURE_AI_V1_PATH)
             self.assertEqual(consumer.max_msg_size, AI_MAX_MSG_SIZE)
-            self.assertEqual(consumer.capture_mode, CaptureMode.V0)
+            self.assertEqual(consumer.capture_mode, CaptureMode.V1)
+            self.assertEqual(consumer.capture_compression, CaptureCompression.NONE)
 
-    def test_async_ai_events_use_v0_even_with_capture_mode_v1(self):
-        client = Client(TEST_API_KEY, capture_mode="v1", flush_interval=0.05)
+    def test_async_ai_events_use_v1_with_capture_mode_v0(self):
+        client = Client(
+            TEST_API_KEY,
+            capture_mode="v0",
+            capture_compression="gzip",
+            flush_interval=0.05,
+        )
         with (
             mock.patch("posthog.consumer.batch_post") as mock_post,
-            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
+            patch_capture_send("consumer") as mock_v1,
         ):
             client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
             client.flush()
 
-        mock_v1.assert_called()
         self.assertEqual(
             [call.kwargs["path"] for call in mock_post.call_args_list],
-            [AI_EVENTS_ENDPOINT],
+            [EVENTS_ENDPOINT],
         )
+        mock_v1.assert_called_once()
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
+        self.assertEqual(
+            mock_v1.call_args.kwargs["compression"], CaptureCompression.NONE
+        )
+        self.assertEqual([e["event"] for e in sent_batch(mock_v1)], ["$ai_generation"])
         client.join()
 
-    def test_sync_ai_events_use_v0_even_with_capture_mode_v1(self):
-        client = Client(TEST_API_KEY, sync_mode=True, capture_mode="v1")
+    def test_sync_ai_events_use_v1_with_capture_mode_v0(self):
+        client = Client(
+            TEST_API_KEY,
+            sync_mode=True,
+            capture_mode="v0",
+            capture_compression="gzip",
+        )
         with (
             mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
+            patch_capture_send("client") as mock_v1,
         ):
             client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
 
         mock_post.assert_called_once()
-        self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
+        self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
         mock_v1.assert_called_once()
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
+        self.assertEqual(
+            mock_v1.call_args.kwargs["compression"], CaptureCompression.NONE
+        )
 
 
 class TestAiLaneLazyStart(unittest.TestCase):
@@ -241,12 +264,12 @@ class TestAiLaneLazyStart(unittest.TestCase):
         client = Client(TEST_API_KEY, flush_interval=0.05)
         self.assertEqual(client._ai_lane.consumers, [])
 
-        with mock.patch("posthog.consumer.batch_post"):
+        with patch_capture_send("consumer"):
             client.capture("button_clicked", distinct_id="d")
             client.flush()
         self.assertEqual(client._ai_lane.consumers, [])
 
-        with mock.patch("posthog.consumer.batch_post"):
+        with patch_capture_send("consumer"):
             client.capture_ai("$ai_generation", distinct_id="d")
             self.assertEqual(len(client._ai_lane.consumers), 1)
             self.assertTrue(client._ai_lane.consumers[0].is_alive())
@@ -262,7 +285,7 @@ class TestAiLaneLazyStart(unittest.TestCase):
             client.capture_ai("$ai_generation", distinct_id="d")
 
         threads = [threading.Thread(target=fire) for _ in range(8)]
-        with mock.patch("posthog.consumer.batch_post"):
+        with patch_capture_send("consumer"):
             for thread in threads:
                 thread.start()
             for thread in threads:
@@ -285,7 +308,7 @@ class TestLaneForkRebuild(unittest.TestCase):
         client = Client(
             TEST_API_KEY, flush_interval=0.05, enable_local_evaluation=False
         )
-        with mock.patch("posthog.consumer.batch_post"):
+        with patch_capture_send("consumer"):
             client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
         self.assertEqual(len(client._ai_lane.consumers), 1)
@@ -305,14 +328,14 @@ class TestLaneForkRebuild(unittest.TestCase):
         self.assertTrue(client._analytics_lane.consumers[0].is_alive())
         self.assertEqual(client._ai_lane.consumers, [])
 
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client.capture("button_clicked", distinct_id="d")
             client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertEqual(len(client._ai_lane.consumers), 1)
         self.assertEqual(
-            set(_events_by_path(mock_post)), {EVENTS_ENDPOINT, AI_EVENTS_ENDPOINT}
+            set(_events_by_path(mock_post)), {_CAPTURE_V1_PATH, _CAPTURE_AI_V1_PATH}
         )
         client.join()
 
@@ -332,7 +355,7 @@ class TestCaptureAiEventHelper(unittest.TestCase):
 
     def test_opted_in_routes_through_ai_lane(self):
         client = Client(TEST_API_KEY, flush_interval=0.05, enable_full_ai_capture=True)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(
                 client,
                 "$ai_generation",
@@ -343,19 +366,19 @@ class TestCaptureAiEventHelper(unittest.TestCase):
 
         self.assertEqual(
             [call.kwargs["path"] for call in mock_post.call_args_list],
-            [AI_EVENTS_ENDPOINT],
+            [_CAPTURE_AI_V1_PATH],
         )
         client.join()
 
     def test_default_keeps_capture_path(self):
         client = Client(TEST_API_KEY, flush_interval=0.05)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertEqual(
             [call.kwargs["path"] for call in mock_post.call_args_list],
-            [EVENTS_ENDPOINT],
+            [_CAPTURE_V1_PATH],
         )
         self.assertEqual(client._ai_lane.consumers, [])
         client.join()
@@ -437,7 +460,7 @@ class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):
     def test_late_ai_capture_after_shutdown_starts_nothing_and_sends_nothing(self):
         client = Client(TEST_API_KEY, enable_full_ai_capture=True, flush_interval=0.05)
         client.shutdown()
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
             client._ai_lane.queue.join()
         self.assertEqual(client._ai_lane.consumers, [])
@@ -499,10 +522,10 @@ class TestFullAiCaptureFlag(unittest.TestCase):
 
     def test_new_flag_routes_wrapper_captures_to_ai_lane(self):
         client = self._client(enable_full_ai_capture=True)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")
             client.flush()
-        self.assertEqual(set(_events_by_path(mock_post)), {AI_EVENTS_ENDPOINT})
+        self.assertEqual(set(_events_by_path(mock_post)), {_CAPTURE_AI_V1_PATH})
 
     def test_deprecated_kwargs_map_to_new_flag(self):
         for kwargs in ({"_use_ai_lane": True}, {"_enable_multimodal_capture": True}):
@@ -570,24 +593,24 @@ class TestCaptureAiUuid(unittest.TestCase):
 
     def test_returned_uuid_matches_the_wire_event_uuid(self):
         client = self._client()
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
-        batch = mock_post.call_args.kwargs["batch"]
+        batch = sent_batch(mock_post)
         self.assertEqual(batch[0]["uuid"], returned_uuid)
 
     def test_supplied_uuid_is_preserved_end_to_end(self):
         client = self._client()
         supplied_uuid = str(uuid.uuid4())
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             returned_uuid = client.capture_ai(
                 "$ai_generation", distinct_id="d", uuid=supplied_uuid
             )
             client.flush()
 
         self.assertEqual(returned_uuid, supplied_uuid)
-        batch = mock_post.call_args.kwargs["batch"]
+        batch = sent_batch(mock_post)
         self.assertEqual(batch[0]["uuid"], supplied_uuid)
 
     def test_returned_uuid_reflects_before_send_replacement(self):
@@ -598,12 +621,12 @@ class TestCaptureAiUuid(unittest.TestCase):
             return event
 
         client = self._client(before_send=replace_uuid)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertEqual(returned_uuid, replacement_uuid)
-        batch = mock_post.call_args.kwargs["batch"]
+        batch = sent_batch(mock_post)
         self.assertEqual(batch[0]["uuid"], replacement_uuid)
 
     def test_returned_uuid_is_regenerated_when_before_send_removes_it(self):
@@ -612,12 +635,12 @@ class TestCaptureAiUuid(unittest.TestCase):
             return event
 
         client = self._client(before_send=drop_uuid)
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             returned_uuid = client.capture_ai("$ai_generation", distinct_id="d")
             client.flush()
 
         self.assertIsNotNone(returned_uuid)
-        batch = mock_post.call_args.kwargs["batch"]
+        batch = sent_batch(mock_post)
         self.assertEqual(batch[0]["uuid"], returned_uuid)
 
 

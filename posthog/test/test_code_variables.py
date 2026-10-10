@@ -112,17 +112,11 @@ _APP_HEADER = """\
 import os
 import posthog
 from posthog import Posthog
-from requests import Response
 import posthog.request
+from posthog.test.capture_helpers import offline_v1_post
 
 
-def offline_post(url, **kwargs):
-    response = Response()
-    response.status_code = 200
-    return response
-
-
-posthog.request._session.post = offline_post
+posthog.request._session.post = offline_v1_post
 
 
 def make_client(**options):

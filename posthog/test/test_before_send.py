@@ -6,14 +6,19 @@ import posthog
 
 from posthog.client import Client
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.capture_helpers import (
+    patch_capture_send,
+    sent_batch,
+    sent_events,
+)
 
 
 class TestClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
-        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher = patch_capture_send("client")
+        cls.consumer_post_patcher = patch_capture_send("consumer")
         cls.client_post_patcher.start()
         cls.consumer_post_patcher.start()
 
@@ -42,7 +47,7 @@ class TestClient(unittest.TestCase):
             event["properties"]["processed_by_before_send"] = True
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -57,7 +62,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
 
             self.assertEqual(
@@ -75,7 +80,7 @@ class TestClient(unittest.TestCase):
             event["uuid"] = replacement_uuid
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -87,7 +92,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg_uuid, replacement_uuid)
 
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
             self.assertEqual(enqueued_msg["uuid"], replacement_uuid)
 
@@ -98,7 +103,7 @@ class TestClient(unittest.TestCase):
             del event["uuid"]
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -110,7 +115,7 @@ class TestClient(unittest.TestCase):
             self.assertIsNotNone(msg_uuid)
 
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
             self.assertEqual(enqueued_msg["uuid"], msg_uuid)
 
@@ -122,7 +127,7 @@ class TestClient(unittest.TestCase):
                 return None
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -140,7 +145,7 @@ class TestClient(unittest.TestCase):
 
             # Check the enqueued message
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
             self.assertEqual(enqueued_msg["event"], "keep_me")
 
@@ -152,7 +157,7 @@ class TestClient(unittest.TestCase):
             event["uuid"] = "invalid"
             raise ValueError("Oops!")
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -187,7 +192,7 @@ class TestClient(unittest.TestCase):
         )
         try:
             with (
-                mock.patch("posthog.consumer.batch_post") as mock_post,
+                patch_capture_send("consumer") as mock_post,
                 mock.patch.object(
                     client._analytics_lane,
                     "enqueue",
@@ -210,7 +215,7 @@ class TestClient(unittest.TestCase):
             event["properties"]["marker"] = marker
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 before_send=add_unsupported_value,
@@ -218,12 +223,12 @@ class TestClient(unittest.TestCase):
             )
             self.assertIsNotNone(client.capture("recleaned", distinct_id="user1"))
 
-        sent_event = mock_post.call_args.kwargs["batch"][0]
+        sent_event = sent_batch(mock_post)[0]
         self.assertIsNone(sent_event["properties"]["marker"])
 
     def test_before_send_callback_non_dict_output_drops_event(self):
         with (
-            mock.patch("posthog.client.batch_post") as mock_post,
+            patch_capture_send("client") as mock_post,
             mock.patch("posthog.client.Client.log.exception") as mock_log,
         ):
             client = Client(
@@ -251,7 +256,7 @@ class TestClient(unittest.TestCase):
             flush_interval=0.01,
         )
         with (
-            mock.patch("posthog.consumer.batch_post") as mock_post,
+            patch_capture_send("consumer") as mock_post,
             self.assertLogs("posthog", level="ERROR") as logs,
         ):
             client.capture("malformed", distinct_id="user1")
@@ -259,8 +264,7 @@ class TestClient(unittest.TestCase):
             client.shutdown()
 
         mock_post.assert_called_once()
-        sent_batch = mock_post.call_args.kwargs["batch"]
-        self.assertEqual([event["event"] for event in sent_batch], ["valid"])
+        self.assertEqual([event["event"] for event in sent_batch(mock_post)], ["valid"])
         self.assertEqual(client.queue.unfinished_tasks, 0)
         self.assertTrue(all(not consumer.is_alive() for consumer in client.consumers))
         self.assertNotIn("private-key", "\n".join(logs.output))
@@ -275,7 +279,7 @@ class TestClient(unittest.TestCase):
             event["properties"]["marked"] = True
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -293,14 +297,12 @@ class TestClient(unittest.TestCase):
 
             # Check all events were marked
             self.assertEqual(mock_post.call_count, 2)
-            for call in mock_post.call_args_list:
-                batch_data = call[1]["batch"]
-                enqueued_msg = batch_data[0]
-                self.assertTrue(enqueued_msg["properties"]["marked"])
+            for event in sent_events(mock_post):
+                self.assertTrue(event["properties"]["marked"])
 
     def test_before_send_callback_disabled_when_none(self):
         """Test that client works normally when before_send is None."""
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -312,7 +314,7 @@ class TestClient(unittest.TestCase):
 
             # Check the event was sent normally
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
             self.assertEqual(enqueued_msg["event"], "normal_event")
 
@@ -336,7 +338,7 @@ class TestClient(unittest.TestCase):
 
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -357,7 +359,7 @@ class TestClient(unittest.TestCase):
 
             # Check the enqueued message was scrubbed
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
 
             self.assertEqual(enqueued_msg["properties"]["email"], "***@example.com")
@@ -379,7 +381,7 @@ class TestModuleLevelBeforeSend(unittest.TestCase):
             event["properties"]["module_level_before_send"] = True
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             posthog.api_key = FAKE_TEST_API_KEY
             posthog.before_send = my_before_send
             posthog.sync_mode = True
@@ -390,7 +392,7 @@ class TestModuleLevelBeforeSend(unittest.TestCase):
             self.assertIs(posthog.default_client.before_send, my_before_send)
 
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             enqueued_msg = batch_data[0]
             self.assertTrue(enqueued_msg["properties"]["module_level_before_send"])
 
@@ -399,7 +401,7 @@ class TestModuleLevelBeforeSend(unittest.TestCase):
             event["properties"]["updated_after_init"] = True
             return event
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             posthog.api_key = FAKE_TEST_API_KEY
             posthog.sync_mode = True
 
@@ -413,8 +415,8 @@ class TestModuleLevelBeforeSend(unittest.TestCase):
             self.assertIs(posthog.default_client.before_send, my_before_send)
 
             self.assertEqual(mock_post.call_count, 2)
-            first_batch = mock_post.call_args_list[0][1]["batch"]
-            second_batch = mock_post.call_args_list[1][1]["batch"]
+            first_batch = sent_batch(mock_post, 0)
+            second_batch = sent_batch(mock_post, 1)
 
             self.assertNotIn("updated_after_init", first_batch[0]["properties"])
             self.assertTrue(second_batch[0]["properties"]["updated_after_init"])

@@ -15,6 +15,7 @@ from flask import Flask, jsonify, request
 
 from posthog import Client
 from posthog.capture_compression import CaptureCompression
+from posthog.capture_v1 import _CAPTURE_V1_PATH
 from posthog.capture_v1 import _post_v1 as original_post_v1
 from posthog.request import EVENTS_ENDPOINT, USER_AGENT
 from posthog.request import batch_post as original_batch_post
@@ -239,6 +240,7 @@ def patched_post_v1(
     timeout: int = 15,
     sdk_info: str = USER_AGENT,
     session: Any = None,
+    path: str = _CAPTURE_V1_PATH,
 ):
     """Patched version of _post_v1 that records requests for /state assertions.
 
@@ -257,6 +259,7 @@ def patched_post_v1(
             timeout=timeout,
             sdk_info=sdk_info,
             session=session,
+            path=path,
         )
     except Exception as e:
         status_code = getattr(e, "status", 0)
@@ -305,10 +308,10 @@ posthog.capture_v1._post_v1 = patched_post_v1
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
+    # No AI capture capability: `capture_ai` posts capture v1 to
+    # /i/v1/ai/events, which this harness version has no suite for.
     capabilities = (
-        ["capture_v1", "capture_ai_v0", "encoding_gzip"]
-        if is_v1()
-        else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
+        ["capture_v1", "encoding_gzip"] if is_v1() else ["capture_v0", "encoding_gzip"]
     )
     capabilities.append("feature_flags_local_evaluation_v1")
     return jsonify(

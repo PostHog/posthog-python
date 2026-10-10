@@ -425,7 +425,7 @@ before_send = None  # type: Optional[BeforeSendCallback]
 enable_local_evaluation = True  # type: bool
 flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
 # Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
-# then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
+# then CaptureMode.V1. See posthog.capture_mode.CaptureMode.
 capture_mode = None  # type: Optional[CaptureMode]
 # Routes AI SDK wrapper events through the dedicated AI capture lane, skips
 # truncation, and passes media unredacted. `privacy_mode` always wins.
