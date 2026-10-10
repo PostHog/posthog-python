@@ -36,10 +36,10 @@ from posthog.capture_compression import (
 )
 from posthog.capture_event import (
     _build_event_defaults,
-    _canonical_event_uuid,
     _event_options,
     _fill_event_defaults,
     _merge_groups,
+    _resolve_event_uuid,
 )
 from posthog.capture_send import (
     _CAPTURE_AI_V1_PATH,
@@ -137,7 +137,6 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
-    _uuid7,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -272,15 +271,6 @@ def get_identity_state(passed) -> tuple[str, bool]:
         return (context_id, False)
 
     return (str(uuid4()), True)
-
-
-def _stringify_event_uuid(value) -> str:
-    canonical = _canonical_event_uuid(value)
-    if canonical is None:
-        raise ValueError(
-            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
-        )
-    return canonical
 
 
 def _personless_options(personless: bool) -> dict[str, Any]:
@@ -2475,17 +2465,8 @@ class Client(object):
     def _normalize_event_uuid(self, msg):
         # type: (...) -> None
         """Ensure `msg["uuid"]` is a valid uuid string, generating one if missing or invalid."""
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
-
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = str(_uuid7())
+        # Always send a uuid, so we can always return one
+        msg["uuid"] = _resolve_event_uuid(msg.pop("uuid", None))
 
     def _report_capture_failure(
         self, error: Exception, batch: list[dict], endpoint: str

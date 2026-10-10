@@ -40,11 +40,11 @@ from .capture_compression import (
 )
 from .capture_event import (
     _build_event_defaults,
-    _canonical_event_uuid,
     _event_options,
     _EventDefaults,
     _fill_event_defaults,
     _merge_groups,
+    _resolve_event_uuid,
 )
 from .capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from .client import (
@@ -99,7 +99,6 @@ from .types import FlagMetadata, FlagValue, normalize_flags_response
 from .utils import (
     SizeLimitedDict,
     _normalize_timestamp,
-    _uuid7,
     clean,
     system_context,
 )
@@ -454,18 +453,7 @@ class AsyncClient:
         return admitted.result()
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
-        raw_uuid = msg.pop("uuid", None)
-        if raw_uuid is not None:
-            normalized = _canonical_event_uuid(raw_uuid)
-            if normalized is None:
-                self.log.error(
-                    "Invalid UUID %r. Falling back to a generated UUID.", raw_uuid
-                )
-            else:
-                msg["uuid"] = normalized
-                return normalized
-
-        normalized = str(_uuid7())
+        normalized = _resolve_event_uuid(msg.pop("uuid", None))
         msg["uuid"] = normalized
         return normalized
 
