@@ -7,9 +7,10 @@ The v1 contract (see ``rust/capture/src/v1/analytics/types.rs``) differs from
 the legacy queued-message shape in a few load-bearing ways that this module
 encodes:
 
-- A typed ``options`` object carries a handful of sentinel properties, renamed
-  and strictly typed. Wrong JSON types fail deserialization of the *whole
-  batch*, so values are coerced to native types or omitted entirely.
+- An ``options`` object carries per-event processing options. Options the
+  caller sets are sent as given, for PostHog to validate. Four legacy ``$``
+  properties fill the matching option when the caller left it unset, and are
+  always removed from ``properties``.
 - ``$set``/``$set_once`` have no top-level form in v1; the server reads them
   from ``properties``. The legacy ``set()``/``set_once()`` builders emit them at
   the top level, so they are relocated into ``properties`` here.
@@ -17,11 +18,15 @@ encodes:
   ``PostHog-Sdk-Info`` header and are stripped from v1 properties.
 """
 
-from collections.abc import Callable
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Any, Optional
+from uuid import UUID
 
 from posthog.utils import _normalize_timestamp
+
+log = logging.getLogger("posthog")
 
 # Sentinel properties lifted to top-level string fields on the event.
 _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
@@ -35,45 +40,49 @@ _RELOCATE_TO_PROPERTIES = ("$set", "$set_once")
 # Properties dropped from v1 events (server injects them from PostHog-Sdk-Info).
 _STRIP_FROM_PROPERTIES = ("$lib", "$lib_version")
 
-
-def _coerce_bool(value: Any) -> Optional[bool]:
-    """Coerce a sentinel value to ``bool`` using the backend's truthiness rules.
-
-    Native bool passes through; ``"true"``/``"1"`` and ``"false"``/``"0"``
-    (case-insensitive, trimmed) map to the obvious bool; any other numeric value
-    is nonzero-truthy. Anything else returns ``None`` so the option is omitted
-    rather than sent with a type the strict v1 schema would reject.
-    """
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        normalized = value.strip().lower()
-        if normalized in ("true", "1"):
-            return True
-        if normalized in ("false", "0"):
-            return False
-        return None
-    if isinstance(value, (int, float)):
-        return value != 0
-    return None
-
-
-def _coerce_str(value: Any) -> Optional[str]:
-    """Accept only ``str`` (the backend's ``product_tour_id`` is ``Option<String>``)."""
-    return value if isinstance(value, str) else None
-
-
-# Sentinel properties lifted into the typed `options` object: legacy property
-# key, the backend's field name, and the coercer enforcing its strict type
-# (wrong JSON types fail deserialization of the whole batch, so a value that
-# won't coerce is omitted). The coercer is stored directly to keep the dispatch
-# type-checked rather than keyed by a stringly-typed name.
-_OPTION_SENTINELS: tuple[tuple[str, str, Callable[[Any], Any]], ...] = (
-    ("$cookieless_mode", "cookieless_mode", _coerce_bool),
-    ("$ignore_sent_at", "disable_skew_correction", _coerce_bool),
-    ("$product_tour_id", "product_tour_id", _coerce_str),
-    ("$process_person_profile", "process_person_profile", _coerce_bool),
+# Legacy properties and the option each one fills. The order matches posthog-rs
+# and posthog-go.
+_LEGACY_OPTION_PROPERTIES: tuple[tuple[str, str], ...] = (
+    ("$cookieless_mode", "cookieless_mode"),
+    ("$ignore_sent_at", "disable_skew_correction"),
+    ("$product_tour_id", "product_tour_id"),
+    ("$process_person_profile", "process_person_profile"),
 )
+
+# The uuid forms Go's uuid.Validate accepts. Python's UUID() also accepts
+# misplaced hyphens and a bare "uuid:" prefix, which other SDKs reject.
+_EVENT_UUID_PATTERN = re.compile(
+    r"(?:urn:uuid:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}"
+    r"|[0-9a-f]{32}",
+    re.IGNORECASE,
+)
+
+
+def _canonical_event_uuid(value: Any) -> Optional[str]:
+    """Return the canonical form of a caller's event uuid, or None if invalid.
+
+    Capture keys per-event results by the canonical lowercase hyphenated form,
+    so a uuid sent in any other form would never match its result.
+    """
+    if isinstance(value, UUID):
+        return str(value)
+    if not isinstance(value, str) or not _EVENT_UUID_PATTERN.fullmatch(value):
+        return None
+    return str(UUID(value.lower()))
+
+
+def _event_options(value: Any) -> dict[str, Any]:
+    """Return a copy of a caller's ``options``, or ``{}`` when it is not a dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        log.error(
+            "options must be a dict, got %s. Sending the event without them.",
+            type(value).__name__,
+        )
+        return {}
+    return dict(value)
 
 
 def _v1_timestamp(timestamp: Any) -> str:
@@ -114,23 +123,24 @@ def _to_v1_event(msg: dict) -> dict:
     for key in _STRIP_FROM_PROPERTIES:
         properties.pop(key, None)
 
-    options: dict[str, Any] = {}
-    for prop_key, wire_key, coercer in _OPTION_SENTINELS:
+    options = _event_options(msg.get("options"))
+    for prop_key, option_key in _LEGACY_OPTION_PROPERTIES:
         if prop_key not in properties:
             continue
-        # Always removed from properties — these sentinels must never reach v1
-        # backend properties — but only emitted as an option when coercible.
-        coerced = coercer(properties.pop(prop_key))
-        if coerced is not None:
-            options[wire_key] = coerced
+        legacy = properties.pop(prop_key)
+        # A null option counts as unset, so the legacy value fills it.
+        if options.get(option_key) is None:
+            options[option_key] = legacy
 
     top_level: dict[str, str] = {}
     for prop_key, field_name in _TOPLEVEL_SENTINELS:
         if prop_key not in properties:
             continue
-        coerced_str = _coerce_str(properties.pop(prop_key))
-        if coerced_str is not None:
-            top_level[field_name] = coerced_str
+        # Always removed. A non-string value would fail the whole batch, so it
+        # is dropped.
+        value = properties.pop(prop_key)
+        if isinstance(value, str):
+            top_level[field_name] = value
 
     event = {
         "event": msg["event"],

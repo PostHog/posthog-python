@@ -35,6 +35,7 @@ from .capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
+from .capture_event import _canonical_event_uuid, _event_options
 from .capture_send import _CAPTURE_V1_PATH
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
@@ -378,9 +379,8 @@ class AsyncClient:
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
         raw_uuid = msg.pop("uuid", None)
         if raw_uuid is not None:
-            try:
-                normalized = str(UUID(str(raw_uuid)))
-            except (TypeError, ValueError, AttributeError):
+            normalized = _canonical_event_uuid(raw_uuid)
+            if normalized is None:
                 self.log.error(
                     "Invalid UUID %r. Falling back to a generated UUID.", raw_uuid
                 )
@@ -493,6 +493,7 @@ class AsyncClient:
                 "distinct_id": distinct_id,
                 "event": event,
                 "uuid": kwargs.get("uuid"),
+                "options": _event_options(kwargs.get("options")),
             },
             kwargs.get("disable_geoip"),
             kwargs.get("_property_allowlist"),
@@ -611,6 +612,7 @@ class AsyncClient:
             property_key: properties,
             "event": event,
             "uuid": kwargs.get("uuid"),
+            "options": _event_options(kwargs.get("options")),
         }
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -646,6 +648,7 @@ class AsyncClient:
         uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         try:
             if not _stringify_id(group_type):
@@ -670,6 +673,7 @@ class AsyncClient:
                 "distinct_id": resolved_distinct_id,
                 "timestamp": timestamp,
                 "uuid": uuid,
+                "options": _event_options(options),
             }
             session_id = _get_context_session_id()
             if session_id:
@@ -688,6 +692,7 @@ class AsyncClient:
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
         disable_geoip: Optional[bool] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         try:
             resolved_previous_id = _stringify_id(previous_id)
@@ -707,6 +712,7 @@ class AsyncClient:
                 "event": "$create_alias",
                 "distinct_id": resolved_previous_id,
                 "uuid": uuid,
+                "options": _event_options(options),
             }
             session_id = _get_context_session_id()
             if session_id:
@@ -809,6 +815,7 @@ class AsyncClient:
                 groups=kwargs.get("groups"),
                 flags=kwargs.get("flags"),
                 disable_geoip=kwargs.get("disable_geoip"),
+                options=kwargs.get("options"),
             )
             if exception is not None and result is not None:
                 mark_exception_as_captured(exception, result)

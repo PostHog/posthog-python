@@ -48,12 +48,16 @@ class OptionalCaptureArgs(TypedDict):
             hidden ``/flags`` request on capture and may return different values than the ones
             the code branched on.
         disable_geoip: Whether to disable GeoIP lookup for this event. Defaults to False.
+        options: Capture options for this event, such as ``{"process_person_profile": False}``.
+            Sent as given, for PostHog to validate. An option wins over its legacy ``$`` property,
+            such as ``$process_person_profile``. A value that is not a dict is logged and ignored.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]
     properties: NotRequired[Optional[Dict[str, Any]]]
     timestamp: NotRequired[Optional[Union[datetime, str]]]
     uuid: NotRequired[Optional[Union[str, UUID]]]
+    options: NotRequired[Optional[Dict[str, Any]]]
     groups: NotRequired[Optional[Dict[str, str]]]
     flags: NotRequired[Optional["FeatureFlagEvaluations"]]
     send_feature_flags: NotRequired[
@@ -83,6 +87,7 @@ class OptionalSetArgs(TypedDict):
             it must be a valid UUID string or uuid.UUID instance; invalid values are ignored
             and replaced with a newly generated UUID.
         disable_geoip: Whether to disable GeoIP lookup for this operation. Defaults to False.
+        options: Capture options for this event, sent as given. See ``OptionalCaptureArgs``.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]
@@ -90,6 +95,7 @@ class OptionalSetArgs(TypedDict):
     timestamp: NotRequired[Optional[Union[datetime, str]]]
     uuid: NotRequired[Optional[Union[str, UUID]]]
     disable_geoip: NotRequired[Optional[bool]]
+    options: NotRequired[Optional[Dict[str, Any]]]
 
 
 ExcInfo = Union[
