@@ -153,6 +153,7 @@ class TestToV1Event(unittest.TestCase):
         [
             ("session_id", "$session_id", "session_id", "s-123"),
             ("window_id", "$window_id", "window_id", "w-456"),
+            ("empty_string", "$session_id", "session_id", ""),
         ]
     )
     def test_top_level_string_sentinels(self, _name, prop_key, field_name, raw) -> None:
@@ -160,8 +161,29 @@ class TestToV1Event(unittest.TestCase):
         self.assertEqual(event[field_name], raw)
         self.assertNotIn(prop_key, event["properties"])
 
-    def test_top_level_sentinel_omitted_but_removed_when_not_string(self) -> None:
-        event = _to_v1_event(_legacy_msg(properties={"$session_id": 42}))
+    @parameterized.expand(
+        [
+            ("number", "$session_id", 42, "number"),
+            ("bool", "$window_id", True, "bool"),
+            ("array", "$session_id", ["s-1"], "array"),
+            ("object", "$window_id", {"id": "w-1"}, "object"),
+        ]
+    )
+    def test_non_string_sentinel_is_dropped_with_a_warning(
+        self, _name, prop_key, raw, type_name
+    ) -> None:
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
+        self.assertNotIn(prop_key.lstrip("$"), event)
+        self.assertNotIn(prop_key, event["properties"])
+        self.assertIn(
+            f"dropping {prop_key}: a {type_name} value is not a string",
+            logs.records[0].getMessage(),
+        )
+
+    def test_null_sentinel_is_dropped_silently(self) -> None:
+        with self.assertNoLogs("posthog", level="WARNING"):
+            event = _to_v1_event(_legacy_msg(properties={"$session_id": None}))
         self.assertNotIn("session_id", event)
         self.assertNotIn("$session_id", event["properties"])
 
