@@ -49,17 +49,23 @@ class _FakeResponse:
 
 
 class _RecordingSession:
-    """Captures the args of a single ``.post`` and returns a canned response."""
+    """Records each ``.post`` and returns canned responses, repeating the last."""
 
-    def __init__(self, response):
-        self._response = response
+    def __init__(self, *responses):
+        self._responses = list(responses)
         self.calls = []
 
-    def post(self, url, data=None, headers=None, timeout=None):
+    def post(self, url, data=None, headers=None, timeout=None, allow_redirects=True):
         self.calls.append(
-            {"url": url, "data": data, "headers": headers, "timeout": timeout}
+            {
+                "url": url,
+                "data": data,
+                "headers": headers,
+                "timeout": timeout,
+                "allow_redirects": allow_redirects,
+            }
         )
-        return self._response
+        return self._responses[min(len(self.calls), len(self._responses)) - 1]
 
 
 class _PostV1Stub:
@@ -211,6 +217,90 @@ class TestPostV1(unittest.TestCase):
             with self.assertRaises(ValueError) as ctx:
                 self._post(_results_response({}), compression=CaptureCompression.ZSTD)
         self.assertIn("posthog[zstd]", str(ctx.exception))
+
+    @parameterized.expand(
+        [
+            (
+                "relative_location",
+                "https://us.i.posthog.com",
+                "/i/v1/analytics/events?retry=1",
+                "https://us.i.posthog.com/i/v1/analytics/events?retry=1",
+            ),
+            (
+                "host_path_prefix",
+                "https://example.com/ingest",
+                "https://example.com/ingest/i/v1/analytics/events",
+                "https://example.com/ingest/i/v1/analytics/events",
+            ),
+            (
+                "explicit_default_port",
+                "https://us.i.posthog.com",
+                "https://us.i.posthog.com:443/other",
+                "https://us.i.posthog.com/other",
+            ),
+        ]
+    )
+    def test_follows_same_origin_redirect_with_same_body(
+        self, _name, host, location, expected_url
+    ) -> None:
+        final = _results_response({})
+        session = _RecordingSession(
+            _FakeResponse(307, headers={"Location": location}), final
+        )
+        body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
+        res = _post_v1(
+            "phc_key", host, body, attempt=1, request_id="r", session=session
+        )
+
+        self.assertIs(res, final)
+        self.assertEqual([c["url"] for c in session.calls][1], expected_url)
+        self.assertEqual(session.calls[0]["data"], session.calls[1]["data"])
+        self.assertEqual(session.calls[0]["headers"], session.calls[1]["headers"])
+        self.assertTrue(all(c["allow_redirects"] is False for c in session.calls))
+
+    @parameterized.expand(
+        [
+            ("other_host", 307, "https://attacker.example.com/collect"),
+            ("loopback", 308, "http://127.0.0.1:8080/collect"),
+            ("https_to_http", 307, "http://us.i.posthog.com/i/v1/analytics/events"),
+            ("other_port", 308, "https://us.i.posthog.com:8443/i/v1/analytics/events"),
+            ("missing_location", 307, None),
+            ("not_307_or_308", 302, "/i/v1/analytics/events"),
+        ]
+    )
+    def test_does_not_follow_other_redirects(self, _name, status, location) -> None:
+        redirect = _FakeResponse(
+            status, headers={"Location": location} if location else {}
+        )
+        session = _RecordingSession(redirect, _results_response({}))
+        body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
+        res = _post_v1(
+            "phc_key",
+            "https://us.i.posthog.com",
+            body,
+            attempt=1,
+            request_id="r",
+            session=session,
+        )
+
+        self.assertIs(res, redirect)
+        self.assertEqual(len(session.calls), 1)
+
+    def test_stops_after_max_redirects(self) -> None:
+        loop = _FakeResponse(307, headers={"Location": "/i/v1/analytics/events"})
+        session = _RecordingSession(loop)
+        body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
+        res = _post_v1(
+            "phc_key",
+            "https://us.i.posthog.com",
+            body,
+            attempt=1,
+            request_id="r",
+            session=session,
+        )
+
+        self.assertIs(res, loop)
+        self.assertEqual(len(session.calls), 6)
 
 
 class TestParseV1Response(unittest.TestCase):
@@ -449,7 +539,14 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(len(stub.calls), 1)
         self.assertEqual(exc.status, 200)
 
-    @parameterized.expand([("bad_request", 400), ("rate_limited", 429)])
+    @parameterized.expand(
+        [
+            ("bad_request", 400),
+            ("rate_limited", 429),
+            ("unfollowed_redirect", 307),
+            ("unfollowed_permanent_redirect", 308),
+        ]
+    )
     def test_terminal_status_raises_immediately(self, _name, status) -> None:
         stub, exc = self._run_expecting_error(
             [_msg("u-1")],

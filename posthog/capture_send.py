@@ -29,6 +29,7 @@ from email.utils import parsedate_to_datetime
 from gzip import GzipFile
 from io import BytesIO
 from typing import TYPE_CHECKING, Optional
+from urllib.parse import urljoin, urlsplit
 from uuid import UUID
 
 from posthog.capture_compression import CaptureCompression, _zstandard
@@ -72,6 +73,9 @@ _RESULT_RETRY = "retry"
 # HTTP status classification. 429 is terminal in v1 (unlike v0, where it is
 # retried) — the backend signals overload via retryable 5xx + Retry-After.
 _RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
+# Only these keep the method and body, so a resent batch is unchanged.
+_REDIRECT_STATUSES = frozenset({307, 308})
+_MAX_REDIRECTS = 5
 _TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
 
 # Single ceiling (seconds) for the retry backoff: caps the exponential schedule
@@ -275,6 +279,34 @@ def _compress_v1(
     return data, None
 
 
+def _origin(url: str) -> Optional[tuple[str, str, int]]:
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if parsed.scheme.lower() == "https" else 80
+    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
+
+
+def _same_origin_redirect_url(
+    base_url: str, current_url: str, location: Optional[str]
+) -> Optional[str]:
+    """Return the redirect target on ``base_url``'s origin, or ``None``."""
+    if not location:
+        return None
+    target = urlsplit(urljoin(current_url, location))
+    base_origin = _origin(base_url)
+    if base_origin is None or _origin(target.geturl()) != base_origin:
+        return None
+    return (
+        urlsplit(base_url)
+        ._replace(path=target.path or "/", query=target.query, fragment="")
+        .geturl()
+    )
+
+
 def _post_v1(
     api_key: str,
     host: Optional[str],
@@ -296,6 +328,11 @@ def _post_v1(
     retries. The body is compressed per ``compression`` (advertised via
     ``Content-Encoding``). Returns the raw response; classification is left to
     the caller.
+
+    Follows only 307/308 redirects to the origin of ``host``, at most
+    :data:`_MAX_REDIRECTS` times, resending the same body and headers. Any other
+    redirect comes back as the response, which the caller treats as a terminal
+    failure, so a batch never goes to another origin.
     """
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + path
@@ -314,9 +351,25 @@ def _post_v1(
         headers["Content-Encoding"] = encoding
 
     log.debug("capture v1 POST %s attempt=%s request_id=%s", url, attempt, request_id)
-    return (session or _get_session()).post(
-        url, data=body, headers=headers, timeout=timeout
-    )
+    http = session or _get_session()
+    for _ in range(_MAX_REDIRECTS + 1):
+        res = http.post(
+            url, data=body, headers=headers, timeout=timeout, allow_redirects=False
+        )
+        if res.status_code not in _REDIRECT_STATUSES:
+            return res
+        target = _same_origin_redirect_url(
+            trimmed_host, url, res.headers.get("Location")
+        )
+        if target is None:
+            log.warning(
+                "capture v1 did not follow a %s redirect to another origin",
+                res.status_code,
+            )
+            return res
+        url = target
+    log.warning("capture v1 stopped after %d redirects", _MAX_REDIRECTS)
+    return res
 
 
 def _parse_v1_response(res: "requests.Response") -> _V1ParsedResponse:
