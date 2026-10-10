@@ -58,6 +58,15 @@ class TestModule(unittest.TestCase):
 
         proxy.assert_called_once_with("flush", timeout_seconds=1.5)
 
+    def test_module_capture_exception_forwards_level(self):
+        error = ValueError("boom")
+        with mock.patch.object(posthog, "_proxy") as proxy:
+            posthog.capture_exception(error, level="warning")
+
+        proxy.assert_called_once_with(
+            "capture_exception", exception=error, level="warning"
+        )
+
 
 class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):
