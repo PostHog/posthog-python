@@ -78,6 +78,19 @@ def _canonical_event_uuid(value: Any) -> Optional[str]:
     return str(UUID(value.lower()))
 
 
+def _json_type_name(value: Any) -> str:
+    """Name a value's JSON type, the same names posthog-go and posthog-rs log."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return type(value).__name__
+
+
 def _event_options(value: Any) -> dict[str, Any]:
     """Return a copy of a caller's ``options``, or ``{}`` when it is not a dict."""
     if value is None:
@@ -242,10 +255,16 @@ def _to_v1_event(msg: dict) -> dict:
         if prop_key not in properties:
             continue
         # Always removed. A non-string value would fail the whole batch, so it
-        # is dropped.
+        # is dropped. None counts as unset and drops silently.
         value = properties.pop(prop_key)
         if isinstance(value, str):
             top_level[field_name] = value
+        elif value is not None:
+            log.warning(
+                "dropping %s: a %s value is not a string",
+                prop_key,
+                _json_type_name(value),
+            )
 
     event = {
         "event": msg["event"],
