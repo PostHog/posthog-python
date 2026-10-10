@@ -15,7 +15,7 @@ def make_consumer(*, retries: int) -> _AsyncConsumer:
         "test-key",
         host="https://example.com",
         on_error=None,
-        process_event=mock.AsyncMock(side_effect=lambda event: event),
+        process_event=mock.AsyncMock(side_effect=lambda event, defaults: event),
         flush_at=100,
         flush_interval=1,
         retries=retries,

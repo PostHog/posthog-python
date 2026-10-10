@@ -20,11 +20,14 @@ encodes:
 
 import logging
 import re
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
 from posthog.utils import _normalize_timestamp
+from posthog.utils import clean as _clean
 
 log = logging.getLogger("posthog")
 
@@ -36,6 +39,9 @@ _TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
 
 # Top-level legacy keys relocated into properties (v1 has no top-level form).
 _RELOCATE_TO_PROPERTIES = ("$set", "$set_once")
+
+# Properties that defaults fill one level deep when both values are dicts.
+_NESTED_FILL_PROPERTIES = frozenset({"$set", "$set_once", "$groups", "$group_set"})
 
 # Properties dropped from v1 events (server injects them from PostHog-Sdk-Info).
 _STRIP_FROM_PROPERTIES = ("$lib", "$lib_version")
@@ -85,6 +91,105 @@ def _event_options(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+@dataclass(frozen=True)
+class _EventDefaults:
+    """Context, global and SDK-derived values for one event, highest layer first.
+
+    They fill in before ``before_send``, so the hook sees them and can change
+    or remove them. The event's own values win over every default.
+    """
+
+    property_layers: tuple[Mapping[str, Any], ...] = ()
+    option_layers: tuple[Mapping[str, Any], ...] = ()
+    property_allowlist: Optional[Collection[str]] = None
+
+
+def _build_event_defaults(
+    *,
+    super_properties: Optional[Mapping[str, Any]],
+    super_options: Any,
+    release_id: Optional[str],
+    context_properties: Optional[Mapping[str, Any]] = None,
+    context_options: Optional[Mapping[str, Any]] = None,
+    derived_options: Optional[Mapping[str, Any]] = None,
+    property_allowlist: Optional[Collection[str]] = None,
+    is_server: bool = False,
+    disable_geoip: bool = False,
+    system_properties: Optional[Mapping[str, Any]] = None,
+) -> _EventDefaults:
+    """Order the layers: context, then global, then values the SDK derives."""
+    # A value in the event, the context or super properties wins over every
+    # value the SDK adds, including `$is_server` and `$geoip_disable`.
+    sdk_properties = dict(system_properties or {})
+    if release_id is not None:
+        sdk_properties["$release_id"] = release_id
+    if is_server:
+        sdk_properties["$is_server"] = True
+    if disable_geoip:
+        sdk_properties["$geoip_disable"] = True
+    return _EventDefaults(
+        property_layers=(
+            context_properties or {},
+            super_properties or {},
+            sdk_properties,
+        ),
+        option_layers=(
+            context_options or {},
+            _event_options(super_options),
+            derived_options or {},
+        ),
+        property_allowlist=property_allowlist,
+    )
+
+
+def _fill_event_defaults(
+    msg: dict[str, Any], defaults: Optional[_EventDefaults]
+) -> None:
+    """Fill the keys an event left unset from ``defaults``, layer by layer.
+
+    A property is unset only when its key is missing. An option is unset when
+    it is missing or ``None``, the same rule hoisting uses. ``$set``,
+    ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep when the
+    event's value and the default are both dicts.
+    """
+    if defaults is None:
+        return
+    allowlist = defaults.property_allowlist
+    properties = msg.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        msg["properties"] = properties
+    for property_layer in defaults.property_layers:
+        for key, value in property_layer.items():
+            if allowlist is not None and key not in allowlist:
+                continue
+            if key not in properties:
+                properties[key] = _clean(value)
+                continue
+            existing = properties[key]
+            if (
+                key in _NESTED_FILL_PROPERTIES
+                and isinstance(existing, dict)
+                and isinstance(value, Mapping)
+            ):
+                properties[key] = {**_clean(dict(value)), **existing}
+    options = _event_options(msg.get("options"))
+    for option_layer in defaults.option_layers:
+        for key, value in option_layer.items():
+            if options.get(key) is None:
+                options[key] = _clean(value)
+    msg["options"] = options
+
+
+def _merge_groups(properties: dict[str, Any], groups: Mapping[str, Any]) -> None:
+    """Merge typed ``groups`` into the ``$groups`` property; ``groups`` wins key by key."""
+    existing = properties.get("$groups")
+    if isinstance(existing, dict):
+        properties["$groups"] = {**existing, **groups}
+    else:
+        properties["$groups"] = dict(groups)
+
+
 def _v1_timestamp(timestamp: Any) -> str:
     """Return a UTC RFC3339 timestamp string.
 
@@ -108,16 +213,16 @@ def _to_v1_event(msg: dict) -> dict:
     properties = dict(msg.get("properties") or {})
 
     # Relocate top-level $set/$set_once into properties; v1 has no top-level
-    # form. On the unusual collision where properties already carries the key,
-    # the properties value wins.
+    # form. The top-level value comes from the set() or set_once() call, so it
+    # wins key by key over a $set in properties, as ingestion merges them.
     for key in _RELOCATE_TO_PROPERTIES:
         top_val = msg.get(key)
         if top_val is None:
             continue
         existing = properties.get(key)
         if isinstance(top_val, dict) and isinstance(existing, dict):
-            properties[key] = {**top_val, **existing}
-        elif key not in properties:
+            properties[key] = {**existing, **top_val}
+        else:
             properties[key] = top_val
 
     for key in _STRIP_FROM_PROPERTIES:
