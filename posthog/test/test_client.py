@@ -1364,7 +1364,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
             self.assertTrue(isinstance(msg["timestamp"], str))
             self.assertIsNotNone(msg.get("uuid"))
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -3800,7 +3800,7 @@ class TestClient(unittest.TestCase):
             # Check page event
             page_batch = sent_batch(mock_post, 1)
             identify_msg = page_batch[0]
-            self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+            self.assertIs(identify_msg["properties"]["$geoip_disable"], False)
 
     def test_disable_geoip_method_overrides_init_on_events(self):
         with patch_capture_send("client") as mock_post:
@@ -3819,7 +3819,7 @@ class TestClient(unittest.TestCase):
             mock_post.assert_called_once()
             batch_data = sent_batch(mock_post)
             msg = batch_data[0]
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
 
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_default_on_decide(self, patch_flags):

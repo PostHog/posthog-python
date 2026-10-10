@@ -124,7 +124,7 @@ def _event_options(value: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class _EventDefaults:
-    """Context, global and SDK-derived values for one event, highest layer first.
+    """Per-call, context, global and SDK-derived values for one event, highest layer first.
 
     They fill in before ``before_send``, so the hook sees them and can change
     or remove them. The event's own values win over every default.
@@ -146,9 +146,18 @@ def _build_event_defaults(
     property_allowlist: Optional[Collection[str]] = None,
     is_server: bool = False,
     disable_geoip: bool = False,
+    call_disable_geoip: Optional[bool] = None,
     system_properties: Optional[Mapping[str, Any]] = None,
 ) -> _EventDefaults:
-    """Order the layers: context, then global, then values the SDK derives."""
+    """Order the layers: per-call arguments, context, global, then SDK values.
+
+    ``disable_geoip`` is the client setting, an SDK value. ``call_disable_geoip``
+    is the argument of one call: it is a value of that event, so only the
+    event's own ``$geoip_disable`` property beats it.
+    """
+    call_properties = (
+        {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
+    )
     # A value in the event, the context or super properties wins over every
     # value the SDK adds, including `$is_server` and `$geoip_disable`.
     sdk_properties = dict(system_properties or {})
@@ -160,6 +169,7 @@ def _build_event_defaults(
         sdk_properties["$geoip_disable"] = True
     return _EventDefaults(
         property_layers=(
+            call_properties,
             context_properties or {},
             super_properties or {},
             sdk_properties,
