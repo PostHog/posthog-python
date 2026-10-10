@@ -1421,6 +1421,7 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.integrations.drf.create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
 function posthog.integrations.drf.exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
+function posthog.is_opted_out() -> bool
 function posthog.join() -> None
 function posthog.load_feature_flags()
 function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
@@ -1437,6 +1438,8 @@ function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayloa
 function posthog.mcp.session_token.read_mcp_session_header(headers: Any) -> Optional[str]
 function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
+function posthog.opt_in_capturing() -> None
+function posthog.opt_out_capturing() -> None
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: int = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
@@ -1622,9 +1625,12 @@ method posthog.client.Client.get_remote_config_payload(key: str)
 method posthog.client.Client.get_tags() -> Dict[str, Any]
 method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
 method posthog.client.Client.identify_context(distinct_id: str) -> None
+method posthog.client.Client.is_opted_out() -> bool
 method posthog.client.Client.join() -> None
 method posthog.client.Client.load_feature_flags()
 method posthog.client.Client.new_context(fresh=False, capture_exceptions: Optional[bool] = None)
+method posthog.client.Client.opt_in_capturing() -> None
+method posthog.client.Client.opt_out_capturing() -> None
 method posthog.client.Client.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 method posthog.client.Client.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.set_context_device_id(device_id: str) -> None
