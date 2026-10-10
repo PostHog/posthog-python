@@ -20,8 +20,6 @@ def adapter(monkeypatch):
     # Importing the adapter installs transport instrumentation. Restore it after
     # every test so collecting these tests alongside SDK tests is safe.
     for module, name in [
-        (posthog.request, "batch_post"),
-        (posthog.consumer, "batch_post"),
         (posthog.capture_v1, "_post_v1"),
     ]:
         monkeypatch.setattr(module, name, getattr(module, name))
@@ -79,14 +77,11 @@ def initialize(adapter, **overrides):
     return adapter.app.test_client()
 
 
-@pytest.mark.parametrize("mode,capability", [("", "capture_v0"), ("v1", "capture_v1")])
-def test_health_opts_into_local_evaluation_without_losing_capture(
-    adapter, monkeypatch, mode, capability
-):
-    monkeypatch.setattr(adapter, "CAPTURE_MODE", mode)
+def test_health_opts_into_local_evaluation_without_losing_capture(adapter):
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
-    assert capability in capabilities
+    assert "capture_v1" in capabilities
+    assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
 
 

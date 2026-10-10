@@ -1,10 +1,10 @@
 {
   "body": {
-    "api_key": "phc_snapshot_project",
     "batch": [
       {
         "distinct_id": "user-123",
         "event": "$exception",
+        "options": {},
         "properties": {
           "$exception_list": [
             {
@@ -53,7 +53,7 @@
                       "",
                       "def _exception_request():",
                       "    session = mock.MagicMock()",
-                      "    session.post.return_value = _successful_response()"
+                      "    session.post.side_effect = _capture_ok_response"
                     ],
                     "pre_context": [
                       "",
@@ -113,8 +113,6 @@
             "company": "company-456"
           },
           "$is_server": true,
-          "$lib": "posthog-python",
-          "$lib_version": "<SDK_VERSION>",
           "$os": "<OS>",
           "$os_distro": "<OS_DISTRO>",
           "$os_version": "<OS_VERSION>",
@@ -127,13 +125,17 @@
         "uuid": "00000000-0000-4000-8000-000000000005"
       }
     ],
-    "historical_migration": false,
-    "sent_at": "2026-01-02T03:04:05+00:00"
+    "created_at": "2026-01-02T03:04:05+00:00"
   },
   "headers": {
+    "Authorization": "Bearer phc_snapshot_project",
     "Content-Type": "application/json",
+    "PostHog-Attempt": "1",
+    "PostHog-Request-Id": "<REQUEST_ID>",
+    "PostHog-Request-Timestamp": "2026-01-02T03:04:05+00:00",
+    "PostHog-Sdk-Info": "posthog-python/<SDK_VERSION>",
     "User-Agent": "posthog-python/<SDK_VERSION>"
   },
   "timeout": 15,
-  "url": "https://example.posthog.test/batch/"
+  "url": "https://example.posthog.test/i/v1/analytics/events"
 }

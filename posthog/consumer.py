@@ -6,14 +6,10 @@ from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_mode import CaptureMode
-from posthog.capture_v1 import _CAPTURE_V1_PATH, _backoff, _send_v1_batch
+from posthog.capture_v1 import _CAPTURE_V1_PATH, _send_v1_batch
 from posthog.request import (
-    EVENTS_ENDPOINT,
     USER_AGENT as _USER_AGENT,
-    APIError,
     DatetimeSerializer,
-    batch_post,
 )
 
 from queue import Empty
@@ -109,13 +105,11 @@ class Consumer(Thread):
         host=None,
         on_error=None,
         flush_interval=5.0,
-        gzip=False,
         retries=10,
         timeout=15,
         historical_migration=False,
-        endpoint=None,
+        endpoint=_CAPTURE_V1_PATH,
         max_msg_size=MAX_MSG_SIZE,
-        capture_mode=CaptureMode.V1,
         capture_compression=CaptureCompression.NONE,
     ):
         """Create a consumer thread."""
@@ -128,16 +122,8 @@ class Consumer(Thread):
         self.host = host
         self.on_error = on_error
         self.queue = queue
-        self.gzip = gzip
-        # Without an explicit endpoint, post to the analytics path of the
-        # selected protocol.
-        if endpoint is None:
-            endpoint = (
-                _CAPTURE_V1_PATH if capture_mode == CaptureMode.V1 else EVENTS_ENDPOINT
-            )
         self.endpoint = endpoint
         self.max_msg_size = max_msg_size
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         self._sdk_info = _USER_AGENT
         self._drain_signal: Optional[_DrainSignal] = None
@@ -294,67 +280,16 @@ class Consumer(Thread):
         return items
 
     def request(self, batch):
-        """Upload the batch to this consumer's `endpoint` via the wire protocol
-        selected by `capture_mode`.
-
-        V1 uses the partial-retry submitter; V0 posts the whole batch.
-        """
-        if self.capture_mode == CaptureMode.V1:
-            _send_v1_batch(
-                self.api_key,
-                self.host,
-                batch,
-                compression=self.capture_compression,
-                timeout=self.timeout,
-                max_retries=self.retries,
-                historical_migration=self.historical_migration,
-                sdk_info=self._sdk_info,
-                path=self.endpoint,
-            )
-            return
-        self._send(batch, self.endpoint)
-
-    def _send(self, batch, path):
-        """Attempt to upload a single batch to `path`, retrying before raising an error"""
-
-        def is_retryable(exc):
-            if isinstance(exc, APIError):
-                # retry on server errors and client errors
-                # with 408 (request timeout) or 429 (rate limited),
-                # don't retry on other client errors
-                if isinstance(exc.status, int):
-                    return not (
-                        (400 <= exc.status < 500) and exc.status not in (408, 429)
-                    )
-                return False
-            else:
-                # retry on all other errors (eg. network)
-                return True
-
-        last_exc = None
-        for attempt in range(self.retries + 1):
-            try:
-                batch_post(
-                    self.api_key,
-                    self.host,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    batch=batch,
-                    historical_migration=self.historical_migration,
-                    path=path,
-                    **(
-                        {"_user_agent": self._sdk_info}
-                        if self._sdk_info != _USER_AGENT
-                        else {}
-                    ),
-                )
-                return
-            except Exception as e:
-                last_exc = e
-                if not is_retryable(e):
-                    raise
-                if attempt < self.retries:
-                    _backoff(attempt, getattr(e, "retry_after", None))
-
-        if last_exc:
-            raise last_exc
+        """Upload the batch to this consumer's `endpoint` with the capture v1
+        partial-retry submitter."""
+        _send_v1_batch(
+            self.api_key,
+            self.host,
+            batch,
+            compression=self.capture_compression,
+            timeout=self.timeout,
+            max_retries=self.retries,
+            historical_migration=self.historical_migration,
+            sdk_info=self._sdk_info,
+            path=self.endpoint,
+        )

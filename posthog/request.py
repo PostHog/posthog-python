@@ -3,11 +3,8 @@ import logging
 import re
 import socket
 import time
-import zlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from gzip import GzipFile
-from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union, cast
 
 import requests
@@ -216,7 +213,6 @@ def post(
     api_key: str,
     host: Optional[str] = None,
     path: Optional[str] = None,
-    gzip: bool = False,
     timeout: int = 15,
     session: Optional[requests.Session] = None,
     **kwargs,
@@ -229,7 +225,7 @@ def post(
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
-    data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
+    data = json.dumps(body, cls=DatetimeSerializer)
     if log.isEnabledFor(logging.DEBUG):
         log.debug(
             "making request: %s to url: %s",
@@ -237,17 +233,6 @@ def post(
             url,
         )
     headers = {"Content-Type": "application/json", "User-Agent": user_agent}
-    if gzip:
-        try:
-            buf = BytesIO()
-            with GzipFile(fileobj=buf, mode="w") as gz:
-                # 'data' was produced by json.dumps(),
-                # whose default encoding is utf-8.
-                gz.write(cast(str, data).encode("utf-8"))
-            data = buf.getvalue()
-            headers["Content-Encoding"] = "gzip"
-        except (OSError, zlib.error) as exc:
-            log.warning("failed to gzip request body, sending uncompressed: %s", exc)
 
     res = (session or _get_session()).post(
         url, data=data, headers=headers, timeout=timeout
@@ -314,7 +299,6 @@ def _feature_flags_retry_delay(failed_attempt: int) -> float:
 def flags(
     api_key: str,
     host: Optional[str] = None,
-    gzip: bool = False,
     timeout: int = 15,
     max_retries: int = 1,
     **kwargs,
@@ -330,7 +314,6 @@ def flags(
                 api_key,
                 host,
                 "/flags/?v=2",
-                gzip,
                 timeout,
                 session=_get_flags_session(),
                 _user_agent=user_agent,
@@ -380,25 +363,6 @@ def _remote_config(
         _user_agent=_user_agent,
     )
     return response.data
-
-
-EVENTS_ENDPOINT = "/batch/"
-AI_EVENTS_ENDPOINT = "/i/v0/ai/batch/"
-
-
-def batch_post(
-    api_key: str,
-    host: Optional[str] = None,
-    gzip: bool = False,
-    timeout: int = 15,
-    path: str = EVENTS_ENDPOINT,
-    **kwargs,
-) -> requests.Response:
-    """Post the `kwargs` to the batch API endpoint for events"""
-    res = post(api_key, host, path, gzip, timeout, **kwargs)
-    return _process_response(
-        res, success_message="data uploaded successfully", return_json=False
-    )
 
 
 def get(

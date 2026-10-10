@@ -2,9 +2,6 @@ import json
 import threading
 import time
 import unittest
-from datetime import datetime, timedelta, timezone
-from email.utils import format_datetime
-from typing import Any
 
 from unittest import mock
 from parameterized import parameterized
@@ -15,10 +12,8 @@ except ImportError:
     from Queue import Queue
 
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_mode import CaptureMode
 from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.consumer import MAX_MSG_SIZE, Consumer, _DrainSignal
-from posthog.request import AI_EVENTS_ENDPOINT, EVENTS_ENDPOINT, APIError
 from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import TEST_API_KEY
@@ -329,88 +324,15 @@ class TestConsumer(unittest.TestCase):
                 consumer.join(15)
             self.assertFalse(consumer.is_alive())
 
-    def test_request(self) -> None:
-        consumer = Consumer(None, TEST_API_KEY, capture_mode=CaptureMode.V0)
-        batch = [_track_event()]
-        with mock.patch("posthog.consumer.batch_post") as post:
-            consumer.request(batch)
-        post.assert_called_once_with(
-            TEST_API_KEY,
-            None,
-            gzip=False,
-            timeout=15,
-            batch=batch,
-            historical_migration=False,
-            path="/batch/",
-        )
-
-    def _run_retry_test(
-        self,
-        exception: Exception,
-        exception_count: int,
-        retries: int = 10,
-        expected_attempts: int = 3,
-        raises: bool = False,
-    ) -> None:
-        call_count = [0]
-
-        def mock_post(*args: Any, **kwargs: Any) -> None:
-            call_count[0] += 1
-            if call_count[0] <= exception_count:
-                raise exception
-
-        consumer = Consumer(
-            None, TEST_API_KEY, retries=retries, capture_mode=CaptureMode.V0
-        )
-        batch = [_track_event()]
-        with (
-            mock.patch("posthog.consumer.batch_post", side_effect=mock_post) as post,
-            mock.patch("posthog.consumer.time.sleep"),
-        ):
-            if raises:
-                with self.assertRaises(type(exception)) as raised:
-                    consumer.request(batch)
-                self.assertIs(raised.exception, exception)
-            else:
-                consumer.request(batch)
-        self.assertEqual(post.call_count, expected_attempts)
-        for call in post.call_args_list:
-            self.assertEqual(call.kwargs["batch"], batch)
-
-    @parameterized.expand(
-        [
-            ("general_errors", Exception("generic exception"), 2),
-            ("server_errors", APIError(500, "Internal Server Error"), 2),
-            ("rate_limit_errors", APIError(429, "Too Many Requests"), 2),
-        ]
-    )
-    def test_request_retries_on_retriable_errors(
-        self, _name: str, exception: Exception, exception_count: int
-    ) -> None:
-        self._run_retry_test(exception, exception_count)
-
-    def test_request_does_not_retry_client_errors(self) -> None:
-        self._run_retry_test(
-            APIError(400, "Client Errors"), 1, expected_attempts=1, raises=True
-        )
-
-    def test_request_fails_when_exceptions_exceed_retries(self) -> None:
-        self._run_retry_test(
-            APIError(500, "Internal Server Error"),
-            4,
-            retries=3,
-            expected_attempts=4,
-            raises=True,
-        )
-
     def test_negative_retries_still_attempts_delivery_once(self) -> None:
-        consumer = Consumer(None, TEST_API_KEY, retries=-1, capture_mode=CaptureMode.V0)
+        consumer = Consumer(None, TEST_API_KEY, retries=-1)
 
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_send:
             consumer.request([_track_event()])
 
         self.assertEqual(consumer.retries, 0)
-        mock_post.assert_called_once()
+        mock_send.assert_called_once()
+        self.assertEqual(mock_send.call_args.kwargs["max_retries"], 0)
 
     def test_pause(self) -> None:
         consumer = Consumer(None, TEST_API_KEY)
@@ -624,101 +546,6 @@ class TestConsumer(unittest.TestCase):
                 consumer.join(5)
             self.assertFalse(consumer.is_alive())
 
-    def test_request_sleeps_with_retry_after(self) -> None:
-        error = APIError(429, "Too Many Requests", retry_after=5.0)
-        call_count = [0]
-
-        def mock_post(*args: Any, **kwargs: Any) -> None:
-            call_count[0] += 1
-            if call_count[0] <= 1:
-                raise error
-
-        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
-        with (
-            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
-            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
-        ):
-            consumer.request([_track_event()])
-            mock_sleep.assert_called_once_with(5.0)
-
-    def test_request_uses_exponential_backoff_without_retry_after(self) -> None:
-        error = APIError(503, "Service Unavailable")
-        call_count = [0]
-
-        def mock_post(*args: Any, **kwargs: Any) -> None:
-            call_count[0] += 1
-            if call_count[0] <= 3:
-                raise error
-
-        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
-        with (
-            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
-            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
-        ):
-            consumer.request([_track_event()])
-            self.assertEqual(
-                mock_sleep.call_args_list,
-                [
-                    mock.call(1),  # 2^0
-                    mock.call(2),  # 2^1
-                    mock.call(4),  # 2^2
-                ],
-            )
-
-    @parameterized.expand(
-        [
-            ("huge_numeric", "1000000000", [30, 30]),
-            ("small_numeric", "0.25", [1, 2]),
-            ("huge_date", "Fri, 01 Jan 2100 00:00:00 GMT", [30, 30]),
-            ("small_date", None, [1, 2]),
-        ]
-    )
-    def test_request_bounds_retry_after_without_reducing_attempts(
-        self, _name: str, retry_after_header: str | None, expected_sleeps: list[int]
-    ) -> None:
-        if retry_after_header is None:
-            retry_after_header = format_datetime(
-                datetime.now(timezone.utc) + timedelta(seconds=1), usegmt=True
-            )
-
-        retry_response = mock.Mock(
-            status_code=503,
-            headers={"Retry-After": retry_after_header},
-            text="Service Unavailable",
-        )
-        retry_response.json.return_value = {"detail": "Service Unavailable"}
-        success_response = mock.Mock(status_code=200)
-        session = mock.Mock()
-        session.post.side_effect = [retry_response, retry_response, success_response]
-
-        consumer = Consumer(None, TEST_API_KEY, retries=2, capture_mode=CaptureMode.V0)
-        with (
-            mock.patch("posthog.request._get_session", return_value=session),
-            mock.patch("posthog.consumer.time.sleep") as mock_sleep,
-        ):
-            consumer.request([_track_event()])
-
-        self.assertEqual(session.post.call_count, 3)
-        self.assertEqual(
-            [call.args[0] for call in mock_sleep.call_args_list], expected_sleeps
-        )
-
-    def test_request_retries_on_408(self) -> None:
-        call_count = [0]
-
-        def mock_post(*args: Any, **kwargs: Any) -> None:
-            call_count[0] += 1
-            if call_count[0] <= 1:
-                raise APIError(408, "Request Timeout")
-
-        consumer = Consumer(None, TEST_API_KEY, retries=3, capture_mode=CaptureMode.V0)
-        with (
-            mock.patch("posthog.consumer.batch_post", side_effect=mock_post),
-            mock.patch("posthog.consumer.time.sleep"),
-        ):
-            consumer.request([_track_event()])
-            self.assertEqual(call_count[0], 2)
-
     @parameterized.expand(
         [
             ("on_error_succeeds", False),
@@ -755,51 +582,28 @@ def _ai_event(event_name: str = "$ai_generation") -> dict[str, str]:
     return {"type": "track", "event": event_name, "distinct_id": "distinct_id"}
 
 
-class TestConsumerCaptureModeRouting(unittest.TestCase):
-    """`capture_mode` selects the submitter; both post to the consumer's `endpoint`."""
+class TestConsumerSubmitterRouting(unittest.TestCase):
+    """Every consumer sends through the capture v1 submitter to its `endpoint`."""
 
-    @parameterized.expand(
-        [
-            ("default", None, True),
-            ("v0", CaptureMode.V0, False),
-            ("v1", CaptureMode.V1, True),
-        ]
-    )
-    def test_capture_mode_selects_analytics_submitter(
-        self, _name, mode, expects_v1
-    ) -> None:
-        kwargs = {"capture_mode": mode} if mode else {}
-        consumer = Consumer(None, TEST_API_KEY, **kwargs)
+    def test_default_posts_to_analytics_endpoint(self) -> None:
+        consumer = Consumer(None, TEST_API_KEY)
         batch = [_track_event()]
-        with (
-            mock.patch("posthog.consumer.batch_post") as mock_post,
-            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
-        ):
+        with patch_capture_send("consumer") as mock_v1:
             consumer.request(batch)
-        if expects_v1:
-            mock_post.assert_not_called()
-            mock_v1.assert_called_once()
-            self.assertEqual(mock_v1.call_args.args[2], batch)
-            self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
-        else:
-            mock_v1.assert_not_called()
-            mock_post.assert_called_once()
-            self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
+        mock_v1.assert_called_once()
+        self.assertEqual(sent_batch(mock_v1), batch)
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
 
-    def test_v1_forwards_consumer_config_to_submitter(self) -> None:
+    def test_forwards_consumer_config_to_submitter(self) -> None:
         consumer = Consumer(
             None,
             TEST_API_KEY,
-            capture_mode=CaptureMode.V1,
             capture_compression=CaptureCompression.DEFLATE,
             timeout=7,
             retries=4,
             historical_migration=True,
         )
-        with (
-            mock.patch("posthog.consumer.batch_post"),
-            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
-        ):
+        with patch_capture_send("consumer") as mock_v1:
             consumer.request([_track_event()])
             kwargs = mock_v1.call_args.kwargs
             self.assertEqual(kwargs["compression"], CaptureCompression.DEFLATE)
@@ -807,7 +611,7 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
             self.assertEqual(kwargs["max_retries"], 4)
             self.assertEqual(kwargs["historical_migration"], True)
 
-    def test_v1_posts_to_configured_endpoint(self) -> None:
+    def test_posts_to_configured_endpoint(self) -> None:
         consumer = Consumer(None, TEST_API_KEY, endpoint=_CAPTURE_AI_V1_PATH)
         batch = [_ai_event()]
         with patch_capture_send("consumer") as mock_v1:
@@ -815,31 +619,3 @@ class TestConsumerCaptureModeRouting(unittest.TestCase):
         mock_v1.assert_called_once()
         self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
         self.assertEqual(sent_batch(mock_v1), batch)
-
-    def test_v0_posts_to_configured_endpoint(self) -> None:
-        consumer = Consumer(
-            None,
-            TEST_API_KEY,
-            endpoint=AI_EVENTS_ENDPOINT,
-            capture_mode=CaptureMode.V0,
-        )
-        batch = [_ai_event()]
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
-            consumer.request(batch)
-            mock_post.assert_called_once()
-            self.assertEqual(mock_post.call_args.kwargs["path"], AI_EVENTS_ENDPOINT)
-            self.assertEqual(mock_post.call_args.kwargs["batch"], batch)
-
-    def test_v1_routes_whole_batch_through_v1_submitter(self) -> None:
-        # A consumer doesn't know AI events exist: with `capture_mode` v1, the
-        # whole batch (including `$ai_*`-named events) rides the v1 submitter.
-        consumer = Consumer(None, TEST_API_KEY, capture_mode=CaptureMode.V1)
-        batch = [_ai_event(), _track_event()]
-        with (
-            mock.patch("posthog.consumer.batch_post") as mock_post,
-            mock.patch("posthog.consumer._send_v1_batch") as mock_v1,
-        ):
-            consumer.request(batch)
-            mock_v1.assert_called_once()
-            self.assertEqual(mock_v1.call_args.args[2], batch)
-            mock_post.assert_not_called()

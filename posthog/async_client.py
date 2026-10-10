@@ -26,7 +26,6 @@ from ._async_consumer import (
 )
 from ._async_request import (
     _build_client,
-    _require_httpx,
     async_flags as _async_flags,
     async_remote_config as _async_remote_config,
 )
@@ -35,7 +34,6 @@ from .capture_compression import (
     CaptureCompression,
     _resolve_capture_compression,
 )
-from .capture_mode import CaptureMode, _resolve_capture_mode
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
@@ -98,13 +96,13 @@ class AsyncClient:
         self,
         project_api_key: str,
         host: Optional[str] = None,
+        *,
         debug: bool = False,
         max_queue_size: int = 10000,
         send: bool = True,
         on_error=None,
         flush_at: int = 100,
         flush_interval: float = 5.0,
-        gzip: bool = False,
         max_retries: int = 3,
         timeout: int = 15,
         thread: int = 1,
@@ -122,7 +120,6 @@ class AsyncClient:
         code_variables_mask_url_credentials=None,
         code_variables_detect_secrets=None,
         in_app_modules: Optional[list[str]] = None,
-        capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
         capture_trace_context: bool = False,
         secret_key: Optional[str] = None,
@@ -141,7 +138,6 @@ class AsyncClient:
         self.debug = debug
         self.send = send
         self.on_error = on_error
-        self.gzip = gzip
         self.max_retries = max(0, max_retries)
         self.timeout = timeout
         self.disabled = disabled or not self.api_key
@@ -150,10 +146,7 @@ class AsyncClient:
         self.historical_migration = historical_migration
         self.super_properties = super_properties
         self._release_id = _resolve_release_id()
-        self.capture_mode = _resolve_capture_mode(capture_mode)
-        self.capture_compression = _resolve_capture_compression(
-            capture_compression, gzip_fallback=gzip
-        )
+        self.capture_compression = _resolve_capture_compression(capture_compression)
         self.capture_trace_context = capture_trace_context
         if personal_api_key is not None and secret_key is None:
             warnings.warn(
@@ -310,9 +303,6 @@ class AsyncClient:
         return self._http_client
 
     def _new_consumer(self) -> _AsyncConsumer:
-        http_client = (
-            self._get_http_client() if self.capture_mode == CaptureMode.V0 else None
-        )
         return _AsyncConsumer(
             self._queue,
             self.api_key,
@@ -321,18 +311,11 @@ class AsyncClient:
             process_event=self._process_event,
             flush_at=self._flush_at,
             flush_interval=self._flush_interval,
-            gzip=self.gzip,
             retries=self.max_retries,
             timeout=self.timeout,
             historical_migration=self.historical_migration,
-            capture_mode=self.capture_mode,
             capture_compression=self.capture_compression,
-            http_client=http_client,
         )
-
-    def _validate_transport_available(self) -> None:
-        if self.capture_mode == CaptureMode.V0:
-            _require_httpx()
 
     def _ensure_workers_started(self) -> None:
         if self.disabled or not self.send or self._closed or self._worker_tasks:
@@ -523,7 +506,6 @@ class AsyncClient:
             if not self.send:
                 return sent_uuid
 
-            self._validate_transport_available()
             if not self._enqueue_prepared_event(prepared):
                 return None
             self.log.debug("queued async event %s", event)
@@ -745,7 +727,6 @@ class AsyncClient:
             return None
         if not self.send:
             return sent_uuid
-        self._validate_transport_available()
         if not self._enqueue_prepared_event(prepared):
             return None
         return sent_uuid

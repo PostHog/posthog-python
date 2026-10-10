@@ -9,7 +9,6 @@ from unittest import mock
 import pytest
 from mcp.types import CallToolResult, ServerResult, TextContent, Tool
 
-from posthog.capture_mode import CaptureMode
 from posthog.mcp import (
     PostHogMCP,
     PreparedToolCall,
@@ -134,20 +133,8 @@ async def test_mcp_events_use_mcp_library_identity():
     )
 
 
-def test_mcp_library_identity_reaches_capture_v0_header():
-    response = mock.Mock(status_code=200)
-    client = PostHogMCP("phc_test", sync_mode=True)
-
-    with mock.patch("posthog.request._session.post", return_value=response) as post:
-        client.capture("$mcp_custom")
-
-    assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{VERSION}"
-    )
-
-
 def test_mcp_library_identity_reaches_capture_v1_header():
-    client = PostHogMCP("phc_test", sync_mode=True, capture_mode=CaptureMode.V1)
+    client = PostHogMCP("phc_test", sync_mode=True)
     with mock.patch("posthog.client._send_v1_batch") as send:
         client.capture("$mcp_custom")
 

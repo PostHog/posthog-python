@@ -2,13 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import zlib
 from datetime import datetime, timezone
-from gzip import GzipFile
-from io import BytesIO
 from typing import Any, Optional
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import quote
 
 from .capture_compression import CaptureCompression
 from .capture_v1 import _parse_retry_after, _send_v1_batch
@@ -39,54 +35,6 @@ def _build_client(host: Optional[str] = None):
     httpx_module = _require_httpx()
     base_url = remove_trailing_slash(normalize_host(host))
     return httpx_module.AsyncClient(base_url=base_url, follow_redirects=False)
-
-
-def _serialize_v0_body(
-    api_key: str, gzip_enabled: bool, body: dict[str, Any]
-) -> tuple[str | bytes, dict[str, str]]:
-    payload = {
-        **body,
-        "sent_at": datetime.now(tz=timezone.utc).isoformat(),
-        "api_key": api_key,
-    }
-    serialized = json.dumps(payload, cls=DatetimeSerializer)
-    data: str | bytes = serialized
-    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
-
-    if gzip_enabled:
-        try:
-            buf = BytesIO()
-            with GzipFile(fileobj=buf, mode="w") as gz:
-                gz.write(serialized.encode("utf-8"))
-            data = buf.getvalue()
-            headers["Content-Encoding"] = "gzip"
-        except (OSError, zlib.error) as exc:
-            logging.getLogger("posthog").warning(
-                "failed to gzip async request body, sending uncompressed: %s", exc
-            )
-
-    return data, headers
-
-
-def _origin(url: str) -> tuple[str, str, Optional[int]]:
-    parsed = urlsplit(url)
-    port = parsed.port
-    if port is None:
-        port = 443 if parsed.scheme.lower() == "https" else 80
-    return parsed.scheme.lower(), (parsed.hostname or "").lower(), port
-
-
-def _same_origin_redirect_url(
-    base_url: str, current_url: str, location: str
-) -> Optional[str]:
-    target = urlsplit(urljoin(current_url, location))
-    if _origin(target.geturl()) != _origin(base_url):
-        return None
-    return (
-        urlsplit(base_url)
-        ._replace(path=target.path or "/", query=target.query, fragment="")
-        .geturl()
-    )
 
 
 def _serialize_flags_body(
@@ -191,64 +139,6 @@ async def async_remote_config(
             timeout=timeout,
         )
         return await asyncio.to_thread(_process_remote_config_response, response)
-    finally:
-        if owns_client:
-            await http_client.aclose()
-
-
-async def async_batch_post(
-    api_key: str,
-    host: Optional[str],
-    *,
-    batch: list[dict[str, Any]],
-    path: str,
-    gzip: bool = False,
-    timeout: int = 15,
-    historical_migration: bool = False,
-    client: Optional[Any] = None,
-) -> None:
-    """Post one legacy capture batch without blocking the event loop."""
-    if not path.startswith("/") or "://" in path:
-        raise ValueError("async capture paths must be relative")
-
-    data, headers = await asyncio.to_thread(
-        _serialize_v0_body,
-        api_key,
-        gzip,
-        {
-            "batch": batch,
-            "historical_migration": historical_migration,
-        },
-    )
-
-    owns_client = client is None
-    http_client = client or _build_client(host)
-    try:
-        logging.getLogger("posthog").debug("making async capture request")
-        base_url = remove_trailing_slash(normalize_host(host))
-        # Absolute URLs avoid reapplying an HTTPX base_url path on redirects.
-        request_url = f"{base_url}{path}"
-        for redirect_count in range(6):
-            response = await http_client.post(
-                request_url, content=data, headers=headers, timeout=timeout
-            )
-            if response.status_code not in (307, 308):
-                _process_response(response)
-                return
-
-            location = response.headers.get("Location") or response.headers.get(
-                "location"
-            )
-            redirect_url = (
-                _same_origin_redirect_url(base_url, request_url, location)
-                if location
-                else None
-            )
-            if redirect_url is None:
-                raise APIError(400, "Cross-origin or invalid redirect blocked")
-            if redirect_count >= 5:
-                raise APIError(400, "Too many capture redirects")
-            request_url = redirect_url
     finally:
         if owns_client:
             await http_client.aclose()

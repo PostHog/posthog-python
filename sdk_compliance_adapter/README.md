@@ -30,7 +30,7 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 
 ### Key Implementation Details
 
-**Request Tracking**: The adapter monkey-patches `batch_post` to track all HTTP requests made by the SDK, including retries.
+**Request Tracking**: The adapter monkey-patches the capture v1 `_post_v1` to track all HTTP requests made by the SDK, including retries.
 
 **State Management**: Thread-safe state tracking for events captured vs sent, retry attempts, and errors.
 

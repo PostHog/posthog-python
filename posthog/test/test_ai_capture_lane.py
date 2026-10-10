@@ -7,11 +7,9 @@ import posthog
 
 from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_mode import CaptureMode
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from posthog.capture_v1 import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
-from posthog.request import EVENTS_ENDPOINT
 from posthog.version import VERSION
 from posthog.test.capture_helpers import patch_capture_send, sent_batch
 from posthog.test.test_utils import TEST_API_KEY
@@ -116,7 +114,6 @@ class TestAnalyticsLaneUnchanged(unittest.TestCase):
             thread=2,
             flush_at=7,
             flush_interval=0.5,
-            gzip=True,
             max_retries=4,
             timeout=9,
             historical_migration=True,
@@ -129,11 +126,9 @@ class TestAnalyticsLaneUnchanged(unittest.TestCase):
             self.assertEqual(consumer.max_msg_size, MAX_MSG_SIZE)
             self.assertEqual(consumer.flush_at, 7)
             self.assertEqual(consumer.flush_interval, 0.5)
-            self.assertTrue(consumer.gzip)
             self.assertEqual(consumer.retries, 4)
             self.assertEqual(consumer.timeout, 9)
             self.assertTrue(consumer.historical_migration)
-            self.assertEqual(consumer.capture_mode, client.capture_mode)
             self.assertEqual(consumer.capture_compression, client.capture_compression)
         client.join()
 
@@ -195,67 +190,59 @@ class TestLaneSizeCaps(unittest.TestCase):
         self.assertTrue(client.queue.empty())
 
 
-class TestAiLaneAlwaysV1(unittest.TestCase):
-    """The AI lane posts capture v1 to the AI endpoint whatever `capture_mode`."""
+class TestAiLaneWireConfig(unittest.TestCase):
+    """The AI lane posts to the AI endpoint uncompressed, whatever the
+    analytics `capture_compression`."""
 
-    def test_ai_lane_consumers_use_v1_and_ai_endpoint(self):
-        client = Client(TEST_API_KEY, send=False, capture_mode="v0", thread=2)
+    def test_ai_lane_consumers_use_ai_endpoint_without_compression(self):
+        client = Client(TEST_API_KEY, send=False, capture_compression="gzip", thread=2)
         client._ai_lane.start()
         self.assertEqual(len(client._ai_lane.consumers), 2)
         for consumer in client._ai_lane.consumers:
             self.assertIs(consumer.queue, client._ai_lane.queue)
             self.assertEqual(consumer.endpoint, _CAPTURE_AI_V1_PATH)
             self.assertEqual(consumer.max_msg_size, AI_MAX_MSG_SIZE)
-            self.assertEqual(consumer.capture_mode, CaptureMode.V1)
             self.assertEqual(consumer.capture_compression, CaptureCompression.NONE)
 
-    def test_async_ai_events_use_v1_with_capture_mode_v0(self):
-        client = Client(
-            TEST_API_KEY,
-            capture_mode="v0",
-            capture_compression="gzip",
-            flush_interval=0.05,
-        )
-        with (
-            mock.patch("posthog.consumer.batch_post") as mock_post,
-            patch_capture_send("consumer") as mock_v1,
-        ):
+    def test_async_lanes_keep_separate_path_and_compression(self):
+        client = Client(TEST_API_KEY, capture_compression="gzip", flush_interval=0.05)
+        with patch_capture_send("consumer") as mock_send:
             client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
             client.flush()
 
+        sends = {
+            call.kwargs["path"]: call.kwargs["compression"]
+            for call in mock_send.call_args_list
+        }
         self.assertEqual(
-            [call.kwargs["path"] for call in mock_post.call_args_list],
-            [EVENTS_ENDPOINT],
+            sends,
+            {
+                _CAPTURE_AI_V1_PATH: CaptureCompression.NONE,
+                _CAPTURE_V1_PATH: CaptureCompression.GZIP,
+            },
         )
-        mock_v1.assert_called_once()
-        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
         self.assertEqual(
-            mock_v1.call_args.kwargs["compression"], CaptureCompression.NONE
+            _events_by_path(mock_send)[_CAPTURE_AI_V1_PATH][0]["event"],
+            "$ai_generation",
         )
-        self.assertEqual([e["event"] for e in sent_batch(mock_v1)], ["$ai_generation"])
         client.join()
 
-    def test_sync_ai_events_use_v1_with_capture_mode_v0(self):
-        client = Client(
-            TEST_API_KEY,
-            sync_mode=True,
-            capture_mode="v0",
-            capture_compression="gzip",
-        )
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            patch_capture_send("client") as mock_v1,
-        ):
+    def test_sync_lanes_keep_separate_path_and_compression(self):
+        client = Client(TEST_API_KEY, sync_mode=True, capture_compression="gzip")
+        with patch_capture_send("client") as mock_send:
             client.capture_ai("$ai_generation", distinct_id="d")
             client.capture("button_clicked", distinct_id="d")
 
-        mock_post.assert_called_once()
-        self.assertEqual(mock_post.call_args.kwargs["path"], EVENTS_ENDPOINT)
-        mock_v1.assert_called_once()
-        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_AI_V1_PATH)
         self.assertEqual(
-            mock_v1.call_args.kwargs["compression"], CaptureCompression.NONE
+            [
+                (call.kwargs["path"], call.kwargs["compression"])
+                for call in mock_send.call_args_list
+            ],
+            [
+                (_CAPTURE_AI_V1_PATH, CaptureCompression.NONE),
+                (_CAPTURE_V1_PATH, CaptureCompression.GZIP),
+            ],
         )
 
 

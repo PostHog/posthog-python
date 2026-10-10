@@ -10,7 +10,6 @@ from posthog.args import (
     OptionalSetArgs,
 )
 from posthog.capture_compression import CaptureCompression as CaptureCompression
-from posthog.capture_mode import CaptureMode as CaptureMode
 from posthog.client import Client
 from posthog.tracing.span import Span as Span
 from posthog.async_client import AsyncClient as AsyncClient
@@ -424,9 +423,6 @@ before_send = None  # type: Optional[BeforeSendCallback]
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
 flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
-# Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
-# then CaptureMode.V1. See posthog.capture_mode.CaptureMode.
-capture_mode = None  # type: Optional[CaptureMode]
 # Routes AI SDK wrapper events through the dedicated AI capture lane, skips
 # truncation, and passes media unredacted. `privacy_mode` always wins.
 enable_full_ai_capture = False  # type: bool
@@ -1423,7 +1419,6 @@ def setup() -> Client:
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
             exception_autocapture_refill_rate=exception_autocapture_refill_rate,
             exception_autocapture_refill_interval_seconds=exception_autocapture_refill_interval_seconds,
-            capture_mode=capture_mode,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state

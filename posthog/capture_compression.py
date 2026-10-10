@@ -19,10 +19,9 @@ CAPTURE_COMPRESSION_ENV_VAR = "POSTHOG_CAPTURE_COMPRESSION"
 
 
 class CaptureCompression(str, Enum):
-    """Selects the request-body compression for capture-v1 uploads.
+    """Selects the request-body compression for capture uploads.
 
-    Only honored when ``capture_mode`` is ``V1``; the legacy ``/batch/`` path
-    keeps using its own ``gzip`` flag. ``NONE`` sends the body uncompressed.
+    ``NONE`` sends the body uncompressed.
     ``GZIP`` and ``DEFLATE`` (zlib, RFC 1950) are both stdlib / zero-dependency;
     ``ZSTD`` is faster and compresses better but needs the optional zstandard
     package (``pip install posthog[zstd]``) until stdlib support lands in
@@ -76,15 +75,12 @@ def _coerce_explicit(
 
 def _resolve_capture_compression(
     capture_compression: Optional[Union[CaptureCompression, str]] = None,
-    *,
-    gzip_fallback: bool = False,
 ) -> CaptureCompression:
-    """Resolve the effective v1 compression.
+    """Resolve the effective capture compression.
 
     Precedence: explicit ``capture_compression`` argument >
-    ``POSTHOG_CAPTURE_COMPRESSION`` env var > the legacy ``gzip`` flag
-    (``GZIP`` when set) > ``NONE``. An unrecognized env value logs a warning and
-    falls back to the ``gzip`` flag, so a typo never silently changes encoding.
+    ``POSTHOG_CAPTURE_COMPRESSION`` env var > ``NONE``. An unrecognized env
+    value logs a warning and falls back to ``NONE``.
 
     ``ZSTD`` requires the optional zstandard package: explicitly requesting it
     without the package raises ``ValueError`` (programming error, fail loud),
@@ -100,7 +96,7 @@ def _resolve_capture_compression(
             )
         return resolved
 
-    fallback = CaptureCompression.GZIP if gzip_fallback else CaptureCompression.NONE
+    fallback = CaptureCompression.NONE
 
     raw = os.environ.get(CAPTURE_COMPRESSION_ENV_VAR)
     if raw is None or raw.strip() == "":

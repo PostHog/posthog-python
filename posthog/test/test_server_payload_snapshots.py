@@ -29,6 +29,16 @@ def _successful_response() -> requests.Response:
     return response
 
 
+def _capture_ok_response(url, data=None, **kwargs) -> requests.Response:
+    response = requests.Response()
+    response.status_code = 200
+    uuids = [event["uuid"] for event in json.loads(data)["batch"]]
+    response._content = json.dumps(
+        {"results": {uuid: {"result": "ok"} for uuid in uuids}}
+    ).encode()
+    return response
+
+
 def _has_test_file_suffix(value: str) -> bool:
     return value.replace("\\", "/").endswith(_TEST_FILE_SUFFIX)
 
@@ -43,8 +53,10 @@ def _normalize_snapshot_value(value):
     for key, item in value.items():
         if key == "$lib_version":
             normalized[key] = "<SDK_VERSION>"
+        elif key == "PostHog-Request-Id":
+            normalized[key] = "<REQUEST_ID>"
         elif (
-            key == "User-Agent"
+            key in ("User-Agent", "PostHog-Sdk-Info")
             and isinstance(item, str)
             and _USER_AGENT_PATTERN.fullmatch(item)
         ):
@@ -99,19 +111,18 @@ def _assert_json_snapshot(name: str, value) -> None:
     assert actual == expected
 
 
-def _legacy_event_family_request():
+def _event_family_request():
     session = mock.MagicMock()
-    session.post.return_value = _successful_response()
+    session.post.side_effect = _capture_ok_response
 
     with (
         freeze_time(_FIXED_TIME),
-        mock.patch("posthog.request._get_session", return_value=session),
+        mock.patch("posthog.capture_v1._get_session", return_value=session),
         mock.patch("posthog.client.system_context", return_value=_RUNTIME_CONTEXT),
     ):
         client = Client(
             "phc_snapshot_project",
             host="https://example.posthog.test",
-            capture_mode="v0",
             flush_at=100,
             flush_interval=100,
         )
@@ -167,18 +178,17 @@ def _raise_snapshot_exception() -> None:
 
 def _exception_request():
     session = mock.MagicMock()
-    session.post.return_value = _successful_response()
+    session.post.side_effect = _capture_ok_response
 
     with (
         freeze_time(_FIXED_TIME),
-        mock.patch("posthog.request._get_session", return_value=session),
+        mock.patch("posthog.capture_v1._get_session", return_value=session),
         mock.patch("posthog.client.system_context", return_value=_RUNTIME_CONTEXT),
         mock.patch("posthog.client._get_current_otel_span_properties", return_value={}),
     ):
         client = Client(
             "phc_snapshot_project",
             host="https://example.posthog.test",
-            capture_mode="v0",
             sync_mode=True,
             project_root=str(Path(__file__).parents[2]),
             capture_exception_code_variables=False,
@@ -257,8 +267,8 @@ def test_does_not_normalize_unexpected_user_agent(user_agent):
     }
 
 
-def test_legacy_capture_identify_alias_and_group_identify_request_snapshot():
-    _assert_json_snapshot("legacy_event_family", _legacy_event_family_request())
+def test_capture_identify_alias_and_group_identify_request_snapshot():
+    _assert_json_snapshot("event_family", _event_family_request())
 
 
 def test_complete_exception_request_snapshot():
