@@ -27,7 +27,7 @@ dependencies = [
     # single-call API. Pinned to the posthog major this provider is released and
     # tested against (both ship from this repo); bump the upper bound when moving
     # the provider to a new posthog major.
-    "posthog>=7.0.0,<8.0.0",
+    "posthog>=7.0.0,<9.0.0",
     "openfeature-sdk>=0.8.0",
 ]
 

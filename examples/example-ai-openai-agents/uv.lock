@@ -9,7 +9,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for backwards compatibility when using relative exclude-newer values.
+exclude-newer = "2026-10-03T03:16:09.242998Z"
 exclude-newer-span = "P7D"
 
 [[package]]
@@ -42,15 +42,6 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/9a/8e/82a0fe20a541c03148528be8cac2408564a6c9a0cc7e9171802bc1d26985/attrs-26.1.0.tar.gz", hash = "sha256:d03ceb89cb322a8fd706d4fb91940737b6642aa36998fe130a9bc96c985eff32", size = 952055, upload-time = "2026-03-19T14:22:25.026Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/64/b4/17d4b0b2a2dc85a6df63d1157e028ed19f90d4cd97c36717afef2bc2f395/attrs-26.1.0-py3-none-any.whl", hash = "sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309", size = 67548, upload-time = "2026-03-19T14:22:23.645Z" },
-]
-
-[[package]]
-name = "backoff"
-version = "2.2.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/47/d7/5bbeb12c44d7c4f2fb5b56abce497eb5ed9f34d85701de869acedd602619/backoff-2.2.1.tar.gz", hash = "sha256:03f829f5bb1923180821643f8753b0502c3b682293992485b0eef2807afa5cba", size = 17001, upload-time = "2022-10-05T19:19:32.061Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/df/73/b6e24bd22e6720ca8ee9a85a0c4a2971af8497d8f3193fa05390cbd46e09/backoff-2.2.1-py3-none-any.whl", hash = "sha256:63579f9a0628e06278f7e47b7d7d5b6ce20dc65c5e96a6f3ca99a6adca0396e8", size = 15148, upload-time = "2022-10-05T19:19:30.546Z" },
 ]
 
 [[package]]
@@ -376,7 +367,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "openai-agents", specifier = "==0.13.1" },
-    { name = "posthog", specifier = "==7.9.12" },
+    { name = "posthog", directory = "../../" },
 ]
 
 [[package]]
@@ -384,7 +375,7 @@ name = "exceptiongroup"
 version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions" },
+    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -646,20 +637,75 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.9.12"
-source = { registry = "https://pypi.org/simple" }
+version = "7.64.1"
+source = { directory = "../../" }
 dependencies = [
-    { name = "backoff" },
     { name = "distro" },
-    { name = "python-dateutil" },
     { name = "requests" },
-    { name = "six" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1c/a7/2865487853061fbd62383492237b546d2d8f7c1846272350d2b9e14138cd/posthog-7.9.12.tar.gz", hash = "sha256:ebabf2eb2e1c1fbf22b0759df4644623fa43cc6c9dcbe9fd429b7937d14251ec", size = 176828, upload-time = "2026-03-12T09:01:15.184Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/65/a9/7a803aed5a5649cf78ea7b31e90d0080181ba21f739243e1741a1e607f1f/posthog-7.9.12-py3-none-any.whl", hash = "sha256:7175bd1698a566bfea98a016c64e3456399f8046aeeca8f1d04ae5bf6c5a38d0", size = 202469, upload-time = "2026-03-12T09:01:13.38Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "anthropic", marker = "extra == 'test'", specifier = ">=0.72" },
+    { name = "claude-agent-sdk", marker = "extra == 'test'" },
+    { name = "coverage", marker = "extra == 'test'" },
+    { name = "distro", specifier = ">=1.5.0" },
+    { name = "django", marker = "extra == 'test'", specifier = ">=5.2.15,<6.0" },
+    { name = "django-stubs", marker = "extra == 'dev'" },
+    { name = "fastmcp", marker = "extra == 'test'", specifier = ">=2.0" },
+    { name = "freezegun", marker = "extra == 'test'", specifier = "==1.5.1" },
+    { name = "gevent", marker = "implementation_name == 'cpython' and extra == 'test'", specifier = ">=25.4.1" },
+    { name = "google-genai", marker = "extra == 'test'" },
+    { name = "griffe", marker = "extra == 'dev'" },
+    { name = "httpx", marker = "extra == 'async'", specifier = ">=0.27.0,<1.0" },
+    { name = "jsonschema", marker = "extra == 'test'", specifier = ">=4.0" },
+    { name = "langchain", marker = "extra == 'langchain'", specifier = ">=1.3.9" },
+    { name = "langchain", marker = "extra == 'test'", specifier = ">=1.3.9" },
+    { name = "langchain-anthropic", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-community", marker = "extra == 'test'", specifier = ">=0.4" },
+    { name = "langchain-core", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langchain-openai", marker = "extra == 'test'", specifier = ">=1.1.14" },
+    { name = "langgraph", marker = "extra == 'test'", specifier = ">=1.0" },
+    { name = "langgraph-checkpoint", marker = "extra == 'test'", specifier = ">=4.1.1" },
+    { name = "lxml", marker = "extra == 'dev'" },
+    { name = "mcp", marker = "extra == 'test'", specifier = ">=1.28.1,<2" },
+    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "mypy-baseline", marker = "extra == 'dev'" },
+    { name = "openai-agents", marker = "extra == 'test'", specifier = ">=0.18" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'test'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'test'", specifier = ">=1.20.0" },
+    { name = "packaging", marker = "extra == 'dev'" },
+    { name = "parameterized", marker = "extra == 'test'", specifier = ">=0.8.1" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pydantic", marker = "extra == 'dev'", specifier = ">=2.12.0" },
+    { name = "pydantic", marker = "extra == 'test'", specifier = ">=2.12.0" },
+    { name = "pytest", marker = "extra == 'test'" },
+    { name = "pytest-asyncio", marker = "extra == 'test'" },
+    { name = "pytest-bdd", marker = "extra == 'test'", specifier = ">=8.1.0" },
+    { name = "pytest-timeout", marker = "extra == 'test'" },
+    { name = "python-dateutil", marker = "extra == 'test'", specifier = ">=2.9.0.post0" },
+    { name = "requests", specifier = ">=2.7,<3.0" },
+    { name = "ruff", marker = "extra == 'dev'" },
+    { name = "setuptools", marker = "extra == 'dev'" },
+    { name = "tiktoken", marker = "extra == 'test'", specifier = ">=0.12.0" },
+    { name = "tomli", marker = "extra == 'dev'" },
+    { name = "tomli-w", marker = "extra == 'dev'" },
+    { name = "twine", marker = "extra == 'dev'" },
+    { name = "types-requests", marker = "extra == 'dev'" },
+    { name = "types-setuptools", marker = "extra == 'dev'" },
+    { name = "typing-extensions", specifier = ">=4.2.0" },
+    { name = "tzdata", marker = "extra == 'test'" },
+    { name = "wheel", marker = "extra == 'dev'" },
+    { name = "zstandard", marker = "extra == 'test'", specifier = ">=0.23.0" },
+    { name = "zstandard", marker = "extra == 'zstd'", specifier = ">=0.23.0" },
 ]
+provides-extras = ["langchain", "async", "zstd", "otel", "dev", "test"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "claude-agent-sdk", specifier = ">=0.1.50" }]
 
 [[package]]
 name = "pycparser"
@@ -832,18 +878,6 @@ wheels = [
 [package.optional-dependencies]
 crypto = [
     { name = "cryptography" },
-]
-
-[[package]]
-name = "python-dateutil"
-version = "2.9.0.post0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "six" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/66/c0/0c8b6ad9f17a802ee498c46e004a0eb49bc148f2fd230864601a86dcf6db/python-dateutil-2.9.0.post0.tar.gz", hash = "sha256:37dd54208da7e1cd875388217d5e00ebd4179249f90fb72437e91a35459a0ad3", size = 342432, upload-time = "2024-03-01T18:36:20.211Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl", hash = "sha256:a8b2bc7bffae282281c8140a97d3aa9c14da0b136dfe83f850eea9a5f7470427", size = 229892, upload-time = "2024-03-01T18:36:18.57Z" },
 ]
 
 [[package]]
@@ -1035,15 +1069,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/13/64/b4d76f227d5c45a7e0b796c674fd81b0a6c4fbd48dc29271857d8219571c/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_aarch64.whl", hash = "sha256:dff13836529b921e22f15cb099751209a60009731a68519630a24d61f0b1b30a", size = 573981, upload-time = "2025-11-30T20:24:32.934Z" },
     { url = "https://files.pythonhosted.org/packages/20/91/092bacadeda3edf92bf743cc96a7be133e13a39cdbfd7b5082e7ab638406/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_i686.whl", hash = "sha256:1b151685b23929ab7beec71080a8889d4d6d9fa9a983d213f07121205d48e2c4", size = 599782, upload-time = "2025-11-30T20:24:35.169Z" },
     { url = "https://files.pythonhosted.org/packages/d1/b7/b95708304cd49b7b6f82fdd039f1748b66ec2b21d6a45180910802f1abf1/rpds_py-0.30.0-pp311-pypy311_pp73-musllinux_1_2_x86_64.whl", hash = "sha256:ac37f9f516c51e5753f27dfdef11a88330f04de2d564be3991384b2f3535d02e", size = 562191, upload-time = "2025-11-30T20:24:36.853Z" },
-]
-
-[[package]]
-name = "six"
-version = "1.17.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/94/e7/b2c673351809dca68a0e064b6af791aa332cf192da575fd474ed7d6f16a2/six-1.17.0.tar.gz", hash = "sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81", size = 34031, upload-time = "2024-12-04T17:35:28.174Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl", hash = "sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274", size = 11050, upload-time = "2024-12-04T17:35:26.475Z" },
 ]
 
 [[package]]
