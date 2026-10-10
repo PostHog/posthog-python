@@ -4,6 +4,7 @@ import logging
 import pytest
 
 from posthog import AsyncPosthog, new_context, set_context_option, tag
+from posthog.ai.utils import _capture_ai_event
 from posthog.capture_event import _to_v1_event
 from posthog.client import Client
 from posthog.test.capture_helpers import (
@@ -454,3 +455,31 @@ def test_late_options_replace_and_remove_legacy_properties():
         "product_tour_id": "context-tour",
     }
     assert not {"$cookieless_mode", "$product_tour_id"} & events[0]["properties"].keys()
+
+
+def _personless_ai_capture(client):
+    with new_context(fresh=True):
+        set_context_option(PP, True)
+        return _capture_ai_event(
+            client,
+            "$ai_generation",
+            distinct_id="trace-1",
+            properties={"$process_person_profile": True},
+            options={PP: True, "cookieless_mode": True},
+            personless=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "before_send, expected",
+    [
+        (None, {PP: False, "cookieless_mode": True}),
+        (lambda m: {**m, "options": {PP: True}}, {PP: True}),
+    ],
+    ids=["sdk_option_wins", "before_send_can_change_it"],
+)
+def test_personless_ai_event_overrides_every_user_layer(before_send, expected):
+    events = _sync_wire_events(
+        _personless_ai_capture, before_send=before_send, super_options={PP: True}
+    )
+    assert events[0]["options"] == expected

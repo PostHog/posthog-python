@@ -19,7 +19,10 @@ from posthog.mcp._sanitization import (
     sanitize_captured_value,
     sanitize_event,
 )
-from posthog.mcp._sink import McpCaptureOptions, process_mcp_event
+from posthog.capture_event import _to_v1_event
+from posthog.client import Client
+from posthog.mcp._sink import McpCaptureOptions, McpEventSink, process_mcp_event
+from posthog.test.capture_helpers import patch_capture_send, sent_events
 from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
 
 # --- ids ---------------------------------------------------------------------
@@ -895,7 +898,8 @@ def test_build_tool_call_event_properties():
     assert props[PostHogMCPAnalyticsProperty.LLM_MODEL_SOURCE] == "client_metadata"
     assert props[PostHogMCPAnalyticsProperty.SESSION_ID] == "ses_abc"
     # anonymous (no identity) => person processing disabled
-    assert props["$process_person_profile"] is False
+    assert capture["options"] == {"process_person_profile": False}
+    assert "$process_person_profile" not in props
 
 
 def test_protocol_version_on_primary_and_exception_events():
@@ -931,7 +935,7 @@ def test_identity_enables_person_processing_and_set():
     [capture] = build_posthog_capture_events(event)
     props = capture["properties"]
     assert capture["distinct_id"] == "user_1"
-    assert "$process_person_profile" not in props
+    assert capture["options"] == {}
     assert props["$set"] == {"email": "a@b.com"}
     assert props["$groups"] == {"organization": "org_1", "project": "p1"}
 
@@ -1109,3 +1113,32 @@ async def test_before_send_can_mutate_event_async():
     result = await process_mcp_event(event, McpCaptureOptions(before_send=before_send))
     _, captures = result
     assert captures[0]["properties"]["added"] is True
+
+
+def _opt_in(e):
+    return {**e, "options": {"process_person_profile": True}}
+
+
+@pytest.mark.parametrize(
+    "before_send, expected",
+    [(None, False), (_opt_in, True)],
+    ids=["sdk_option_wins", "before_send_can_change_it"],
+)
+async def test_anonymous_event_sends_personless_option(before_send, expected):
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "properties": {"$process_person_profile": True},
+        "timestamp": datetime.now(timezone.utc),
+    }
+    with patch_capture_send("client") as send:
+        client = Client(
+            "test-key",
+            sync_mode=True,
+            super_options={"process_person_profile": True},
+        )
+        await McpEventSink(client).capture(
+            event, McpCaptureOptions(before_send=before_send)
+        )
+    [wire] = [_to_v1_event(msg) for msg in sent_events(send)]
+    assert wire["options"] == {"process_person_profile": expected}

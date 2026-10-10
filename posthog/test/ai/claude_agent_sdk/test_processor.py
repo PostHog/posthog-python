@@ -644,7 +644,7 @@ class TestMediaRedactionEndToEnd:
 
 class TestPersonlessMode:
     @pytest.mark.asyncio
-    async def test_no_distinct_id_sets_process_person_profile_false(self, mock_client):
+    async def test_no_distinct_id_sets_personless_option(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
             distinct_id=None,
@@ -668,8 +668,7 @@ class TestPersonlessMode:
                 pass
 
         for call in mock_client.capture.call_args_list:
-            props = call.kwargs.get("properties") or call[1].get("properties")
-            assert props.get("$process_person_profile") is False
+            assert call.kwargs["options"] == {"process_person_profile": False}
             assert call.kwargs["distinct_id"] == "trace-fallback"
 
 

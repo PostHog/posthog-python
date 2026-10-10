@@ -242,14 +242,12 @@ class PostHogClaudeSDKClient:
                 **self._extra_props,
             }
 
-            if resolved_id is None:
-                properties["$process_person_profile"] = False
-
             self._processor._capture_event(
                 "$ai_trace",
                 properties,
                 resolved_id or self._trace_id,
                 self._groups,
+                personless=resolved_id is None,
             )
 
             try:

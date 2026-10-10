@@ -1735,25 +1735,52 @@ def test_async_streaming_with_web_search(
 # =======================
 
 
-def test_no_distinct_id_uses_trace_id_and_personless(
-    mock_client, mock_anthropic_response
+@pytest.mark.parametrize("stream", [False, True], ids=["response", "stream"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_no_distinct_id_uses_trace_id_and_personless(
+    mock_client,
+    mock_anthropic_response,
+    mock_anthropic_stream_with_tools,
+    is_async,
+    stream,
 ):
     """When no distinct_id is provided and no outer context, trace_id is used and event is personless."""
-    with patch(
-        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
-    ):
-        client = Anthropic(api_key="test-key", posthog_client=mock_client)
-        client.messages.create(
-            model="claude-3-opus-20240229",
-            messages=[{"role": "user", "content": "Hello"}],
-            posthog_trace_id="trace-123",
+    request = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "posthog_trace_id": "trace-123",
+        "posthog_properties": {"$process_person_profile": True},
+        **({"stream": True} if stream else {}),
+    }
+    if is_async:
+
+        async def stream_events():
+            for event in mock_anthropic_stream_with_tools:
+                yield event
+
+        async def create(**kwargs):
+            return stream_events() if stream else mock_anthropic_response
+
+        with patch("anthropic.resources.AsyncMessages.create", side_effect=create):
+            client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+            response = await client.messages.create(**request)
+            if stream:
+                [event async for event in response]
+    else:
+        provider_response = (
+            mock_anthropic_stream_with_tools if stream else mock_anthropic_response
         )
+        with patch(
+            "anthropic.resources.Messages.create", return_value=provider_response
+        ):
+            client = Anthropic(api_key="test-key", posthog_client=mock_client)
+            response = client.messages.create(**request)
+            if stream:
+                list(response)
 
-        call_args = mock_client.capture.call_args[1]
-        props = call_args["properties"]
-
-        assert call_args["distinct_id"] == "trace-123"
-        assert props["$process_person_profile"] is False
+    call_args = mock_client.capture.call_args[1]
+    assert call_args["distinct_id"] == "trace-123"
+    assert call_args["options"] == {"process_person_profile": False}
 
 
 def test_explicit_distinct_id_creates_person_profile(
@@ -1775,10 +1802,8 @@ def test_explicit_distinct_id_creates_person_profile(
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "user-123"
-        assert (
-            "$process_person_profile" not in props
-            or props["$process_person_profile"] is not False
-        )
+        assert "options" not in call_args
+        assert "$process_person_profile" not in props
 
 
 def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response):
@@ -1799,10 +1824,8 @@ def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response)
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "outer-user-456"
-        assert (
-            "$process_person_profile" not in props
-            or props["$process_person_profile"] is not False
-        )
+        assert "options" not in call_args
+        assert "$process_person_profile" not in props
 
 
 def test_explicit_distinct_id_overrides_outer_context(

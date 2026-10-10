@@ -995,7 +995,8 @@ async def test_async_embed_content_no_distinct_id(
 
     # Should fall back to trace_id as distinct_id
     assert call_args["distinct_id"] == props["$ai_trace_id"]
-    assert props["$process_person_profile"] is False
+    assert call_args["options"] == {"process_person_profile": False}
+    assert "$process_person_profile" not in props
 
 
 async def test_async_embed_content_default_params(
