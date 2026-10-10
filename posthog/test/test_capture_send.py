@@ -3,6 +3,7 @@ import unittest
 import zlib
 from datetime import datetime, timedelta
 from unittest import mock
+from uuid import UUID
 
 import zstandard
 
@@ -19,6 +20,8 @@ from posthog.capture_send import (
     _HEADER_SDK_INFO,
     _MAX_BACKOFF_SECONDS,
     CaptureError,
+    CaptureEventResult,
+    _capture_loss_message,
     _parse_v1_response,
     _post_v1,
     _send_v1_batch,
@@ -317,6 +320,7 @@ class TestSendV1Batch(unittest.TestCase):
             ],
         )
         self.assertEqual(stub.calls[0]["request_id"], stub.calls[1]["request_id"])
+        self.assertEqual(UUID(stub.calls[0]["request_id"]).version, 7)
         # created_at is hoisted once, so the envelope timestamp is identical
         # across retry attempts (only the attempt header increments).
         self.assertEqual(stub.calls[0]["created_at"], stub.calls[1]["created_at"])
@@ -383,18 +387,56 @@ class TestSendV1Batch(unittest.TestCase):
 
     def test_retry_exhausted_carries_earlier_drops(self) -> None:
         # A drop seen on attempt 1 rides along on the retry-exhaustion error.
-        batch = [_msg("u-drop"), _msg("u-retry")]
+        batch = [_msg("u-ok"), _msg("u-drop"), _msg("u-retry")]
         stub, exc = self._run_expecting_error(
             batch,
             [
-                _results_response({"u-drop": ("drop", "billing"), "u-retry": "retry"}),
-                _results_response({"u-retry": "retry"}),
+                _results_response(
+                    {
+                        "u-ok": "ok",
+                        "u-drop": ("drop", "billing"),
+                        "u-retry": "retry",
+                    }
+                ),
+                _results_response({"u-retry": ("retry", "not_persisted")}),
             ],
             max_retries=1,
         )
         self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(exc.endpoint, _CAPTURE_V1_PATH)
         self.assertEqual(exc.retry_exhausted, ["u-retry"])
         self.assertEqual(exc.drops, [("u-drop", "billing")])
+        self.assertEqual(
+            exc.event_results,
+            {
+                "u-ok": CaptureEventResult("ok"),
+                "u-drop": CaptureEventResult("drop", "billing"),
+                "u-retry": CaptureEventResult("retry", "not_persisted"),
+            },
+        )
+        self.assertEqual(exc.verdict_summary(), "drop/billing=1, retry/not_persisted=1")
+
+    @parameterized.expand(
+        [
+            ("uppercase", "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"),
+            ("no_hyphens", "aaaaaaaaaaaa4aaa8aaaaaaaaaaaaaaa"),
+            ("braced", "{aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa}"),
+            ("urn", "urn:uuid:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"),
+        ]
+    )
+    def test_results_match_non_canonical_uuid(self, _name, sent_uuid) -> None:
+        # Capture parses any of these forms but keys results canonically, so a
+        # verdict for a uuid `before_send` rewrote must still reach its event.
+        canonical = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+        stub, exc = self._run_expecting_error(
+            [_msg(sent_uuid)],
+            [
+                _results_response({canonical: "retry"}),
+                _results_response({canonical: ("drop", "billing")}),
+            ],
+        )
+        self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(exc.drops, [(canonical, "billing")])
 
     def test_malformed_2xx_is_terminal(self) -> None:
         stub, exc = self._run_expecting_error(
@@ -438,14 +480,22 @@ class TestSendV1Batch(unittest.TestCase):
         )
         self.assertEqual(len(stub.calls), 2)
 
-    def test_transport_error_exhausted_reraises_original(self) -> None:
+    def test_transport_error_exhausted_raises_capture_error(self) -> None:
         stub = _PostV1Stub([ConnectionError("boom"), ConnectionError("boom")])
         with mock.patch("posthog.capture_send._post_v1", stub):
-            with self.assertRaises(ConnectionError):
+            with self.assertRaises(CaptureError) as ctx:
                 _send_v1_batch(
-                    "phc_key", "https://app.posthog.com", [_msg("u-1")], max_retries=1
+                    "phc_key",
+                    "https://app.posthog.com",
+                    [_msg("u-1")],
+                    max_retries=1,
+                    path=_CAPTURE_AI_V1_PATH,
                 )
         self.assertEqual(len(stub.calls), 2)
+        self.assertEqual(ctx.exception.status, 0)
+        self.assertEqual(ctx.exception.endpoint, _CAPTURE_AI_V1_PATH)
+        self.assertEqual(ctx.exception.attempts, 2)
+        self.assertIsInstance(ctx.exception.__cause__, ConnectionError)
 
     def test_negative_max_retries_still_attempts_delivery_once(self) -> None:
         stub = _PostV1Stub([_results_response({"u-1": "ok"})])
@@ -461,20 +511,69 @@ class TestSendV1Batch(unittest.TestCase):
     def test_small_retry_after_does_not_shorten_backoff(self) -> None:
         # A Retry-After smaller than the configured backoff must not make the
         # client retry earlier than its own schedule (Retry-After is a minimum).
-        # attempt_index=1 -> configured backoff 2s; Retry-After 0.5s is ignored.
+        # attempt_index=1 -> configured backoff 0.2s; Retry-After 0.1s is ignored.
         stub = self._run(
             [_msg("u-1")],
             [
                 _results_response({"u-1": "retry"}),
-                _results_response({"u-1": "retry"}, headers={"Retry-After": "0.5"}),
+                _results_response({"u-1": "retry"}, headers={"Retry-After": "0.1"}),
                 _results_response({"u-1": "ok"}),
             ],
             max_retries=3,
         )
         self.assertEqual(len(stub.calls), 3)
-        # First backoff (attempt_index 0) waits 1s; second (attempt_index 1)
-        # keeps the 2s configured backoff rather than the smaller 0.5s header.
-        self.assertEqual([c.args[0] for c in self.sleep.call_args_list], [1, 2])
+        # First backoff (attempt_index 0) waits 0.1s; second (attempt_index 1)
+        # keeps the 0.2s configured backoff rather than the smaller 0.1s header.
+        self.assertEqual([c.args[0] for c in self.sleep.call_args_list], [0.1, 0.2])
+
+
+class TestCaptureLossMessage(unittest.TestCase):
+    @parameterized.expand(
+        [
+            (
+                "partial_2xx",
+                CaptureError(
+                    200,
+                    "2 event(s) not delivered",
+                    endpoint=_CAPTURE_V1_PATH,
+                    drops=[("u-drop", "billing")],
+                    retry_exhausted=["u-retry"],
+                    event_results={
+                        "u-ok": CaptureEventResult("ok"),
+                        "u-drop": CaptureEventResult("drop", "billing"),
+                        "u-retry": CaptureEventResult("retry", "not_persisted"),
+                    },
+                ),
+                3,
+                "2 event(s) not persisted by /i/v1/analytics/events: 1 dropped, "
+                "1 out of retries (drop/billing=1, retry/not_persisted=1)",
+            ),
+            (
+                "request_failure_after_partial_success",
+                CaptureError(
+                    503,
+                    "unavailable",
+                    endpoint=_CAPTURE_AI_V1_PATH,
+                    event_results={
+                        "u-ok": CaptureEventResult("warning"),
+                        "u-retry": CaptureEventResult("retry"),
+                    },
+                ),
+                2,
+                "1 event(s) not persisted by /i/v1/ai/events: CaptureError (status=503)",
+            ),
+            (
+                "other_exception_uses_caller_endpoint",
+                ValueError("bad payload"),
+                4,
+                "4 event(s) not persisted by /i/v1/analytics/events: ValueError",
+            ),
+        ]
+    )
+    def test_message(self, _name, error, batch_size, expected) -> None:
+        self.assertEqual(
+            _capture_loss_message(error, batch_size, _CAPTURE_V1_PATH), expected
+        )
 
 
 class TestBackoff(unittest.TestCase):
@@ -483,13 +582,13 @@ class TestBackoff(unittest.TestCase):
     @parameterized.expand(
         [
             # (attempt_index, retry_after, expected sleep seconds)
-            ("first_no_header", 0, None, 1),
-            ("second_no_header", 1, None, 2),
+            ("first_no_header", 0, None, 0.1),
+            ("second_no_header", 1, None, 0.2),
             ("exp_capped_at_30", 10, None, 30),
-            ("zero_header_uses_backoff", 0, 0, 1),
+            ("zero_header_uses_backoff", 0, 0, 0.1),
             ("larger_header_wins", 0, 5.0, 5.0),
-            ("smaller_header_ignored", 3, 2.0, 8),  # configured 8 > 2.0
-            ("equal_header_and_backoff", 0, 1.0, 1),
+            ("smaller_header_ignored", 3, 0.5, 0.8),  # configured 0.8 > 0.5
+            ("equal_header_and_backoff", 1, 0.2, 0.2),
             ("header_at_ceiling", 0, 30.0, 30),
             ("header_above_ceiling_clamped", 0, 120.0, _MAX_BACKOFF_SECONDS),
             ("absurd_header_clamped", 0, 10**9, _MAX_BACKOFF_SECONDS),
@@ -498,4 +597,5 @@ class TestBackoff(unittest.TestCase):
     def test_backoff(self, _name, attempt_index, retry_after, expected) -> None:
         with mock.patch("posthog.capture_send.time.sleep") as sleep:
             _backoff(attempt_index, retry_after)
-            sleep.assert_called_once_with(expected)
+            sleep.assert_called_once()
+            self.assertAlmostEqual(sleep.call_args.args[0], expected)

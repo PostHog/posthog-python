@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from unittest import mock
+from uuid import UUID
 
 import pytest
 
@@ -56,7 +57,7 @@ async def test_capture_is_a_synchronous_queue_write_and_flushes():
                 distinct_id="user-1",
                 properties={"plan": "pro"},
             )
-            assert isinstance(event_uuid, str)
+            assert UUID(event_uuid).version == 7
             await client.flush(timeout_seconds=1)
 
     assert len(batches) == 1
@@ -704,6 +705,34 @@ async def test_capture_immediate_offloads_synchronous_on_error():
 
     assert result is None
     assert callback_thread != threading.get_ident()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("immediate", [False, True])
+async def test_capture_failure_inside_on_error_logs_instead_of_recursing(
+    caplog, immediate
+):
+    calls = []
+    client: AsyncPosthog
+
+    async def on_error(error, batch):
+        calls.append(batch[0]["event"])
+        await client.capture_immediate("from_callback", distinct_id="user-1")
+
+    with patch_async_capture_send(side_effect=APIError(503, "unavailable")):
+        client = AsyncPosthog("test-key", on_error=on_error, flush_at=1, max_retries=0)
+        if immediate:
+            await client.capture_immediate("event", distinct_id="user-1")
+        else:
+            client.capture("event", distinct_id="user-1")
+            await client.flush(timeout_seconds=1)
+        await client.shutdown()
+
+    assert calls == ["event"]
+    assert (
+        "1 event(s) not persisted by /i/v1/analytics/events: APIError (status=503)"
+        in caplog.text
+    )
 
 
 @pytest.mark.asyncio

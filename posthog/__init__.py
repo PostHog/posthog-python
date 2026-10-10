@@ -313,8 +313,11 @@ Attributes:
         disabled no-op global client.
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
-    on_error: Optional callback invoked by background consumers when event upload
-        fails. Keep it short and non-blocking. Lifecycle methods can be called
+    on_error: Optional callback ``(error, batch)`` invoked when event upload
+        fails: by background consumers, or on the calling thread in ``sync_mode``.
+        Capture failures arrive as ``CaptureError``. Without it, each failed batch
+        logs one aggregate line. A capture that fails inside the callback logs that
+        line instead of calling it again. Keep it short and non-blocking. Lifecycle methods can be called
         directly and will be deferred, but the callback must not wait for another
         thread or task that calls ``flush()``, ``join()``, or ``shutdown()``.
     debug: Enable verbose SDK logging and re-raise errors from public APIs.

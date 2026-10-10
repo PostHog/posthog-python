@@ -261,6 +261,32 @@ class TestUtils(unittest.TestCase):
     def test_remove_slash(self, input_url, expected_url):
         assert expected_url == utils.remove_trailing_slash(input_url)
 
+    @parameterized.expand(
+        [
+            ("random_ones", b"\xff" * 10, "01234567-89ab-7fff-bfff-ffffffffffff"),
+            ("random_zeros", b"\x00" * 10, "01234567-89ab-7000-8000-000000000000"),
+            (
+                "random_mixed",
+                bytes(range(0x10, 0x1A)),
+                "01234567-89ab-7011-9213-141516171819",
+            ),
+        ]
+    )
+    def test_uuid7_layout(self, _name, random_bytes, expected):
+        # Bit 48 of the millisecond clock is set to check that it is masked off.
+        time_ns = ((1 << 48) + 0x0123456789AB) * 1_000_000 + 999_999
+        with (
+            mock.patch.object(utils.time, "time_ns", return_value=time_ns),
+            mock.patch.object(
+                utils.os,
+                "urandom",
+                side_effect=lambda n: (random_bytes + b"\xaa" * n)[:n],
+            ),
+        ):
+            value = utils._uuid7()
+        self.assertEqual(str(value), expected)
+        self.assertEqual(value.version, 7)
+
     def test_clean_pydantic(self):
         class ModelV2(BaseModel):
             foo: str
