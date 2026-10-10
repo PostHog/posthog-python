@@ -12,7 +12,7 @@ class FakePH:
     def __init__(self):
         self.events = []
 
-    def capture(self, *args, **kwargs):
+    def capture_ai(self, *args, **kwargs):
         self.events.append(kwargs)
 
     def flush(self):

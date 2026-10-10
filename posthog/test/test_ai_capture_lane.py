@@ -4,6 +4,7 @@ import unittest
 import uuid
 from unittest import mock
 
+import pytest
 from parameterized import parameterized
 
 import posthog
@@ -506,16 +507,96 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         self.assertEqual(properties["$ai_provider"], "openai")
         self.assertEqual(properties["$ai_model"], "gpt-4o")
 
-    @parameterized.expand([("default", False), ("full_capture", True)])
-    def test_client_without_capture_ai_falls_back_to_capture(self, _name, full_capture):
-        client = mock.Mock(spec=["capture", "enable_full_ai_capture"])
-        client.enable_full_ai_capture = full_capture
-        _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(
-            event="$ai_generation",
-            distinct_id="d",
-            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
-        )
+
+_AZURE_KWARGS = {
+    "api_key": "test-key",
+    "azure_endpoint": "https://example.openai.azure.com",
+    "api_version": "2024-02-01",
+}
+_BEDROCK_KWARGS = {
+    "aws_region": "us-east-1",
+    "aws_access_key": "test-access-key",
+    "aws_secret_key": "test-secret-key",
+}
+_VERTEX_KWARGS = {"region": "us-east5", "project_id": "test", "access_token": "test"}
+
+
+class TestAiIntegrationsRequireCaptureAi(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("posthog.ai.openai", "OpenAI", "posthog_client", {"api_key": "test-key"}),
+            (
+                "posthog.ai.openai",
+                "AsyncOpenAI",
+                "posthog_client",
+                {"api_key": "test-key"},
+            ),
+            ("posthog.ai.openai", "AzureOpenAI", "posthog_client", _AZURE_KWARGS),
+            ("posthog.ai.openai", "AsyncAzureOpenAI", "posthog_client", _AZURE_KWARGS),
+            (
+                "posthog.ai.anthropic",
+                "Anthropic",
+                "posthog_client",
+                {"api_key": "test-key"},
+            ),
+            (
+                "posthog.ai.anthropic",
+                "AsyncAnthropic",
+                "posthog_client",
+                {"api_key": "test-key"},
+            ),
+            (
+                "posthog.ai.anthropic",
+                "AnthropicBedrock",
+                "posthog_client",
+                _BEDROCK_KWARGS,
+            ),
+            (
+                "posthog.ai.anthropic",
+                "AsyncAnthropicBedrock",
+                "posthog_client",
+                _BEDROCK_KWARGS,
+            ),
+            (
+                "posthog.ai.anthropic",
+                "AnthropicVertex",
+                "posthog_client",
+                _VERTEX_KWARGS,
+            ),
+            (
+                "posthog.ai.anthropic",
+                "AsyncAnthropicVertex",
+                "posthog_client",
+                _VERTEX_KWARGS,
+            ),
+            ("posthog.ai.gemini", "Client", "posthog_client", {"api_key": "test-key"}),
+            (
+                "posthog.ai.gemini",
+                "AsyncClient",
+                "posthog_client",
+                {"api_key": "test-key"},
+            ),
+            ("posthog.ai.langchain", "CallbackHandler", "client", {}),
+            ("posthog.ai.openai_agents", "PostHogTracingProcessor", "client", {}),
+            (
+                "posthog.ai.claude_agent_sdk",
+                "PostHogClaudeAgentProcessor",
+                "client",
+                {},
+            ),
+        ],
+        name_func=lambda func, _num, param: f"{func.__name__}_{param.args[1]}",
+    )
+    def test_integration_rejects_client_without_capture_ai_at_construction(
+        self, module, integration, client_argument, kwargs
+    ):
+        integration_class = getattr(pytest.importorskip(module), integration)
+        client = mock.Mock(spec=["capture", "privacy_mode"])
+
+        with self.assertRaisesRegex(TypeError, "capture_ai"):
+            integration_class(**{client_argument: client}, **kwargs)
+
+        client.capture.assert_not_called()
 
 
 class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):

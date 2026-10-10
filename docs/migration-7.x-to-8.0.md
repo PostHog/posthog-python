@@ -176,7 +176,7 @@ These changes follow from this order:
 
 - `capture_ai` and every built-in AI integration send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
-- The AI integrations call your client's `capture_ai`. A client object without `capture_ai` gets `capture` calls instead. A custom client must accept the `options` keyword argument.
+- The AI integrations call your client's `capture_ai`, and never `capture`. A custom client object must implement `capture_ai` and accept its `options` keyword argument. If the client has no `capture_ai`, the wrapper, callback handler or tracing processor raises `TypeError` when you create it. Before, such a client got `capture` calls.
 - Tests that pass a `Mock` client to an AI integration must assert on `mock.capture_ai`, not `mock.capture`.
 - When an AI integration or MCP falls back to a trace, run or session ID, it turns person processing off with a per-event option. This is the only option the integrations pass. It wins over `super_options`, context options and a `$process_person_profile: true` property. `before_send` can still change it.
 - The AI integrations have no `options` argument. To set options on their events, use `set_context_option`, `super_options`, or a legacy property such as `$cookieless_mode` in `posthog_properties`.
