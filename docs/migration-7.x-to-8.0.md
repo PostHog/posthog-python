@@ -9,6 +9,8 @@ Read the checklist first, then the sections that apply to you.
 You need to change code if your app does any of these:
 
 - passes `Client` or `AsyncPosthog` constructor arguments by position after `host`
+- calls `posthog.request.post` or `posthog.request.flags` with positional arguments after `path` or `host`
+- sets `$exception_level` or another reserved exception property in `capture_exception(properties=...)`
 - sets `capture_mode`, `POSTHOG_CAPTURE_MODE` or `gzip`
 - imports `CaptureV1Error`, `posthog.capture_v1`, `request.batch_post`, `EVENTS_ENDPOINT` or `AI_EVENTS_ENDPOINT`
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
@@ -58,7 +60,7 @@ To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$l
 | `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
 | `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Nothing. Send events through a client. |
-| The `gzip` parameter of `request.post` and `request.flags` | Nothing. |
+| The `gzip` parameter of `request.post` and `request.flags` | Nothing. The parameters after `path` in `post` and after `host` in `flags` are keyword-only, so a 7.x call that passes them by position raises `TypeError`. |
 | The `backoff` dependency | Add it to your own requirements if your code imports it. |
 
 The `posthoganalytics` package has the same changes. For example, import `CaptureError` from `posthoganalytics`.
@@ -110,7 +112,13 @@ The SDK moves them out of `properties` for you.
 
 - A string is sent as given, including `""`.
 - `None` counts as unset and is removed.
-- Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property.
+- Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property. The SDK logs a warning for each one, with the key and the value's type but not the value.
+
+## Exceptions
+
+- `capture_exception` takes a `level=` argument on `Client`, `AsyncPosthog` and the module. It sets `$exception_level`, for example `"warning"` or `"fatal"`. The default is `"error"`, and an unknown value counts as unset.
+- `capture_exception` ignores reserved exception properties in `properties`, such as `$exception_list`, `$exception_level` and `$exception_source`. In 7.x they overrode the SDK's values, with a `DeprecationWarning`. Use `level=` instead of `$exception_level`.
+- `AsyncPosthog.capture_exception` now sends `$exception_level`.
 
 ## Event options
 
