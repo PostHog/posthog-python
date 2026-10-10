@@ -172,7 +172,7 @@ def patched_post_v1(
     attempt: int,
     request_id: str,
     compression: CaptureCompression = CaptureCompression.NONE,
-    timeout: int = 15,
+    timeout: float = 15,
     sdk_info: str = USER_AGENT,
     session: Any = None,
     path: str = _CAPTURE_V1_PATH,
