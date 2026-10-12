@@ -1,5 +1,11 @@
 # posthog
 
+## 7.67.1 — 2026-10-12
+
+### Patch changes
+
+- [a3bd254](https://github.com/posthog/posthog-python/commit/a3bd254bb924322bbd48a2ee2c778fe761a7ee73) Set `$mcp_interface` to `mcp` on events from MCP servers. — Thanks @gesh!
+
 ## 7.67.0 — 2026-10-09
 
 ### Minor changes
