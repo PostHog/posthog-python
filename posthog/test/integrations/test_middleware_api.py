@@ -153,8 +153,8 @@ def test_context_only_enriches_events_without_redirecting_the_client(
         ),
         patch.object(
             client,
-            "_enqueue",
-            side_effect=lambda message, *args, **kwargs: captured.append(message),
+            "before_send",
+            new=lambda message: captured.append(message),
         ),
     ):
         middleware = PosthogContextMiddleware(async_view if asynchronous else view)
