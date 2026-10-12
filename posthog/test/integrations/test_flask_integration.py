@@ -5,7 +5,9 @@ from unittest.mock import Mock, patch
 import pytest
 from flask import Flask, abort, jsonify
 
+import posthog
 from posthog import contexts
+from posthog.client import Client
 from posthog.integrations.flask import (
     PosthogFlaskIntegration,
     _sanitize_tracing_header_value,
@@ -20,7 +22,11 @@ def _app() -> Flask:
 
 def test_adds_request_context_and_restores_parent_context() -> None:
     app = _app()
-    PosthogFlaskIntegration(app, extra_properties=lambda request: {"tenant": "acme"})
+    PosthogFlaskIntegration(
+        app,
+        extra_properties=lambda request: {"tenant": "acme"},
+        trust_tracing_headers=True,
+    )
 
     @app.get("/users/<user_id>")
     def view(user_id: str):
@@ -85,7 +91,7 @@ def test_fresh_request_preserves_enclosing_exception_privacy_settings() -> None:
         return "event-id"
 
     client.capture_exception.side_effect = capture
-    PosthogFlaskIntegration(app, client=client)
+    PosthogFlaskIntegration(app, client=client, capture_exceptions=True)
 
     @app.get("/privacy")
     def privacy_failure():
@@ -138,7 +144,7 @@ def test_captures_unhandled_exception_once_with_request_properties() -> None:
         return "event-id"
 
     client.capture_exception.side_effect = capture
-    PosthogFlaskIntegration(app, client=client)
+    PosthogFlaskIntegration(app, client=client, capture_exceptions=True)
     error = ValueError("view failed")
 
     @app.get("/failure")
@@ -164,7 +170,7 @@ def test_captures_unhandled_exception_once_with_request_properties() -> None:
 
 def test_uses_global_client_when_custom_client_is_not_provided() -> None:
     app = _app()
-    PosthogFlaskIntegration(app)
+    PosthogFlaskIntegration(app, capture_exceptions=True)
     error = RuntimeError("boom")
 
     @app.get("/failure")
@@ -188,7 +194,7 @@ def test_uses_global_client_when_custom_client_is_not_provided() -> None:
 def test_does_not_capture_handled_exception_or_expected_http_error() -> None:
     app = _app()
     client = Mock()
-    PosthogFlaskIntegration(app, client=client)
+    PosthogFlaskIntegration(app, client=client, capture_exceptions=True)
 
     @app.errorhandler(ValueError)
     def handle_value_error(error):
@@ -222,12 +228,132 @@ def test_capture_exceptions_can_be_disabled_without_changing_propagation() -> No
     client.capture_exception.assert_not_called()
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_exception_capture_defaults_to_custom_client_setting(enabled: bool) -> None:
+    app = _app()
+    client = Mock(enable_exception_autocapture=enabled)
+    PosthogFlaskIntegration(app, client=client)
+
+    @app.get("/failure")
+    def failure():
+        raise RuntimeError("custom default")
+
+    with pytest.raises(RuntimeError, match="custom default"):
+        app.test_client().get("/failure")
+
+    if enabled:
+        client.capture_exception.assert_called_once()
+    else:
+        client.capture_exception.assert_not_called()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize("initialized", [False, True])
+def test_exception_capture_defaults_to_global_client_setting(
+    enabled: bool, initialized: bool
+) -> None:
+    app = _app()
+    default_client = Mock(enable_exception_autocapture=enabled) if initialized else None
+
+    # App-factory setup may run before the global client is configured.
+    PosthogFlaskIntegration(app)
+
+    @app.get("/failure")
+    def failure():
+        raise RuntimeError("global default")
+
+    with (
+        patch.object(posthog, "default_client", default_client),
+        patch.object(
+            posthog,
+            "enable_exception_autocapture",
+            not enabled if initialized else enabled,
+        ),
+        patch("posthog.capture_exception") as capture_exception,
+        pytest.raises(RuntimeError, match="global default"),
+    ):
+        app.test_client().get("/failure")
+
+    if enabled:
+        capture_exception.assert_called_once()
+    else:
+        capture_exception.assert_not_called()
+
+
+def test_context_enriches_events_without_redirecting_capture_calls() -> None:
+    app = _app()
+    events = []
+
+    def record_event(event):
+        events.append(event)
+        return event
+
+    event_client = Client(
+        "event-api-key", send=False, sync_mode=True, before_send=record_event
+    )
+    exception_client = Mock(enable_exception_autocapture=False)
+    PosthogFlaskIntegration(
+        app,
+        client=exception_client,
+        extra_properties=lambda request: {"tenant": "acme"},
+    )
+
+    @app.get("/capture")
+    def capture_event():
+        event_client.capture(
+            "request event", distinct_id="event-user", properties={"source": "app"}
+        )
+        return "ok"
+
+    try:
+        assert app.test_client().get("/capture").status_code == 200
+    finally:
+        event_client.shutdown()
+
+    assert len(events) == 1
+    assert events[0]["distinct_id"] == "event-user"
+    assert events[0]["properties"]["source"] == "app"
+    assert events[0]["properties"]["tenant"] == "acme"
+    assert events[0]["properties"]["$request_path"] == "/capture"
+    assert {"tenant", "$request_path"} <= set(events[0]["properties"]["$context_tags"])
+    exception_client.capture.assert_not_called()
+
+
+def test_tracing_headers_are_ignored_by_default_and_can_be_trusted() -> None:
+    def request_identity(trust_tracing_headers: bool) -> dict:
+        app = _app()
+        PosthogFlaskIntegration(app, trust_tracing_headers=trust_tracing_headers)
+
+        @app.get("/identity")
+        def identity():
+            return jsonify(
+                distinct_id=contexts.get_context_distinct_id(),
+                session_id=contexts.get_context_session_id(),
+            )
+
+        response = app.test_client().get(
+            "/identity",
+            headers={
+                "X-PostHog-Distinct-Id": "person-1",
+                "X-PostHog-Session-Id": "session-1",
+            },
+        )
+        return response.get_json()
+
+    assert request_identity(False) == {"distinct_id": None, "session_id": None}
+    assert request_identity(True) == {
+        "distinct_id": "person-1",
+        "session_id": "session-1",
+    }
+
+
 def test_request_filter_skips_context_and_exception_capture() -> None:
     app = _app()
     client = Mock()
     PosthogFlaskIntegration(
         app,
         client=client,
+        capture_exceptions=True,
         request_filter=lambda request: request.path != "/ignored",
     )
 

@@ -29,6 +29,7 @@ SDK usage examples and code snippets live in the official documentation so they 
 - [Migrating from 7.x to 8.0](docs/migration-7.x-to-8.0.md)
 - [Django framework docs](https://posthog.com/docs/libraries/django)
 - [Flask framework docs](https://posthog.com/docs/libraries/flask)
+- [Request integration configuration](references/middleware_configuration.md) — shared middleware options and compatibility notes
 - [OpenFeature provider docs](https://posthog.com/docs/feature-flags/installation/openfeature) — use PostHog flags through the [OpenFeature](https://openfeature.dev) Python SDK
 
 ## Contributing
