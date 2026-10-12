@@ -2726,12 +2726,13 @@ class Client(object):
 
         Details:
             While opted out, ``capture()`` and every other event-producing API
-            drop their event silently and make no network request. Feature flag
-            evaluation and other non-capture APIs are unaffected. The state is
-            held in memory on this client only, so it does not survive a process
-            restart; persist the user's choice yourself and re-apply it on
-            startup. This is separate from the constructor-time ``disabled``
-            kill switch, which cannot be toggled at runtime.
+            drop their event silently, metrics and spans are no longer recorded
+            or exported, and none of them make a network request. Feature flag
+            evaluation is unaffected. The state is held in memory on this client
+            only, so it does not survive a process restart; persist the user's
+            choice yourself and re-apply it on startup. This is separate from
+            ``disabled``: opting in again never re-enables a disabled client.
+            ``AsyncClient`` does not support opt-out yet.
 
         Examples:
             ```python
@@ -2748,8 +2749,8 @@ class Client(object):
         Resume capturing events after ``opt_out_capturing()``.
 
         Details:
-            Events dropped while opted out are not recovered. A client that was
-            constructed with ``disabled=True`` stays disabled.
+            Events, metrics and spans dropped while opted out are not recovered.
+            A disabled client stays disabled.
 
         Examples:
             ```python
@@ -2766,9 +2767,9 @@ class Client(object):
         Whether capture is currently suppressed by ``opt_out_capturing()``.
 
         Returns:
-            ``True`` when the client is opted out. This reports the runtime
-            consent gate only; a client disabled at construction returns
-            ``False`` unless it was also opted out.
+            ``True`` when the client is opted out. This reports the opt-out
+            state only; a disabled client returns ``False`` unless it was also
+            opted out.
 
         Examples:
             ```python

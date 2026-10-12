@@ -1229,9 +1229,12 @@ def opt_out_capturing() -> None:
     Stop capturing events on the global client until ``opt_in_capturing()`` is called.
 
     While opted out, ``capture()`` and every other event-producing API drop
-    their event silently and make no network request. Feature flag evaluation is
+    their event silently, metrics and spans are no longer recorded or exported,
+    and none of them make a network request. Feature flag evaluation is
     unaffected. The state is held in memory, so it does not survive a process
-    restart; persist the user's choice yourself and re-apply it on startup.
+    restart; persist the user's choice yourself and re-apply it on startup. This
+    is separate from ``disabled``: opting in again never re-enables a disabled
+    client. ``AsyncClient`` does not support opt-out yet.
 
     Examples:
         ```python
@@ -1249,7 +1252,7 @@ def opt_in_capturing() -> None:
     """
     Resume capturing events on the global client after ``opt_out_capturing()``.
 
-    Events dropped while opted out are not recovered.
+    Events, metrics and spans dropped while opted out are not recovered.
 
     Examples:
         ```python
