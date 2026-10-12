@@ -74,6 +74,14 @@ class TestStartSpan:
         span.end()
         assert queued(pipeline) == []
 
+    def test_returns_an_inert_handle_when_the_client_is_opted_out(self):
+        client = SimpleNamespace(disabled=False, _opted_out=True, send=True)
+        pipeline, _, _ = make(client=client)
+        span = pipeline.start_span("a")
+        assert span is NOOP_SPAN
+        span.end()
+        assert queued(pipeline) == []
+
     def test_makes_a_child_of_an_inert_handle_inert_rather_than_an_orphan(self):
         pipeline, _, _ = make()
         child = pipeline.start_span("child", parent=NOOP_SPAN)
@@ -443,6 +451,15 @@ class TestGating:
         pipeline, _, _ = make(client=client)
         span = pipeline.start_span("a")
         client.disabled = True
+        span.end()
+        assert queued(pipeline) == []
+        assert pipeline._live_spans == {}
+
+    def test_drops_a_span_whose_client_opted_out_mid_trace(self):
+        client = SimpleNamespace(disabled=False, _opted_out=False, send=True)
+        pipeline, _, _ = make(client=client)
+        span = pipeline.start_span("a")
+        client._opted_out = True
         span.end()
         assert queued(pipeline) == []
         assert pipeline._live_spans == {}

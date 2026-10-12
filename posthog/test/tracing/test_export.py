@@ -101,6 +101,15 @@ class TestExport:
         assert sender.payloads == []
         assert queued(pipeline) == []
 
+    def test_an_opted_out_client_discards_the_queue_instead_of_exporting(self):
+        client = SimpleNamespace(disabled=False, _opted_out=False, send=True)
+        pipeline, sender, _ = make_traces(client=client)
+        pipeline.start_span("a").end()
+        client._opted_out = True
+        pipeline.flush()
+        assert sender.payloads == []
+        assert queued(pipeline) == []
+
     def test_a_disabled_discard_takes_the_failed_batchs_budget_with_it(self, clock):
         client = SimpleNamespace(disabled=False, send=True)
         sender = FakeSender(SendOutcome("retry-later"), SendOutcome("ok"))
