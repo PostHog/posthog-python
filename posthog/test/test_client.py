@@ -3637,6 +3637,24 @@ class TestClient(unittest.TestCase):
         patch_flags.assert_called()
         self.assertFalse(self.failed)
 
+    @mock.patch("posthog.client.batch_post")
+    @mock.patch("posthog.client.flags")
+    def test_opt_out_capturing_skips_send_feature_flags_request(
+        self, patch_flags, patch_post
+    ):
+        patch_flags.return_value = {"featureFlags": {"beta-feature": True}}
+        client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+        client.opt_out_capturing()
+
+        self.assertIsNone(
+            client.capture(
+                "ignored event", distinct_id="distinct_id", send_feature_flags=True
+            )
+        )
+        patch_flags.assert_not_called()
+        patch_post.assert_not_called()
+        self.assertFalse(self.failed)
+
     @mock.patch("posthog.client.flags")
     def test_disabled_with_feature_flags(self, patch_flags):
         client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, disabled=True)

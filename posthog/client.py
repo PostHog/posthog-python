@@ -1666,6 +1666,10 @@ class Client(object):
         self, event: str, lane: _Lane, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Shared message-building body of `capture()` and `capture_ai()`; `lane` picks the wire destination."""
+        # Bail before the `send_feature_flags` prefetch, which would otherwise hit /flags.
+        if self._opted_out:
+            return None
+
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
         timestamp = kwargs.get("timestamp", None)
