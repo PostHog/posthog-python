@@ -59,7 +59,10 @@ def build_posthog_capture_events(
 
 
 def _build_capture_event(event: Event) -> PostHogCaptureEvent:
-    properties: Dict[str, Any] = {_P.SOURCE: POSTHOG_MCP_ANALYTICS_SOURCE}
+    properties: Dict[str, Any] = {
+        _P.INTERFACE: "mcp",
+        _P.SOURCE: POSTHOG_MCP_ANALYTICS_SOURCE,
+    }
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
     _add_person_processing(event, properties)
@@ -260,7 +263,7 @@ def _add_server_build(event: Event, properties: Dict[str, Any]) -> None:
 
 
 def _build_exception_event(event: Event) -> PostHogCaptureEvent:
-    properties: Dict[str, Any] = {}
+    properties: Dict[str, Any] = {_P.INTERFACE: "mcp"}
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
     _add_person_processing(event, properties)

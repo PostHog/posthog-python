@@ -84,6 +84,7 @@ class PostHogMCPAnalyticsProperty:
     FEEDBACK_TASK_COMPLETED = "$mcp_feedback_task_completed"
     FEEDBACK_TOOL = "$mcp_feedback_tool"
     FEEDBACK_TYPE = "$mcp_feedback_type"
+    INTERFACE = "$mcp_interface"
     IS_ERROR = "$mcp_is_error"
     INTENT = "$mcp_intent"
     INTENT_SOURCE = "$mcp_intent_source"
