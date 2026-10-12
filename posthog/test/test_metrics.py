@@ -198,6 +198,15 @@ class TestMetricsGuardrails:
 
         assert payload is None
 
+    def test_opted_out_client_records_nothing(self):
+        c = Client(FAKE_API_KEY, host="https://us.example.com")
+        c.opt_out_capturing()
+        c.metrics.count("m", 1)
+
+        payload, _, _ = flush_and_capture(c)
+
+        assert payload is None
+
 
 class TestMetricsDelivery:
     def test_resource_attributes_layer_sdk_keys_over_user_keys(self):

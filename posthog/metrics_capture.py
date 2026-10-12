@@ -353,7 +353,9 @@ class PostHogMetrics:
         unit: Optional[str],
         attributes: Optional[dict],
     ) -> None:
-        if getattr(self._client, "disabled", False):
+        if getattr(self._client, "disabled", False) or getattr(
+            self._client, "_opted_out", False
+        ):
             return
 
         sample = {
