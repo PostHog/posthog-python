@@ -63,6 +63,8 @@ def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
 _POSTHOG_COOKIE_NAME_RE = re.compile(r"^ph_.+_posthog$")
 _POSTHOG_CONSENT_COOKIE_PREFIX = "__ph_opt_in_out_"
 _POSTHOG_CONSENT_NO_VALUES = ("false", "0", "no")
+# posthog-js grants consent only for these exact values. Anything else is pending.
+_POSTHOG_CONSENT_YES_VALUES = ("true", "1", "yes")
 # posthog-js defaults. The browser starts a new session after this much inactivity or session length.
 _COOKIE_SESSION_IDLE_TIMEOUT_MS = 30 * 60 * 1000
 _COOKIE_SESSION_MAX_LENGTH_MS = 24 * 60 * 60 * 1000
@@ -139,8 +141,13 @@ def _read_posthog_cookie(
                 and value.strip().lower() in _POSTHOG_CONSENT_NO_VALUES
                 for value in consent_values
             )
-            # Like posthog-js, a visitor with no consent cookie counts as opted out under this default.
-            or (opt_out_by_default and not consent_values)
+            # Like posthog-js, a visitor without a granted consent value counts as opted out under this default.
+            or (
+                opt_out_by_default
+                and not any(
+                    value in _POSTHOG_CONSENT_YES_VALUES for value in consent_values
+                )
+            )
         )
         if not raw or opted_out:
             return None, None
