@@ -878,10 +878,13 @@ attribute posthog.integrations.celery.PosthogCeleryIntegration.task_filter = tas
 attribute posthog.integrations.django.PosthogContextMiddleware.async_capable = True
 attribute posthog.integrations.django.PosthogContextMiddleware.capture_exceptions: Optional[bool] = capture_exceptions if (capture_exceptions is None or isinstance(capture_exceptions, bool)) else True
 attribute posthog.integrations.django.PosthogContextMiddleware.client = cast('Optional[Client]', settings.POSTHOG_MW_CLIENT)
+attribute posthog.integrations.django.PosthogContextMiddleware.cookie_opt_out_by_default = getattr(settings, 'POSTHOG_MW_COOKIE_OPT_OUT_BY_DEFAULT', False) is True
+attribute posthog.integrations.django.PosthogContextMiddleware.cookie_session_idle_timeout_ms = int(min(max(idle_timeout_seconds, 60), 10 * 60 * 60) * 1000) if isinstance(idle_timeout_seconds, (int, float)) and not isinstance(idle_timeout_seconds, bool) and math.isfinite(idle_timeout_seconds) and idle_timeout_seconds != 0 else _COOKIE_SESSION_IDLE_TIMEOUT_MS
 attribute posthog.integrations.django.PosthogContextMiddleware.extra_properties = cast('Callable[[HttpRequest], Dict[str, Any]]', extra_properties) if callable(extra_properties) else None
 attribute posthog.integrations.django.PosthogContextMiddleware.extra_tags
 attribute posthog.integrations.django.PosthogContextMiddleware.get_response = get_response
 attribute posthog.integrations.django.PosthogContextMiddleware.properties_map = cast('Callable[[Dict[str, Any]], Dict[str, Any]]', properties_map) if callable(properties_map) else None
+attribute posthog.integrations.django.PosthogContextMiddleware.read_posthog_cookie = settings.POSTHOG_MW_READ_POSTHOG_COOKIE
 attribute posthog.integrations.django.PosthogContextMiddleware.request_filter = cast('Optional[Callable[[HttpRequest], bool]]', settings.POSTHOG_MW_REQUEST_FILTER)
 attribute posthog.integrations.django.PosthogContextMiddleware.sync_capable = True
 attribute posthog.integrations.django.PosthogContextMiddleware.tag_map
