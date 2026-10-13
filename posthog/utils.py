@@ -175,7 +175,7 @@ def _drop_invalid_event_name(logger: logging.Logger, msg: dict) -> bool:
         return False
     _warn_once(
         logger,
-        f"event_name_{reason}",
+        f"event_name_{reason}",  # pragma: no mutate
         "Dropping an event with a %s name: event names must be non-empty strings. "
         "Later events dropped for the same reason are not logged.",
         reason,
