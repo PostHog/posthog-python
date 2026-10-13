@@ -20,14 +20,20 @@ import pytest
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.client import Client
-from posthog.contexts import get_context_session_id, new_context, set_context_session
+from posthog.contexts import (
+    get_context_session_id,
+    identify_context,
+    new_context,
+    set_context_option,
+    set_context_session,
+)
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.version import VERSION
 from posthog.contexts import tag
-from posthog.test.capture_helpers import patch_capture_send, sent_batch
+from posthog.test.capture_helpers import patch_capture_send, sent_batch, sent_events
 
 
 # Legacy single-flag behavior remains covered here; warning emission itself is
@@ -2281,6 +2287,83 @@ class TestClient(unittest.TestCase):
             msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["distinct_id"], "0")
             self.assertEqual(msg["properties"]["distinct_id"], "0")
+
+    def _capture_in_request_context(self, call):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context(fresh=True):
+                identify_context("context-user")
+                set_context_session("context-session")
+                tag("tenant", "acme")
+                set_context_option("product_tour_id", "tour-1")
+                result = call(client)
+        return result, (sent_batch(mock_post)[0] if mock_post.called else None)
+
+    @parameterized.expand(
+        [
+            ("caller_id", "caller-user", "caller-user"),
+            ("whitespace_caller_id", "  ", "context-user"),
+        ]
+    )
+    def test_group_identify_takes_context_values_but_not_its_session(
+        self, _, distinct_id, expected_distinct_id
+    ):
+        _, msg = self._capture_in_request_context(
+            lambda client: client.group_identify(
+                "company", "acme-1", distinct_id=distinct_id
+            )
+        )
+
+        self.assertEqual(msg["distinct_id"], expected_distinct_id)
+        self.assertNotIn("$session_id", msg["properties"])
+        self.assertEqual(msg["properties"]["tenant"], "acme")
+        self.assertEqual(msg["options"]["product_tour_id"], "tour-1")
+
+    def test_group_identify_without_any_distinct_id_uses_the_group_id(self):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.group_identify("company", "acme-1")
+            client.group_identify("company", "acme-1")
+
+        self.assertEqual(
+            [msg["distinct_id"] for msg in sent_events(mock_post)],
+            ["$company_acme-1", "$company_acme-1"],
+        )
+
+    @parameterized.expand(
+        [
+            ("caller_target", "user-1", "user-1"),
+            ("context_only_target", None, None),
+            ("whitespace_target", "  ", None),
+        ]
+    )
+    def test_alias_takes_its_target_only_from_the_caller(
+        self, _, distinct_id, expected_alias
+    ):
+        result, msg = self._capture_in_request_context(
+            lambda client: client.alias("anon-1", distinct_id)
+        )
+
+        if expected_alias is None:
+            self.assertIsNone(result)
+            self.assertIsNone(msg)
+            return
+        self.assertEqual(msg["properties"]["alias"], expected_alias)
+        self.assertEqual(msg["properties"]["$session_id"], "context-session")
+        self.assertEqual(msg["properties"]["tenant"], "acme")
+        self.assertEqual(msg["options"]["product_tour_id"], "tour-1")
+
+    @parameterized.expand([("none", None), ("empty", ""), ("whitespace", " \t ")])
+    def test_capture_without_a_distinct_id_sends_a_personless_v7_id(
+        self, _, distinct_id
+    ):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture("event", distinct_id=distinct_id)
+
+        msg = sent_batch(mock_post)[0]
+        self.assertEqual(UUID(msg["distinct_id"]).version, 7)
+        self.assertEqual(msg["options"]["process_person_profile"], False)
 
     def test_alias_without_distinct_id_is_dropped(self):
         with patch_capture_send("client") as mock_post:

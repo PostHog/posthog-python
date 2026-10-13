@@ -25,6 +25,7 @@ You need to change code if your app does any of these:
 - sets `$lib` or `$lib_version`, or filters on `$lib = "posthog-python-mcp"`
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
+- calls `alias()` without a `distinct_id` and relies on the context distinct ID
 
 ## Endpoints
 
@@ -129,6 +130,15 @@ The SDK moves them out of `properties` for you.
 - A string is sent as given, including `""`.
 - `None` counts as unset and is removed.
 - Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property. The SDK logs a warning for each one, with the key and the value's type but not the value.
+
+## Identity and request context
+
+- An empty or whitespace-only `distinct_id` counts as missing, so the event gets a generated personless distinct ID. 7.x sent a whitespace-only ID, and capture dropped the event.
+- Generated personless distinct IDs are UUIDv7. 7.x generated UUIDv4.
+- `group_identify` uses the `distinct_id` you pass, then the context distinct ID, then `$<group_type>_<group_key>`. 7.x fell back to a random ID, which created a new person on every call.
+- `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
+- `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
+- Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
 
 ## Exceptions
 

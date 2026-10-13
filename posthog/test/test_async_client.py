@@ -15,7 +15,11 @@ from posthog import AsyncClient, AsyncPosthog, CaptureCompression
 from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.consumer import AI_MAX_MSG_SIZE, AI_MAX_PROPERTIES_SIZE, MAX_MSG_SIZE
 from posthog.contexts import (
+    identify_context,
     new_context,
+    set_context_option,
+    set_context_session,
+    tag,
     set_capture_exception_code_variables_context,
     set_code_variables_detect_secrets_context,
     set_code_variables_ignore_patterns_context,
@@ -516,6 +520,50 @@ async def test_identify_methods_enqueue_events(
             await client.flush(timeout_seconds=1)
 
     assert batches[0][0]["event"] == expected_event
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("method_name", "method_kwargs", "expected_distinct_id", "expected_session"),
+    [
+        (
+            "group_identify",
+            {"group_type": "company", "group_key": "acme-1"},
+            "context-user",
+            None,
+        ),
+        (
+            "alias",
+            {"previous_id": "anon-1", "distinct_id": "user-1"},
+            "anon-1",
+            "context-session",
+        ),
+    ],
+)
+async def test_identity_methods_take_context_values_by_the_context_rule(
+    method_name, method_kwargs, expected_distinct_id, expected_session
+):
+    batches = []
+
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
+
+    with patch_async_capture_send(side_effect=send_batch):
+        async with AsyncPosthog("test-key", flush_interval=30) as client:
+            with new_context(fresh=True):
+                identify_context("context-user")
+                set_context_session("context-session")
+                tag("tenant", "acme")
+                set_context_option("product_tour_id", "tour-1")
+                assert getattr(client, method_name)(**method_kwargs) is not None
+                assert client.alias("anon-2", None) is None
+            await client.flush(timeout_seconds=1)
+
+    msg = batches[0][0]
+    assert msg["distinct_id"] == expected_distinct_id
+    assert msg["properties"].get("$session_id") == expected_session
+    assert msg["properties"]["tenant"] == "acme"
+    assert msg["options"]["product_tour_id"] == "tour-1"
 
 
 @pytest.mark.asyncio
