@@ -227,10 +227,15 @@ class TestLaneSizeCaps(unittest.TestCase):
         self.assertIsNotNone(result)
         mock_send.assert_called_once()
 
-    def test_analytics_lane_rejects_events_over_900kib(self):
+    def test_analytics_lane_sends_events_up_to_the_request_limit(self):
+        # Capture reports an analytics event over its per-event limit in the
+        # response, so the SDK only drops what no request could carry.
         client = self._client()
         consumer = client.consumers[0]
-        client.queue.put(self._sized_event("big_analytics_event", 2 * 1024 * 1024))
+        big = self._sized_event("big_analytics_event", 2 * 1024 * 1024)
+        client.queue.put(big)
+        client.queue.put(self._sized_event("too_big_for_a_request", MAX_MSG_SIZE))
+        self.assertEqual(consumer.next(), [big])
         self.assertEqual(consumer.next(), [])
         self.assertTrue(client.queue.empty())
 

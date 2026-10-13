@@ -78,7 +78,9 @@ async def _report_capture_failure(
 
 
 async def _serialized_event_size(event: dict[str, Any]) -> int:
-    serialized = await asyncio.to_thread(json.dumps, event, cls=DatetimeSerializer)
+    serialized = await asyncio.to_thread(
+        json.dumps, event, cls=DatetimeSerializer, allow_nan=False
+    )
     return len(serialized.encode())
 
 

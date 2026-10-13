@@ -79,23 +79,32 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False, False),
-            ("whitespace_only", " \n\t ", "", True, True),
-            ("empty_string", "", "", True, True),
+            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False, None),
+            ("whitespace_only", " \n\t ", "", True, "api_key is empty"),
+            ("empty_string", "", "", True, "api_key is empty"),
+            (
+                "personal_api_key",
+                " phx_secret ",
+                "phx_secret",
+                True,
+                "personal API key",
+            ),
         ]
     )
     def test_trims_api_key_whitespace(
-        self, _, raw_api_key, expected_api_key, expected_disabled, expect_error_log
+        self, _, raw_api_key, expected_api_key, expected_disabled, expected_error
     ):
         with mock.patch.object(Client.log, "error") as mock_error:
             client = Client(raw_api_key, send=False)
 
         self.assertEqual(client.api_key, expected_api_key)
         self.assertEqual(client.disabled, expected_disabled)
-        if expect_error_log:
-            mock_error.assert_called_once_with(
-                "api_key is empty after trimming whitespace; check your project API key"
-            )
+        if expected_error:
+            mock_error.assert_called_once()
+            message = " ".join(str(arg) for arg in mock_error.call_args.args)
+            self.assertIn(expected_error, message)
+            self.assertNotIn("secret", message)
+            self.assertIsNone(client.capture("event", distinct_id="user"))
         else:
             mock_error.assert_not_called()
 
@@ -1868,9 +1877,36 @@ class TestClient(unittest.TestCase):
         self.assertIsNotNone(result)
         msg = sent_batch(mock_post)[0]
         self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
-        mock_warning.assert_called_once_with(
-            "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
-        )
+        mock_warning.assert_called_once()
+        self.assertNotIn(timestamp, repr(mock_warning.call_args))
+
+    @parameterized.expand(
+        [
+            ("missing", None, None),
+            ("non_string", 123, None),
+            ("empty", "", None),
+            ("set_by_before_send", "valid", 123),
+        ]
+    )
+    def test_capture_drops_an_invalid_event_name_and_logs_once(
+        self, _, event, hook_event
+    ):
+        def before_send(msg):
+            if hook_event is not None:
+                msg["event"] = hook_event
+            return msg
+
+        with (
+            patch_capture_send("client") as mock_post,
+            mock.patch("posthog.utils._warned_reasons", set()),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, before_send=before_send)
+            results = [client.capture(event, distinct_id="user") for _ in range(2)]
+
+        self.assertEqual(results, [None, None])
+        mock_post.assert_not_called()
+        mock_warning.assert_called_once()
 
     def test_capture_does_not_normalize_datetime_properties(self):
         property_value = datetime(

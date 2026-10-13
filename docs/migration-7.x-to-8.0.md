@@ -23,6 +23,8 @@ You need to change code if your app does any of these:
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
 - sets `$lib` or `$lib_version`, or filters on `$lib = "posthog-python-mcp"`
+- passes a personal API key (`phx_...`) as the project API key
+- reads event content from the SDK's debug log
 
 ## Endpoints
 
@@ -97,6 +99,17 @@ When the whole request is over the billing limit, capture returns a `402` with n
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
 - The SDK retries `408`, `500`, `502`, `503` and `504` responses and network errors. Other error statuses fail the batch at once, including `429` and the other 5xx codes. 7.x also retried `429` and every 5xx. Capture itself does not return `429`; a proxy in front of it can.
 - Retries start at 100 ms and double each attempt, up to 30 seconds. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
+- Logs never contain event content. The debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. To inspect events, use `before_send`.
+- A personal API key (`phx_...`) passed as the project API key disables the client and logs one error, as an empty key does. Capture rejects personal API keys, and the SDK no longer sends one with every request.
+
+## Invalid events
+
+Capture rejects a whole batch when one event cannot be parsed.
+8.0 drops only the invalid event, so the rest of the batch is delivered.
+
+- An event whose name is missing, `None`, empty or not a string is dropped. The SDK logs one warning per reason per process. 7.x sent it.
+- An event that cannot be serialized to JSON is dropped and logged, for example one with `NaN` or `Infinity` in its properties. 7.x sent `NaN` as invalid JSON.
+- A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, `float`, `bool` and `None` keys are still converted to strings.
 
 ## Event uuids
 
@@ -194,7 +207,7 @@ These changes follow from this order:
 
 ## Batching and size limits
 
-- An analytics event over 900 KiB is dropped and logged. This now applies in `sync_mode` too.
+- An analytics event over 10 MiB is dropped and logged, because no capture request can carry it. 7.x dropped events over 900 KiB. Capture drops an event over its own per-event limit and reports it in `CaptureError.drops` as `event_too_big`.
 - An AI event over `capture_ai_max_event_bytes` is dropped and logged.
 - A batch stops before an event that would take it past 5 MiB. A larger event is sent alone.
 - `flush()` and `shutdown()` drain the analytics and AI queues at the same time.
