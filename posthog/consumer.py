@@ -19,7 +19,10 @@ from posthog.request import (
 from queue import Empty
 
 
-MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
+# Capture's request body limit. An analytics event larger than this can never
+# be accepted, so the SDK drops it locally; anything smaller is sent, and
+# capture reports an event over its own per-event limit in the response.
+MAX_MSG_SIZE = 10 * 1024 * 1024
 
 # The AI endpoint's per-event ceiling. The endpoint applies it to the
 # serialized properties alone.
@@ -33,8 +36,7 @@ AI_MAX_MSG_SIZE = AI_MAX_PROPERTIES_SIZE + AI_ENVELOPE_HEADROOM
 
 # A batch closes before it appends an event that would take it past this, so
 # a request carries at most this much event data, or one larger event alone.
-# The maximum request body size is currently 20MiB, let's be conservative
-# in case we want to lower it in the future.
+# Half of capture's request body limit, which applies before decompression.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
 _configure_posthog_logging()
@@ -246,7 +248,9 @@ class Consumer(Thread):
                     pending_items += 1
                     try:
                         item_size = len(
-                            json.dumps(item, cls=DatetimeSerializer).encode()
+                            json.dumps(
+                                item, cls=DatetimeSerializer, allow_nan=False
+                            ).encode()
                         )
                     except Exception:
                         # Callback-modified events can still contain invalid mapping

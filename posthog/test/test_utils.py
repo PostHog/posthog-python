@@ -355,10 +355,22 @@ class TestUtils(unittest.TestCase):
             assert utils._clean_dict({"ok": 1, "bad": bad_value}) == {"ok": 1}
 
         warning.assert_called_once()
-        assert warning.call_args.args[0] == (
-            'Dictionary values must be serializeable to JSON "%s" value %s of type %s is unsupported.'
+        assert warning.call_args.args[1:] == ("bad", type(bad_value))
+        assert bad_value not in warning.call_args.args
+
+    def test_clean_drops_only_keys_json_cannot_write(self):
+        cleaned = utils.clean(
+            {
+                "s": 1,
+                2: "int",
+                1.5: "float",
+                True: "bool",
+                None: "none",
+                ("t",): "tuple",
+            }
         )
-        assert warning.call_args.args[1:] == ("bad", bad_value, type(bad_value))
+        assert cleaned == {"s": 1, 2: "int", 1.5: "float", True: "bool", None: "none"}
+        json.dumps(cleaned)
 
     def test_coerce_unicode(self):
         assert utils._coerce_unicode("already unicode") == "already unicode"

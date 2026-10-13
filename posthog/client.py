@@ -137,6 +137,8 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
+    _is_personal_api_key,
+    _drop_invalid_event_name,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -997,7 +999,9 @@ class Client(object):
             _BackgroundEventLoopRunner
         ] = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
-        self.disabled = disabled or not self.api_key
+        self.disabled = (
+            disabled or not self.api_key or _is_personal_api_key(self.api_key)
+        )
         self.disable_geoip = disable_geoip
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
@@ -1122,6 +1126,11 @@ class Client(object):
         if not self.api_key:
             self.log.error(
                 "api_key is empty after trimming whitespace; check your project API key"
+            )
+        elif _is_personal_api_key(self.api_key):
+            self.log.error(
+                "api_key is a personal API key (phx_...), not a project API key; "
+                "PostHog is disabled. Use the project API key (phc_...)."
             )
 
         self._set_before_send(before_send)
@@ -2517,7 +2526,8 @@ class Client(object):
             msg["timestamp"] = _normalize_timestamp(timestamp)
         except ValueError:
             self.log.warning(
-                "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+                "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
+                "Falling back to the current UTC time."
             )
             msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
@@ -2577,7 +2587,10 @@ class Client(object):
         self._normalize_event_uuid(msg)
         sent_uuid = msg["uuid"]
 
-        self.log.debug("queueing: %s", msg)
+        if _drop_invalid_event_name(self.log, msg):
+            return None
+
+        self.log.debug("queueing %s on the %s lane", msg["event"], lane.name)
 
         # if send is False, return msg as if it was successfully queued, unless
         # shutdown has already closed this lane's admission.
@@ -2595,7 +2608,9 @@ class Client(object):
             self.log.debug("enqueued with blocking %s.", msg["event"])
 
             try:
-                event_size = len(json.dumps(msg, cls=_DatetimeSerializer).encode())
+                event_size = len(
+                    json.dumps(msg, cls=_DatetimeSerializer, allow_nan=False).encode()
+                )
             except Exception:
                 self.log.error("Unable to serialize event for sizing, dropping.")
                 return None

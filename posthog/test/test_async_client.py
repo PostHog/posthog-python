@@ -408,8 +408,23 @@ async def test_ai_capture_handles_a_non_string_event_name_like_capture(event):
     try:
         expected = client.capture(event, distinct_id="user-1") is None
         assert (client.capture_ai(event, distinct_id="user-1") is None) is expected
-        immediate = await client.capture_ai_immediate(event, distinct_id="user-1")
-        assert (immediate is None) is expected
+        # The immediate paths process the event, so they drop the invalid name.
+        assert await client.capture_immediate(event, distinct_id="user-1") is None
+        assert await client.capture_ai_immediate(event, distinct_id="user-1") is None
+    finally:
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", ["", " ", "phx_secret"])
+async def test_missing_or_personal_api_key_disables_the_client(api_key):
+    with mock.patch.object(AsyncPosthog.log, "error") as mock_error:
+        client = AsyncPosthog(api_key, send=False)
+    try:
+        assert client.disabled
+        assert client.capture("event", distinct_id="user-1") is None
+        mock_error.assert_called_once()
+        assert "secret" not in repr(mock_error.call_args)
     finally:
         await client.shutdown()
 

@@ -342,7 +342,9 @@ def _post_v1(
     """
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + path
-    data = json.dumps(batch_body, cls=DatetimeSerializer)
+    # Every event was serialized on its own with allow_nan=False before it
+    # joined the batch, so this never raises for an event the SDK accepted.
+    data = json.dumps(batch_body, cls=DatetimeSerializer, allow_nan=False)
     headers = {
         "Content-Type": "application/json",
         "User-Agent": sdk_info,
