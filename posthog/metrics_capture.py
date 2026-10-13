@@ -42,6 +42,8 @@ from posthog.request import _get_session
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
+from .tracing._traceparent import TRACE_FLAGS_SAMPLED, parse_traceparent
+
 log = logging.getLogger("posthog")
 
 MetricAttributeValue = Union[str, int, float, bool]
@@ -79,10 +81,6 @@ _MAX_RETRY_BACKOFF_MULTIPLIER = 64
 _DEFAULT_FLUSH_INTERVAL_SECONDS = 10.0
 _DEFAULT_MAX_SERIES_PER_FLUSH = 1000
 _SCOPE_NAME = "posthog-python"
-_TRACE_FLAG_SAMPLED = 0x01
-_INVALID_TRACE_ID = "0" * 32
-_INVALID_SPAN_ID = "0" * 16
-_HEX_DIGITS = frozenset("0123456789abcdef")
 # None until the first lookup; False when opentelemetry-api is not installed.
 _otel_trace: Any = None
 
@@ -148,23 +146,10 @@ def _bucket_index_for(value: float, bounds: list) -> int:
 
 def _parse_sampled_traceparent(value: Any) -> Optional[tuple[str, str]]:
     """The (trace_id, span_id) of a sampled W3C ``traceparent``, or None."""
-    if not isinstance(value, str):
+    context = parse_traceparent(value)
+    if context is None or context.flags != TRACE_FLAGS_SAMPLED:
         return None
-    parts = value.strip().lower().split("-")
-    if len(parts) < 4:
-        return None
-    trace_id, span_id, flags = parts[1], parts[2], parts[3]
-    if (
-        len(trace_id) != 32
-        or len(span_id) != 16
-        or len(flags) != 2
-        or not _HEX_DIGITS.issuperset(trace_id + span_id + flags)
-        or trace_id == _INVALID_TRACE_ID
-        or span_id == _INVALID_SPAN_ID
-        or not int(flags, 16) & _TRACE_FLAG_SAMPLED
-    ):
-        return None
-    return trace_id, span_id
+    return context.trace_id, context.span_id
 
 
 def _otel_trace_module() -> Any:
