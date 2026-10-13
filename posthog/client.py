@@ -132,6 +132,7 @@ from .types import (
     to_values,
 )
 from posthog.utils import (
+    _uuid7,
     FlagCache,
     RedisFlagCache,
     SizeLimitedDict,
@@ -262,17 +263,37 @@ def _positive_config_value(
     return value
 
 
+def _explicit_distinct_id(passed) -> Optional[str]:
+    """The caller's distinct id, or None when it is missing, empty or whitespace."""
+    stringified = stringify_id(passed)
+    if stringified and stringified.strip():
+        return stringified
+    return None
+
+
 def get_identity_state(passed) -> tuple[str, bool]:
     """Returns the distinct id to use, and whether this is a personless event or not"""
-    stringified = stringify_id(passed)
-    if stringified and len(stringified):
-        return (stringified, False)
+    explicit = _explicit_distinct_id(passed)
+    if explicit:
+        return (explicit, False)
 
     context_id = get_context_distinct_id()
     if context_id:
         return (context_id, False)
 
-    return (str(uuid4()), True)
+    return (str(_uuid7()), True)
+
+
+def _group_identify_distinct_id(passed, group_type, group_key) -> str:
+    """The caller's id, else the context id, else one stable id per group.
+
+    Ingestion creates a person for each new distinct id, so a random id
+    would add a person on every call.
+    """
+    distinct_id, personless = get_identity_state(passed)
+    if personless:
+        return f"${group_type}_{group_key}"
+    return distinct_id
 
 
 def _personless_options(personless: bool) -> dict[str, Any]:
@@ -2076,6 +2097,8 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             distinct_id: The distinct ID of the user performing the action.
+                Falls back to the context distinct ID, then to
+                ``$<group_type>_<group_key>``.
             options: Capture options for this event, sent as given.
 
         Examples:
@@ -2105,8 +2128,7 @@ class Client(object):
 
         properties = properties or {}
 
-        # group_identify is purposefully always personful
-        distinct_id = get_identity_state(distinct_id)[0]
+        distinct_id = _group_identify_distinct_id(distinct_id, group_type, group_key)
 
         msg: Dict[str, Any] = {
             "event": "$groupidentify",
@@ -2121,11 +2143,14 @@ class Client(object):
             "options": _event_options(options),
         }
 
-        # NOTE - group_identify doesn't generally use context properties - should it?
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
-
-        return self._enqueue(msg, disable_geoip)
+        # No context session: this event's distinct id is not the session's
+        # user, and a session takes the person of its latest event.
+        return self._enqueue(
+            msg,
+            disable_geoip,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
+        )
 
     @no_throw()
     def alias(
@@ -2143,9 +2168,9 @@ class Client(object):
         Args:
             previous_id: The previous distinct ID. Required - the call is dropped
                 with a warning if it is missing or empty.
-            distinct_id: The new distinct ID to alias to. Falls back to the
-                context distinct ID; the call is dropped with a warning if
-                neither is available.
+            distinct_id: The new distinct ID to alias to. Required - the call is
+                dropped with a warning if it is missing or empty. The context
+                distinct ID is never used here.
             timestamp: The timestamp of the event. UTC is preferred; non-UTC
                 datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
@@ -2171,10 +2196,10 @@ class Client(object):
             )
             return None
 
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless:
-            # No alias target was passed and none is available from context.
+        # The alias target always comes from the caller: a context id can come
+        # from a client-controlled request header.
+        distinct_id = _explicit_distinct_id(distinct_id)
+        if not distinct_id:
             self.log.warning(
                 "alias() called without a distinct_id, dropping the $create_alias event"
             )
@@ -2195,7 +2220,12 @@ class Client(object):
         if get_context_session_id():
             msg["properties"]["$session_id"] = str(get_context_session_id())
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg,
+            disable_geoip,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
+        )
 
     def capture_exception(
         self,

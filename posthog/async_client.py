@@ -55,6 +55,8 @@ from .client import (
     _parse_flag_payload,
     _add_context_session_id,
     _context_tag_defaults,
+    _explicit_distinct_id,
+    _group_identify_distinct_id,
     _personless_options,
     _positive_config_value,
     add_context_tags as _add_context_tags,
@@ -798,7 +800,9 @@ class AsyncClient:
                 )
                 return None
 
-            resolved_distinct_id = _get_identity_state(distinct_id)[0]
+            resolved_distinct_id = _group_identify_distinct_id(
+                distinct_id, group_type, group_key
+            )
             msg: dict[str, Any] = {
                 "event": "$groupidentify",
                 "properties": {
@@ -811,10 +815,14 @@ class AsyncClient:
                 "uuid": uuid,
                 "options": _event_options(options),
             }
-            session_id = _get_context_session_id()
-            if session_id:
-                msg["properties"]["$session_id"] = str(session_id)
-            return self._enqueue_built_event(msg, disable_geoip)
+            # No context session: this event's distinct id is not the session's
+            # user, and a session takes the person of its latest event.
+            return self._enqueue_built_event(
+                msg,
+                disable_geoip,
+                _get_context_options(),
+                context_properties=_context_tag_defaults(),
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -835,8 +843,10 @@ class AsyncClient:
             if not resolved_previous_id:
                 self.log.warning("alias() called without a previous_id, dropping event")
                 return None
-            resolved_distinct_id, personless = _get_identity_state(distinct_id)
-            if personless:
+            # The alias target always comes from the caller: a context id can
+            # come from a client-controlled request header.
+            resolved_distinct_id = _explicit_distinct_id(distinct_id)
+            if not resolved_distinct_id:
                 self.log.warning("alias() called without a distinct_id, dropping event")
                 return None
             msg: dict[str, Any] = {
@@ -853,7 +863,12 @@ class AsyncClient:
             session_id = _get_context_session_id()
             if session_id:
                 msg["properties"]["$session_id"] = str(session_id)
-            return self._enqueue_built_event(msg, disable_geoip)
+            return self._enqueue_built_event(
+                msg,
+                disable_geoip,
+                _get_context_options(),
+                context_properties=_context_tag_defaults(),
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -865,6 +880,7 @@ class AsyncClient:
         msg: dict[str, Any],
         disable_geoip: Optional[bool],
         context_options: Optional[dict[str, Any]] = None,
+        context_properties: Optional[dict[str, Any]] = None,
     ) -> Optional[str]:
         prepared, sent_uuid = self._prepare_event(msg)
         if prepared is None or sent_uuid is None:
@@ -872,7 +888,9 @@ class AsyncClient:
         if not self.send:
             return sent_uuid
         defaults = self._event_defaults(
-            context_options=context_options, disable_geoip=disable_geoip
+            context_properties=context_properties,
+            context_options=context_options,
+            disable_geoip=disable_geoip,
         )
         if not self._enqueue_prepared_event(prepared, self._analytics_lane, defaults):
             return None
