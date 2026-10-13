@@ -1,5 +1,11 @@
 # posthog
 
+## 7.69.0 — 2026-10-13
+
+### Minor changes
+
+- [3cc2d64](https://github.com/posthog/posthog-python/commit/3cc2d6468d22306897db285bf5fa291a94287e71) `client.metrics` now attaches a trace exemplar to each series it flushes. A sample recorded inside a sampled span (a PostHog `start_span` span, or the current OpenTelemetry span) stamps its data point with that span's trace ID, span ID, and value, so metric charts can link to a representative trace. One exemplar per series per flush window; the last sample wins. — Thanks @DanielVisca!
+
 ## 7.68.0 — 2026-10-12
 
 ### Minor changes
