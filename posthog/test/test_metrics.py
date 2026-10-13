@@ -4,6 +4,8 @@ import math
 from unittest import mock
 
 import pytest
+from opentelemetry import trace
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 
 import posthog
 from posthog.client import Client
@@ -23,6 +25,21 @@ def client():
     c = Client(FAKE_API_KEY, host="https://us.example.com", sync_mode=True)
     yield c
     c.metrics.reset()
+
+
+@pytest.fixture
+def traced_client():
+    # Tracing on, so start_span returns a recording span with its own span ID
+    # instead of a pass-through that echoes the parent's traceparent.
+    with mock.patch(
+        "posthog.tracing._transport._get_session", return_value=mock_session()
+    ):
+        c = Client(
+            FAKE_API_KEY, host="https://us.example.com", sync_mode=True, traces={}
+        )
+        yield c
+        c.metrics.reset()
+        c.shutdown()
 
 
 def mock_session(status_code=200):
@@ -584,6 +601,120 @@ class TestMetricsEncodingParity:
         (dp,) = metric["sum"]["dataPoints"]
         (attr,) = dp["attributes"]
         assert attr["value"] == expected
+
+
+OTEL_TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736"
+OTEL_SPAN_ID = "00f067aa0ba902b7"
+
+
+def otel_span(sampled):
+    return NonRecordingSpan(
+        SpanContext(
+            trace_id=int(OTEL_TRACE_ID, 16),
+            span_id=int(OTEL_SPAN_ID, 16),
+            is_remote=False,
+            trace_flags=TraceFlags(
+                TraceFlags.SAMPLED if sampled else TraceFlags.DEFAULT
+            ),
+        )
+    )
+
+
+def data_points_by_type(payload):
+    points = {}
+    for metric in metrics_from(payload):
+        for kind in ("sum", "gauge", "histogram"):
+            if kind in metric:
+                points[kind] = metric[kind]["dataPoints"][0]
+    return points
+
+
+def record_one_of_each(client):
+    client.metrics.count("c", 1)
+    client.metrics.count("c", 4)
+    client.metrics.gauge("g", 7)
+    client.metrics.histogram("h", 12)
+
+
+class TestMetricsExemplars:
+    def test_sampled_otel_span_stamps_last_sample_on_every_type(self, client):
+        with trace.use_span(otel_span(sampled=True)):
+            record_one_of_each(client)
+
+        payload, _, _ = flush_and_capture(client)
+        points = data_points_by_type(payload)
+
+        for kind, value in (("sum", 4), ("gauge", 7), ("histogram", 12)):
+            (exemplar,) = points[kind]["exemplars"]
+            assert exemplar["traceId"] == OTEL_TRACE_ID
+            assert exemplar["spanId"] == OTEL_SPAN_ID
+            assert exemplar["asDouble"] == value
+            assert exemplar["timeUnixNano"].isdigit()
+
+    def test_active_posthog_span_wins_over_outer_otel_span(self, traced_client):
+        parent_trace_id, parent_span_id = "a" * 32, "b" * 16
+        with trace.use_span(otel_span(sampled=True)):
+            with traced_client.start_span(
+                "job", parent=f"00-{parent_trace_id}-{parent_span_id}-01"
+            ) as span:
+                traced_client.metrics.count("c", 1)
+                _, trace_id, span_id, _ = span.traceparent().split("-")
+
+        payload, _, _ = flush_and_capture(traced_client)
+        (exemplar,) = data_points_by_type(payload)["sum"]["exemplars"]
+        # The recording span's own ID, in the inbound trace, not the parent's.
+        assert span_id not in (parent_span_id, OTEL_SPAN_ID)
+        assert (exemplar["traceId"], exemplar["spanId"]) == (parent_trace_id, span_id)
+
+    def test_innermost_posthog_span_is_the_exemplar(self, traced_client):
+        with traced_client.start_span("request"):
+            with traced_client.start_span("db.query") as child:
+                traced_client.metrics.histogram("h", 3)
+                _, trace_id, span_id, _ = child.traceparent().split("-")
+
+        payload, _, _ = flush_and_capture(traced_client)
+        (exemplar,) = data_points_by_type(payload)["histogram"]["exemplars"]
+        assert (exemplar["traceId"], exemplar["spanId"]) == (trace_id, span_id)
+
+    @pytest.mark.parametrize("context", ["no_span", "unsampled_otel_span"])
+    def test_no_exemplar_without_a_sampled_span(self, client, context):
+        if context == "no_span":
+            record_one_of_each(client)
+        else:
+            with trace.use_span(otel_span(sampled=False)):
+                record_one_of_each(client)
+
+        payload, _, _ = flush_and_capture(client)
+        for point in data_points_by_type(payload).values():
+            assert "exemplars" not in point
+
+    def test_unsampled_posthog_span_hides_a_sampled_outer_otel_span(
+        self, traced_client
+    ):
+        with trace.use_span(otel_span(sampled=True)):
+            with traced_client.start_span(
+                "job", parent=f"00-{'a' * 32}-{'b' * 16}-00"
+            ) as span:
+                assert span.traceparent().endswith("-00")
+                record_one_of_each(traced_client)
+
+        payload, _, _ = flush_and_capture(traced_client)
+        for point in data_points_by_type(payload).values():
+            assert "exemplars" not in point
+
+    def test_failed_flush_keeps_exemplar_for_the_retry(self, client):
+        with trace.use_span(otel_span(sampled=True)):
+            client.metrics.count("c", 1)
+        with mock.patch(
+            "posthog.metrics_capture._get_session", return_value=mock_session(503)
+        ):
+            client.metrics.flush()
+        client.metrics.count("c", 2)
+
+        payload, _, _ = flush_and_capture(client)
+        point = data_points_by_type(payload)["sum"]
+        assert point["asDouble"] == 3
+        assert point["exemplars"][0]["traceId"] == OTEL_TRACE_ID
 
 
 class TestMetricsFailureHandling:
