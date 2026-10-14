@@ -8,6 +8,7 @@ import copy
 import logging
 import math
 import re
+import threading
 import time
 import urllib.parse
 import warnings
@@ -35,6 +36,15 @@ PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
 
 PromptSource = Literal["api", "cache", "stale_cache", "code_fallback"]
+
+
+class _InFlightFetch:
+    """One network request that several callers wait on."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: Optional[Dict[str, Any]] = None
+        self.error: Optional[BaseException] = None
 
 
 @dataclass(frozen=True)
@@ -270,6 +280,11 @@ class Prompts:
             else DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
+        # One request per cache key at a time. Threads that arrive while it is in
+        # flight wait for that result, so a worker with many concurrent callers does
+        # not turn every cache miss or expiry into one request per caller.
+        self._in_flight: Dict[PromptCacheKey, _InFlightFetch] = {}
+        self._in_flight_lock = threading.Lock()
         self._has_warned_deprecation = False
         self._client = posthog
         self._capture_errors = capture_errors
@@ -568,7 +583,7 @@ class Prompts:
 
         # Try to fetch from API
         try:
-            data = self._fetch_prompt_from_api(name, version, label)
+            data = self._fetch_prompt_once(name, version, label)
 
             # An older PostHog server ignores the label param and returns the latest
             # version with no label field — surface that instead of failing silently.
@@ -604,8 +619,6 @@ class Prompts:
             )
 
         except Exception as error:
-            self._maybe_capture_error(error, name=name, version=version, label=label)
-
             prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
             if cached is not None:
@@ -633,6 +646,40 @@ class Prompts:
                 )
 
             raise
+
+    def _fetch_prompt_once(
+        self, name: str, version: Optional[int], label: Optional[str]
+    ) -> Dict[str, Any]:
+        """Fetch a prompt, sharing the request with other threads that want the same key."""
+        cache_key = _cache_key(name, version, label)
+        with self._in_flight_lock:
+            pending = self._in_flight.get(cache_key)
+            is_leader = pending is None
+            if pending is None:
+                pending = _InFlightFetch()
+                self._in_flight[cache_key] = pending
+
+        if not is_leader:
+            pending.done.wait()
+            if pending.error is not None:
+                raise pending.error
+            assert pending.result is not None
+            return pending.result
+
+        try:
+            pending.result = self._fetch_prompt_from_api(name, version, label)
+            return pending.result
+        except BaseException as error:
+            pending.error = error
+            if isinstance(error, Exception):
+                self._maybe_capture_error(
+                    error, name=name, version=version, label=label
+                )
+            raise
+        finally:
+            with self._in_flight_lock:
+                self._in_flight.pop(cache_key, None)
+            pending.done.set()
 
     def compile(self, prompt: str, variables: PromptVariables) -> str:
         """

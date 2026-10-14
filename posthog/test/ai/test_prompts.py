@@ -1,3 +1,4 @@
+import threading
 import unittest
 import warnings
 from unittest.mock import MagicMock, patch
@@ -381,6 +382,78 @@ class TestPromptsGet(TestPrompts):
         result = prompts.get("test-prompt", cache_ttl_seconds=300, with_metadata=True)
         self.assertEqual(result.source, "api")
         self.assertEqual(mock_get.call_count, 4)
+
+    def _run_concurrent_gets(self, prompts, calls):
+        results = [None] * len(calls)
+        start_together = threading.Barrier(len(calls))
+
+        def run(index, kwargs):
+            start_together.wait(5)
+            results[index] = prompts.get("test-prompt", with_metadata=True, **kwargs)
+
+        threads = [
+            threading.Thread(target=run, args=(index, kwargs))
+            for index, kwargs in enumerate(calls)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+        return results
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_share_one_request_between_concurrent_callers(self, mock_get_session):
+        mock_get = mock_get_session.return_value.get
+        release = threading.Event()
+
+        def slow_get(url, **kwargs):
+            release.wait(5)
+            version = 2 if "version=2" in url else 1
+            return MockResponse(
+                json_data={**self.mock_prompt_response, "version": version}
+            )
+
+        mock_get.side_effect = slow_get
+        prompts = Prompts(self.create_mock_posthog())
+
+        calls = [{}] * 10 + [{"version": 2}]
+
+        # Release the network once every caller is waiting on it.
+        timer = threading.Timer(0.2, release.set)
+        timer.start()
+        results = self._run_concurrent_gets(prompts, calls)
+        timer.join()
+
+        self.assertEqual(mock_get.call_count, 2)
+        self.assertEqual({r.source for r in results}, {"api"})
+        self.assertEqual([r.version for r in results[:10]], [1] * 10)
+        self.assertEqual(results[10].version, 2)
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_concurrent_callers_share_one_failure_and_capture_it_once(
+        self, mock_get_session
+    ):
+        mock_get = mock_get_session.return_value.get
+        release = threading.Event()
+
+        def failing_get(url, **kwargs):
+            release.wait(5)
+            raise Exception("Network error")
+
+        mock_get.side_effect = failing_get
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+
+        timer = threading.Timer(0.2, release.set)
+        timer.start()
+        results = self._run_concurrent_gets(
+            prompts, [{"fallback": "fallback prompt"}] * 10
+        )
+        timer.join()
+
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual({r.source for r in results}, {"code_fallback"})
+        posthog.capture_exception.assert_called_once()
 
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.log")
