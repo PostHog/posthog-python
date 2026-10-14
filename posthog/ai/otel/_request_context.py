@@ -49,17 +49,12 @@ def capture_request_context() -> Optional[RequestContext]:
     return snapshot
 
 
-def request_context_attributes(
-    context: RequestContext, include_distinct_id: bool = True
-) -> Dict[str, AttributeValue]:
+def request_context_attributes(context: RequestContext) -> Dict[str, AttributeValue]:
     """Return the snapshot as span attributes. Tags win over the context IDs."""
     values: Dict[str, Any] = {
         key: value
         for key, value in (
-            (
-                DISTINCT_ID_ATTRIBUTE,
-                context.distinct_id if include_distinct_id else None,
-            ),
+            (DISTINCT_ID_ATTRIBUTE, context.distinct_id),
             (SESSION_ID_ATTRIBUTE, context.session_id),
         )
         if value
@@ -84,10 +79,8 @@ def with_request_context(span: ReadableSpan, context: RequestContext) -> Readabl
     has_identity = any(key in own for key in IDENTITY_ATTRIBUTES)
     extra = {
         key: value
-        for key, value in request_context_attributes(
-            context, include_distinct_id=not has_identity
-        ).items()
-        if key not in own
+        for key, value in request_context_attributes(context).items()
+        if key not in own and not (has_identity and key == DISTINCT_ID_ATTRIBUTE)
     }
     if not extra:
         return span

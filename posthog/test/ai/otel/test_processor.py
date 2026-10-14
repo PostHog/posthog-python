@@ -11,7 +11,6 @@ from unittest.mock import MagicMock, patch
 from opentelemetry.sdk.trace import TracerProvider
 
 from posthog import contexts
-from posthog.ai.otel._request_context import IDENTITY_ATTRIBUTES as IDENTITY_KEYS
 from posthog.ai.otel.processor import PostHogSpanProcessor, _reset_processors_after_fork
 from posthog.test.ai.otel.conftest import make_span
 
@@ -202,7 +201,13 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
         self.assertEqual(self._exported_attributes()[0]["$session_id"], "conv_42")
 
     def test_skips_context_distinct_id_when_span_has_an_identity(self):
-        for key in IDENTITY_KEYS:
+        identity_keys = (
+            "posthog.distinct_id",
+            "user.id",
+            "ai.telemetry.metadata.posthog_distinct_id",
+            "ai.settings.context.posthog_distinct_id",
+        )
+        for key in identity_keys:
             with self.subTest(key=key):
                 self.inner.on_end.reset_mock()
                 with new_request_context():
@@ -213,6 +218,14 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
                 self.assertEqual(attributes[key], "bob")
                 if key != "posthog.distinct_id":
                     self.assertNotIn("posthog.distinct_id", attributes)
+
+    def test_skips_distinct_id_tag_when_span_has_an_identity(self):
+        with new_request_context():
+            contexts.tag("posthog.distinct_id", "alice")
+            self._emit_span(attributes={"user.id": "bob"})
+
+        attributes = self._exported_attributes()[0]
+        self.assertEqual(attributes, {"user.id": "bob"})
 
     def test_encodes_structured_tags_as_json(self):
         with new_request_context():
@@ -316,6 +329,38 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
         del span
         gc.collect()
 
+        self.assertEqual(self.processor._captured, {})
+
+    def test_collecting_an_abandoned_span_does_not_deadlock_on_the_held_lock(self):
+        def collect_while_holding_lock():
+            with new_request_context():
+                contexts.identify_context("alice")
+                holder = []
+                span = self.tracer.start_span("gen_ai.chat")
+                holder.append(span)
+                holder.append(holder)
+            del span, holder
+            self.other_processor.reset_mock()
+            with self.processor._captured_lock:
+                gc.collect()
+
+        worker = threading.Thread(target=collect_while_holding_lock, daemon=True)
+        worker.start()
+        worker.join(timeout=5)
+
+        self.assertFalse(worker.is_alive(), "gc deadlocked on the captured lock")
+        self.assertEqual(self.processor._captured, {})
+
+    def test_finalizer_is_detached_once_the_span_ends(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            span = self.tracer.start_span("gen_ai.chat")
+        _, finalizer = next(iter(self.processor._captured.values()))
+        self.assertTrue(finalizer.alive)
+
+        span.end()
+
+        self.assertFalse(finalizer.alive)
         self.assertEqual(self.processor._captured, {})
 
     def test_after_fork_resets_lock_and_store(self):

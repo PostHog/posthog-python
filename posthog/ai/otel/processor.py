@@ -37,6 +37,14 @@ def _span_key(span: ReadableSpan) -> Tuple[int, int]:
 _processors: "weakref.WeakSet[PostHogSpanProcessor]" = weakref.WeakSet()
 
 
+def _discard_abandoned(
+    processor_ref: "weakref.ref[PostHogSpanProcessor]", key: Tuple[int, int]
+) -> None:
+    processor = processor_ref()
+    if processor is not None:
+        processor._discard_captured(key)
+
+
 def _reset_processors_after_fork() -> None:
     for processor in list(_processors):
         processor._reset_after_fork()
@@ -95,18 +103,30 @@ class PostHogSpanProcessor(SpanProcessor):
             headers={"Authorization": f"Bearer {self._api_key}"},
         )
         self._processor = BatchSpanProcessor(exporter)
-        self._captured: Dict[Tuple[int, int], RequestContext] = {}
-        self._captured_lock = threading.Lock()
+        self._captured: Dict[
+            Tuple[int, int], Tuple[RequestContext, weakref.finalize]
+        ] = {}
+        # Reentrant: cyclic GC can run a span finalizer on a thread that already holds the lock.
+        self._captured_lock = threading.RLock()
         _processors.add(self)
 
     def _reset_after_fork(self) -> None:
         # A lock held by another thread at fork time would never release in the child.
-        self._captured_lock = threading.Lock()
+        self._captured_lock = threading.RLock()
         self._captured = {}
 
     def _discard_captured(self, key: Tuple[int, int]) -> None:
         with self._captured_lock:
             self._captured.pop(key, None)
+
+    def _take_captured(self, key: Tuple[int, int]) -> Optional[RequestContext]:
+        with self._captured_lock:
+            entry = self._captured.pop(key, None)
+        if entry is None:
+            return None
+        captured, finalizer = entry
+        finalizer.detach()
+        return captured
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         """
@@ -120,9 +140,11 @@ class PostHogSpanProcessor(SpanProcessor):
             captured = capture_request_context()
             if captured:
                 key = _span_key(span)
+                finalizer = weakref.finalize(
+                    span, _discard_abandoned, weakref.ref(self), key
+                )
                 with self._captured_lock:
-                    self._captured[key] = captured
-                weakref.finalize(span, self._discard_captured, key)
+                    self._captured[key] = (captured, finalizer)
         except Exception:
             log.debug("Failed to capture PostHog context for span", exc_info=True)
 
@@ -133,8 +155,7 @@ class PostHogSpanProcessor(SpanProcessor):
         Args:
             span: The ended OpenTelemetry span.
         """
-        with self._captured_lock:
-            captured = self._captured.pop(_span_key(span), None)
+        captured = self._take_captured(_span_key(span))
         if not is_ai_span(span):
             return
         warn_if_posthog_ai_gateway_otel_attributes(span.attributes)
@@ -149,6 +170,8 @@ class PostHogSpanProcessor(SpanProcessor):
         """Shut down the underlying batch span processor."""
         self._processor.shutdown()
         with self._captured_lock:
+            for _, finalizer in self._captured.values():
+                finalizer.detach()
             self._captured.clear()
 
     def force_flush(self, timeout_millis: Optional[int] = None) -> bool:
