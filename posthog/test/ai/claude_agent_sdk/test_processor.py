@@ -701,9 +701,12 @@ class TestCapturePolicy:
             "$ai_trace_id": "trace-id",
         }
 
-    def test_client_without_capture_ai_is_rejected_at_construction(self):
-        with pytest.raises(TypeError, match="capture_ai"):
-            PostHogClaudeAgentProcessor(client=object())
+    def test_client_without_capture_ai_disables_capture_at_construction(self, caplog):
+        with caplog.at_level(logging.ERROR, logger="posthog"):
+            proc = PostHogClaudeAgentProcessor(client=object())
+
+        assert "capture_ai" in caplog.text
+        proc._capture_event("$ai_trace", {})
 
     def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
         mock_client.capture_ai.side_effect = RuntimeError("capture failed")

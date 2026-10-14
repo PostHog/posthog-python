@@ -2,7 +2,7 @@ import json
 import logging
 import os
 import time
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -787,6 +787,25 @@ def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_call
         assert props["$ai_input_tokens"] == 30
         assert props["$ai_output_tokens"] == 20
         assert props["$ai_http_status"] == 200
+
+
+def test_client_without_capture_ai_still_returns_the_provider_response(
+    mock_openai_response, caplog
+):
+    ph_client = MagicMock(spec=["capture", "privacy_mode"])
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=mock_openai_response,
+    ):
+        with caplog.at_level(logging.ERROR, logger="posthog"):
+            client = OpenAI(api_key="test-key", posthog_client=ph_client)
+        response = client.chat.completions.create(
+            model="gpt-4", messages=[{"role": "user", "content": "Hello"}]
+        )
+
+    assert response == mock_openai_response
+    assert "capture_ai" in caplog.text
+    ph_client.capture.assert_not_called()
 
 
 def test_streaming_with_tool_calls(mock_client, streaming_tool_call_chunks):
