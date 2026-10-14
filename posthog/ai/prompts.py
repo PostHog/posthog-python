@@ -7,11 +7,13 @@ Fetch and compile LLM prompts from PostHog with caching and fallback support.
 import copy
 import logging
 import math
+import os
 import re
 import threading
 import time
 import urllib.parse
 import warnings
+import weakref
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union, overload
 
@@ -31,6 +33,10 @@ _MAX_PROMPT_LIST_PAGES = 100
 # The server's tightest prompt limit is per-minute, so a minute lets the bucket refill.
 DEFAULT_REFETCH_COOLDOWN_SECONDS = 60
 MAX_REFETCH_COOLDOWN_SECONDS = 3600
+# Longest a caller waits on another thread's fetch: the 10s request timeout times
+# the transport's three attempts. Past it the leader is assumed lost, for example
+# to a fork, and the caller fetches for itself.
+_IN_FLIGHT_WAIT_SECONDS = 30
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
@@ -285,6 +291,11 @@ class Prompts:
         # not turn every cache miss or expiry into one request per caller.
         self._in_flight: Dict[PromptCacheKey, _InFlightFetch] = {}
         self._in_flight_lock = threading.Lock()
+        if hasattr(os, "register_at_fork"):
+            weak_self = weakref.ref(self)
+            os.register_at_fork(
+                after_in_child=lambda: Prompts._reset_in_flight_after_fork(weak_self)
+            )
         self._has_warned_deprecation = False
         self._client = posthog
         self._capture_errors = capture_errors
@@ -585,37 +596,13 @@ class Prompts:
         try:
             data = self._fetch_prompt_once(name, version, label)
 
-            # An older PostHog server ignores the label param and returns the latest
-            # version with no label field — surface that instead of failing silently.
-            if label is not None and data.get("label") != label:
-                log.warning(
-                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
-                    "resolved %r. It may not support prompt labels yet and returned the "
-                    "latest version instead.",
-                    label,
-                    name,
-                    data.get("label"),
-                )
-
-            config = _extract_config(data)
-
-            # Update cache
-            self._cache[cache_key] = CachedPrompt(
-                prompt=data["prompt"],
-                fetched_at=time.time(),
-                name=data["name"],
-                version=data["version"],
-                label=data.get("label"),
-                config=config,
-            )
-
             return PromptResult(
                 source="api",
                 prompt=data["prompt"],
                 name=data["name"],
                 version=data["version"],
                 label=data.get("label"),
-                config=copy.deepcopy(config),
+                config=copy.deepcopy(_extract_config(data)),
             )
 
         except Exception as error:
@@ -647,6 +634,16 @@ class Prompts:
 
             raise
 
+    @staticmethod
+    def _reset_in_flight_after_fork(weak_self: "weakref.ref[Prompts]") -> None:
+        # The child has no copy of the thread that was fetching, so an inherited
+        # in-flight entry would hold every later caller for that key.
+        self = weak_self()
+        if self is None:
+            return
+        self._in_flight = {}
+        self._in_flight_lock = threading.Lock()
+
     def _fetch_prompt_once(
         self, name: str, version: Optional[int], label: Optional[str]
     ) -> Dict[str, Any]:
@@ -660,26 +657,56 @@ class Prompts:
                 self._in_flight[cache_key] = pending
 
         if not is_leader:
-            pending.done.wait()
+            if not pending.done.wait(_IN_FLIGHT_WAIT_SECONDS):
+                with self._in_flight_lock:
+                    if self._in_flight.get(cache_key) is pending:
+                        del self._in_flight[cache_key]
+                return self._fetch_prompt_once(name, version, label)
             if pending.error is not None:
                 raise pending.error
             assert pending.result is not None
             return pending.result
 
         try:
-            pending.result = self._fetch_prompt_from_api(name, version, label)
-            return pending.result
+            data = self._fetch_prompt_from_api(name, version, label)
+
+            # An older PostHog server ignores the label param and returns the latest
+            # version with no label field — surface that instead of failing silently.
+            if label is not None and data.get("label") != label:
+                log.warning(
+                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
+                    "resolved %r. It may not support prompt labels yet and returned the "
+                    "latest version instead.",
+                    label,
+                    name,
+                    data.get("label"),
+                )
+
+            # Cached before the in-flight entry is released, so a caller that
+            # arrives in between finds the entry instead of starting a request.
+            self._cache[cache_key] = CachedPrompt(
+                prompt=data["prompt"],
+                fetched_at=time.time(),
+                name=data["name"],
+                version=data["version"],
+                label=data.get("label"),
+                config=_extract_config(data),
+            )
+            pending.result = data
+            return data
         except BaseException as error:
             pending.error = error
-            if isinstance(error, Exception):
-                self._maybe_capture_error(
-                    error, name=name, version=version, label=label
-                )
             raise
         finally:
             with self._in_flight_lock:
                 self._in_flight.pop(cache_key, None)
             pending.done.set()
+            # Reported after the waiters are released, so an error-tracking callback
+            # that fetches the same prompt cannot wait on this very request.
+            if isinstance(pending.error, Exception):
+                self._maybe_capture_error(
+                    pending.error, name=name, version=version, label=label
+                )
 
     def compile(self, prompt: str, variables: PromptVariables) -> str:
         """

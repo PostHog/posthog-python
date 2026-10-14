@@ -455,6 +455,49 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual({r.source for r in results}, {"code_fallback"})
         posthog.capture_exception.assert_called_once()
 
+    @patch("posthog.ai.prompts._IN_FLIGHT_WAIT_SECONDS", 0.05)
+    @patch("posthog.ai.prompts._get_session")
+    def test_fetches_for_itself_when_the_in_flight_leader_is_gone(
+        self, mock_get_session
+    ):
+        from posthog.ai.prompts import _InFlightFetch, _cache_key
+
+        mock_get = mock_get_session.return_value.get
+        mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
+        prompts = Prompts(self.create_mock_posthog())
+        # What a forked child inherits: an entry whose fetching thread no longer exists.
+        prompts._in_flight[_cache_key("test-prompt", None, None)] = _InFlightFetch()
+
+        result = prompts.get("test-prompt", with_metadata=True)
+
+        self.assertEqual(result.source, "api")
+        self.assertEqual(mock_get.call_count, 1)
+        self.assertEqual(prompts._in_flight, {})
+
+    @patch("posthog.ai.prompts._get_session")
+    def test_error_callback_that_fetches_the_same_prompt_does_not_deadlock(
+        self, mock_get_session
+    ):
+        mock_get = mock_get_session.return_value.get
+        mock_get.side_effect = Exception("Network error")
+        posthog = self.create_mock_posthog()
+        prompts = Prompts(posthog, capture_errors=True)
+        nested_results = []
+
+        def capture_exception(*args, **kwargs):
+            if nested_results:
+                return
+            nested_results.append(
+                prompts.get("test-prompt", with_metadata=True, fallback="nested")
+            )
+
+        posthog.capture_exception.side_effect = capture_exception
+
+        result = prompts.get("test-prompt", with_metadata=True, fallback="outer")
+
+        self.assertEqual(result.prompt, "outer")
+        self.assertEqual([r.prompt for r in nested_results], ["nested"])
+
     @patch("posthog.ai.prompts._get_session")
     @patch("posthog.ai.prompts.log")
     def test_use_fallback_when_no_cache_and_fetch_fails_with_warning(
