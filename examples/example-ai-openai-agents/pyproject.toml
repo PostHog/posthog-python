@@ -3,6 +3,9 @@ name = "example-ai-openai-agents"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
-    "posthog==7.9.12",
+    "posthog",
     "openai-agents==0.13.1",
 ]
+
+[tool.uv.sources]
+posthog = { path = "../.." }

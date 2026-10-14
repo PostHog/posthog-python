@@ -366,13 +366,15 @@ class TestSendV1Batch(unittest.TestCase):
         stub, exc = self._run_expecting_error(
             batch,
             [
-                _results_response({"u-drop": ("drop", "billing"), "u-retry": "retry"}),
+                _results_response(
+                    {"u-drop": ("drop", "llm_events_over_quota"), "u-retry": "retry"}
+                ),
                 _results_response({"u-retry": "ok"}),
             ],
         )
         self.assertEqual(len(stub.calls), 2)
         self.assertEqual(stub.calls[1]["uuids"], ["u-retry"])  # only retry resent
-        self.assertEqual(exc.drops, [("u-drop", "billing")])
+        self.assertEqual(exc.drops, [("u-drop", "llm_events_over_quota")])
         self.assertEqual(exc.retry_exhausted, [])
 
     def test_retry_exhausted_raises_with_uuids(self) -> None:
@@ -394,7 +396,7 @@ class TestSendV1Batch(unittest.TestCase):
                 _results_response(
                     {
                         "u-ok": "ok",
-                        "u-drop": ("drop", "billing"),
+                        "u-drop": ("drop", "llm_events_over_quota"),
                         "u-retry": "retry",
                     }
                 ),
@@ -405,16 +407,18 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(len(stub.calls), 2)
         self.assertEqual(exc.endpoint, _CAPTURE_V1_PATH)
         self.assertEqual(exc.retry_exhausted, ["u-retry"])
-        self.assertEqual(exc.drops, [("u-drop", "billing")])
+        self.assertEqual(exc.drops, [("u-drop", "llm_events_over_quota")])
         self.assertEqual(
             exc.event_results,
             {
                 "u-ok": CaptureEventResult("ok"),
-                "u-drop": CaptureEventResult("drop", "billing"),
+                "u-drop": CaptureEventResult("drop", "llm_events_over_quota"),
                 "u-retry": CaptureEventResult("retry", "not_persisted"),
             },
         )
-        self.assertEqual(exc.verdict_summary(), "drop/billing=1, retry/not_persisted=1")
+        self.assertEqual(
+            exc.verdict_summary(), "drop/llm_events_over_quota=1, retry/not_persisted=1"
+        )
 
     @parameterized.expand(
         [
@@ -432,11 +436,11 @@ class TestSendV1Batch(unittest.TestCase):
             [_msg(sent_uuid)],
             [
                 _results_response({canonical: "retry"}),
-                _results_response({canonical: ("drop", "billing")}),
+                _results_response({canonical: ("drop", "llm_events_over_quota")}),
             ],
         )
         self.assertEqual(len(stub.calls), 2)
-        self.assertEqual(exc.drops, [(canonical, "billing")])
+        self.assertEqual(exc.drops, [(canonical, "llm_events_over_quota")])
 
     def test_malformed_2xx_is_terminal(self) -> None:
         stub, exc = self._run_expecting_error(
@@ -536,17 +540,17 @@ class TestCaptureLossMessage(unittest.TestCase):
                     200,
                     "2 event(s) not delivered",
                     endpoint=_CAPTURE_V1_PATH,
-                    drops=[("u-drop", "billing")],
+                    drops=[("u-drop", "llm_events_over_quota")],
                     retry_exhausted=["u-retry"],
                     event_results={
                         "u-ok": CaptureEventResult("ok"),
-                        "u-drop": CaptureEventResult("drop", "billing"),
+                        "u-drop": CaptureEventResult("drop", "llm_events_over_quota"),
                         "u-retry": CaptureEventResult("retry", "not_persisted"),
                     },
                 ),
                 3,
                 "2 event(s) not persisted by /i/v1/analytics/events: 1 dropped, "
-                "1 out of retries (drop/billing=1, retry/not_persisted=1)",
+                "1 out of retries (drop/llm_events_over_quota=1, retry/not_persisted=1)",
             ),
             (
                 "request_failure_after_partial_success",
