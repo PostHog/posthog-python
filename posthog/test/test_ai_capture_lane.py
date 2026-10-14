@@ -9,6 +9,7 @@ from parameterized import parameterized
 import posthog
 
 from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
+from posthog.async_client import AsyncPosthog
 from posthog.capture_compression import CAPTURE_COMPRESSION_ENV_VAR, CaptureCompression
 from posthog.client import Client
 from posthog.consumer import AI_MAX_MSG_SIZE, AI_MAX_PROPERTIES_SIZE, MAX_MSG_SIZE
@@ -699,14 +700,16 @@ class TestCaptureAiUuid(unittest.TestCase):
 class TestCaptureAiPrivacyMode(unittest.TestCase):
     """Privacy mode always wins over `enable_full_ai_capture`."""
 
-    def test_privacy_mode_strips_content_despite_full_ai_capture(self):
-        client = Client(
+    @parameterized.expand([("sync", Client), ("async", AsyncPosthog)])
+    def test_privacy_mode_strips_content_despite_full_ai_capture(
+        self, _name, client_cls
+    ):
+        client = client_cls(
             TEST_API_KEY,
             send=False,
             enable_full_ai_capture=True,
             privacy_mode=True,
         )
-        self.addCleanup(client.join)
         payload = {"role": "user", "content": "sensitive prompt"}
 
         sanitized = with_privacy_mode(
@@ -714,6 +717,33 @@ class TestCaptureAiPrivacyMode(unittest.TestCase):
         )
 
         self.assertIsNone(sanitized)
+
+    @parameterized.expand(
+        [
+            ("sync_default", Client, False),
+            ("sync_full_capture", Client, True),
+            ("async_default", AsyncPosthog, False),
+            ("async_full_capture", AsyncPosthog, True),
+        ]
+    )
+    def test_full_ai_capture_controls_media_redaction(
+        self, _name, client_cls, full_capture
+    ):
+        client = client_cls(
+            TEST_API_KEY, send=False, enable_full_ai_capture=full_capture
+        )
+        image = "data:image/jpeg;base64," + "A" * 64
+        payload = [
+            {
+                "role": "user",
+                "content": [{"type": "image_url", "image_url": {"url": image}}],
+            }
+        ]
+
+        sanitized = finalize_ai_content(payload, ph_client=client)
+
+        sent_url = sanitized[0]["content"][0]["image_url"]["url"]
+        self.assertEqual(sent_url == image, full_capture)
 
 
 if __name__ == "__main__":
