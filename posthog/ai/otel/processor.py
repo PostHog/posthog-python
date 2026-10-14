@@ -6,7 +6,9 @@ for setups using TracerProvider.add_span_processor().
 """
 
 import logging
+import os
 import threading
+import weakref
 from typing import Dict, Optional, Tuple
 
 from opentelemetry.context import Context
@@ -30,6 +32,18 @@ def _span_key(span: ReadableSpan) -> Tuple[int, int]:
     # The SDK passes on_end a ReadableSpan snapshot, not the Span object on_start saw.
     context = span.get_span_context()
     return (context.trace_id, context.span_id)
+
+
+_processors: "weakref.WeakSet[PostHogSpanProcessor]" = weakref.WeakSet()
+
+
+def _reset_processors_after_fork() -> None:
+    for processor in list(_processors):
+        processor._reset_after_fork()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_processors_after_fork)
 
 
 class PostHogSpanProcessor(SpanProcessor):
@@ -56,8 +70,11 @@ class PostHogSpanProcessor(SpanProcessor):
             handle_request()
 
     Attributes already on a span win over explicit tags, which win over the
-    context's distinct ID and session ID. Threads that don't copy contextvars
+    context's distinct ID and session ID (exported as ``$session_id``). Threads that don't copy contextvars
     carry no user.
+
+    The context is captured when a span starts, but tag values are read when the
+    span ends. Mutating a tagged object while a span is open shows up in the export.
     """
 
     def __init__(
@@ -80,6 +97,16 @@ class PostHogSpanProcessor(SpanProcessor):
         self._processor = BatchSpanProcessor(exporter)
         self._captured: Dict[Tuple[int, int], RequestContext] = {}
         self._captured_lock = threading.Lock()
+        _processors.add(self)
+
+    def _reset_after_fork(self) -> None:
+        # A lock held by another thread at fork time would never release in the child.
+        self._captured_lock = threading.Lock()
+        self._captured = {}
+
+    def _discard_captured(self, key: Tuple[int, int]) -> None:
+        with self._captured_lock:
+            self._captured.pop(key, None)
 
     def on_start(self, span: Span, parent_context: Optional[Context] = None) -> None:
         """
@@ -92,8 +119,10 @@ class PostHogSpanProcessor(SpanProcessor):
         try:
             captured = capture_request_context()
             if captured:
+                key = _span_key(span)
                 with self._captured_lock:
-                    self._captured[_span_key(span)] = captured
+                    self._captured[key] = captured
+                weakref.finalize(span, self._discard_captured, key)
         except Exception:
             log.debug("Failed to capture PostHog context for span", exc_info=True)
 

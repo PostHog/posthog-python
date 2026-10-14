@@ -1,3 +1,4 @@
+import gc
 import json
 import threading
 import unittest
@@ -10,7 +11,8 @@ from unittest.mock import MagicMock, patch
 from opentelemetry.sdk.trace import TracerProvider
 
 from posthog import contexts
-from posthog.ai.otel.processor import PostHogSpanProcessor
+from posthog.ai.otel._request_context import IDENTITY_ATTRIBUTES as IDENTITY_KEYS
+from posthog.ai.otel.processor import PostHogSpanProcessor, _reset_processors_after_fork
 from posthog.test.ai.otel.conftest import make_span
 
 
@@ -159,7 +161,7 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
             [
                 {
                     "posthog.distinct_id": "alice",
-                    "$ai_session_id": "s_alice",
+                    "$session_id": "s_alice",
                     "plan": "pro",
                 }
             ],
@@ -195,9 +197,22 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
     def test_keeps_attributes_already_on_the_span(self):
         with new_request_context():
             contexts.set_context_session("s_alice")
-            self._emit_span(attributes={"$ai_session_id": "conv_42"})
+            self._emit_span(attributes={"$session_id": "conv_42"})
 
-        self.assertEqual(self._exported_attributes()[0]["$ai_session_id"], "conv_42")
+        self.assertEqual(self._exported_attributes()[0]["$session_id"], "conv_42")
+
+    def test_skips_context_distinct_id_when_span_has_an_identity(self):
+        for key in IDENTITY_KEYS:
+            with self.subTest(key=key):
+                self.inner.on_end.reset_mock()
+                with new_request_context():
+                    contexts.identify_context("alice")
+                    self._emit_span(attributes={key: "bob"})
+
+                attributes = self._exported_attributes()[0]
+                self.assertEqual(attributes[key], "bob")
+                if key != "posthog.distinct_id":
+                    self.assertNotIn("posthog.distinct_id", attributes)
 
     def test_encodes_structured_tags_as_json(self):
         with new_request_context():
@@ -248,17 +263,72 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
 
     def test_tags_win_over_context_ids_and_survive_an_empty_context(self):
         with new_request_context():
-            contexts.tag("$ai_session_id", "conv_42")
+            contexts.tag("$session_id", "conv_42")
             self._emit_span()
+        with new_request_context():
+            contexts.set_context_session("s_alice")
+            contexts.tag("$session_id", "conv_42")
+            self._emit_span()
+
+        self.assertEqual(
+            [a["$session_id"] for a in self._exported_attributes()],
+            ["conv_42", "conv_42"],
+        )
+
+    def test_explicit_ai_session_id_tag_passes_through(self):
         with new_request_context():
             contexts.set_context_session("s_alice")
             contexts.tag("$ai_session_id", "conv_42")
             self._emit_span()
 
-        self.assertEqual(
-            [a["$ai_session_id"] for a in self._exported_attributes()],
-            ["conv_42", "conv_42"],
-        )
+        attributes = self._exported_attributes()[0]
+        self.assertEqual(attributes["$ai_session_id"], "conv_42")
+        self.assertEqual(attributes["$session_id"], "s_alice")
+
+    def test_context_session_does_not_set_ai_session_id(self):
+        with new_request_context():
+            contexts.set_context_session("s_alice")
+            self._emit_span()
+
+        self.assertNotIn("$ai_session_id", self._exported_attributes()[0])
+
+    def test_integers_outside_signed_64_bit_range_are_sent_as_strings(self):
+        with new_request_context():
+            contexts.tag("big", 2**63)
+            contexts.tag("small", -(2**63) - 1)
+            contexts.tag("edge", 2**63 - 1)
+            contexts.tag("bigs", [2**64, 1])
+            self._emit_span()
+
+        attributes = self._exported_attributes()[0]
+        self.assertEqual(attributes["big"], str(2**63))
+        self.assertEqual(attributes["small"], str(-(2**63) - 1))
+        self.assertEqual(attributes["edge"], 2**63 - 1)
+        self.assertEqual(json.loads(attributes["bigs"]), [2**64, 1])
+
+    def test_abandoned_span_entry_is_removed_when_garbage_collected(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            span = self.tracer.start_span("gen_ai.chat")
+        self.assertEqual(len(self.processor._captured), 1)
+
+        self.other_processor.reset_mock()
+        del span
+        gc.collect()
+
+        self.assertEqual(self.processor._captured, {})
+
+    def test_after_fork_resets_lock_and_store(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            span = self.tracer.start_span("gen_ai.chat")
+        old_lock = self.processor._captured_lock
+
+        _reset_processors_after_fork()
+
+        self.assertIsNot(self.processor._captured_lock, old_lock)
+        self.assertEqual(self.processor._captured, {})
+        span.end()
 
     def test_unstampable_tag_does_not_drop_the_other_tags(self):
         class Unstampable(list):
@@ -277,14 +347,15 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
 
         self.assertEqual(self._exported_attributes(), [{}])
 
-    def test_concurrent_contexts_export_their_own_values(self):
-        both_inside = threading.Barrier(2)
+    def test_overlapping_requests_export_their_own_values(self):
+        both_started = threading.Barrier(2)
 
         def request(user):
             with new_request_context():
                 contexts.identify_context(user)
-                both_inside.wait()
-                self._emit_span()
+                span = self.tracer.start_span("gen_ai.chat")
+            both_started.wait(timeout=5)
+            span.end()
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(pool.map(request, ["alice", "bob"]))

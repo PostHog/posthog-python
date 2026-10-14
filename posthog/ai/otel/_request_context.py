@@ -15,7 +15,16 @@ from opentelemetry.util.types import AttributeValue
 from ...contexts import get_context_distinct_id, get_context_session_id, get_tags
 
 DISTINCT_ID_ATTRIBUTE = "posthog.distinct_id"
-SESSION_ID_ATTRIBUTE = "$ai_session_id"
+SESSION_ID_ATTRIBUTE = "$session_id"
+# Ingestion prefers posthog.distinct_id, so adding the context's would override the span's explicit user.
+IDENTITY_ATTRIBUTES = (
+    DISTINCT_ID_ATTRIBUTE,
+    "user.id",
+    "ai.telemetry.metadata.posthog_distinct_id",
+    "ai.settings.context.posthog_distinct_id",
+)
+_MAX_INT64 = 2**63 - 1
+_MIN_INT64 = -(2**63)
 _PRIMITIVE_TYPES = (str, bool, int, float)
 
 log = logging.getLogger("posthog")
@@ -40,12 +49,17 @@ def capture_request_context() -> Optional[RequestContext]:
     return snapshot
 
 
-def request_context_attributes(context: RequestContext) -> Dict[str, AttributeValue]:
+def request_context_attributes(
+    context: RequestContext, include_distinct_id: bool = True
+) -> Dict[str, AttributeValue]:
     """Return the snapshot as span attributes. Tags win over the context IDs."""
     values: Dict[str, Any] = {
         key: value
         for key, value in (
-            (DISTINCT_ID_ATTRIBUTE, context.distinct_id),
+            (
+                DISTINCT_ID_ATTRIBUTE,
+                context.distinct_id if include_distinct_id else None,
+            ),
             (SESSION_ID_ATTRIBUTE, context.session_id),
         )
         if value
@@ -67,9 +81,12 @@ def request_context_attributes(context: RequestContext) -> Dict[str, AttributeVa
 def with_request_context(span: ReadableSpan, context: RequestContext) -> ReadableSpan:
     """Return a copy of ``span`` with the context's values added, keeping attributes it already has."""
     own = span.attributes or {}
+    has_identity = any(key in own for key in IDENTITY_ATTRIBUTES)
     extra = {
         key: value
-        for key, value in request_context_attributes(context).items()
+        for key, value in request_context_attributes(
+            context, include_distinct_id=not has_identity
+        ).items()
         if key not in own
     }
     if not extra:
@@ -96,6 +113,8 @@ def to_attribute_value(value: Any) -> Optional[AttributeValue]:
         return None
     if isinstance(value, float) and not math.isfinite(value):
         return None
+    if _is_out_of_int64_range(value):
+        return str(value)
     if isinstance(value, _PRIMITIVE_TYPES):
         return value
     if isinstance(value, (list, tuple)) and _is_homogeneous(value):
@@ -117,9 +136,18 @@ def _encode_string_like(value: Any) -> str:
     raise TypeError(f"{type(value).__name__} is not JSON serializable")
 
 
+def _is_out_of_int64_range(value: Any) -> bool:
+    return (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and not _MIN_INT64 <= value <= _MAX_INT64
+    )
+
+
 def _is_homogeneous(values: Sequence[Any]) -> bool:
     return (
         all(isinstance(v, _PRIMITIVE_TYPES) for v in values)
+        and not any(_is_out_of_int64_range(v) for v in values)
         and all(math.isfinite(v) for v in values if isinstance(v, float))
         and len({type(v) for v in values}) <= 1
     )
