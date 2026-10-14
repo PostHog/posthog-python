@@ -1,6 +1,15 @@
+import json
+import threading
 import unittest
+import uuid
+from datetime import datetime, timezone
+from decimal import Decimal
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
+from opentelemetry.sdk.trace import TracerProvider
+
+from posthog import contexts
 from posthog.ai.otel.processor import PostHogSpanProcessor
 from posthog.test.ai.otel.conftest import make_span
 
@@ -108,3 +117,179 @@ class TestPostHogSpanProcessor(unittest.TestCase):
                 inner.force_flush.return_value = result
                 self.assertIs(processor.force_flush(), result)
                 inner.force_flush.assert_called_once_with()
+
+
+def new_request_context():
+    return contexts.new_context(fresh=True, capture_exceptions=False)
+
+
+class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
+    def setUp(self):
+        exporter_patch = patch("posthog.ai.otel.processor.OTLPSpanExporter")
+        batch_patch = patch("posthog.ai.otel.processor.BatchSpanProcessor")
+        exporter_patch.start()
+        self.inner = batch_patch.start().return_value
+        self.addCleanup(exporter_patch.stop)
+        self.addCleanup(batch_patch.stop)
+        provider = TracerProvider()
+        self.processor = PostHogSpanProcessor(api_key="phc_test")
+        provider.add_span_processor(self.processor)
+        self.other_processor = MagicMock()
+        provider.add_span_processor(self.other_processor)
+        self.tracer = provider.get_tracer("test")
+
+    def _emit_span(self, name="gen_ai.chat", attributes=None):
+        with self.tracer.start_as_current_span(name, attributes=attributes):
+            pass
+
+    def _exported_attributes(self):
+        return [
+            dict(call.args[0].attributes) for call in self.inner.on_end.call_args_list
+        ]
+
+    def test_exports_distinct_id_session_and_tags(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            contexts.set_context_session("s_alice")
+            contexts.tag("plan", "pro")
+            self._emit_span()
+
+        self.assertEqual(
+            self._exported_attributes(),
+            [
+                {
+                    "posthog.distinct_id": "alice",
+                    "$ai_session_id": "s_alice",
+                    "plan": "pro",
+                }
+            ],
+        )
+
+    def test_other_processors_do_not_see_the_context(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            contexts.tag("plan", "pro")
+            self._emit_span(attributes={"gen_ai.system": "openai"})
+
+        started = self.other_processor.on_start.call_args.args[0]
+        ended = self.other_processor.on_end.call_args.args[0]
+        self.assertEqual(dict(started.attributes), {"gen_ai.system": "openai"})
+        self.assertEqual(dict(ended.attributes), {"gen_ai.system": "openai"})
+
+    def test_drops_non_ai_spans_started_in_a_context(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            self._emit_span(name="http.request")
+
+        self.inner.on_end.assert_not_called()
+        self.assertEqual(self.processor._captured, {})
+
+    def test_shutdown_clears_captured_contexts(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            with self.tracer.start_as_current_span("gen_ai.chat"):
+                self.assertEqual(len(self.processor._captured), 1)
+                self.processor.shutdown()
+                self.assertEqual(self.processor._captured, {})
+
+    def test_keeps_attributes_already_on_the_span(self):
+        with new_request_context():
+            contexts.set_context_session("s_alice")
+            self._emit_span(attributes={"$ai_session_id": "conv_42"})
+
+        self.assertEqual(self._exported_attributes()[0]["$ai_session_id"], "conv_42")
+
+    def test_encodes_structured_tags_as_json(self):
+        with new_request_context():
+            contexts.tag("account", {"tier": "pro", "seats": 3})
+            contexts.tag("arms", ["short-prompt", "new-router"])
+            contexts.tag("mixed", ["a", 1])
+            contexts.tag("nested_not_finite", {"x": float("inf")})
+            self._emit_span()
+
+        attributes = self._exported_attributes()[0]
+        self.assertEqual(json.loads(attributes["account"]), {"tier": "pro", "seats": 3})
+        self.assertEqual(list(attributes["arms"]), ["short-prompt", "new-router"])
+        self.assertEqual(json.loads(attributes["mixed"]), ["a", 1])
+        self.assertNotIn("nested_not_finite", attributes)
+
+    def test_skips_non_finite_numbers(self):
+        with new_request_context():
+            contexts.tag("nan", float("nan"))
+            contexts.tag("inf", float("-inf"))
+            contexts.tag("list_with_inf", [1.0, float("inf")])
+            contexts.tag("plan", "pro")
+            self._emit_span()
+
+        self.assertEqual(self._exported_attributes(), [{"plan": "pro"}])
+
+    def test_string_like_values_arrive_as_plain_strings(self):
+        moment = datetime(2026, 10, 14, 8, 30, tzinfo=timezone.utc)
+        identifier = uuid.UUID("12345678-1234-5678-1234-567812345678")
+        with new_request_context():
+            contexts.tag("when", moment)
+            contexts.tag("id", identifier)
+            contexts.tag("price", Decimal("1.50"))
+            self._emit_span()
+
+        self.assertEqual(
+            self._exported_attributes(),
+            [{"when": moment.isoformat(), "id": str(identifier), "price": "1.50"}],
+        )
+
+    def test_skips_values_json_cannot_represent(self):
+        with new_request_context():
+            contexts.tag("tags", {"a", "b"})
+            contexts.tag("raw", b"bytes")
+            contexts.tag("plan", "pro")
+            self._emit_span()
+
+        self.assertEqual(self._exported_attributes(), [{"plan": "pro"}])
+
+    def test_tags_win_over_context_ids_and_survive_an_empty_context(self):
+        with new_request_context():
+            contexts.tag("$ai_session_id", "conv_42")
+            self._emit_span()
+        with new_request_context():
+            contexts.set_context_session("s_alice")
+            contexts.tag("$ai_session_id", "conv_42")
+            self._emit_span()
+
+        self.assertEqual(
+            [a["$ai_session_id"] for a in self._exported_attributes()],
+            ["conv_42", "conv_42"],
+        )
+
+    def test_unstampable_tag_does_not_drop_the_other_tags(self):
+        class Unstampable(list):
+            def __iter__(self):
+                raise RuntimeError("cannot iterate")
+
+        with new_request_context():
+            contexts.tag("bad", Unstampable([1]))
+            contexts.tag("plan", "pro")
+            self._emit_span()
+
+        self.assertEqual(self._exported_attributes(), [{"plan": "pro"}])
+
+    def test_adds_nothing_without_a_context(self):
+        self._emit_span()
+
+        self.assertEqual(self._exported_attributes(), [{}])
+
+    def test_concurrent_contexts_export_their_own_values(self):
+        both_inside = threading.Barrier(2)
+
+        def request(user):
+            with new_request_context():
+                contexts.identify_context(user)
+                both_inside.wait()
+                self._emit_span()
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(request, ["alice", "bob"]))
+
+        self.assertEqual(
+            sorted(a["posthog.distinct_id"] for a in self._exported_attributes()),
+            ["alice", "bob"],
+        )
