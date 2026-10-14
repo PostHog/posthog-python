@@ -846,11 +846,11 @@ class Client(object):
                 captured exceptions. Defaults to the current working directory.
             privacy_mode: For AI observability, capture usage metadata without
                 prompt inputs or outputs.
-            enable_full_ai_capture: Route PostHog AI wrapper events through
-                the dedicated AI capture endpoint and capture full AI content:
-                skips string truncation and passes media (base64/data URIs)
-                through unredacted. ``privacy_mode`` always wins. Defaults to
-                False.
+            enable_full_ai_capture: Capture full AI content in PostHog AI
+                wrapper events: skips string truncation and passes media
+                (base64/data URIs) through unredacted. ``privacy_mode`` always
+                wins. Wrapper events use the AI capture endpoint whether or not
+                this is set. Defaults to False.
             before_send: Optional callback that can modify or drop events before
                 upload. Return ``None`` to drop an event. Context tags,
                 context options, ``super_properties``, ``super_options`` and

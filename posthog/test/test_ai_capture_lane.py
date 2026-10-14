@@ -83,14 +83,6 @@ class TestLaneRouting(unittest.TestCase):
         batch = sent_batch(mock_post)
         self.assertEqual([e["event"] for e in batch], ["$ai_generation"])
 
-    def test_multimodal_client_routes_wrapper_captures_to_ai_lane(self):
-        client = self._client(enable_full_ai_capture=True)
-        with patch_capture_send("consumer") as mock_post:
-            _capture_ai_event(client, "$ai_generation", distinct_id="d")
-            client.flush()
-        by_path = _events_by_path(mock_post)
-        self.assertEqual(set(by_path), {_CAPTURE_AI_V1_PATH})
-
     def test_disabled_client_never_starts_ai_lane(self):
         client = Client(TEST_API_KEY, disabled=True)
         client.capture_ai("$ai_generation", distinct_id="d")
@@ -464,10 +456,13 @@ class TestLaneForkRebuild(unittest.TestCase):
 
 
 class TestCaptureAiEventHelper(unittest.TestCase):
-    """`_capture_ai_event` rides the AI lane only when the client opted in."""
+    """`_capture_ai_event` always rides the AI lane; `enable_full_ai_capture` only controls content."""
 
-    def test_opted_in_routes_through_ai_lane(self):
-        client = Client(TEST_API_KEY, flush_interval=0.05, enable_full_ai_capture=True)
+    @parameterized.expand([("default", False), ("full_capture", True)])
+    def test_routes_only_through_ai_lane(self, _name, full_capture):
+        client = Client(
+            TEST_API_KEY, flush_interval=0.05, enable_full_ai_capture=full_capture
+        )
         with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(
                 client,
@@ -483,19 +478,6 @@ class TestCaptureAiEventHelper(unittest.TestCase):
         )
         client.join()
 
-    def test_default_keeps_capture_path(self):
-        client = Client(TEST_API_KEY, flush_interval=0.05)
-        with patch_capture_send("consumer") as mock_post:
-            _capture_ai_event(client, "$ai_generation", distinct_id="d")
-            client.flush()
-
-        self.assertEqual(
-            [call.kwargs["path"] for call in mock_post.call_args_list],
-            [_CAPTURE_V1_PATH],
-        )
-        self.assertEqual(client._ai_lane.consumers, [])
-        client.join()
-
     def test_adds_ai_library_identity_and_preserves_provider_and_model(self):
         client = mock.Mock()
         _capture_ai_event(
@@ -505,59 +487,16 @@ class TestCaptureAiEventHelper(unittest.TestCase):
             properties={"$ai_provider": "openai", "$ai_model": "gpt-4o"},
         )
 
-        properties = client.capture.call_args.kwargs["properties"]
+        properties = client.capture_ai.call_args.kwargs["properties"]
         self.assertEqual(properties["$ai_lib"], "posthog-ai")
         self.assertEqual(properties["$ai_lib_version"], VERSION)
         self.assertEqual(properties["$ai_provider"], "openai")
         self.assertEqual(properties["$ai_model"], "gpt-4o")
 
-    def test_default_mock_clients_keep_seeing_capture(self):
-        # Downstream test suites pass Mock clients into the wrappers; without
-        # the opt-in they must keep seeing plain `capture()` calls.
-        client = mock.Mock()
-        _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(
-            event="$ai_generation",
-            distinct_id="d",
-            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
-        )
-        client.capture_ai.assert_not_called()
-
-    def test_opted_in_prefers_capture_ai(self):
-        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
-        client.enable_full_ai_capture = True
-        _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture_ai.assert_called_once_with(
-            event="$ai_generation",
-            distinct_id="d",
-            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
-        )
-        client.capture.assert_not_called()
-
-    def test_opted_in_duck_typed_client_without_method_falls_back(self):
+    @parameterized.expand([("default", False), ("full_capture", True)])
+    def test_client_without_capture_ai_falls_back_to_capture(self, _name, full_capture):
         client = mock.Mock(spec=["capture", "enable_full_ai_capture"])
-        client.enable_full_ai_capture = True
-        _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture.assert_called_once_with(
-            event="$ai_generation",
-            distinct_id="d",
-            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
-        )
-
-    def test_client_multimodal_flag_prefers_capture_ai(self):
-        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
-        client.enable_full_ai_capture = True
-        _capture_ai_event(client, "$ai_generation", distinct_id="d")
-        client.capture_ai.assert_called_once_with(
-            event="$ai_generation",
-            distinct_id="d",
-            properties={"$ai_lib": "posthog-ai", "$ai_lib_version": VERSION},
-        )
-        client.capture.assert_not_called()
-
-    def test_client_multimodal_flag_off_keeps_capture(self):
-        client = mock.Mock(spec=["capture", "capture_ai", "enable_full_ai_capture"])
-        client.enable_full_ai_capture = False
+        client.enable_full_ai_capture = full_capture
         _capture_ai_event(client, "$ai_generation", distinct_id="d")
         client.capture.assert_called_once_with(
             event="$ai_generation",
@@ -571,7 +510,7 @@ class TestLanesRefuseWorkAfterShutdown(unittest.TestCase):
     afterwards, even a lazy AI lane that never started before shutdown."""
 
     def test_late_ai_capture_after_shutdown_starts_nothing_and_sends_nothing(self):
-        client = Client(TEST_API_KEY, enable_full_ai_capture=True, flush_interval=0.05)
+        client = Client(TEST_API_KEY, flush_interval=0.05)
         client.shutdown()
         with patch_capture_send("consumer") as mock_post:
             _capture_ai_event(client, "$ai_generation", distinct_id="d")

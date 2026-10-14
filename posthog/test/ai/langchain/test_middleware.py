@@ -121,7 +121,7 @@ def _client() -> MagicMock:
 
 
 def _events(client: MagicMock) -> list[dict[str, Any]]:
-    return [call.kwargs for call in client.capture.call_args_list]
+    return [call.kwargs for call in client.capture_ai.call_args_list]
 
 
 def _event(client: MagicMock, event_name: str) -> dict[str, Any]:
@@ -353,7 +353,7 @@ async def test_async_hooks_do_not_capture_on_the_event_loop_thread() -> None:
     client.sync_mode = True
     event_loop_thread = threading.get_ident()
     capture_threads: list[int] = []
-    client.capture.side_effect = lambda **_: capture_threads.append(
+    client.capture_ai.side_effect = lambda **_: capture_threads.append(
         threading.get_ident()
     )
     middleware = PostHogMiddleware(client)
@@ -841,7 +841,7 @@ def test_privacy_mode_redacts_agent_and_model_content() -> None:
 
 def test_capture_failure_never_changes_agent_result() -> None:
     client = _client()
-    client.capture.side_effect = RuntimeError("telemetry unavailable")
+    client.capture_ai.side_effect = RuntimeError("telemetry unavailable")
     middleware = PostHogMiddleware(client)
     state = _middleware_state(middleware)
     request = _model_request(StubAgentModel(responses=[]), state)
