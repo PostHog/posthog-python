@@ -119,6 +119,11 @@ from posthog.test.capture_helpers import offline_v1_post
 posthog.request._session.post = offline_v1_post
 
 
+def print_event(event):
+    print("captured:", event, flush=True)
+    return event
+
+
 def make_client(**options):
     return Posthog(
         "phc_x",
@@ -126,6 +131,7 @@ def make_client(**options):
         debug=True,
         enable_exception_autocapture=True,
         project_root=os.path.dirname(os.path.abspath(__file__)),
+        before_send=print_event,
         **options,
     )
 """
@@ -135,9 +141,9 @@ def run_app(tmpdir, body, *, env=None):
     """Write and run a tiny PostHog app that raises an uncaught exception.
 
     The app already has ``make_client(**options)`` and ``posthog`` imported; the body
-    creates the client, defines the failing code, and triggers it. In debug mode the
-    autocaptured payload (including ``code_variables``) is printed, which is what the
-    end-to-end tests assert against. Returns the combined stdout/stderr.
+    creates the client, defines the failing code, and triggers it. A ``before_send``
+    hook prints the autocaptured payload (including ``code_variables``), which is what
+    the end-to-end tests assert against. Returns the combined stdout/stderr.
     """
     app = tmpdir.join("app.py")
     app.write(_APP_HEADER + "\n" + dedent(body))
@@ -1024,8 +1030,8 @@ class TestFrameVariableExtraction:
 
 class TestEndToEnd:
     """The whole code-variables pipeline through a real subprocess: an uncaught
-    exception is autocaptured and its serialized payload (with code_variables) is
-    printed in debug mode."""
+    exception is autocaptured and its payload (with code_variables) is printed by a
+    before_send hook."""
 
     def test_code_variables_are_captured_and_masked(self, tmpdir):
         # the failing frame's locals: one safe dict, two secrets, one ignored dunder
@@ -1050,7 +1056,7 @@ class TestEndToEnd:
         )
         assert "ZeroDivisionError" in output
         assert "'code_variables':" in output  # the key form, not the temp-path word
-        # scalars show up in the debug log in their repr form
+        # scalars show up in the printed payload in their repr form
         assert "'greeting': 'hello world'" in output
         assert "'count': 42" in output
         # a dict variable is double-encoded as a JSON string (locks the wire format)

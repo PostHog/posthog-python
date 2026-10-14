@@ -354,11 +354,79 @@ class TestUtils(unittest.TestCase):
         ):
             assert utils._clean_dict({"ok": 1, "bad": bad_value}) == {"ok": 1}
 
-        warning.assert_called_once()
-        assert warning.call_args.args[0] == (
-            'Dictionary values must be serializeable to JSON "%s" value %s of type %s is unsupported.'
+        warning.assert_called_once_with(
+            'Dictionary value for key "%s" of type %s is not JSON serializable, dropping it.',
+            "bad",
+            type(bad_value),
         )
-        assert warning.call_args.args[1:] == ("bad", bad_value, type(bad_value))
+
+    @parameterized.expand(
+        [
+            ("missing", None, "missing"),
+            ("non_string", 123, "non-string"),
+            ("bytes", b"event", "non-string"),
+            ("empty", "", "empty"),
+            ("valid", "signed_up", None),
+            ("whitespace_is_a_name", " ", None),
+        ]
+    )
+    def test_invalid_event_name_reason(self, _, event, expected):
+        assert utils._invalid_event_name_reason(event) == expected
+
+    def test_drop_invalid_event_name_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            dropped = [
+                utils._drop_invalid_event_name(logger, msg)
+                for msg in ({"event": None}, {}, {"event": ""}, {"event": "ok"})
+            ]
+
+        assert dropped == [True, True, True, False]
+        message = (
+            "Dropping an event with a %s name: event names must be non-empty strings. "
+            "Later events dropped for the same reason are not logged."
+        )
+        assert logger.warning.call_args_list == [
+            mock.call(message, "missing"),
+            mock.call(message, "empty"),
+        ]
+
+    def test_warn_once_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            utils._warn_once(logger, "a", "first %s", 1)
+            utils._warn_once(logger, "a", "again %s", 2)
+            utils._warn_once(logger, "b", "second")
+
+        assert logger.warning.call_args_list == [
+            mock.call("first %s", 1),
+            mock.call("second"),
+        ]
+
+    @parameterized.expand(
+        [
+            ("personal", "phx_abc", True),
+            ("project", "phc_abc", False),
+            ("prefix_elsewhere", "abc_phx_", False),
+            ("empty", "", False),
+        ]
+    )
+    def test_is_personal_api_key(self, _, api_key, expected):
+        assert utils._is_personal_api_key(api_key) is expected
+
+    def test_clean_drops_only_keys_json_cannot_write(self):
+        cleaned = utils.clean(
+            {
+                ("t",): "tuple",
+                "s": 1,
+                2: "int",
+                1.5: "float",
+                True: "bool",
+                None: "none",
+            }
+        )
+        assert cleaned == {"s": 1, 2: "int", 1.5: "float", True: "bool", None: "none"}
+        json.dumps(cleaned)
 
     def test_coerce_unicode(self):
         assert utils._coerce_unicode("already unicode") == "already unicode"
