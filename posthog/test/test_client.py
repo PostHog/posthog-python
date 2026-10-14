@@ -476,18 +476,17 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("empty string", ""),
-            ("invalid string", "not-a-uuid"),
+            ("invalid string", "not-a-uuid-secret-1"),
             ("short string", "1234"),
             ("integer", 123),
         ]
     )
-    def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
+    def test_capture_with_invalid_uuid_warns_and_falls_back_to_generated_uuid(
         self, _name, invalid_uuid
     ):
         with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR") as logs:
+            with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
@@ -498,18 +497,24 @@ class TestClient(unittest.TestCase):
             msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["uuid"], msg_uuid)
             self.assertNotEqual(msg["uuid"], str(invalid_uuid))
-            self.assertTrue(
-                any(
-                    f"Invalid event uuid {invalid_uuid!r}" in message
-                    and "Expected a valid UUID string or uuid.UUID instance" in message
-                    and "Falling back to a generated UUID" in message
-                    for message in logs.output
+            uuid_warnings = [r for r in logs.records if "Event uuid" in r.getMessage()]
+            self.assertEqual(len(uuid_warnings), 1)
+            self.assertEqual(uuid_warnings[0].levelname, "WARNING")
+            self.assertNotIn(str(invalid_uuid), uuid_warnings[0].getMessage())
+
+    def test_capture_with_empty_uuid_generates_one_without_logging(self):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertNoLogs("posthog", level="WARNING"):
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=""
                 )
-            )
+
+            self.assertEqual(UUID(msg_uuid).version, 7)
+            self.assertEqual(sent_batch(mock_post)[0]["uuid"], msg_uuid)
 
     @parameterized.expand(
         [
-            ("empty string", ""),
             ("invalid string", "not-a-uuid"),
             ("short string", "1234"),
             ("integer", 123),
@@ -518,7 +523,7 @@ class TestClient(unittest.TestCase):
     def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
         with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR"):
+            with self.assertLogs("posthog", level="WARNING"):
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
@@ -580,44 +585,47 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
-    def test_reserved_exception_property_overrides_are_deprecated(self):
-        custom_exception_list = [{"type": "CustomError", "value": "custom"}]
+    def test_capture_exception_ignores_reserved_properties(self):
         properties = {
-            "$exception_list": custom_exception_list,
+            "$exception_list": [{"type": "CustomError", "value": "custom"}],
             "$exception_level": "warning",
             "$exception_source": "custom.source",
-            "$exception_issue_id": "legacy-issue-id",
+            "$exception_issue_id": "custom-issue-id",
+            "plan": "pro",
         }
 
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            self.assertWarnsRegex(
-                DeprecationWarning,
-                "Reserved exception properties.*next major version",
-            ),
-        ):
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"), properties=properties
             )
 
         captured_properties = patch_capture.call_args.kwargs["properties"]
-        self.assertIs(captured_properties["$exception_list"], custom_exception_list)
-        self.assertEqual(captured_properties["$exception_level"], "warning")
-        self.assertEqual(captured_properties["$exception_source"], "custom.source")
-        self.assertEqual(captured_properties["$exception_issue_id"], "legacy-issue-id")
+        self.assertEqual(captured_properties["$exception_list"][0]["type"], "Exception")
+        self.assertEqual(captured_properties["$exception_level"], "error")
+        self.assertNotIn("$exception_source", captured_properties)
+        self.assertNotIn("$exception_issue_id", captured_properties)
+        self.assertEqual(captured_properties["plan"], "pro")
 
-    def test_reserved_exception_property_warning_cannot_drop_the_event(self):
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            warnings.catch_warnings(),
-        ):
-            warnings.simplefilter("error", DeprecationWarning)
+    @parameterized.expand(
+        [
+            ("default", None, None, "error"),
+            ("caller_level", None, "warning", "warning"),
+            ("alias", None, "WARN", "warning"),
+            ("unknown_level", None, "loud", "error"),
+            ("integration_level_wins", "fatal", "warning", "fatal"),
+        ]
+    )
+    def test_capture_exception_level(self, _name, integration_level, level, expected):
+        capture_metadata = {"level": integration_level} if integration_level else {}
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"),
-                properties={"$exception_level": "warning"},
+                level=level,
+                _capture_metadata=capture_metadata,
             )
 
-        patch_capture.assert_called_once()
+        captured_properties = patch_capture.call_args.kwargs["properties"]
+        self.assertEqual(captured_properties["$exception_level"], expected)
 
     @parameterized.expand(
         [
@@ -1356,7 +1364,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["event"], "python test event")
             self.assertTrue(isinstance(msg["timestamp"], str))
             self.assertIsNotNone(msg.get("uuid"))
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -3792,7 +3800,7 @@ class TestClient(unittest.TestCase):
             # Check page event
             page_batch = sent_batch(mock_post, 1)
             identify_msg = page_batch[0]
-            self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+            self.assertIs(identify_msg["properties"]["$geoip_disable"], False)
 
     def test_disable_geoip_method_overrides_init_on_events(self):
         with patch_capture_send("client") as mock_post:
@@ -3811,7 +3819,7 @@ class TestClient(unittest.TestCase):
             mock_post.assert_called_once()
             batch_data = sent_batch(mock_post)
             msg = batch_data[0]
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
 
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_default_on_decide(self, patch_flags):
