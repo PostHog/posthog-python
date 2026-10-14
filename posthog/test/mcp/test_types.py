@@ -1,8 +1,23 @@
 from unittest.mock import Mock
+from types import SimpleNamespace
 
 import pytest
 
 from posthog.mcp.types import MCPAnalyticsOptions, PreparedToolCall, UserIdentity
+from posthog.mcp._argument_ownership import _descriptor_input_schema
+
+
+@pytest.mark.parametrize(
+    "descriptor",
+    [
+        {"inputSchema": {"type": "object"}},
+        {"input_schema": {"type": "object"}},
+        SimpleNamespace(inputSchema={"type": "object"}),
+        SimpleNamespace(input_schema={"type": "object"}),
+    ],
+)
+def test_original_tool_descriptor_schema_shapes(descriptor):
+    assert _descriptor_input_schema(descriptor) == {"type": "object"}
 
 
 @pytest.mark.parametrize("capture_model", [False, True])
