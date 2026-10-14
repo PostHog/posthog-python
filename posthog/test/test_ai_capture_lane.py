@@ -209,6 +209,18 @@ class TestLaneSizeCaps(unittest.TestCase):
         mock_send.assert_not_called()
         self.assertIn("exceeds the 1024KiB limit", "\n".join(logs.output))
 
+    def test_sync_mode_ai_event_at_endpoint_ceiling_is_sent(self):
+        client = Client(TEST_API_KEY, sync_mode=True)
+        with patch_capture_send("client") as mock_send:
+            result = client.capture_ai(
+                "$ai_generation",
+                distinct_id="d",
+                properties={"p": "x" * AI_MAX_PROPERTIES_SIZE},
+            )
+
+        self.assertIsNotNone(result)
+        mock_send.assert_called_once()
+
     def test_analytics_lane_rejects_events_over_900kib(self):
         client = self._client()
         consumer = client.consumers[0]
