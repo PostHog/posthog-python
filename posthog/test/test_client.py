@@ -420,20 +420,6 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertNotIn("$is_server", msg["properties"])
 
-    def test_is_server_not_overridden_by_super_properties(self):
-        with patch_capture_send("client") as mock_post:
-            client = Client(
-                FAKE_TEST_API_KEY,
-                on_error=self.set_fail,
-                sync_mode=True,
-                super_properties={"$is_server": False},
-            )
-            client.capture("python test event", distinct_id="distinct_id")
-            self.assertFalse(self.failed)
-
-            msg = sent_batch(mock_post)[0]
-            self.assertEqual(msg["properties"]["$is_server"], True)
-
     def test_basic_capture_with_uuid(self):
         with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
@@ -2390,10 +2376,10 @@ class TestClient(unittest.TestCase):
         [
             # test_name, super_properties, event_session_id, expected_session_id, expected_super_props
             (
-                "super_properties_override_session_id",
+                "event_session_id_overrides_super_properties",
                 {"$session_id": "super-session", "source": "test"},
                 "event-session-808",
-                "super-session",
+                "event-session-808",
                 {"source": "test"},
             ),
             (

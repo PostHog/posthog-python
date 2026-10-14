@@ -38,6 +38,20 @@ def patch_capture_send(site: str = "client", **kwargs) -> "mock._patch":
     return mock.patch(f"posthog.{site}.{_SUBMITTER}", **kwargs)
 
 
+def record_sync_capture_sends(test_case) -> list[dict]:
+    """Record every event a ``sync_mode`` client uploads until ``test_case`` ends."""
+    events: list[dict] = []
+
+    def record(*args, **kwargs):
+        events.extend(args[2] if len(args) > 2 else kwargs["batch"])
+        return mock.DEFAULT
+
+    patcher = patch_capture_send("client", side_effect=record)
+    patcher.start()
+    test_case.addCleanup(patcher.stop)
+    return events
+
+
 def patch_async_capture_send(**kwargs) -> "mock._patch":
     """Patch the submitter the ``AsyncPosthog`` consumer awaits."""
     return mock.patch("posthog._async_consumer.async_send_v1_batch", **kwargs)

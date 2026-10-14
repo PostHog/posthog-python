@@ -16,6 +16,7 @@ from parameterized import parameterized
 from posthog.capture_event import _to_v1_event
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.request import GetResponse
+from posthog.test.capture_helpers import record_sync_capture_sends
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.utils import system_context
 
@@ -65,21 +66,15 @@ def _local_flag_definition(has_experiment):
 
 
 class _CapturedEventsMixin:
-    """Builds a non-sending client whose fully-enriched events are captured via
-    ``before_send``, so tests assert the exact wire shape after every enrichment
-    step (system context, super properties, $lib, ...)."""
+    """Builds a sync client whose fully-enriched events are recorded at upload,
+    so tests assert the exact wire shape after every enrichment step (system
+    context, super properties, $lib, ...)."""
 
     def _make_client(self, **kwargs):
-        captured = []
-
-        def before_send(msg):
-            captured.append(msg)
-            return msg
-
+        captured = record_sync_capture_sends(self)
         client = Client(
             FAKE_TEST_API_KEY,
-            send=False,
-            before_send=before_send,
+            sync_mode=True,
             super_properties={"app_version": "1.2.3"},
             **kwargs,
         )

@@ -925,6 +925,7 @@ def test_identity_enables_person_processing_and_set():
         "identify_actor_given_id": "user_1",
         "identify_actor_data": {"email": "a@b.com"},
         "groups": {"organization": "org_1"},
+        "properties": {"$groups": {"organization": "custom", "project": "p1"}},
         "timestamp": datetime.now(timezone.utc),
     }
     [capture] = build_posthog_capture_events(event)
@@ -932,7 +933,29 @@ def test_identity_enables_person_processing_and_set():
     assert capture["distinct_id"] == "user_1"
     assert "$process_person_profile" not in props
     assert props["$set"] == {"email": "a@b.com"}
-    assert props["$groups"] == {"organization": "org_1"}
+    assert props["$groups"] == {"organization": "org_1", "project": "p1"}
+
+
+def test_typed_groups_win_on_primary_and_exception_events():
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "is_error": True,
+        "error": {"$exception_list": [{"type": "ValueError", "value": "boom"}]},
+        "groups": {"organization": "org_1"},
+        "properties": {"$groups": {"organization": "custom", "project": "p1"}},
+        "timestamp": datetime.now(timezone.utc),
+    }
+    captures = build_posthog_capture_events(event)
+    assert [c["event"] for c in captures] == [
+        PostHogMCPAnalyticsEvent.TOOL_CALL,
+        PostHogMCPAnalyticsEvent.EXCEPTION,
+    ]
+    for capture in captures:
+        assert capture["properties"]["$groups"] == {
+            "organization": "org_1",
+            "project": "p1",
+        }
 
 
 def test_listed_tool_names_only_on_tools_list():

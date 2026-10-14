@@ -52,6 +52,12 @@ from posthog.contexts import (
 from posthog.contexts import (
     get_tags as inner_get_tags,
 )
+from posthog.contexts import (
+    set_context_option as inner_set_context_option,
+)
+from posthog.contexts import (
+    get_context_options as inner_get_context_options,
+)
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
@@ -299,6 +305,44 @@ def get_tags() -> Dict[str, Any]:
     return inner_get_tags()
 
 
+def set_context_option(key: str, value: Any) -> None:
+    """
+    Set a capture option for every event captured within the current context.
+
+    Context options fill options an event leaves unset, before ``before_send``
+    runs, so the hook sees them. They override ``super_options``. An event's
+    own ``options`` override them, and ``before_send`` can change them.
+
+    Args:
+        key: The option name, such as ``"process_person_profile"``
+        value: The option value, sent as given
+
+    Examples:
+        ```python
+        from posthog import new_context, set_context_option
+        with new_context():
+            set_context_option("process_person_profile", False)
+        ```
+
+    Category:
+        Contexts
+    """
+    return inner_set_context_option(key, value)
+
+
+def get_context_options() -> Dict[str, Any]:
+    """
+    Get all capture options from the current context.
+
+    Returns:
+        Dict of all capture options in the current context
+
+    Category:
+        Contexts
+    """
+    return inner_get_context_options()
+
+
 """Settings.
 
 These module-level settings configure the legacy global PostHog client used by
@@ -340,7 +384,18 @@ Attributes:
     feature_flags_request_max_retries: Number of retries for feature flag
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
-    super_properties: Properties merged into every captured event.
+    super_properties: Properties for every captured event. They fill only
+        keys the event leaves unset, before ``before_send`` runs. ``$set``,
+        ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep. An
+        event's own properties and context tags override them, and
+        ``before_send`` can change or remove them.
+    super_options: Capture options for every captured event, such as
+        ``{"cookieless_mode": True}``. They fill only options the event leaves
+        unset, before ``before_send`` runs. An event's own ``options`` and
+        context options override them, and ``before_send`` can change them. They also
+        win over an event's legacy property for the same key, such as
+        ``$cookieless_mode``, so pass per-event overrides of that key as
+        ``options``.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
@@ -364,7 +419,9 @@ Attributes:
     project_root: Root path used to determine in-app exception stack frames.
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
-        Return ``None`` to drop an event.
+        Return ``None`` to drop an event. Context tags, context options,
+        ``super_properties`` and ``super_options`` fill in before it runs, so
+        it can change or remove them.
     enable_local_evaluation: Whether to poll feature flag definitions for local
         evaluation when a personal API key is configured.
     flag_definition_cache_provider: Optional external cache provider for sharing
@@ -414,6 +471,7 @@ is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: int
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
+super_options = None  # type: Optional[Dict]
 metrics = None  # type: Optional[Dict]
 traces = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
@@ -1406,6 +1464,7 @@ def setup() -> Client:
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
+            super_options=super_options,
             metrics=metrics,
             traces=traces,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)

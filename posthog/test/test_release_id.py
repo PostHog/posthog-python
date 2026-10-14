@@ -10,7 +10,10 @@ from posthog import AsyncPosthog
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.release_id import RELEASE_ID_ENV_VAR, _resolve_release_id
 from posthog.test.test_utils import FAKE_TEST_API_KEY
-from posthog.test.capture_helpers import patch_async_capture_send
+from posthog.test.capture_helpers import (
+    patch_async_capture_send,
+    record_sync_capture_sends,
+)
 
 # (name, call, expected event): one row per public event-producing method, shared
 # by the sync and async clients. Each call builds its own arguments, because a
@@ -80,17 +83,10 @@ class TestResolveReleaseId(unittest.TestCase):
 
 class TestClientReleaseId(unittest.TestCase):
     def _client(self, env_value, **kwargs):
-        """Build a client under `env_value` and collect the events it would send."""
-        events = []
-
-        def before_send(msg):
-            events.append(msg)
-            return msg
-
+        """Build a client under `env_value` and collect the events it sends."""
+        events = record_sync_capture_sends(self)
         with _release_id_env(env_value):
-            client = Client(
-                FAKE_TEST_API_KEY, send=False, before_send=before_send, **kwargs
-            )
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
         return client, events
 
     @parameterized.expand(EVENT_CALLS)
