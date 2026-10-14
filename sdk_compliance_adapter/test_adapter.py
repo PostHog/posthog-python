@@ -77,12 +77,60 @@ def initialize(adapter, **overrides):
     return adapter.app.test_client()
 
 
-def test_health_opts_into_local_evaluation_without_losing_capture(adapter):
+@pytest.mark.parametrize(
+    "env_value,codec",
+    [(None, "gzip"), ("gzip", "gzip"), ("deflate", "deflate"), ("zstd", "zstd")],
+)
+def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
+    if env_value is None:
+        monkeypatch.delenv("COMPRESSION", raising=False)
+    else:
+        monkeypatch.setenv("COMPRESSION", env_value)
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
-    assert "capture_v1" in capabilities
+    assert {"capture_v1", "capture_ai_v1", "event_options"} <= set(capabilities)
     assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
+    assert [c for c in capabilities if c.startswith("encoding_")] == [
+        f"encoding_{codec}"
+    ]
+
+    initialize(adapter, enable_compression=True)
+    assert adapter.state.client.capture_compression.value == codec
+    assert adapter.state.client.capture_ai_compression.value == codec
+
+
+@pytest.mark.parametrize(
+    "route,method", [("/capture", "capture"), ("/capture_ai", "capture_ai")]
+)
+def test_capture_passes_options_and_uuid_unchanged(adapter, monkeypatch, route, method):
+    client = initialize(adapter, personal_api_key=None)
+    sent = Mock(return_value="0190a5a8-0000-7000-8000-000000000001")
+    monkeypatch.setattr(adapter.state.client, method, sent)
+    options = {"cookieless_mode": "no", "process_person_profile": 0.0, "custom": [1]}
+
+    response = client.post(
+        route,
+        json={
+            "distinct_id": "user",
+            "event": "$ai_generation",
+            "properties": {"$ignore_sent_at": "maybe"},
+            "options": options,
+            "uuid": "0190A5A8-0000-7000-8000-000000000001",
+        },
+    )
+
+    assert response.json == {
+        "success": True,
+        "uuid": "0190a5a8-0000-7000-8000-000000000001",
+    }
+    sent.assert_called_once_with(
+        "$ai_generation",
+        distinct_id="user",
+        properties={"$ignore_sent_at": "maybe"},
+        options=options,
+        uuid="0190A5A8-0000-7000-8000-000000000001",
+    )
 
 
 def test_init_enables_explicit_definitions_loading_without_polling(adapter):

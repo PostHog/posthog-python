@@ -2,8 +2,6 @@ name: SDK Compliance Tests
 
 permissions:
   contents: read
-  packages: read
-  pull-requests: write
 
 on:
   pull_request:
@@ -23,16 +21,81 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install adapter and test dependencies
-        run: python -m pip install -e . -r sdk_compliance_adapter/requirements.txt pytest pytest-timeout pytest-asyncio
+        run: python -m pip install -e ".[zstd]" -r sdk_compliance_adapter/requirements.txt pytest pytest-timeout pytest-asyncio
       - name: Test adapter protocol
         run: python -m pytest sdk_compliance_adapter/test_adapter.py --timeout=30
 
   compliance:
-    name: PostHog SDK compliance tests
-    uses: PostHog/posthog-sdk-test-harness/.github/workflows/test-sdk-action.yml@4593de8b423f61fa222115da592e5c18dc82ad3c # 1.11.0
-    with:
-      adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
-      adapter-context: "."
-      test-harness-version: "1.1.1"
-      continue-on-error: false
-      report-name: "sdk-compliance-report"
+    # The harness has one enable_compression flag but a test per codec, so each
+    # job runs the adapter with one codec. The reusable harness workflow cannot
+    # pass the COMPRESSION env var, so this job runs the containers directly.
+    # The SDK has no brotli support, so there is no br job.
+    name: PostHog SDK compliance tests (${{ matrix.compression }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        compression: [gzip, deflate, zstd]
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ matrix.compression }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+    env:
+      HARNESS_IMAGE: ghcr.io/posthog/sdk-test-harness:1.13.1
+    steps:
+      - name: Check out source code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pull test harness
+        run: docker pull "$HARNESS_IMAGE"
+
+      - name: Build SDK adapter
+        run: docker build -f sdk_compliance_adapter/Dockerfile -t sdk-adapter:test .
+
+      - name: Start SDK adapter
+        run: |
+          docker network create test-network
+          docker run -d \
+            --name sdk-adapter \
+            --network test-network \
+            -e COMPRESSION=${{ matrix.compression }} \
+            sdk-adapter:test
+
+      - name: Run compliance suite
+        run: |
+          mkdir -p report
+          docker run --rm \
+            --name test-harness \
+            --network test-network \
+            -v "${GITHUB_WORKSPACE}/report:/report" \
+            "$HARNESS_IMAGE" \
+            run \
+            --adapter-url http://sdk-adapter:8080 \
+            --mock-url http://test-harness:8081 \
+            --output text \
+            --report /report/sdk-compliance-report.md \
+            --sdk-type server
+
+      - name: Publish report to the job summary
+        if: always()
+        run: |
+          if [ -f report/sdk-compliance-report.md ]; then
+            cat report/sdk-compliance-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload compliance report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-compliance-report-${{ matrix.compression }}
+          path: report/sdk-compliance-report.md
+
+      - name: Show adapter logs on failure
+        if: failure()
+        run: docker logs sdk-adapter || true
+
+      - name: Stop containers
+        if: always()
+        run: |
+          docker rm -f sdk-adapter || true
+          docker network rm test-network || true
