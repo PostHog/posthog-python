@@ -483,10 +483,13 @@ class TestPromptsGet(TestPrompts):
         posthog = self.create_mock_posthog()
         prompts = Prompts(posthog, capture_errors=True)
         nested_results = []
+        entered = threading.Event()
 
         def capture_exception(*args, **kwargs):
-            if nested_results:
+            # The nested fetch fails too and reports again; only the first report fetches.
+            if entered.is_set():
                 return
+            entered.set()
             nested_results.append(
                 prompts.get("test-prompt", with_metadata=True, fallback="nested")
             )
