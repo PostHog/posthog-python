@@ -53,6 +53,24 @@ class _InFlightFetch:
         self.error: Optional[BaseException] = None
 
 
+# Every live Prompts instance, so one fork hook can reset them all. Registered
+# once here, because os.register_at_fork keeps each callback for the process
+# lifetime and an app that builds many instances would accumulate them.
+_instances: "weakref.WeakSet[Prompts]" = weakref.WeakSet()
+
+
+def _reset_in_flight_after_fork() -> None:
+    # The child has no copy of the thread that was fetching, so an inherited
+    # in-flight entry would hold every later caller for that key.
+    for prompts in list(_instances):
+        prompts._in_flight = {}
+        prompts._in_flight_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_in_flight_after_fork)
+
+
 @dataclass(frozen=True)
 class PromptResult:
     """Result of a prompt fetch with metadata about its source.
@@ -291,11 +309,7 @@ class Prompts:
         # not turn every cache miss or expiry into one request per caller.
         self._in_flight: Dict[PromptCacheKey, _InFlightFetch] = {}
         self._in_flight_lock = threading.Lock()
-        if hasattr(os, "register_at_fork"):
-            weak_self = weakref.ref(self)
-            os.register_at_fork(
-                after_in_child=lambda: Prompts._reset_in_flight_after_fork(weak_self)
-            )
+        _instances.add(self)
         self._has_warned_deprecation = False
         self._client = posthog
         self._capture_errors = capture_errors
@@ -634,16 +648,6 @@ class Prompts:
 
             raise
 
-    @staticmethod
-    def _reset_in_flight_after_fork(weak_self: "weakref.ref[Prompts]") -> None:
-        # The child has no copy of the thread that was fetching, so an inherited
-        # in-flight entry would hold every later caller for that key.
-        self = weak_self()
-        if self is None:
-            return
-        self._in_flight = {}
-        self._in_flight_lock = threading.Lock()
-
     def _fetch_prompt_once(
         self, name: str, version: Optional[int], label: Optional[str]
     ) -> Dict[str, Any]:
@@ -698,8 +702,11 @@ class Prompts:
             pending.error = error
             raise
         finally:
+            # A waiter that gave up on this fetch may have started its own; only
+            # remove the entry if it is still this one.
             with self._in_flight_lock:
-                self._in_flight.pop(cache_key, None)
+                if self._in_flight.get(cache_key) is pending:
+                    del self._in_flight[cache_key]
             pending.done.set()
             # Reported after the waiters are released, so an error-tracking callback
             # that fetches the same prompt cannot wait on this very request.
