@@ -267,7 +267,6 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
     _add_person_processing(event, properties)
-    _add_groups(event, properties)
 
     error = event.get("error")
     if error:
@@ -295,6 +294,7 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
 
     _add_custom_properties(event, properties)
+    _add_groups(event, properties)
     _add_server_build(event, properties)
 
     return {

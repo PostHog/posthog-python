@@ -321,6 +321,23 @@ async def test_async_defaults_fill_before_before_send(method):
     _assert_hook_sees_defaults_and_has_final_say(seen, events)
 
 
+@pytest.mark.asyncio
+async def test_async_queued_event_keeps_capture_time_defaults():
+    def capture_then_change_defaults(client):
+        result = client.capture("e", distinct_id="d")
+        client.super_properties["plan"] = "pro"
+        client.super_options["cookieless_mode"] = True
+        return result
+
+    events = await _async_wire_events(
+        capture_then_change_defaults,
+        super_properties={"plan": "free"},
+        super_options={"cookieless_mode": False},
+    )
+    assert events[0]["properties"]["plan"] == "free"
+    assert events[0]["options"]["cookieless_mode"] is False
+
+
 NESTED_SUPER_PROPERTIES = {
     "$set": {"plan": "free", "source": "super"},
     "$groups": {"company": "acme", "team": "core", "region": "us"},

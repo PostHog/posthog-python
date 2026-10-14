@@ -9,6 +9,7 @@ import sys
 import threading
 import warnings
 import weakref
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, Mapping, Optional, Union
 from uuid import UUID
@@ -353,6 +354,12 @@ class AsyncClient:
     ) -> bool:
         if not self._accepting or self._closed:
             return False
+        # Shallow copy, as 7.x merged super_properties into a new dict at capture.
+        defaults = replace(
+            defaults,
+            property_layers=tuple(dict(layer) for layer in defaults.property_layers),
+            option_layers=tuple(dict(layer) for layer in defaults.option_layers),
+        )
         queued_event = _QueuedEvent(prepared, contextvars.copy_context(), defaults)
         try:
             running_loop = asyncio.get_running_loop()
