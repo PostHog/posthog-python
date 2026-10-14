@@ -33,10 +33,6 @@ _MAX_PROMPT_LIST_PAGES = 100
 # The server's tightest prompt limit is per-minute, so a minute lets the bucket refill.
 DEFAULT_REFETCH_COOLDOWN_SECONDS = 60
 MAX_REFETCH_COOLDOWN_SECONDS = 3600
-# Longest a caller waits on another thread's fetch: the 10s request timeout times
-# the transport's three attempts. Past it the leader is assumed lost, for example
-# to a fork, and the caller fetches for itself.
-_IN_FLIGHT_WAIT_SECONDS = 30
 
 PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
@@ -49,7 +45,7 @@ class _InFlightFetch:
 
     def __init__(self) -> None:
         self.done = threading.Event()
-        self.result: Optional[Dict[str, Any]] = None
+        self.result: Optional[CachedPrompt] = None
         self.error: Optional[BaseException] = None
 
 
@@ -608,15 +604,15 @@ class Prompts:
 
         # Try to fetch from API
         try:
-            data = self._fetch_prompt_once(name, version, label)
+            fetched = self._fetch_prompt_once(name, version, label, ttl=ttl)
 
             return PromptResult(
                 source="api",
-                prompt=data["prompt"],
-                name=data["name"],
-                version=data["version"],
-                label=data.get("label"),
-                config=copy.deepcopy(_extract_config(data)),
+                prompt=fetched.prompt,
+                name=fetched.name,
+                version=fetched.version,
+                label=fetched.label,
+                config=copy.deepcopy(fetched.config),
             )
 
         except Exception as error:
@@ -649,11 +645,23 @@ class Prompts:
             raise
 
     def _fetch_prompt_once(
-        self, name: str, version: Optional[int], label: Optional[str]
-    ) -> Dict[str, Any]:
+        self,
+        name: str,
+        version: Optional[int],
+        label: Optional[str],
+        *,
+        ttl: float,
+    ) -> CachedPrompt:
         """Fetch a prompt, sharing the request with other threads that want the same key."""
         cache_key = _cache_key(name, version, label)
         with self._in_flight_lock:
+            # Another thread may have finished a fetch between the caller's cache
+            # check and this lock. Its entry is fresh, so serve it instead of
+            # starting another request. A zero TTL is never fresh and still fetches.
+            cached = self._cache.get(cache_key)
+            if cached is not None and (time.time() - cached.fetched_at) < ttl:
+                return cached
+
             pending = self._in_flight.get(cache_key)
             is_leader = pending is None
             if pending is None:
@@ -661,11 +669,7 @@ class Prompts:
                 self._in_flight[cache_key] = pending
 
         if not is_leader:
-            if not pending.done.wait(_IN_FLIGHT_WAIT_SECONDS):
-                with self._in_flight_lock:
-                    if self._in_flight.get(cache_key) is pending:
-                        del self._in_flight[cache_key]
-                return self._fetch_prompt_once(name, version, label)
+            pending.done.wait()
             if pending.error is not None:
                 raise pending.error
             assert pending.result is not None
@@ -686,9 +690,7 @@ class Prompts:
                     data.get("label"),
                 )
 
-            # Cached before the in-flight entry is released, so a caller that
-            # arrives in between finds the entry instead of starting a request.
-            self._cache[cache_key] = CachedPrompt(
+            fetched = CachedPrompt(
                 prompt=data["prompt"],
                 fetched_at=time.time(),
                 name=data["name"],
@@ -696,17 +698,17 @@ class Prompts:
                 label=data.get("label"),
                 config=_extract_config(data),
             )
-            pending.result = data
-            return data
+            # Cached before the in-flight entry is released, so a caller that
+            # arrives in between finds the entry instead of starting a request.
+            self._cache[cache_key] = fetched
+            pending.result = fetched
+            return fetched
         except BaseException as error:
             pending.error = error
             raise
         finally:
-            # A waiter that gave up on this fetch may have started its own; only
-            # remove the entry if it is still this one.
             with self._in_flight_lock:
-                if self._in_flight.get(cache_key) is pending:
-                    del self._in_flight[cache_key]
+                self._in_flight.pop(cache_key, None)
             pending.done.set()
             # Reported after the waiters are released, so an error-tracking callback
             # that fetches the same prompt cannot wait on this very request.

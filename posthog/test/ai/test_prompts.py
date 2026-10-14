@@ -455,12 +455,13 @@ class TestPromptsGet(TestPrompts):
         self.assertEqual({r.source for r in results}, {"code_fallback"})
         posthog.capture_exception.assert_called_once()
 
-    @patch("posthog.ai.prompts._IN_FLIGHT_WAIT_SECONDS", 0.05)
     @patch("posthog.ai.prompts._get_session")
-    def test_fetches_for_itself_when_the_in_flight_leader_is_gone(
-        self, mock_get_session
-    ):
-        from posthog.ai.prompts import _InFlightFetch, _cache_key
+    def test_fork_hook_clears_inherited_in_flight_entries(self, mock_get_session):
+        from posthog.ai.prompts import (
+            _InFlightFetch,
+            _cache_key,
+            _reset_in_flight_after_fork,
+        )
 
         mock_get = mock_get_session.return_value.get
         mock_get.return_value = MockResponse(json_data=self.mock_prompt_response)
@@ -468,11 +469,11 @@ class TestPromptsGet(TestPrompts):
         # What a forked child inherits: an entry whose fetching thread no longer exists.
         prompts._in_flight[_cache_key("test-prompt", None, None)] = _InFlightFetch()
 
+        _reset_in_flight_after_fork()
         result = prompts.get("test-prompt", with_metadata=True)
 
         self.assertEqual(result.source, "api")
         self.assertEqual(mock_get.call_count, 1)
-        self.assertEqual(prompts._in_flight, {})
 
     @patch("posthog.ai.prompts._get_session")
     def test_error_callback_that_fetches_the_same_prompt_does_not_deadlock(
