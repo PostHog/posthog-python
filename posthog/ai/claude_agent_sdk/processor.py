@@ -192,6 +192,7 @@ class PostHogClaudeAgentProcessor:
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
         groups: Optional[Dict[str, Any]] = None,
+        personless: bool = False,
     ) -> None:
         _capture_processor_event(
             self._client,
@@ -200,6 +201,7 @@ class PostHogClaudeAgentProcessor:
             default_properties=self._properties,
             distinct_id=distinct_id,
             groups=groups if groups is not None else self._groups,
+            personless=personless,
         )
 
     async def query(
@@ -449,11 +451,12 @@ class PostHogClaudeAgentProcessor:
         if gen.stop_reason is not None:
             properties["$ai_stop_reason"] = gen.stop_reason
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
         self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
         )
 
     def _emit_generation_from_result(
@@ -522,11 +525,12 @@ class PostHogClaudeAgentProcessor:
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
         self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
         )
 
     def _emit_tool_span(
@@ -557,10 +561,13 @@ class PostHogClaudeAgentProcessor:
                 _ensure_serializable(block.input), self._client
             )
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event("$ai_span", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_span",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+        )
 
     def _emit_trace(
         self,
@@ -592,10 +599,13 @@ class PostHogClaudeAgentProcessor:
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event("$ai_trace", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_trace",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+        )
 
         # Flush to ensure events are sent before process exits
         try:

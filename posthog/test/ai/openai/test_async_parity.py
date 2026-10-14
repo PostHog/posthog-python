@@ -186,7 +186,8 @@ async def test_embedding_telemetry_has_sync_async_parity(mock_client):
     assert async_props["$ai_input"] is None
     assert async_props["$ai_input_tokens"] == 12
     assert async_props["$ai_provider"] == "azure"
-    assert async_props["$process_person_profile"] is False
+    assert async_capture.kwargs["options"] == sync_capture.kwargs["options"]
+    assert async_capture.kwargs["options"] == {"process_person_profile": False}
     assert async_capture.kwargs["distinct_id"] == "shared-trace"
     assert async_capture.kwargs["groups"] == {"company": "test-company"}
 

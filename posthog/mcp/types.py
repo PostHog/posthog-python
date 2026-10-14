@@ -78,6 +78,7 @@ class PostHogCaptureEvent(TypedDict, total=False):
     distinct_id: str
     event: str
     properties: Dict[str, Any]
+    options: Dict[str, Any]
     timestamp: datetime
 
 

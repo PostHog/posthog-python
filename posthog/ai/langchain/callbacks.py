@@ -577,15 +577,13 @@ class CallbackHandler(BaseCallbackHandler):
                 finalize_ai_content(outputs, self._ph_client),
             )
 
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
         _capture_ai_event(
             self._ph_client,
             event_name,
             distinct_id=self._distinct_id or run_id,
             properties=event_properties,
             groups=self._groups,
+            personless=self._distinct_id is None,
         )
 
     def _pop_run_and_capture_generation(
@@ -662,9 +660,6 @@ class CallbackHandler(BaseCallbackHandler):
         if self._properties:
             event_properties.update(self._properties)
 
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
             event_properties["$ai_error"] = _stringify_exception(output)
@@ -737,6 +732,7 @@ class CallbackHandler(BaseCallbackHandler):
             distinct_id=self._distinct_id or trace_id,
             properties=event_properties,
             groups=self._groups,
+            personless=self._distinct_id is None,
         )
 
     def _log_debug_event(

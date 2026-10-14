@@ -255,7 +255,7 @@ async def test_identify_sets_distinct_id_and_groups():
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["distinct_id"] == "user_42"
     assert calls[0]["properties"]["$groups"] == {"organization": "org_7"}
-    assert "$process_person_profile" not in calls[0]["properties"]
+    assert calls[0]["options"] == {}
     # an $identify event was emitted
     assert _events(client, "$identify")
 

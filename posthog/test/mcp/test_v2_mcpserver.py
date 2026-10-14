@@ -544,7 +544,8 @@ async def test_anonymous_events_do_not_create_person_profiles():
     await _flush()
 
     calls = _events(client, "$mcp_tool_call")
-    assert calls[0]["properties"]["$process_person_profile"] is False
+    assert calls[0]["options"] == {"process_person_profile": False}
+    assert "$process_person_profile" not in calls[0]["properties"]
 
 
 async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():

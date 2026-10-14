@@ -543,13 +543,13 @@ def test_personless_mode(mock_client):
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert span_args["properties"]["$process_person_profile"] is False
+    assert span_args["options"] == {"process_person_profile": False}
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert generation_args["properties"]["$process_person_profile"] is False
+    assert generation_args["options"] == {"process_person_profile": False}
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$process_person_profile"] is False
+    assert trace_args["options"] == {"process_person_profile": False}
 
     id = uuid.uuid4()
     chain.invoke(
@@ -561,13 +561,13 @@ def test_personless_mode(mock_client):
     trace_args = mock_client.capture.call_args_list[5][1]
 
     # span
-    assert "$process_person_profile" not in span_args["properties"]
+    assert "options" not in span_args
     assert span_args["distinct_id"] == id
     # generation
-    assert "$process_person_profile" not in generation_args["properties"]
+    assert "options" not in generation_args
     assert generation_args["distinct_id"] == id
     # trace
-    assert "$process_person_profile" not in trace_args["properties"]
+    assert "options" not in trace_args
     assert trace_args["distinct_id"] == id
 
 
@@ -602,13 +602,13 @@ def test_personless_mode_exception(mock_client, unauthorized_http_client):
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert span_args["properties"]["$process_person_profile"] is False
+    assert span_args["options"] == {"process_person_profile": False}
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert generation_args["properties"]["$process_person_profile"] is False
+    assert generation_args["options"] == {"process_person_profile": False}
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$process_person_profile"] is False
+    assert trace_args["options"] == {"process_person_profile": False}
 
     id = uuid.uuid4()
     with pytest.raises(AuthenticationError):
@@ -622,17 +622,17 @@ def test_personless_mode_exception(mock_client, unauthorized_http_client):
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert "$process_person_profile" not in span_args["properties"]
+    assert "options" not in span_args
     assert span_args["distinct_id"] == id
 
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert "$process_person_profile" not in generation_args["properties"]
+    assert "options" not in generation_args
     assert generation_args["distinct_id"] == id
 
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert "$process_person_profile" not in trace_args["properties"]
+    assert "options" not in trace_args
     assert trace_args["distinct_id"] == id
 
 
