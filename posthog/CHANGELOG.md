@@ -1,5 +1,11 @@
 # posthog
 
+## 7.70.0 — 2026-10-14
+
+### Minor changes
+
+- [6916499](https://github.com/posthog/posthog-python/commit/69164994c920bbaf445c3a2c20b9f558f6a5a473) `PostHogSpanProcessor` now adds the active PostHog context to the AI spans it exports: the distinct ID from `identify_context`, the session ID from `set_context_session` (sent as `$session_id`), and context tags as properties. Spans started inside `posthog.new_context()` reach PostHog under the right person, so one process can trace many users. Tags set by the request middleware (for example `email`, `$ip`, `$user_agent` and `$current_url`) now appear on AI events too. Attributes already on a span are kept, and other processors on the provider never see the context. Apps already using PostHog contexts (for example the Django, Flask or ASGI request middleware) will see their AI events attributed to the context's person after upgrading. — Thanks @carlos-marchal-ph!
+
 ## 7.69.0 — 2026-10-13
 
 ### Minor changes
