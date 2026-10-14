@@ -89,8 +89,9 @@ def test_omitted_capture_setting_preserves_legacy_default():
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])
-@pytest.mark.parametrize("trust", [False, True])
-def test_tracing_headers_require_opt_in_and_user_fallback(asynchronous, trust):
+@pytest.mark.parametrize("capture", [None, False, True])
+@pytest.mark.parametrize("header_id", ["browser-user", " \r\n ", None])
+def test_tracing_header_capture_and_user_fallback(asynchronous, capture, header_id):
     observed = {}
 
     def view(request):
@@ -103,7 +104,7 @@ def test_tracing_headers_require_opt_in_and_user_fallback(asynchronous, trust):
 
     request = MockRequest(
         headers={
-            "X-POSTHOG-DISTINCT-ID": "browser-user",
+            "X-POSTHOG-DISTINCT-ID": header_id,
             "X-POSTHOG-SESSION-ID": "browser-session",
         }
     )
@@ -113,18 +114,18 @@ def test_tracing_headers_require_opt_in_and_user_fallback(asynchronous, trust):
         return request.user
 
     request.auser = auser
-    with override_settings(
-        POSTHOG_MW_CAPTURE_EXCEPTIONS=False,
-        POSTHOG_MW_TRUST_TRACING_HEADERS=trust,
-    ):
+    options = {} if capture is None else {"POSTHOG_MW_CAPTURE_TRACING_HEADERS": capture}
+    with override_settings(POSTHOG_MW_CAPTURE_EXCEPTIONS=False, **options):
         middleware = PosthogContextMiddleware(async_view if asynchronous else view)
         with contexts.new_context(fresh=True, capture_exceptions=False):
             result = middleware(request)
             assert (asyncio.run(result) if asynchronous else result) == "response"
 
     assert observed == {
-        "distinct_id": "browser-user" if trust else "42",
-        "session_id": "browser-session" if trust else None,
+        "distinct_id": "browser-user"
+        if capture is not False and header_id == "browser-user"
+        else "42",
+        "session_id": "browser-session" if capture is not False else None,
     }
 
 

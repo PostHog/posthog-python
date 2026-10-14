@@ -56,7 +56,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         tag_map=None,
         capture_exceptions=True,
         get_response=None,
-        trust_tracing_headers=True,
+        capture_tracing_headers=True,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -69,7 +69,8 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_TAG_MAP = tag_map
             mock_settings.POSTHOG_MW_CAPTURE_EXCEPTIONS = capture_exceptions
             mock_settings.POSTHOG_MW_CLIENT = None
-            mock_settings.POSTHOG_MW_TRUST_TRACING_HEADERS = trust_tracing_headers
+            mock_settings.POSTHOG_MW_CAPTURE_TRACING_HEADERS = capture_tracing_headers
+            mock_settings.POSTHOG_MW_TRUST_TRACING_HEADERS = None
 
             # Make hasattr work correctly
             def mock_hasattr(obj, name):
@@ -474,7 +475,7 @@ class TestPosthogContextMiddlewareAsync(unittest.TestCase):
 
     def setUp(self):
         # Header propagation tests explicitly opt in to analytics attribution.
-        configuration = override_settings(POSTHOG_MW_TRUST_TRACING_HEADERS=True)
+        configuration = override_settings(POSTHOG_MW_CAPTURE_TRACING_HEADERS=True)
         configuration.enable()
         self.addCleanup(configuration.disable)
 
