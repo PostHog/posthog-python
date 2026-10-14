@@ -554,6 +554,7 @@ attribute posthog.ai.openai.openai_providers.AzureOpenAI.embeddings: WrappedEmbe
 attribute posthog.ai.openai.openai_providers.AzureOpenAI.responses: WrappedResponses
 attribute posthog.ai.openai.wrapper_utils.log = logging.getLogger('posthog')
 attribute posthog.ai.openai_agents.processor.log = logging.getLogger('posthog')
+attribute posthog.ai.otel.processor.log = logging.getLogger('posthog')
 attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 'traceloop.')
 attribute posthog.ai.otel.spans.DEFAULT_HOST = 'https://us.i.posthog.com'
 attribute posthog.ai.prompts.APP_ENDPOINT = 'https://us.posthog.com'
