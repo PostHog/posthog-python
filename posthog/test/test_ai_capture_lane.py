@@ -9,7 +9,12 @@ from parameterized import parameterized
 
 import posthog
 
-from posthog.ai.utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
+from posthog.ai.utils import (
+    _capture_ai_event,
+    _resolve_ai_client,
+    finalize_ai_content,
+    with_privacy_mode,
+)
 from posthog.async_client import AsyncPosthog
 from posthog.capture_compression import CAPTURE_COMPRESSION_ENV_VAR, CaptureCompression
 from posthog.client import Client
@@ -587,15 +592,30 @@ class TestAiIntegrationsRequireCaptureAi(unittest.TestCase):
         ],
         name_func=lambda func, _num, param: f"{func.__name__}_{param.args[1]}",
     )
-    def test_integration_rejects_client_without_capture_ai_at_construction(
+    def test_integration_logs_and_disables_capture_for_client_without_capture_ai(
         self, module, integration, client_argument, kwargs
     ):
         integration_class = getattr(pytest.importorskip(module), integration)
         client = mock.Mock(spec=["capture", "privacy_mode"])
 
-        with self.assertRaisesRegex(TypeError, "capture_ai"):
+        with self.assertLogs("posthog", level="ERROR") as logs:
             integration_class(**{client_argument: client}, **kwargs)
 
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("capture_ai", logs.output[0])
+        client.capture.assert_not_called()
+
+    def test_disabled_ai_client_drops_ai_events_and_keeps_other_attributes(self):
+        client = mock.Mock(spec=["capture", "privacy_mode"])
+        client.privacy_mode = True
+
+        with self.assertLogs("posthog", level="ERROR"):
+            resolved = _resolve_ai_client(client)
+
+        self.assertIsNone(
+            _capture_ai_event(resolved, "$ai_generation", distinct_id="d")
+        )
+        self.assertTrue(resolved.privacy_mode)
         client.capture.assert_not_called()
 
 

@@ -85,18 +85,34 @@ def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwar
     return ph_client.capture_ai(event=event, **kwargs)
 
 
+class _AICaptureDisabled:
+    """Stands in for a client without ``capture_ai``: AI events are dropped, and
+    every other attribute comes from the client."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def capture_ai(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
 def _resolve_ai_client(posthog_client: Optional[PostHogClient]) -> PostHogClient:
     """Return the client an AI integration sends through, or the global client.
 
-    The check runs when the integration is built. A client object without
-    ``capture_ai`` then fails at setup, and not after a provider call that the
-    user already paid for.
+    The check runs when the integration is built, so the error log appears at
+    setup. A client object without ``capture_ai`` turns AI capture off for the
+    integration, and provider calls still work.
     """
     client = posthog_client or setup()
     if not callable(getattr(client, "capture_ai", None)):
-        raise TypeError(
-            "The PostHog client for an AI integration must implement capture_ai()"
+        logging.getLogger("posthog").error(
+            "The PostHog client for an AI integration must implement capture_ai(). "
+            "AI events from this integration are not captured."
         )
+        return cast(PostHogClient, _AICaptureDisabled(client))
     return client
 
 
