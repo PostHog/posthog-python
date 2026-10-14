@@ -3,10 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 from parameterized import parameterized
 
+from uuid import UUID
+
 from posthog.capture_event import (
     _build_v1_batch_body,
-    _coerce_bool,
-    _coerce_str,
+    _canonical_event_uuid,
     _to_v1_event,
 )
 
@@ -27,42 +28,37 @@ def _legacy_msg(event="my_event", properties=None, **overrides) -> dict:
     return msg
 
 
-class TestCoercion(unittest.TestCase):
+_CANONICAL_UUID = "0190a8f3-1b2c-7d4e-8f90-123456789abc"
+
+
+class TestCanonicalEventUuid(unittest.TestCase):
     @parameterized.expand(
         [
-            ("bool_true", True, True),
-            ("bool_false", False, False),
-            ("str_true", "true", True),
-            ("str_true_upper", "TRUE", True),
-            ("str_true_padded", "  true ", True),
-            ("str_one", "1", True),
-            ("str_false", "false", False),
-            ("str_zero", "0", False),
-            ("int_nonzero", 5, True),
-            ("int_zero", 0, False),
-            ("float_nonzero", 1.5, True),
-            ("float_zero", 0.0, False),
-            ("neg_int", -1, True),
-            ("str_yes_uncoercible", "yes", None),
-            ("str_empty_uncoercible", "", None),
-            ("none_uncoercible", None, None),
-            ("dict_uncoercible", {"a": 1}, None),
+            ("canonical", _CANONICAL_UUID),
+            ("uppercase", _CANONICAL_UUID.upper()),
+            ("unhyphenated", _CANONICAL_UUID.replace("-", "")),
+            ("braced", "{" + _CANONICAL_UUID + "}"),
+            ("urn", "urn:uuid:" + _CANONICAL_UUID),
+            ("urn_uppercase", "URN:UUID:" + _CANONICAL_UUID.upper()),
+            ("uuid_instance", UUID(_CANONICAL_UUID)),
         ]
     )
-    def test_coerce_bool(self, _name, value, expected) -> None:
-        self.assertIs(_coerce_bool(value), expected)
+    def test_accepted_forms_are_canonicalized(self, _name, value) -> None:
+        self.assertEqual(_canonical_event_uuid(value), _CANONICAL_UUID)
 
     @parameterized.expand(
         [
-            ("str", "tour-1", "tour-1"),
-            ("empty_str", "", ""),
-            ("int", 123, None),
-            ("bool", True, None),
-            ("none", None, None),
+            ("bare_uuid_prefix", "uuid:" + _CANONICAL_UUID),
+            ("misplaced_hyphen", "0190a8f31-b2c-7d4e-8f90-123456789abc"),
+            ("surrounding_whitespace", " " + _CANONICAL_UUID),
+            ("braced_unhyphenated", "{" + _CANONICAL_UUID.replace("-", "") + "}"),
+            ("too_short", _CANONICAL_UUID[:-1]),
+            ("empty", ""),
+            ("int", 123),
         ]
     )
-    def test_coerce_str(self, _name, value, expected) -> None:
-        self.assertEqual(_coerce_str(value), expected)
+    def test_other_forms_are_rejected(self, _name, value) -> None:
+        self.assertIsNone(_canonical_event_uuid(value))
 
 
 class TestToV1Event(unittest.TestCase):
@@ -94,60 +90,64 @@ class TestToV1Event(unittest.TestCase):
     def test_does_not_mutate_input(self) -> None:
         msg = _legacy_msg(
             properties={"$cookieless_mode": True, "$session_id": "s-1"},
+            options={"product_tour_id": "tour-1"},
             **{"$set": {"name": "Max"}},
         )
         original_properties = dict(msg["properties"])
         _to_v1_event(msg)
         self.assertEqual(msg["properties"], original_properties)
+        self.assertEqual(msg["options"], {"product_tour_id": "tour-1"})
         self.assertIn("$set", msg)  # top-level $set untouched on the original
 
     @parameterized.expand(
         [
-            ("cookieless_mode", "$cookieless_mode", "cookieless_mode", True, True),
-            (
-                "ignore_sent_at_rename",
-                "$ignore_sent_at",
-                "disable_skew_correction",
-                "true",
-                True,
-            ),
+            ("cookieless_mode", "$cookieless_mode", "cookieless_mode", True),
+            ("ignore_sent_at", "$ignore_sent_at", "disable_skew_correction", "true"),
             (
                 "process_person_profile",
                 "$process_person_profile",
                 "process_person_profile",
-                "false",
-                False,
+                0,
             ),
-            (
-                "product_tour_id",
-                "$product_tour_id",
-                "product_tour_id",
-                "tour-7",
-                "tour-7",
-            ),
+            ("product_tour_id", "$product_tour_id", "product_tour_id", 123),
         ]
     )
-    def test_option_sentinels_lifted_renamed_and_coerced(
-        self, _name, prop_key, wire_key, raw, expected
+    def test_legacy_property_fills_option_unchanged(
+        self, _name, prop_key, option_key, raw
     ) -> None:
         event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
-        self.assertEqual(event["options"], {wire_key: expected})
+        self.assertEqual(event["options"], {option_key: raw})
         self.assertNotIn(prop_key, event["properties"])
 
     @parameterized.expand(
         [
-            ("bad_bool", "$cookieless_mode", "maybe"),
-            ("bad_tour_id_int", "$product_tour_id", 123),
+            ("option_set", {"cookieless_mode": False}, False),
+            ("option_null", {"cookieless_mode": None}, True),
+            ("option_missing", {}, True),
         ]
     )
-    def test_option_sentinel_removed_but_omitted_on_bad_coercion(
-        self, _name, prop_key, raw
+    def test_caller_option_wins_over_legacy_property(
+        self, _name, options, expected
     ) -> None:
-        event = _to_v1_event(_legacy_msg(properties={prop_key: raw}))
-        # Removed from properties (sentinels must never reach v1 props) but not
-        # emitted as an option, so a wrong type cannot 400 the whole batch.
-        self.assertNotIn(prop_key, event["properties"])
-        self.assertEqual(event["options"], {})
+        event = _to_v1_event(
+            _legacy_msg(properties={"$cookieless_mode": True}, options=options)
+        )
+        self.assertEqual(event["options"], {"cookieless_mode": expected})
+        self.assertNotIn("$cookieless_mode", event["properties"])
+
+    def test_caller_options_pass_through_unchanged(self) -> None:
+        options = {"process_person_profile": "false", "future_option": {"a": [1]}}
+        event = _to_v1_event(_legacy_msg(options=options))
+        self.assertEqual(event["options"], options)
+
+    @parameterized.expand([("list", ["x"]), ("string", "x"), ("int", 1)])
+    def test_non_dict_options_are_logged_and_ignored(self, _name, options) -> None:
+        with self.assertLogs("posthog", level="ERROR") as logs:
+            event = _to_v1_event(
+                _legacy_msg(properties={"$cookieless_mode": True}, options=options)
+            )
+        self.assertEqual(event["options"], {"cookieless_mode": True})
+        self.assertIn("options must be a dict", logs.output[0])
 
     @parameterized.expand(
         [
@@ -170,9 +170,9 @@ class TestToV1Event(unittest.TestCase):
             _legacy_msg(
                 properties={
                     "$cookieless_mode": True,
-                    "$ignore_sent_at": "1",
+                    "$ignore_sent_at": True,
                     "$product_tour_id": "tour-x",
-                    "$process_person_profile": 0,
+                    "$process_person_profile": False,
                     "$session_id": "s-1",
                     "$window_id": "w-1",
                     "$geoip_disable": True,
