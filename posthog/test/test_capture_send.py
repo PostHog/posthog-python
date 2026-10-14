@@ -9,6 +9,7 @@ import zstandard
 
 from parameterized import parameterized
 
+from posthog import capture_send
 from posthog.capture_compression import CaptureCompression
 from posthog.capture_event import _build_v1_batch_body, _to_v1_event
 from posthog.capture_send import (
@@ -355,6 +356,7 @@ class TestSendV1Batch(unittest.TestCase):
         sleep_patch = mock.patch("posthog.capture_send.time.sleep")
         self.sleep = sleep_patch.start()
         self.addCleanup(sleep_patch.stop)
+        _patch_no_jitter(self)
 
     def _run(self, batch, outcomes, **kwargs):
         stub = _PostV1Stub(outcomes)
@@ -677,8 +679,18 @@ class TestCaptureLossMessage(unittest.TestCase):
         )
 
 
+def _patch_no_jitter(test: unittest.TestCase) -> None:
+    # 0.5 draws a jitter factor of exactly 1.0.
+    patch = mock.patch.object(capture_send.random, "random", return_value=0.5)
+    patch.start()
+    test.addCleanup(patch.stop)
+
+
 class TestBackoff(unittest.TestCase):
     """Directly exercises ``_backoff``'s Retry-After-as-minimum + cap policy."""
+
+    def setUp(self) -> None:
+        _patch_no_jitter(self)
 
     @parameterized.expand(
         [
@@ -700,3 +712,21 @@ class TestBackoff(unittest.TestCase):
             _backoff(attempt_index, retry_after)
             sleep.assert_called_once()
             self.assertAlmostEqual(sleep.call_args.args[0], expected)
+
+    @parameterized.expand(
+        [
+            # (draw, attempt_index, retry_after, expected sleep seconds)
+            ("lowest_draw_shortens_by_a_quarter", 0.0, 1, None, 0.15),
+            ("highest_draw_lengthens_by_a_quarter", 1.0, 1, None, 0.25),
+            ("jittered_wait_still_capped", 1.0, 10, None, _MAX_BACKOFF_SECONDS),
+            ("jitter_never_shortens_retry_after", 0.0, 1, 0.2, 0.2),
+            ("jitter_can_lengthen_past_retry_after", 1.0, 1, 0.2, 0.25),
+        ]
+    )
+    def test_jitter(self, _name, draw, attempt_index, retry_after, expected) -> None:
+        with (
+            mock.patch.object(capture_send.random, "random", return_value=draw),
+            mock.patch("posthog.capture_send.time.sleep") as sleep,
+        ):
+            _backoff(attempt_index, retry_after)
+        self.assertAlmostEqual(sleep.call_args.args[0], expected)

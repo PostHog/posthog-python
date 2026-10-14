@@ -21,6 +21,7 @@ Request bodies are optionally compressed per :class:`~posthog.capture_compressio
 
 import json
 import logging
+import random
 import time
 import zlib
 from dataclasses import dataclass
@@ -87,6 +88,10 @@ _MAX_BACKOFF_SECONDS = 30
 # First retry delay; it doubles per attempt up to `_MAX_BACKOFF_SECONDS`. Matches
 # posthog-go.
 _BACKOFF_BASE_SECONDS = 0.1
+
+# Spread each backoff by up to a quarter, so clients refused together do not
+# return together.
+_BACKOFF_JITTER = 0.25
 
 
 @dataclass(frozen=True)
@@ -413,18 +418,25 @@ def _parse_v1_response(res: "requests.Response") -> _V1ParsedResponse:
     return _V1ParsedResponse(status, False, retry_after, error_message=message)
 
 
+def _draw_jitter() -> float:
+    return 1 - _BACKOFF_JITTER + random.random() * _BACKOFF_JITTER * 2
+
+
 def _backoff(attempt_index: int, retry_after: Optional[float]) -> None:
     """Sleep before the next attempt.
 
-    Exponential backoff capped at :data:`_MAX_BACKOFF_SECONDS` is the base. When
-    the server sent a ``Retry-After`` it acts as a *minimum*, not a replacement:
+    Exponential backoff, spread by :data:`_BACKOFF_JITTER` and then capped at
+    :data:`_MAX_BACKOFF_SECONDS`, is the base. When the server sent a
+    ``Retry-After`` it acts as a *minimum*, not a replacement:
     the client waits the longer of the configured backoff and ``Retry-After``, so
     a small ``Retry-After`` never retries earlier than the normal schedule
     (matching posthog-go / posthog-rs). ``Retry-After`` is itself clamped to
     :data:`_MAX_BACKOFF_SECONDS`, so both sides share one ceiling and a
     hostile/buggy header can't park the consumer thread.
     """
-    configured = min(_BACKOFF_BASE_SECONDS * 2**attempt_index, _MAX_BACKOFF_SECONDS)
+    configured = min(
+        _BACKOFF_BASE_SECONDS * 2**attempt_index * _draw_jitter(), _MAX_BACKOFF_SECONDS
+    )
     clamped_retry_after = (
         min(retry_after, _MAX_BACKOFF_SECONDS) if retry_after and retry_after > 0 else 0
     )
