@@ -1,5 +1,11 @@
 # posthog
 
+## 7.70.2 — 2026-10-15
+
+### Patch changes
+
+- [fec41f2](https://github.com/posthog/posthog-python/commit/fec41f24cb497d37a8cd0dd53490b74c98554dfa) Mark cancelled async LLM calls as errors while preserving cancellation. — Thanks @marandaneto!
+
 ## 7.70.1 — 2026-10-15
 
 ### Patch changes
