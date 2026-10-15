@@ -1073,7 +1073,6 @@ attribute posthog.types.FlagEvaluationErrorCode.PARSE_ERROR = 'PARSE_ERROR'
 attribute posthog.types.FlagEvaluationErrorCode.TYPE_MISMATCH = 'TYPE_MISMATCH'
 attribute posthog.types.FlagMetadata.config_version: Optional[int] = None
 attribute posthog.types.FlagMetadata.description: str
-attribute posthog.types.FlagMetadata.experiment_id: Optional[int] = None
 attribute posthog.types.FlagMetadata.forced_variant: Optional[bool] = None
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
 attribute posthog.types.FlagMetadata.holdout_id: Optional[int] = None
@@ -1255,7 +1254,7 @@ class posthog.types.FeatureFlagEvaluationRuntime
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
 class posthog.types.FlagEvaluationDetails(key: str, value: _T, variant: Optional[str] = None, reason: Optional[FlagReason] = None, metadata: Optional[FlagMetadata] = None, error_code: Optional[FlagEvaluationErrorCode] = None, error_message: Optional[str] = None)
 class posthog.types.FlagEvaluationErrorCode 
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, experiment_id: Optional[int] = None, variant_key: Optional[str] = None, holdout_id: Optional[int] = None, forced_variant: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, variant_key: Optional[str] = None, holdout_id: Optional[int] = None, forced_variant: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 

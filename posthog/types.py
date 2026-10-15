@@ -162,7 +162,6 @@ class FlagMetadata:
             typed ``value`` always read as ``1``.
         rule_type: Type of the rule that produced the result, when one did.
         rule_id: ID of the rule that produced the result, when one did.
-        experiment_id: ID of the experiment behind the result, when there is one.
         variant_key: Key of the assigned variant, when one was assigned.
         holdout_id: ID of the holdout that excluded the subject, when one did.
         forced_variant: Whether a condition-level variant override produced the
@@ -177,7 +176,6 @@ class FlagMetadata:
     config_version: Optional[int] = None
     rule_type: Optional[str] = None
     rule_id: Optional[str] = None
-    experiment_id: Optional[int] = None
     variant_key: Optional[str] = None
     holdout_id: Optional[int] = None
     forced_variant: Optional[bool] = None
@@ -446,9 +444,6 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
                 ),
                 rule_id=_read_typed(
                     raw_metadata.get("rule_id"), "metadata.rule_id", str
-                ),
-                experiment_id=_read_int(
-                    raw_metadata.get("experiment_id"), "metadata.experiment_id"
                 ),
                 variant_key=_read_typed(
                     raw_metadata.get("variant_key"), "metadata.variant_key", str

@@ -104,9 +104,23 @@ def _complete_split(details: FlagEvaluationDetails[Any]) -> bool:
         and details.reason.code == "experiment_split"
         and metadata.rule_type == "experiment"
         and metadata.rule_id is not None
-        and metadata.experiment_id is not None
         and metadata.variant_key is not None
     )
+
+
+# The pinned contract still lists `metadata.experiment_id` as a known field. Records no
+# longer carry an experiment ID, and the reader ignores the key like any unknown one, so
+# these cases now read as a complete split. Drop the overrides when the fixtures are
+# re-pinned to a contract without the field.
+READER_OVERRIDES: Dict[str, Dict[str, Any]] = {
+    "readers.partial_split_missing_experiment_id": {"experiment_exposure": True},
+    "readers.split_wrong_type_experiment_id": {
+        "value": False,
+        "config_version": 2,
+        "experiment_exposure": True,
+        "error_code": None,
+    },
+}
 
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
@@ -118,10 +132,14 @@ def test_vendored_fixtures_match_the_recorded_release_digests():
         assert digest == entry["sha256"], name
 
 
+def test_reader_overrides_name_vendored_cases():
+    assert set(READER_OVERRIDES) <= {case["id"] for case in READERS["cases"]}
+
+
 @pytest.mark.parametrize("case", READERS["cases"], ids=lambda case: case["id"])
 def test_reader_fixture(client, case):
     snapshot = _evaluate(client, _build(READERS, case))
-    reader = case["reader"]
+    reader = {**case["reader"], **READER_OVERRIDES.get(case["id"], {})}
     key = reader["requested_key"]
 
     details = _details(snapshot, key, reader["caller_default"], reader["value"])
@@ -164,7 +182,8 @@ def test_valid_producer_responses_are_retained_as_sent(case):
         assert flag.reason.condition_index == record["reason"]["condition_index"]
         assert isinstance(flag.metadata, FlagMetadata)
         for field, value in record["metadata"].items():
-            if field != "payload":
+            # The pinned fixtures still send `experiment_id`, which is ignored.
+            if field not in ("payload", "experiment_id"):
                 assert getattr(flag.metadata, field) == value, field
 
 
@@ -288,7 +307,6 @@ def test_typed_details_carry_the_variant_key_and_context(client):
     assert details.metadata is not None
     assert details.metadata.rule_type == "experiment"
     assert details.metadata.rule_id == "10000000-0000-4000-8000-000000000001"
-    assert details.metadata.experiment_id == 301
     assert details.metadata.variant_key == "arm_a"
 
 
@@ -392,7 +410,6 @@ def _record(**overrides: Any) -> Dict[str, Any]:
         ("metadata.has_experiment", "false"),
         ("metadata.rule_type", 2),
         ("metadata.rule_id", 3),
-        ("metadata.experiment_id", "301"),
         ("metadata.variant_key", True),
         ("metadata.holdout_id", 4.5),
         ("metadata.forced_variant", "yes"),
@@ -435,7 +452,7 @@ def test_a_record_that_is_not_an_object_fails_only_that_record():
 def test_unknown_fields_and_null_optional_fields_are_ignored():
     record = _record(**{"future_field": {"nested": True}})
     record["reason"]["future_reason"] = 1
-    record["metadata"].update(future_metadata=[1], experiment_id=None, holdout_id=None)
+    record["metadata"].update(future_metadata=[1], holdout_id=None)
     record["conditions"] = "not read"
 
     flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
@@ -445,7 +462,23 @@ def test_unknown_fields_and_null_optional_fields_are_ignored():
     assert flag.error_code is None
     assert flag.value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
-    assert flag.metadata.experiment_id is None
+    assert flag.metadata.holdout_id is None
+
+
+@pytest.mark.parametrize("experiment_id", [301, "301"])
+def test_an_experiment_id_in_the_metadata_is_ignored(experiment_id):
+    # Experiments link to rules on the server, so records carry no experiment ID. A
+    # record that still sends one reads like a record with any other unknown key.
+    record = _record(**{"metadata.experiment_id": experiment_id})
+
+    flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
+        "garden-layout"
+    ]
+
+    assert flag.error_code is None
+    assert flag.value == "compact"
+    assert isinstance(flag.metadata, FlagMetadata)
+    assert not hasattr(flag.metadata, "experiment_id")
 
 
 def test_a_record_without_value_is_read_as_an_older_server_record():
@@ -463,7 +496,6 @@ def test_a_record_without_value_is_read_as_an_older_server_record():
             "config_version": 2,
             "rule_type": "experiment",
             "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301,
             "variant_key": "compact",
         },
     }
@@ -477,7 +509,6 @@ def test_a_record_without_value_is_read_as_an_older_server_record():
     assert flag.metadata.config_version == 1
     assert flag.metadata.rule_type is None
     assert flag.metadata.rule_id is None
-    assert flag.metadata.experiment_id is None
     assert flag.metadata.variant_key is None
 
 
