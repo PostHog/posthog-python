@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -648,6 +649,13 @@ async def call_llm_and_track_usage_async(
 
         try:
             response = await call_async_method(**kwargs)
+        except asyncio.CancelledError:
+            http_status = 0
+            error_params = {
+                "$ai_is_error": True,
+                "$ai_error": "cancelled",
+            }
+            raise
         except Exception as exc:
             error = exc
             http_status = getattr(
