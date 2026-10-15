@@ -10,10 +10,8 @@
 # 1. Copy .env.example to .env and fill in your PostHog credentials
 # 2. Run this script and choose from the interactive menu
 
-import gc
 import os
 import sys
-import time
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -76,7 +74,7 @@ print("3. Feature flag payload examples")
 print(f"4. Flag dependencies examples{local_eval_note}")
 print("5. Context management and tagging examples")
 print("6. Run all examples")
-print("7. Process, host, and GC metrics (60 seconds, macOS)")
+print("7. Process, host, and GC metrics (30-minute workload, macOS)")
 print("8. Exit")
 choice = input("\nEnter your choice (1-8): ").strip()
 
@@ -494,6 +492,8 @@ elif choice == "6":
         print("✅ Demo completed with context tags")
 
 elif choice == "7" and sys.platform == "darwin":
+    from _example_runtime_metrics import run_workload
+
     run_id = uuid4().hex
 
     def print_runtime_sample(sample):
@@ -529,27 +529,16 @@ elif choice == "7" and sys.platform == "darwin":
     }
     posthog.setup()
     print(f"Service: python-runtime-metrics-demo; demo.run_id: {run_id}", flush=True)
-    start = time.monotonic()
-    allocation = None
-    for phase, end, busy in [
-        ("idle", 20, False),
-        ("CPU busy", 40, True),
-        ("memory allocated (+64 MiB)", 60, False),
-    ]:
-        if end == 60:
-            allocation = bytearray(64 * 1024 * 1024)
-            allocation[::4096] = b"\x01" * (len(allocation) // 4096)
-            for _ in range(10000):
-                cycle: list[object] = []
-                cycle.append(cycle)
-            del cycle
-            gc.collect()
-        print(f"{datetime.now(timezone.utc).isoformat()} Phase: {phase}", flush=True)
-        while time.monotonic() < start + end:
-            if busy:
-                sum(i * i for i in range(10000))
-            else:
-                time.sleep(min(0.1, max(0, start + end - time.monotonic())))
+    print(
+        "Running for 30 minutes with 30-second phases. Press Ctrl+C to stop.",
+        flush=True,
+    )
+    try:
+        run_workload()
+    except KeyboardInterrupt:
+        print("\nMetrics workload stopped.", flush=True)
+    finally:
+        posthog.shutdown()
 
 elif choice == "7":
     print("Automatic runtime metrics are currently supported only on macOS.")
