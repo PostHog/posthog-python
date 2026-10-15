@@ -8,7 +8,12 @@ values the code branched on, with no additional /flags request.
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FlagValue
+from posthog.types import (
+    FeatureFlag,
+    FlagEvaluationDetails,
+    FlagValue,
+    _resolve_flag_details,
+)
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,9 @@ class _EvaluatedFlagRecord:
     # Server-reported signal for whether the flag is linked to an experiment.
     # ``None`` when the server did not report it (older deployments).
     has_experiment: Optional[bool] = None
+    # The parsed /flags record, with its typed value, reason and metadata.
+    # ``None`` for a locally evaluated flag.
+    details: Optional[FeatureFlag] = None
 
 
 @dataclass
@@ -123,6 +131,92 @@ class FeatureFlagEvaluations:
             return False
         return flag.variant if flag.variant is not None else True
 
+    def get_boolean_value(self, key: str, default_value: bool) -> bool:
+        """Return the flag's boolean value, or ``default_value``.
+
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
+        :meth:`get_boolean_details` for when the default is returned.
+        """
+        return self.get_boolean_details(key, default_value).value
+
+    def get_boolean_details(
+        self, key: str, default_value: bool
+    ) -> FlagEvaluationDetails[bool]:
+        """Return the flag's boolean value with its evaluation details.
+
+        The value is never coerced. ``default_value`` is returned when the flag is
+        not in the evaluation, failed, has no value, or has a value of another
+        type; ``error_code`` says which, except for a flag without a value. Fires
+        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
+        """
+        return self._get_typed_details(key, default_value, "boolean")
+
+    def get_string_value(self, key: str, default_value: str) -> str:
+        """Return the flag's string value, or ``default_value``.
+
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
+        :meth:`get_string_details` for when the default is returned.
+        """
+        return self.get_string_details(key, default_value).value
+
+    def get_string_details(
+        self, key: str, default_value: str
+    ) -> FlagEvaluationDetails[str]:
+        """Return the flag's string value with its evaluation details.
+
+        The value is never coerced. ``default_value`` is returned when the flag is
+        not in the evaluation, failed, has no value, or has a value of another
+        type; ``error_code`` says which, except for a flag without a value or with
+        the value ``False``. Fires ``$feature_flag_called`` on first access, like
+        :meth:`get_flag`.
+        """
+        return self._get_typed_details(key, default_value, "string")
+
+    def get_number_value(self, key: str, default_value: float) -> float:
+        """Return the flag's number value, or ``default_value``.
+
+        An integer value is returned as an ``int``. Like :meth:`get_flag`, fires
+        ``$feature_flag_called`` on first access. See :meth:`get_number_details` for
+        when the default is returned.
+        """
+        return self.get_number_details(key, default_value).value
+
+    def get_number_details(
+        self, key: str, default_value: float
+    ) -> FlagEvaluationDetails[float]:
+        """Return the flag's number value with its evaluation details.
+
+        The value is never coerced: a boolean is not a number. ``default_value`` is
+        returned when the flag is not in the evaluation, failed, has no value, or
+        has a value of another type; ``error_code`` says which, except for a flag
+        without a value or with the value ``False``. Fires ``$feature_flag_called``
+        on first access, like :meth:`get_flag`.
+        """
+        return self._get_typed_details(key, default_value, "number")
+
+    def get_object_value(
+        self, key: str, default_value: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Return the flag's object value, or ``default_value``.
+
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
+        :meth:`get_object_details` for when the default is returned.
+        """
+        return self.get_object_details(key, default_value).value
+
+    def get_object_details(
+        self, key: str, default_value: Dict[str, Any]
+    ) -> FlagEvaluationDetails[Dict[str, Any]]:
+        """Return the flag's object value with its evaluation details.
+
+        The value is never coerced: a payload is not an object value.
+        ``default_value`` is returned when the flag is not in the evaluation,
+        failed, has no value, or has a value of another type; ``error_code`` says
+        which, except for a flag without a value or with the value ``False``. Fires
+        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
+        """
+        return self._get_typed_details(key, default_value, "object")
+
     def get_flag_payload(self, key: str) -> Optional[Any]:
         """Return the payload associated with a flag.
 
@@ -214,6 +308,18 @@ class FeatureFlagEvaluations:
             # only what the parent saw, not what happened on filtered views.
             accessed=set(self._accessed),
         )
+
+    def _get_typed_details(
+        self, key: str, default_value: Any, value_type: str
+    ) -> FlagEvaluationDetails[Any]:
+        flag = self._flags.get(key)
+        self._record_access(key)
+        details = None
+        if flag is not None:
+            details = flag.details or FeatureFlag.from_value_and_payload(
+                key, flag.variant if flag.variant is not None else flag.enabled, None
+            )
+        return _resolve_flag_details(key, details, default_value, value_type)
 
     def _record_access(self, key: str) -> None:
         self._accessed.add(key)

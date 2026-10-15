@@ -149,7 +149,7 @@ async def async_flags(
                     _serialize_flags_body, api_key, request_data
                 )
                 response = await http_client.post(
-                    "/flags/?v=2", content=data, headers=headers, timeout=timeout
+                    "/flags/?v=3", content=data, headers=headers, timeout=timeout
                 )
                 return await asyncio.to_thread(_process_flags_response, response)
             except httpx_module.TransportError:

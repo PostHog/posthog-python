@@ -242,7 +242,7 @@ async def test_async_flags_sends_v2_request_payload():
 
     assert result == {"flags": {}}
     _, args, kwargs = client.calls[0]
-    assert args == ("/flags/?v=2",)
+    assert args == ("/flags/?v=3",)
     payload = json.loads(kwargs["content"])
     assert payload["token"] == "project-key"
     assert "api_key" not in payload

@@ -81,6 +81,8 @@ from posthog.types import (
     BeforeSendCallback as BeforeSendCallback,
     FeatureFlag as FeatureFlag,
     FeatureFlagEvaluationRuntime as FeatureFlagEvaluationRuntime,
+    FlagEvaluationDetails as FlagEvaluationDetails,
+    FlagEvaluationErrorCode as FlagEvaluationErrorCode,
     FlagValue as FlagValue,
     FlagsAndPayloads as FlagsAndPayloads,
 )
