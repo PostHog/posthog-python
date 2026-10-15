@@ -13,7 +13,7 @@ import pytest
 import posthog
 from posthog import metrics_capture
 from posthog.client import Client
-from posthog.test.test_metrics import metrics_from, mock_session, sent_payload
+from posthog.test.test_metrics import mock_session, sent_payload
 
 
 class ManualTimer:
@@ -49,6 +49,8 @@ def native(monkeypatch):
         size=96,
         threads=7,
         switches=100,
+        voluntary=50,
+        involuntary=100,
         cpus=8,
         physical_pages=4096,
         page_size=4096,
@@ -76,9 +78,15 @@ def native(monkeypatch):
     monkeypatch.setattr(
         module,
         "getrusage",
-        lambda who: SimpleNamespace(ru_utime=state.user, ru_stime=state.system),
+        lambda who: SimpleNamespace(
+            ru_utime=state.user,
+            ru_stime=state.system,
+            ru_nvcsw=state.voluntary,
+            ru_nivcsw=state.involuntary,
+        ),
     )
     monkeypatch.setattr(module, "monotonic", lambda: state.time)
+    monkeypatch.setattr(module, "gc_callbacks", [], raising=False)
     monkeypatch.setattr(
         module, "get_stats", lambda: [stats.copy() for stats in state.gc_stats]
     )
@@ -119,7 +127,12 @@ def runtime_client(native, monkeypatch):
 
 
 def exported_metrics(session):
-    return {metric["name"]: metric for metric in metrics_from(sent_payload(session))}
+    return {
+        metric["name"]: metric
+        for group in sent_payload(session)["resourceMetrics"]
+        for scope in group["scopeMetrics"]
+        for metric in scope["metrics"]
+    }
 
 
 def attributes(point):
@@ -129,14 +142,14 @@ def attributes(point):
 
 
 @pytest.mark.parametrize("before", [2**31 - 2, 2**32 - 2])
-def test_context_switch_counter_wraps_without_a_spike(native, before):
+def test_context_switch_native_counters_preserve_large_values(native, before):
     module, state, _ = native
-    state.switches = before
+    state.involuntary = before
     collector = module._MacOSProcessMetrics()
-    state.switches += 5
+    state.involuntary += 5
     state.time += 10
     samples = {sample.name: sample.value for sample in collector.collect()}
-    assert samples["app.process.cpu.ctx_switch.total"] == 5
+    assert samples["process.context_switches"] == 5
 
 
 def test_native_read_failure_omits_native_metrics_and_warns_once(native, caplog):
@@ -151,13 +164,13 @@ def test_native_read_failure_omits_native_metrics_and_warns_once(native, caplog)
         assert "process.memory.usage" not in samples
         assert "process.memory.utilization" not in samples
         assert "process.thread.count" not in samples
-        assert "app.process.cpu.ctx_switch.total" not in samples
+        assert "process.context_switches" in samples
     state.time += 10
     state.size = 96
-    state.switches += 10000
+    state.involuntary += 10000
     samples = {sample.name: sample.value for sample in collector.collect()}
     assert samples["process.thread.count"] == 7
-    assert samples["app.process.cpu.ctx_switch.total"] == 10000
+    assert samples["process.context_switches"] == 10000
     assert caplog.text.count("Unable to collect native process metrics") == 1
 
 
@@ -173,10 +186,10 @@ def test_native_baseline_failure_does_not_disable_cpu_and_gc(native):
     state.size = 96
     samples = {sample.name: sample.value for sample in collector.collect()}
     assert samples["process.memory.usage"] == state.rss
-    assert samples["app.process.cpu.ctx_switch.total"] == 0
-    state.switches += 3
+    assert samples["process.context_switches"] == 0
+    state.involuntary += 3
     samples = {sample.name: sample.value for sample in collector.collect()}
-    assert samples["app.process.cpu.ctx_switch.total"] == 3
+    assert samples["process.context_switches"] == 3
 
 
 def test_opt_in_starts_collection_without_manual_metrics_calls(runtime_client):
@@ -239,16 +252,22 @@ def test_timer_collects_process_metrics_and_continues(runtime_client, native):
     timer = client.metrics._flush_timer
     timer.fire()
     metrics = exported_metrics(session)
-    cpu = metrics["app.process.cpu.percent"]
+    cpu = metrics["process.cpu.time"]
     memory = metrics["process.memory.usage"]
-    assert cpu["unit"] == "%"
-    assert cpu["gauge"]["dataPoints"][0]["asDouble"] == 150
+    assert cpu["unit"] == "s"
+    assert cpu["sum"]["dataPoints"][0]["asDouble"] == 1
     assert memory["unit"] == "By"
     assert memory["sum"]["dataPoints"][0]["asDouble"] == state.rss
-    tags = attributes(cpu["gauge"]["dataPoints"][0])
+    tags = attributes(memory["sum"]["dataPoints"][0])
     assert tags["process.pid"] == os.getpid()
-    assert tags["process.runtime_id"]
-    assert attributes(memory["sum"]["dataPoints"][0]) == tags
+    assert attributes(sent_payload(session)["resourceMetrics"][0]["resource"])[
+        "service.instance.id"
+    ]
+    assert "process.runtime_id" not in tags
+    assert attributes(cpu["sum"]["dataPoints"][0]) == {
+        **tags,
+        "cpu.mode": "user",
+    }
     assert client.metrics._flush_timer is not timer
     assert client.metrics._flush_timer.active
     assert client.metrics._flush_timer.interval == 3
@@ -313,10 +332,10 @@ def test_shutdown_collects_final_samples_and_stops_timer(runtime_client, native)
     native[1].user += 2.5
     client.shutdown()
     assert (
-        exported_metrics(session)["app.process.cpu.percent"]["gauge"]["dataPoints"][0][
+        exported_metrics(session)["process.cpu.time"]["sum"]["dataPoints"][0][
             "asDouble"
         ]
-        == 25
+        == 2.5
     )
     assert not timer.active
     assert client.metrics._runtime_metrics is None
@@ -377,7 +396,7 @@ def test_reset_clears_window_but_collection_continues(runtime_client, native):
     client.metrics._flush_timer.fire()
     metrics = exported_metrics(session)
     assert "manual.metric" not in metrics
-    assert "app.process.cpu.percent" in metrics
+    assert "process.cpu.utilization" in metrics
     assert "process.memory.usage" in metrics
 
 
@@ -494,7 +513,7 @@ def test_shutdown_during_initialization_prevents_collector_install(
     session.post.assert_not_called()
 
 
-def test_zero_elapsed_time_skips_cpu_percent(native):
+def test_zero_elapsed_time_skips_cpu_utilization(native):
     collector = native[0]._MacOSProcessMetrics()
     samples = {sample.name: sample.value for sample in collector.collect()}
     assert "app.process.cpu.percent" not in samples
@@ -502,16 +521,18 @@ def test_zero_elapsed_time_skips_cpu_percent(native):
     assert "process.cpu.time" in samples
     assert samples["process.memory.usage"] == native[1].rss
     assert samples["process.thread.count"] == 7
-    assert samples["app.process.cpu.ctx_switch.total"] == 0
+    assert samples["process.context_switches"] == 0
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
 def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
     client, _ = runtime_client()
-    parent_id = client.metrics._runtime_metrics.attributes["process.runtime_id"]
+    parent_id = client.metrics._runtime_metrics.resource_attributes[
+        "service.instance.id"
+    ]
     native[1].time += 100
     native[1].user += 50
-    native[1].switches += 100000
+    native[1].involuntary += 100000
     locks = [
         client.metrics._lock,
         client.metrics._flush_lock,
@@ -525,7 +546,7 @@ def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
         try:
             collector = client.metrics._runtime_metrics
             assert collector.attributes["process.pid"] == os.getpid()
-            assert collector.attributes["process.runtime_id"] != parent_id
+            assert collector.resource_attributes["service.instance.id"] != parent_id
             assert client.metrics._flush_timer.active
             collected = collector.collect()
             samples = {sample.name: sample.value for sample in collected}
@@ -548,7 +569,10 @@ def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
         lock.release()
     _, status = os.waitpid(pid, 0)
     assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
-    assert client.metrics._runtime_metrics.attributes["process.runtime_id"] == parent_id
+    assert (
+        client.metrics._runtime_metrics.resource_attributes["service.instance.id"]
+        == parent_id
+    )
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
@@ -636,7 +660,7 @@ def test_native_macos_current_process_reading():
     assert 0 < utilization <= 1
     assert samples["process.thread.count"][0] > 0
     assert samples["process.cpu.time"][0] >= 0
-    assert samples["app.process.cpu.ctx_switch.total"][0] >= 0
+    assert samples["process.context_switches"][0] >= 0
     assert samples["cpython.gc.collections"][0] >= 0
     assert samples["cpython.gc.collected_objects"][0] >= 0
     assert samples["cpython.gc.uncollectable_objects"][0] >= 0

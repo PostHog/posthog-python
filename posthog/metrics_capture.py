@@ -239,6 +239,7 @@ class _SeriesState:
         "type",
         "unit",
         "attributes",
+        "resource_attributes",
         "window_start_ms",
         "total",
         "last",
@@ -253,7 +254,9 @@ class _SeriesState:
         metric_type: str,
         unit: Optional[str],
         attributes: Optional[dict],
+        resource_attributes: Optional[dict] = None,
     ):
+        self.resource_attributes = dict(resource_attributes or {})
         self.name = name
         self.type = metric_type
         self.unit = unit
@@ -311,28 +314,42 @@ class PostHogMetrics:
       ``cpython.gc.uncollectable_objects``: cumulative ``gc.get_stats()``
       counters, distinguished by ``cpython.gc.generation`` (0, 1, 2).
       These are CPython-only, and measure neither heap size nor GC pause duration.
-    * ``app.process.cpu.percent``: a custom utilization gauge where 100% is one
-      busy CPU core, and values may exceed 100%.
-    * ``app.process.cpu.ctx_switch.total``: a custom cumulative context-switch
-      counter. The native reader supplies a combined total, not the split
-      required by OpenTelemetry's standard context-switch metric.
+    * ``app.cpython.gc.duration``: CPython collection-duration histograms in
+      milliseconds, distinguished by ``cpython.gc.generation``. Measures wall
+      time between GC callbacks, not exact application stop-the-world time.
+      Callbacks only buffer observations; hooks and export run at flush time.
+      At most 4096 observations are buffered per collector; contention or a full
+      buffer can omit observations, with a bounded warning on collection.
+    * ``process.context_switches``: cumulative native ``getrusage()`` counts,
+      with ``process.context_switch.type=voluntary`` or ``involuntary``.
+      Per-core-equivalent CPU percentage can be derived from
+      ``rate(process.cpu.time) * 100``, summing the CPU modes.
 
     Only this process is measured, not children or host totals. Samples use the
     configured flush interval (10 seconds by default) and pass through
     ``before_send``. Automatic cumulative sums use sample types
     ``observable_counter`` and ``observable_updowncounter``; manual ``count``
     calls remain delta sums. CPU, GC, and context-switch counters exclude work
-    before collection starts. Each process has ``process.pid`` and a stable
-    ``process.runtime_id`` attribute; forked workers get a new identity and
-    counter baselines. ``shutdown()`` collects a final sample and stops collection.
+    before collection starts. Automatic process samples carry ``process.pid``
+    and a generated resource attribute ``service.instance.id``; forked workers
+    get a new identity and counter baselines. The generated instance resource
+    does not change manual or host metrics' configured resource attributes.
+    ``shutdown()`` collects a final sample and stops collection.
 
     Independently opt in to macOS host collection with ``capture_host_metrics=True``:
 
-    * ``app.system.cpu.utilization``: aggregate busy fraction across all CPUs,
-      including user, system, and nice time. Not per-logical-CPU utilization.
-    * ``app.system.memory.available.estimated``: (free + inactive) pages in bytes,
-      including speculative pages already present in free. This estimate is not
-      guaranteed immediately allocatable memory or a process memory limit.
+    * ``system.cpu.utilization``: per-logical-CPU utilization fractions, with
+      integer ``cpu.logical_number`` (0-based) and ``cpu.mode`` set to ``user``,
+      ``system``, ``idle``, or ``nice``. To chart busy utilization, exclude idle
+      and sum the other modes per CPU. Initial, unchanged, and topology-change
+      readings are omitted until a valid counter delta is available.
+    * ``system.memory.usage``: native memory bytes by ``system.memory.state``.
+      Following psutil's macOS accounting, ``free`` excludes speculative pages
+      and ``used`` is active plus wired pages. Unsupported ``cached`` and
+      ``buffers`` states are omitted. These values are not available memory
+      and need not sum to total RAM (for example, compressed storage is separate).
+    * ``system.memory.limit``: installed physical RAM bytes from ``hw.memsize``.
+      Neither memory metric represents a container or process memory limit.
     * ``app.system.memory.pressure``: native level, 1=normal, 2=warning, 4=critical.
       This is categorical, not a percentage. The optional, undocumented polling
       sysctl may be unavailable or denied; failed and unknown readings are omitted.
@@ -478,7 +495,11 @@ class PostHogMetrics:
                     or self._client._shutdown_requested
                     or self._client._join_requested
                 ):
+                    if runtime is not None:
+                        runtime.close()
                     return
+                if self._runtime_metrics is not None:
+                    self._runtime_metrics.close()
                 self._runtime_metrics = runtime
                 self._host_metrics = host
                 if runtime is not None or host is not None:
@@ -520,6 +541,7 @@ class PostHogMetrics:
                                 sample.unit,
                                 {**collector.attributes, **(sample.attributes or {})},
                                 collector,
+                                sample.start_time_ms,
                             )
                     except Exception as e:
                         if not self._runtime_error_warned:
@@ -531,6 +553,8 @@ class PostHogMetrics:
 
     def _stop_runtime_metrics(self) -> None:
         with self._runtime_lock:
+            if self._runtime_metrics is not None:
+                self._runtime_metrics.close()
             self._collect_runtime_metrics()
             with self._lock:
                 self._runtime_metrics = None
@@ -581,6 +605,8 @@ class PostHogMetrics:
     def reset(self) -> None:
         """Drops the current window; enabled runtime collection continues."""
         with self._runtime_lock, self._lock:
+            if self._runtime_metrics is not None:
+                self._runtime_metrics.reset_gc_duration()
             self._clear_flush_timer()
             self._series = {}
             self._series_cap_warned = False
@@ -599,10 +625,19 @@ class PostHogMetrics:
         runtime_collector: Optional[
             Union["_MacOSProcessMetrics", "_MacOSHostMetrics"]
         ] = None,
+        runtime_start_time_ms: Optional[int] = None,
     ) -> None:
         # A telemetry call must never raise into the host application, whatever the input.
         try:
-            self._capture(metric_type, name, value, unit, attributes, runtime_collector)
+            self._capture(
+                metric_type,
+                name,
+                value,
+                unit,
+                attributes,
+                runtime_collector,
+                runtime_start_time_ms,
+            )
         except Exception as e:
             if not self._capture_error_warned:
                 self._capture_error_warned = True
@@ -618,6 +653,7 @@ class PostHogMetrics:
         runtime_collector: Optional[
             Union["_MacOSProcessMetrics", "_MacOSHostMetrics"]
         ] = None,
+        runtime_start_time_ms: Optional[int] = None,
     ) -> None:
         if getattr(self._client, "disabled", False):
             return
@@ -679,8 +715,19 @@ class PostHogMetrics:
             # None-valued attributes are stripped from the wire, so strip them from the
             # series identity too — otherwise two indistinguishable data points emit.
             attributes = {k: v for k, v in attributes.items() if v is not None}
+        resource_attributes = (
+            getattr(runtime_collector, "resource_attributes", None)
+            if runtime_collector is not None
+            else None
+        )
         key = _series_key(metric_type, name, unit, attributes)
-        trace_context = _active_trace_context(self._client)
+        if resource_attributes:
+            key += "\x00" + _series_key("", "", None, resource_attributes)
+        trace_context = (
+            None
+            if runtime_collector is not None and metric_type == "histogram"
+            else _active_trace_context(self._client)
+        )
 
         with self._lock:
             self._reset_after_fork_locked()
@@ -703,9 +750,15 @@ class PostHogMetrics:
                             self._max_series_per_flush,
                         )
                     return
-                state = _SeriesState(name, metric_type, unit, attributes)
+                state = _SeriesState(
+                    name, metric_type, unit, attributes, resource_attributes
+                )
                 if runtime_collector is not None and metric_type in _RUNTIME_SUM_TYPES:
                     state.window_start_ms = runtime_collector.start_time_ms
+                elif (
+                    runtime_collector is not None and runtime_start_time_ms is not None
+                ):
+                    state.window_start_ms = runtime_start_time_ms
                 self._series[key] = state
 
             # Bookkeeping only for admitted samples, so name-cardinality misuse (IDs in
@@ -741,6 +794,8 @@ class PostHogMetrics:
         self._flush_lock = threading.Lock()
         self._runtime_lock = threading.RLock()
         self._runtime_collecting = False
+        if self._runtime_metrics is not None:
+            self._runtime_metrics.close()
         self._runtime_metrics = None
         self._host_metrics = None
         self._pid = os.getpid()
@@ -984,19 +1039,29 @@ class PostHogMetrics:
         resource_attributes["telemetry.sdk.name"] = _SCOPE_NAME
         resource_attributes["telemetry.sdk.version"] = VERSION
 
+        groups: dict = {}
+        for key, state in window.items():
+            resource_key = _series_key("", "", None, state.resource_attributes)
+            if resource_key not in groups:
+                groups[resource_key] = (state.resource_attributes, {})
+            groups[resource_key][1][key] = state
+
         return {
             "resourceMetrics": [
                 {
                     "resource": {
-                        "attributes": _to_otlp_key_value_list(resource_attributes)
+                        "attributes": _to_otlp_key_value_list(
+                            {**resource_attributes, **extra_attributes}
+                        )
                     },
                     "scopeMetrics": [
                         {
                             "scope": {"name": _SCOPE_NAME, "version": VERSION},
-                            "metrics": self._build_metrics(window),
+                            "metrics": self._build_metrics(series),
                         }
                     ],
                 }
+                for extra_attributes, series in (groups.values() or [({}, {})])
             ]
         }
 

@@ -29,7 +29,13 @@ def test_host_opt_in_collects_without_process_metrics(
         start_time_ms=1234,
         collect=mock.Mock(
             return_value=[
-                module._RuntimeMetric("app.system.cpu.utilization", 0.25, "1", "gauge")
+                module._RuntimeMetric(
+                    "system.cpu.utilization",
+                    0.25,
+                    "1",
+                    "gauge",
+                    {"cpu.logical_number": 0, "cpu.mode": "user"},
+                )
             ]
         ),
     )
@@ -40,10 +46,14 @@ def test_host_opt_in_collects_without_process_metrics(
     assert client.metrics._runtime_metrics is None
     client.metrics._flush_timer.fire()
     constructor.assert_called_once()
-    metric = exported_metrics(session)["app.system.cpu.utilization"]
+    metric = exported_metrics(session)["system.cpu.utilization"]
     point = metric["gauge"]["dataPoints"][0]
     assert point["asDouble"] == 0.25
-    assert attributes(point) == {"host.name": "test-host"}
+    assert attributes(point) == {
+        "host.name": "test-host",
+        "cpu.logical_number": 0,
+        "cpu.mode": "user",
+    }
     assert client.metrics._flush_timer.active
     client.shutdown()
     assert client.metrics._host_metrics is None
@@ -54,8 +64,12 @@ def test_host_opt_in_collects_without_process_metrics(
 def host_native(native, monkeypatch):
     module = native[0]
     state = SimpleNamespace(
-        ticks=[1000, 500, 2000, 100],
         free=100,
+        active=200,
+        wired=30,
+        total_memory=8 * 1024**3,
+        total_error=0,
+        total_size=8,
         inactive=50,
         speculative=20,
         page_size=16384,
@@ -63,28 +77,29 @@ def host_native(native, monkeypatch):
         swapouts=456,
         swap_used=98765,
         pressure=1,
-        cpu_result=0,
         vm_result=0,
         page_result=0,
-        cpu_count=4,
         vm_count=38,
         pressure_error=0,
         swap_error=0,
         pressure_size=4,
         swap_size=32,
+        core_ticks=[[100, 200, 300, 400], [1000, 2000, 3000, 4000]],
+        processor_result=0,
+        processor_count=None,
+        processor_info_count=None,
+        processor_null=False,
+        deallocate_result=0,
+        allocations={},
     )
 
     def statistics(host, flavor, output, count):
         assert host == 42
         size = ctypes.cast(count, ctypes.POINTER(ctypes.c_uint32)).contents
-        if flavor == 3:
-            assert size.value == 4
-            info = ctypes.cast(output, ctypes.POINTER(module._HostCPULoadInfo)).contents
-            info.cpu_ticks[:] = state.ticks
-            size.value = state.cpu_count
-            return state.cpu_result
         assert flavor == 4 and size.value == 38
         info = ctypes.cast(output, ctypes.POINTER(module._VMStatistics64)).contents
+        info.active_count = state.active
+        info.wire_count = state.wired
         info.free_count = state.free
         info.inactive_count = state.inactive
         info.speculative_count = state.speculative
@@ -105,7 +120,14 @@ def host_native(native, monkeypatch):
     def sysctl(name, output, size_pointer, new_value, new_size):
         assert new_value is None and new_size == 0
         size = ctypes.cast(size_pointer, ctypes.POINTER(ctypes.c_size_t)).contents
-        if name == b"vm.swapusage":
+        if name == b"hw.memsize":
+            assert size.value == 8
+            ctypes.cast(
+                output, ctypes.POINTER(ctypes.c_uint64)
+            ).contents.value = state.total_memory
+            size.value = state.total_size
+            error = state.total_error
+        elif name == b"vm.swapusage":
             assert size.value == 32
             info = ctypes.cast(output, ctypes.POINTER(module._SwapUsage)).contents
             info.used = state.swap_used
@@ -122,14 +144,49 @@ def host_native(native, monkeypatch):
         ctypes.set_errno(error)
         return -1 if error else 0
 
+    def processors(host, flavor, number, output, count):
+        assert host == 42 and flavor == 2
+        ctypes.cast(number, ctypes.POINTER(ctypes.c_uint32)).contents.value = (
+            len(state.core_ticks)
+            if state.processor_count is None
+            else state.processor_count
+        )
+        ctypes.cast(count, ctypes.POINTER(ctypes.c_uint32)).contents.value = (
+            len(state.core_ticks) * 4
+            if state.processor_info_count is None
+            else state.processor_info_count
+        )
+        pointer = ctypes.cast(output, ctypes.POINTER(ctypes.POINTER(ctypes.c_int32)))
+        if state.processor_null:
+            pointer[0] = ctypes.POINTER(ctypes.c_int32)()
+        else:
+            values = [tick for core in state.core_ticks for tick in core]
+            array = (ctypes.c_int32 * len(values))(*values)
+            state.allocations[ctypes.addressof(array)] = array
+            pointer[0] = ctypes.cast(array, ctypes.POINTER(ctypes.c_int32))
+        return state.processor_result
+
+    def deallocate(task, address, size):
+        assert task == 43
+        assert address in state.allocations
+        expected_count = (
+            len(state.core_ticks) * 4
+            if state.processor_info_count is None
+            else state.processor_info_count
+        )
+        assert size == expected_count * ctypes.sizeof(ctypes.c_int32)
+        del state.allocations[address]
+        return state.deallocate_result
+
     library = mock.Mock(
         mach_host_self=mock.Mock(return_value=42),
         mach_task_self=mock.Mock(return_value=43),
         mach_port_deallocate=mock.Mock(return_value=0),
-        host_statistics=mock.Mock(side_effect=statistics),
         host_statistics64=mock.Mock(side_effect=statistics),
         host_page_size=mock.Mock(side_effect=page_size),
         sysctlbyname=mock.Mock(side_effect=sysctl),
+        host_processor_info=mock.Mock(side_effect=processors),
+        mach_vm_deallocate=mock.Mock(side_effect=deallocate),
     )
     original = module.ctypes.CDLL
 
@@ -162,13 +219,14 @@ def test_native_host_values_and_cumulative_baselines(host_native, page_size):
     module, state, library = host_native
     state.page_size = page_size
     collector = module._MacOSHostMetrics()
-    state.ticks = [1050, 525, 2025, 100]
+    state.core_ticks[0][0] += 100
     state.swapins += 3
     state.swapouts += 5
     samples = collector.collect()
     values = {sample.name: sample.value for sample in samples}
-    assert values["app.system.cpu.utilization"] == 0.75
-    assert values["app.system.memory.available.estimated"] == 150 * page_size
+    assert values["system.cpu.utilization"] == 0
+    assert values["system.memory.usage"] == (state.active + state.wired) * page_size
+    assert values["system.memory.limit"] == state.total_memory
     assert values["app.system.memory.pressure"] == 1
     assert values["system.paging.usage"] == 98765
     swap = [sample for sample in samples if sample.name == "app.system.swap.io"]
@@ -184,13 +242,12 @@ def test_native_host_values_and_cumulative_baselines(host_native, page_size):
     assert library.mach_port_deallocate.call_args_list == [mock.call(43, 42)] * 4
 
 
-def test_host_cpu_omits_initial_and_zero_samples_and_handles_wrap(host_native):
+def test_host_uses_per_core_cpu_instead_of_custom_aggregate(host_native):
     module, state, _ = host_native
-    state.ticks = [2**32 - 10] * 4
     collector = module._MacOSHostMetrics()
     assert "app.system.cpu.utilization" not in host_values(collector)
-    state.ticks = [10, 10, 50, 10]
-    assert host_values(collector)["app.system.cpu.utilization"] == 0.5
+    state.core_ticks[0][0] += 100
+    assert "system.cpu.utilization" in host_values(collector)
     assert "app.system.cpu.utilization" not in host_values(collector)
 
 
@@ -224,31 +281,32 @@ def test_unknown_pressure_is_omitted_and_recovers(host_native, caplog, level):
 @pytest.mark.parametrize(
     "field,bad,good,omitted",
     [
-        ("cpu_result", 5, 0, {"app.system.cpu.utilization"}),
-        ("cpu_count", 3, 4, {"app.system.cpu.utilization"}),
+        ("total_error", errno.EPERM, 0, {"system.memory.limit"}),
+        ("total_error", errno.ENOENT, 0, {"system.memory.limit"}),
+        ("total_size", 4, 8, {"system.memory.limit"}),
         (
             "vm_result",
             5,
             0,
-            {"app.system.memory.available.estimated", "app.system.swap.io"},
+            {"system.memory.usage", "app.system.swap.io"},
         ),
         (
             "vm_count",
             24,
             38,
-            {"app.system.memory.available.estimated", "app.system.swap.io"},
+            {"system.memory.usage", "app.system.swap.io"},
         ),
         (
             "page_result",
             5,
             0,
-            {"app.system.memory.available.estimated", "app.system.swap.io"},
+            {"system.memory.usage", "app.system.swap.io"},
         ),
         (
             "page_size",
             0,
             16384,
-            {"app.system.memory.available.estimated", "app.system.swap.io"},
+            {"system.memory.usage", "app.system.swap.io"},
         ),
         ("pressure_error", errno.EPERM, 0, {"app.system.memory.pressure"}),
         ("pressure_error", errno.ENOENT, 0, {"app.system.memory.pressure"}),
@@ -264,19 +322,20 @@ def test_host_source_failures_are_isolated_and_recover(
     collector = module._MacOSHostMetrics()
     setattr(state, field, bad)
     expected = {
-        "app.system.cpu.utilization",
-        "app.system.memory.available.estimated",
+        "system.cpu.utilization",
+        "system.memory.limit",
+        "system.memory.usage",
         "app.system.memory.pressure",
         "app.system.swap.io",
         "system.paging.usage",
     }
     for _ in range(2):
-        state.ticks[0] += 100
+        state.core_ticks[0][0] += 100
         assert set(host_values(collector)) == expected - omitted
     assert caplog.text.count("Unable to collect host") == 1
     assert library.mach_host_self.call_count == library.mach_port_deallocate.call_count
     setattr(state, field, good)
-    state.ticks[0] += 100
+    state.core_ticks[0][0] += 100
     assert set(host_values(collector)) == expected
 
 
@@ -305,7 +364,7 @@ def test_host_and_process_exports_keep_separate_identity_and_retry_values(
     )
     native[1].time += 2
     native[1].user += 1
-    host_native[1].ticks[0] += 100
+    host_native[1].core_ticks[0][0] += 100
     host_native[1].swapins += 2
     session.post.return_value.status_code = 503
     client.metrics._consecutive_send_failures = 1
@@ -322,7 +381,7 @@ def test_host_and_process_exports_keep_separate_identity_and_retry_values(
     for name, metric in metrics.items():
         for point in metric.get("sum", metric.get("gauge"))["dataPoints"]:
             tags = attributes(point)
-            if name.startswith("app.system.") or name == "system.paging.usage":
+            if name.startswith(("app.system.", "system.")):
                 assert tags["host.name"] == "test-host"
                 assert "process.pid" not in tags and "process.runtime_id" not in tags
             else:
@@ -412,9 +471,7 @@ def test_collector_initialization_failures_do_not_disable_other_collector(
     client.metrics.flush()
     names = exported_metrics(session)
     assert ("process.cpu.time" in names) == (failed != "_MacOSProcessMetrics")
-    assert ("app.system.memory.available.estimated" in names) == (
-        failed != "_MacOSHostMetrics"
-    )
+    assert ("system.memory.usage" in names) == (failed != "_MacOSHostMetrics")
 
 
 def test_shutdown_during_host_initialization_does_not_install_collector(

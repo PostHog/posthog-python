@@ -10,6 +10,7 @@
 # 1. Copy .env.example to .env and fill in your PostHog credentials
 # 2. Run this script and choose from the interactive menu
 
+import gc
 import os
 import sys
 import time
@@ -75,7 +76,7 @@ print("3. Feature flag payload examples")
 print(f"4. Flag dependencies examples{local_eval_note}")
 print("5. Context management and tagging examples")
 print("6. Run all examples")
-print("7. Process CPU and memory metrics (60 seconds, macOS)")
+print("7. Process, host, and GC metrics (60 seconds, macOS)")
 print("8. Exit")
 choice = input("\nEnter your choice (1-8): ").strip()
 
@@ -502,9 +503,12 @@ elif choice == "7" and sys.platform == "darwin":
             if key
             in (
                 "cpu.mode",
+                "cpu.logical_number",
                 "cpython.gc.generation",
                 "system.paging.direction",
                 "system.paging.state",
+                "system.memory.state",
+                "process.context_switch.type",
             )
         )
         name = sample["name"] + (f"{{{labels}}}" if labels else "")
@@ -535,6 +539,11 @@ elif choice == "7" and sys.platform == "darwin":
         if end == 60:
             allocation = bytearray(64 * 1024 * 1024)
             allocation[::4096] = b"\x01" * (len(allocation) // 4096)
+            for _ in range(10000):
+                cycle: list[object] = []
+                cycle.append(cycle)
+            del cycle
+            gc.collect()
         print(f"{datetime.now(timezone.utc).isoformat()} Phase: {phase}", flush=True)
         while time.monotonic() < start + end:
             if busy:

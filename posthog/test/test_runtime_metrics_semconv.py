@@ -29,7 +29,8 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
     state.time += 2
     state.user += 2
     state.system += 1
-    state.switches += 9
+    state.involuntary += 9
+    state.voluntary += 4
     for generation, stats in enumerate(state.gc_stats):
         for factor, field in enumerate(
             ("collections", "collected", "uncollectable"), 1
@@ -46,8 +47,7 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
         "cpython.gc.collections": ("{collection}", True),
         "cpython.gc.collected_objects": ("{object}", True),
         "cpython.gc.uncollectable_objects": ("{object}", True),
-        "app.process.cpu.percent": ("%", None),
-        "app.process.cpu.ctx_switch.total": ("{context_switch}", True),
+        "process.context_switches": ("{context_switch}", True),
     }
     assert set(metrics) == set(expected)
     identity = client.metrics._runtime_metrics.attributes
@@ -72,10 +72,13 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
     assert set(utilization) == {"user", "system"}
     assert utilization["user"]["asDouble"] == 0.125
     assert utilization["system"]["asDouble"] == 0.0625
-    assert points(metrics["app.process.cpu.percent"])[0]["asDouble"] == 150
     assert points(metrics["process.memory.usage"])[0]["asDouble"] == state.rss
     assert points(metrics["process.thread.count"])[0]["asDouble"] == state.threads
-    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 9
+    switches = by_attribute(
+        metrics["process.context_switches"], "process.context_switch.type"
+    )
+    assert switches["voluntary"]["asDouble"] == 4
+    assert switches["involuntary"]["asDouble"] == 9
     for name, factor in (
         ("cpython.gc.collections", 1),
         ("cpython.gc.collected_objects", 2),
@@ -86,7 +89,7 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
         for generation in range(3):
             assert generations[generation]["asDouble"] == (generation + 1) * factor
     decoded = ParseDict(sent_payload(session), ExportMetricsServiceRequest())
-    assert len(decoded.resource_metrics[0].scope_metrics[0].metrics) == 10
+    assert len(decoded.resource_metrics[0].scope_metrics[0].metrics) == 9
 
 
 @pytest.mark.parametrize(
@@ -96,7 +99,7 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
         "cpython.gc.collections",
         "cpython.gc.collected_objects",
         "cpython.gc.uncollectable_objects",
-        "app.process.cpu.ctx_switch.total",
+        "process.context_switches",
     ],
 )
 def test_cumulative_counters_exclude_work_before_collection_starts(
@@ -157,7 +160,7 @@ def test_unavailable_physical_memory_omits_utilization_and_recovers(
     assert "process.memory.usage" in metrics
     assert "process.thread.count" in metrics
     assert "process.cpu.time" in metrics
-    assert "app.process.cpu.ctx_switch.total" in metrics
+    assert "process.context_switches" in metrics
     monkeypatch.setattr(module.os, "sysconf", original_sysconf)
     state.time += 10
     client.metrics.flush()
@@ -179,7 +182,7 @@ def test_cpu_utilization_tracks_available_cpus(runtime_client, native):
         utilization = by_attribute(metrics["process.cpu.utilization"], "cpu.mode")
         assert utilization["user"]["asDouble"] == 1 / cpus
         assert utilization["system"]["asDouble"] == 0
-        assert points(metrics["app.process.cpu.percent"])[0]["asDouble"] == 100
+        assert "app.process.cpu.percent" not in metrics
 
 
 @pytest.mark.parametrize("cpus", [None, 0])
@@ -194,7 +197,7 @@ def test_unknown_cpu_availability_omits_normalized_utilization(
     metrics = exported_metrics(session)
     assert "process.cpu.utilization" not in metrics
     assert "process.cpu.time" in metrics
-    assert points(metrics["app.process.cpu.percent"])[0]["asDouble"] == 100
+    assert "app.process.cpu.percent" not in metrics
 
 
 def test_cpu_availability_falls_back_on_older_python(
@@ -226,7 +229,7 @@ def test_cumulative_observations_keep_latest_value_and_stable_start(
     state.time += 10
     state.user += 0.5
     state.system += 0.25
-    state.switches += 2
+    state.involuntary += 2
     state.rss = 100
     state.threads = 3
     state.gc_stats[0]["collections"] += 1
@@ -239,7 +242,12 @@ def test_cumulative_observations_keep_latest_value_and_stable_start(
     assert cpu["system"]["asDouble"] == 0.25
     assert points(second["process.memory.usage"])[0]["asDouble"] == 100
     assert points(second["process.thread.count"])[0]["asDouble"] == 3
-    assert points(second["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 2
+    assert (
+        by_attribute(second["process.context_switches"], "process.context_switch.type")[
+            "involuntary"
+        ]["asDouble"]
+        == 2
+    )
     assert (
         by_attribute(second["cpython.gc.collections"], "cpython.gc.generation")[0][
             "asDouble"
@@ -266,7 +274,7 @@ def test_retry_merge_preserves_newer_cumulative_observations(runtime_client, nat
         state.rss = 100
         state.threads = 3
         state.gc_stats[0]["collected"] += 20
-        state.switches += 7
+        state.involuntary += 7
         client.metrics._collect_runtime_metrics()
         return mock.Mock(status_code=500)
 
@@ -289,7 +297,12 @@ def test_retry_merge_preserves_newer_cumulative_observations(runtime_client, nat
         ]["asDouble"]
         == 20
     )
-    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 7
+    assert (
+        by_attribute(
+            metrics["process.context_switches"], "process.context_switch.type"
+        )["involuntary"]["asDouble"]
+        == 7
+    )
     assert (
         points(first["process.cpu.time"])[0]["startTimeUnixNano"]
         == points(metrics["process.cpu.time"])[0]["startTimeUnixNano"]
@@ -340,20 +353,24 @@ def test_native_failure_preserves_context_switch_counter_across_gap(
     client.metrics.flush()
     state.size = 8
     state.time += 10
-    state.switches += 100
+    state.involuntary += 100
     client.metrics.flush()
     metrics = exported_metrics(session)
     assert "process.memory.usage" not in metrics
     assert "process.memory.utilization" not in metrics
-    assert "app.process.cpu.ctx_switch.total" not in metrics
+    switches = by_attribute(
+        metrics["process.context_switches"], "process.context_switch.type"
+    )
+    assert switches["involuntary"]["asDouble"] == 100
     assert "cpython.gc.collections" in metrics
     state.size = 96
     state.time += 10
-    state.switches += 2
+    state.involuntary += 2
     client.metrics.flush()
     assert (
-        points(exported_metrics(session)["app.process.cpu.ctx_switch.total"])[0][
-            "asDouble"
-        ]
+        by_attribute(
+            exported_metrics(session)["process.context_switches"],
+            "process.context_switch.type",
+        )["involuntary"]["asDouble"]
         == 102
     )
