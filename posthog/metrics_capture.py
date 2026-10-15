@@ -321,9 +321,10 @@ class PostHogMetrics:
     configured flush interval (10 seconds by default) and pass through
     ``before_send``. Automatic cumulative sums use sample types
     ``observable_counter`` and ``observable_updowncounter``; manual ``count``
-    calls remain delta sums. Each process has ``process.pid`` and a stable
+    calls remain delta sums. CPU, GC, and context-switch counters exclude work
+    before collection starts. Each process has ``process.pid`` and a stable
     ``process.runtime_id`` attribute; forked workers get a new identity and
-    CPU baseline. ``shutdown()`` collects a final sample and stops collection.
+    counter baselines. ``shutdown()`` collects a final sample and stops collection.
     """
 
     def __init__(self, client, config: Optional[dict] = None):
@@ -397,6 +398,7 @@ class PostHogMetrics:
         self._flush_lock = threading.Lock()
         self._series: dict = {}
         self._flush_timer: Optional[threading.Timer] = None
+        self._timer_flush_in_progress = False
         self._series_cap_warned = False
         self._type_by_name: dict = {}
         self._type_collision_warned: set = set()
@@ -411,27 +413,36 @@ class PostHogMetrics:
             if self._capture_runtime_metrics is not False:
                 log.warning("Ignoring capture_runtime_metrics: expected a boolean")
             return
-        if (
-            self._client.disabled
-            or not self._client.send
-            or self._client._shutdown_requested
-            or self._client._join_requested
-        ):
-            return
-        if sys.platform == "darwin":
-            try:
-                from ._runtime_metrics import _MacOSProcessMetrics
+        with self._runtime_lock:
+            if (
+                self._client.disabled
+                or not self._client.send
+                or self._client._shutdown_requested
+                or self._client._join_requested
+            ):
+                return
+            if sys.platform == "darwin":
+                try:
+                    from ._runtime_metrics import _MacOSProcessMetrics
 
-                self._runtime_metrics = _MacOSProcessMetrics()
-                with self._lock:
-                    self._arm_flush_timer()
-            except Exception as e:
-                self._runtime_metrics = None
-                log.warning("Unable to start runtime metrics: %s", e)
-        else:
-            log.warning(
-                "Automatic runtime metrics are currently supported only on macOS"
-            )
+                    collector = _MacOSProcessMetrics()
+                    if (
+                        self._client.disabled
+                        or not self._client.send
+                        or self._client._shutdown_requested
+                        or self._client._join_requested
+                    ):
+                        return
+                    self._runtime_metrics = collector
+                    with self._lock:
+                        self._arm_flush_timer()
+                except Exception as e:
+                    self._runtime_metrics = None
+                    log.warning("Unable to start runtime metrics: %s", e)
+            else:
+                log.warning(
+                    "Automatic runtime metrics are currently supported only on macOS"
+                )
 
     def _collect_runtime_metrics(self) -> None:
         with self._runtime_lock:
@@ -683,6 +694,7 @@ class PostHogMetrics:
 
     def _drop_inherited_window(self) -> None:
         self._flush_timer = None
+        self._timer_flush_in_progress = False
         self._series = {}
         self._series_cap_warned = False
         self._type_by_name = {}
@@ -731,20 +743,33 @@ class PostHogMetrics:
         )
         timer.daemon = True
         self._flush_timer = timer
-        timer.start()
+        self._start_flush_timer()
+
+    def _start_flush_timer(self) -> None:
+        if self._flush_timer is not None and not self._timer_flush_in_progress:
+            self._flush_timer.start()
 
     def _timer_flush(self, fired: Optional[threading.Timer] = None) -> None:
         with self._lock:
             # A timer whose thread already started can't be cancelled: if a newer
             # timer replaced this one meanwhile (failed explicit flush arming the
             # backoff timer), the stale body must not clear it or flush again.
-            if fired is not None and fired is not self._flush_timer:
+            if self._timer_flush_in_progress or (
+                fired is not None and fired is not self._flush_timer
+            ):
                 return
+            self._timer_flush_in_progress = True
             self._flush_timer = None
+            pid = os.getpid()
         try:
             self.flush()
         except Exception as e:
             log.error("Metrics flush failed: %s", e)
+        finally:
+            if os.getpid() == pid:
+                with self._lock:
+                    self._timer_flush_in_progress = False
+                    self._start_flush_timer()
 
     def _clear_flush_timer(self) -> None:
         if self._flush_timer is not None:

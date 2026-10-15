@@ -22,8 +22,11 @@ class ManualTimer:
         self.callback = callback
         self.daemon = False
         self.active = False
+        self.started = False
 
     def start(self):
+        assert not self.started
+        self.started = True
         self.active = True
 
     def cancel(self):
@@ -76,7 +79,9 @@ def native(monkeypatch):
         lambda who: SimpleNamespace(ru_utime=state.user, ru_stime=state.system),
     )
     monkeypatch.setattr(module, "monotonic", lambda: state.time)
-    monkeypatch.setattr(module, "get_stats", lambda: state.gc_stats)
+    monkeypatch.setattr(
+        module, "get_stats", lambda: [stats.copy() for stats in state.gc_stats]
+    )
     monkeypatch.setattr(
         module.os,
         "sysconf",
@@ -131,7 +136,7 @@ def test_context_switch_counter_wraps_without_a_spike(native, before):
     state.switches += 5
     state.time += 10
     samples = {sample.name: sample.value for sample in collector.collect()}
-    assert samples["app.process.cpu.ctx_switch.total"] == before + 5
+    assert samples["app.process.cpu.ctx_switch.total"] == 5
 
 
 def test_native_read_failure_omits_native_metrics_and_warns_once(native, caplog):
@@ -152,7 +157,7 @@ def test_native_read_failure_omits_native_metrics_and_warns_once(native, caplog)
     state.switches += 10000
     samples = {sample.name: sample.value for sample in collector.collect()}
     assert samples["process.thread.count"] == 7
-    assert samples["app.process.cpu.ctx_switch.total"] == 10100
+    assert samples["app.process.cpu.ctx_switch.total"] == 10000
     assert caplog.text.count("Unable to collect native process metrics") == 1
 
 
@@ -168,7 +173,10 @@ def test_native_baseline_failure_does_not_disable_cpu_and_gc(native):
     state.size = 96
     samples = {sample.name: sample.value for sample in collector.collect()}
     assert samples["process.memory.usage"] == state.rss
-    assert samples["app.process.cpu.ctx_switch.total"] == state.switches
+    assert samples["app.process.cpu.ctx_switch.total"] == 0
+    state.switches += 3
+    samples = {sample.name: sample.value for sample in collector.collect()}
+    assert samples["app.process.cpu.ctx_switch.total"] == 3
 
 
 def test_opt_in_starts_collection_without_manual_metrics_calls(runtime_client):
@@ -244,6 +252,46 @@ def test_timer_collects_process_metrics_and_continues(runtime_client, native):
     assert client.metrics._flush_timer is not timer
     assert client.metrics._flush_timer.active
     assert client.metrics._flush_timer.interval == 3
+
+
+@pytest.mark.parametrize("runtime_enabled", [False, True])
+@pytest.mark.parametrize("outcome", ["ok", "retry-later"])
+@pytest.mark.parametrize("reset_during_export", [False, True])
+def test_timer_waits_for_export_before_starting_next_timer(
+    runtime_client, monkeypatch, runtime_enabled, outcome, reset_during_export
+):
+    client, _ = runtime_client(metrics={"capture_runtime_metrics": runtime_enabled})
+    metrics = client.metrics
+    metrics.count("manual.before")
+    metrics._consecutive_send_failures = 1
+    entered, release = threading.Event(), threading.Event()
+
+    def send(payload):
+        entered.set()
+        assert release.wait(5)
+        return outcome
+
+    sender = mock.Mock(side_effect=send)
+    monkeypatch.setattr(metrics, "_send", sender)
+    timer = metrics._flush_timer
+    worker = threading.Thread(target=timer.fire)
+    worker.start()
+    try:
+        assert entered.wait(5)
+        if reset_during_export:
+            metrics.reset()
+        metrics.count("manual.during")
+        pending = metrics._flush_timer
+        assert pending is None or not pending.active
+    finally:
+        release.set()
+        worker.join(5)
+    assert not worker.is_alive()
+    assert sender.call_count == 1
+    assert metrics._flush_timer.active
+    assert metrics._flush_timer.interval == metrics._flush_interval * (
+        2 if outcome == "retry-later" else 1
+    )
 
 
 def test_runtime_samples_use_before_send(runtime_client, native):
@@ -386,6 +434,66 @@ def test_late_module_configuration_starts_collection(runtime_client, monkeypatch
         client.shutdown()
 
 
+def test_shutdown_waits_for_runtime_metrics_initialization(
+    runtime_client, native, monkeypatch
+):
+    client, _ = runtime_client(metrics=None)
+    client._metrics_config = {"capture_runtime_metrics": True}
+    entered, release = threading.Event(), threading.Event()
+    stopping, stopped = threading.Event(), threading.Event()
+    constructor = native[0]._MacOSProcessMetrics
+    original_stop = metrics_capture.PostHogMetrics._stop_runtime_metrics
+
+    def initialize():
+        entered.set()
+        assert release.wait(5)
+        return constructor()
+
+    def stop(metrics):
+        stopping.set()
+        original_stop(metrics)
+        stopped.set()
+
+    monkeypatch.setattr(native[0], "_MacOSProcessMetrics", initialize)
+    monkeypatch.setattr(metrics_capture.PostHogMetrics, "_stop_runtime_metrics", stop)
+    startup = threading.Thread(target=client._start_runtime_metrics)
+    shutdown = threading.Thread(target=client.shutdown)
+    startup.start()
+    try:
+        assert entered.wait(5)
+        shutdown.start()
+        assert stopping.wait(5)
+        assert not stopped.wait(0.1)
+    finally:
+        release.set()
+        startup.join(5)
+        if shutdown.ident is not None:
+            shutdown.join(5)
+    assert not startup.is_alive() and not shutdown.is_alive()
+    assert client._shutdown_complete
+    assert client._metrics._runtime_metrics is None
+    assert client._metrics._flush_timer is None
+
+
+def test_shutdown_during_initialization_prevents_collector_install(
+    runtime_client, native, monkeypatch
+):
+    client, session = runtime_client(metrics=None)
+    client._metrics_config = {"capture_runtime_metrics": True}
+    constructor = native[0]._MacOSProcessMetrics
+
+    def initialize():
+        client.shutdown()
+        return constructor()
+
+    monkeypatch.setattr(native[0], "_MacOSProcessMetrics", initialize)
+    client._start_runtime_metrics()
+    assert client._shutdown_complete
+    assert client._metrics._runtime_metrics is None
+    assert client._metrics._flush_timer is None
+    session.post.assert_not_called()
+
+
 def test_zero_elapsed_time_skips_cpu_percent(native):
     collector = native[0]._MacOSProcessMetrics()
     samples = {sample.name: sample.value for sample in collector.collect()}
@@ -394,7 +502,7 @@ def test_zero_elapsed_time_skips_cpu_percent(native):
     assert "process.cpu.time" in samples
     assert samples["process.memory.usage"] == native[1].rss
     assert samples["process.thread.count"] == 7
-    assert samples["app.process.cpu.ctx_switch.total"] == 100
+    assert samples["app.process.cpu.ctx_switch.total"] == 0
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
@@ -419,10 +527,15 @@ def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
             assert collector.attributes["process.pid"] == os.getpid()
             assert collector.attributes["process.runtime_id"] != parent_id
             assert client.metrics._flush_timer.active
-            samples = {sample.name: sample.value for sample in collector.collect()}
+            collected = collector.collect()
+            samples = {sample.name: sample.value for sample in collected}
             assert "app.process.cpu.percent" not in samples
             assert "process.cpu.utilization" not in samples
-            assert samples["app.process.cpu.ctx_switch.total"] == native[1].switches
+            assert all(
+                sample.value == 0
+                for sample in collected
+                if sample.metric_type == "observable_counter"
+            )
             assert samples["process.memory.usage"] == native[1].rss
             native[1].time += 10
             native[1].user += 1
@@ -436,6 +549,37 @@ def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
     _, status = os.waitpid(pid, 0)
     assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
     assert client.metrics._runtime_metrics.attributes["process.runtime_id"] == parent_id
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")
+def test_fork_during_timer_export_preserves_child_timer(runtime_client, monkeypatch):
+    client, _ = runtime_client()
+    metrics = client.metrics
+    parent_pid = os.getpid()
+    children = []
+
+    def send(payload):
+        pid = os.fork()
+        if pid == 0:
+            signal.alarm(5)
+        children.append(pid)
+        return "ok"
+
+    monkeypatch.setattr(metrics, "_send", send)
+    try:
+        metrics._flush_timer.fire()
+        if os.getpid() != parent_pid:
+            assert not metrics._timer_flush_in_progress
+            assert metrics._flush_timer.active
+    except BaseException:
+        if os.getpid() != parent_pid:
+            os._exit(1)
+        raise
+    if os.getpid() != parent_pid:
+        os._exit(0)
+    _, status = os.waitpid(children[0], 0)
+    assert os.WIFEXITED(status) and os.WEXITSTATUS(status) == 0
+    monkeypatch.setattr(metrics, "_send", lambda payload: "ok")
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="requires fork")

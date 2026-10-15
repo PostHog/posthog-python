@@ -30,6 +30,11 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
     state.user += 2
     state.system += 1
     state.switches += 9
+    for generation, stats in enumerate(state.gc_stats):
+        for factor, field in enumerate(
+            ("collections", "collected", "uncollectable"), 1
+        ):
+            stats[field] += (generation + 1) * factor
     client.metrics.flush()
     metrics = exported_metrics(session)
     expected = {
@@ -61,8 +66,8 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
     assert sum(len(points(metric)) for metric in metrics.values()) == 18
     cpu_time = by_attribute(metrics["process.cpu.time"], "cpu.mode")
     assert set(cpu_time) == {"user", "system"}
-    assert cpu_time["user"]["asDouble"] == 3.5
-    assert cpu_time["system"]["asDouble"] == 1.5
+    assert cpu_time["user"]["asDouble"] == 2
+    assert cpu_time["system"]["asDouble"] == 1
     utilization = by_attribute(metrics["process.cpu.utilization"], "cpu.mode")
     assert set(utilization) == {"user", "system"}
     assert utilization["user"]["asDouble"] == 0.125
@@ -70,18 +75,42 @@ def test_otel_types_units_cpu_modes_gc_generations_and_identity(runtime_client, 
     assert points(metrics["app.process.cpu.percent"])[0]["asDouble"] == 150
     assert points(metrics["process.memory.usage"])[0]["asDouble"] == state.rss
     assert points(metrics["process.thread.count"])[0]["asDouble"] == state.threads
-    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 109
-    for name, field in (
-        ("cpython.gc.collections", "collections"),
-        ("cpython.gc.collected_objects", "collected"),
-        ("cpython.gc.uncollectable_objects", "uncollectable"),
+    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 9
+    for name, factor in (
+        ("cpython.gc.collections", 1),
+        ("cpython.gc.collected_objects", 2),
+        ("cpython.gc.uncollectable_objects", 3),
     ):
         generations = by_attribute(metrics[name], "cpython.gc.generation")
         assert set(generations) == {0, 1, 2}
-        for generation, stats in enumerate(state.gc_stats):
-            assert generations[generation]["asDouble"] == stats[field]
+        for generation in range(3):
+            assert generations[generation]["asDouble"] == (generation + 1) * factor
     decoded = ParseDict(sent_payload(session), ExportMetricsServiceRequest())
     assert len(decoded.resource_metrics[0].scope_metrics[0].metrics) == 10
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "process.cpu.time",
+        "cpython.gc.collections",
+        "cpython.gc.collected_objects",
+        "cpython.gc.uncollectable_objects",
+        "app.process.cpu.ctx_switch.total",
+    ],
+)
+def test_cumulative_counters_exclude_work_before_collection_starts(
+    runtime_client, name
+):
+    client, session = runtime_client()
+    client.metrics.flush()
+    metric = exported_metrics(session)[name]
+    assert all(point["asDouble"] == 0 for point in points(metric))
+    assert all(
+        int(point["startTimeUnixNano"])
+        == client.metrics._runtime_metrics.start_time_ms * 1_000_000
+        for point in points(metric)
+    )
 
 
 def test_memory_utilization_tracks_rss_and_physical_memory(runtime_client, native):
@@ -206,16 +235,16 @@ def test_cumulative_observations_keep_latest_value_and_stable_start(
     client.metrics.flush()
     second = exported_metrics(session)
     cpu = by_attribute(second["process.cpu.time"], "cpu.mode")
-    assert cpu["user"]["asDouble"] == 4
-    assert cpu["system"]["asDouble"] == 0.75
+    assert cpu["user"]["asDouble"] == 2.5
+    assert cpu["system"]["asDouble"] == 0.25
     assert points(second["process.memory.usage"])[0]["asDouble"] == 100
     assert points(second["process.thread.count"])[0]["asDouble"] == 3
-    assert points(second["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 102
+    assert points(second["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 2
     assert (
         by_attribute(second["cpython.gc.collections"], "cpython.gc.generation")[0][
             "asDouble"
         ]
-        == 11
+        == 1
     )
     for name, metric in first.items():
         if "sum" in metric:
@@ -250,7 +279,7 @@ def test_retry_merge_preserves_newer_cumulative_observations(runtime_client, nat
     client.metrics.flush()
     metrics = exported_metrics(session)
     assert (
-        by_attribute(metrics["process.cpu.time"], "cpu.mode")["user"]["asDouble"] == 4
+        by_attribute(metrics["process.cpu.time"], "cpu.mode")["user"]["asDouble"] == 2.5
     )
     assert points(metrics["process.memory.usage"])[0]["asDouble"] == 100
     assert points(metrics["process.thread.count"])[0]["asDouble"] == 3
@@ -258,9 +287,9 @@ def test_retry_merge_preserves_newer_cumulative_observations(runtime_client, nat
         by_attribute(metrics["cpython.gc.collected_objects"], "cpython.gc.generation")[
             0
         ]["asDouble"]
-        == 45
+        == 20
     )
-    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 107
+    assert points(metrics["app.process.cpu.ctx_switch.total"])[0]["asDouble"] == 7
     assert (
         points(first["process.cpu.time"])[0]["startTimeUnixNano"]
         == points(metrics["process.cpu.time"])[0]["startTimeUnixNano"]
@@ -326,5 +355,5 @@ def test_native_failure_preserves_context_switch_counter_across_gap(
         points(exported_metrics(session)["app.process.cpu.ctx_switch.total"])[0][
             "asDouble"
         ]
-        == 202
+        == 102
     )

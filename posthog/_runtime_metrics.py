@@ -67,8 +67,9 @@ class _MacOSProcessMetrics:
         }
         self.start_time_ms = int(time() * 1000)
         usage = getrusage(RUSAGE_SELF)
-        self._cpu_time_user = usage.ru_utime
-        self._cpu_time_sys = usage.ru_stime
+        self._cpu_start_user = self._cpu_time_user = usage.ru_utime
+        self._cpu_start_sys = self._cpu_time_sys = usage.ru_stime
+        self._gc_start = get_stats() if sys.implementation.name == "cpython" else []
         self._time = monotonic()
         self._ctx_switches: int | None = None
         self._ctx_total = 0
@@ -89,9 +90,7 @@ class _MacOSProcessMetrics:
         return info
 
     def _update_context_switches(self, current: int) -> int:
-        if self._ctx_switches is None:
-            self._ctx_total = current % (1 << 32)
-        else:
+        if self._ctx_switches is not None:
             # libproc's signed 32-bit context-switch field wraps.
             self._ctx_total += (current - self._ctx_switches) % (1 << 32)
         self._ctx_switches = current
@@ -111,11 +110,14 @@ class _MacOSProcessMetrics:
 
         samples = [
             _RuntimeMetric(
-                "process.cpu.time", usage.ru_utime, "s", attributes={"cpu.mode": "user"}
+                "process.cpu.time",
+                usage.ru_utime - self._cpu_start_user,
+                "s",
+                attributes={"cpu.mode": "user"},
             ),
             _RuntimeMetric(
                 "process.cpu.time",
-                usage.ru_stime,
+                usage.ru_stime - self._cpu_start_sys,
                 "s",
                 attributes={"cpu.mode": "system"},
             ),
@@ -151,7 +153,7 @@ class _MacOSProcessMetrics:
                     samples.append(
                         _RuntimeMetric(
                             f"cpython.gc.{name}",
-                            stats[field],
+                            stats[field] - self._gc_start[generation][field],
                             unit,
                             attributes={"cpython.gc.generation": generation},
                         )
