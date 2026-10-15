@@ -1,3 +1,4 @@
+import asyncio
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -148,6 +149,32 @@ async def test_async_client_basic_generation(
     assert props["foo"] == "bar"
     assert "$ai_trace_id" in props
     assert props["$ai_latency"] > 0
+
+
+async def test_async_client_timeout_captures_error(
+    mock_client, mock_google_genai_client
+):
+    async def slow_call(**kwargs):
+        await asyncio.Event().wait()
+
+    mock_google_genai_client.aio.models.generate_content = AsyncMock(
+        side_effect=slow_call
+    )
+    client = AsyncClient(api_key="test-key", posthog_client=mock_client)
+
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(
+            client.models.generate_content(model="gemini-x", contents="Hello"),
+            timeout=0.01,
+        )
+
+    assert mock_client.capture_ai.call_count == 1
+    event = mock_client.capture_ai.call_args.kwargs
+    assert event["event"] == "$ai_generation"
+    props = event["properties"]
+    assert props["$ai_http_status"] == 0
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "cancelled"
 
 
 async def test_async_client_streaming_with_generate_content_stream(
