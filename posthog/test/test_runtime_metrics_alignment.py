@@ -208,5 +208,4 @@ def test_host_memory_states_and_total_without_inventing_unsupported_states(host_
     assert "app.system.memory.available.estimated" not in names
     assert "app.system.cpu.utilization" not in names
     assert "system.paging.operations" not in names
-    assert "app.system.swap.io" in names
-    assert "app.system.memory.pressure" in names
+    assert {"app.system.swap.io", "app.system.memory.pressure"} <= names
