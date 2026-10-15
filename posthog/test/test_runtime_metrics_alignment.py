@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 from google.protobuf.json_format import ParseDict
 from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
     ExportMetricsServiceRequest,
@@ -65,8 +66,9 @@ def test_context_switches_use_native_split_not_combined_libproc(
     assert "app.process.cpu.percent" not in metrics
 
 
+@pytest.mark.parametrize("configured_host", [None, "configured-host"])
 def test_runtime_instance_is_resource_scoped_without_changing_manual_or_host(
-    runtime_client, host_native
+    runtime_client, host_native, configured_host
 ):
     client, session = runtime_client(
         metrics={
@@ -75,6 +77,7 @@ def test_runtime_instance_is_resource_scoped_without_changing_manual_or_host(
             "resource_attributes": {
                 "deployment.region": "test",
                 "service.instance.id": "configured",
+                **({"host.name": configured_host} if configured_host else {}),
             },
         }
     )
@@ -108,8 +111,15 @@ def test_runtime_instance_is_resource_scoped_without_changing_manual_or_host(
         == manual_resource["deployment.region"]
         == "test"
     )
+    assert collector.resource_attributes["host.name"] == "test-host"
+    assert runtime_resource["host.name"] == (configured_host or "test-host")
+    assert manual_resource.get("host.name") == configured_host
     assert manual["process.cpu.utilization"]["gauge"]["dataPoints"][0]["asDouble"] == 42
     assert "system.cpu.utilization" in manual
+    assert {
+        attributes(point)["host.name"]
+        for point in manual["system.cpu.utilization"]["gauge"]["dataPoints"]
+    } == {"test-host"}
     for metric in runtime.values():
         for point in metric.get("sum", metric.get("gauge", metric.get("histogram")))[
             "dataPoints"
@@ -119,16 +129,34 @@ def test_runtime_instance_is_resource_scoped_without_changing_manual_or_host(
             )
             assert "process.runtime_id" not in attributes(point)
             assert "service.instance.id" not in attributes(point)
+            assert "host.name" not in attributes(point)
+
+
+def test_runtime_host_resource_without_host_collection(runtime_client, native):
+    client, session = runtime_client()
+    client.metrics.gauge("manual.sample", 1)
+    client.metrics.flush()
+    assert client.metrics._host_metrics is None
+    runtime_resource, _ = next(
+        group for group in metric_groups(session) if "process.cpu.time" in group[1]
+    )
+    manual_resource, _ = next(
+        group for group in metric_groups(session) if "manual.sample" in group[1]
+    )
+    assert runtime_resource["host.name"] == native[0].gethostname()
+    assert "host.name" not in manual_resource
 
 
 def test_failed_export_preserves_resource_identity_when_collector_is_replaced(
-    runtime_client, native
+    runtime_client, native, monkeypatch
 ):
+    monkeypatch.setattr(native[0], "gethostname", lambda: "first-host")
     client, session = runtime_client()
     first = client.metrics._runtime_metrics
     native[1].user += 1
     session.post.return_value.status_code = 503
     client.metrics.flush()
+    monkeypatch.setattr(native[0], "gethostname", lambda: "second-host")
     client.metrics._start_runtime_metrics()
     second = client.metrics._runtime_metrics
     native[1].user += 2
@@ -138,6 +166,12 @@ def test_failed_export_preserves_resource_identity_when_collector_is_replaced(
     assert {resource["service.instance.id"] for resource, _ in groups} == {
         first.resource_attributes["service.instance.id"],
         second.resource_attributes["service.instance.id"],
+    }
+    assert {
+        resource["service.instance.id"]: resource["host.name"] for resource, _ in groups
+    } == {
+        first.resource_attributes["service.instance.id"]: "first-host",
+        second.resource_attributes["service.instance.id"]: "second-host",
     }
     assert sorted(
         next(

@@ -85,6 +85,7 @@ def native(monkeypatch):
             ru_nivcsw=state.involuntary,
         ),
     )
+    monkeypatch.setattr(module, "gethostname", lambda: "test-host")
     monkeypatch.setattr(module, "monotonic", lambda: state.time)
     monkeypatch.setattr(module, "gc_callbacks", [], raising=False)
     monkeypatch.setattr(
@@ -547,6 +548,7 @@ def test_fork_replaces_locks_identity_and_cpu_baseline(runtime_client, native):
             collector = client.metrics._runtime_metrics
             assert collector.attributes["process.pid"] == os.getpid()
             assert collector.resource_attributes["service.instance.id"] != parent_id
+            assert collector.resource_attributes["host.name"] == "test-host"
             assert client.metrics._flush_timer.active
             collected = collector.collect()
             samples = {sample.name: sample.value for sample in collected}

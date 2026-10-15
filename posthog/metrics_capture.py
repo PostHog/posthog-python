@@ -331,9 +331,11 @@ class PostHogMetrics:
     ``observable_counter`` and ``observable_updowncounter``; manual ``count``
     calls remain delta sums. CPU, GC, and context-switch counters exclude work
     before collection starts. Automatic process samples carry ``process.pid``
-    and a generated resource attribute ``service.instance.id``; forked workers
-    get a new identity and counter baselines. The generated instance resource
-    does not change manual or host metrics' configured resource attributes.
+    and resource attributes ``service.instance.id`` (generated) and ``host.name``
+    (the same native hostname used by host collection, unless explicitly configured
+    in ``resource_attributes``). Forked workers get a new instance identity and
+    counter baselines. Automatic process resources do not change manual or host
+    metrics' configured resource attributes.
     ``shutdown()`` collects a final sample and stops collection.
 
     Independently opt in to macOS host collection with ``capture_host_metrics=True``:
@@ -720,6 +722,11 @@ class PostHogMetrics:
             if runtime_collector is not None
             else None
         )
+        if resource_attributes and "host.name" in self._resource_attributes:
+            resource_attributes = {
+                **resource_attributes,
+                "host.name": self._resource_attributes["host.name"],
+            }
         key = _series_key(metric_type, name, unit, attributes)
         if resource_attributes:
             key += "\x00" + _series_key("", "", None, resource_attributes)

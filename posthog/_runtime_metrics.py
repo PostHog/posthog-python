@@ -166,7 +166,10 @@ class _MacOSProcessMetrics:
         self.close()
         self._pid = os.getpid()
         self.attributes = {"process.pid": self._pid}
-        self.resource_attributes = {"service.instance.id": uuid4().hex}
+        self.resource_attributes = {
+            "service.instance.id": uuid4().hex,
+            "host.name": gethostname(),
+        }
         self.start_time_ms = int(time() * 1000)
         usage = getrusage(RUSAGE_SELF)
         self._cpu_start_user = self._cpu_time_user = usage.ru_utime
