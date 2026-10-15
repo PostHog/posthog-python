@@ -108,10 +108,13 @@ def _complete_split(details: FlagEvaluationDetails[Any]) -> bool:
     )
 
 
-# The pinned contract still lists `metadata.experiment_id` as a known field. Records no
-# longer carry an experiment ID, and the reader ignores the key like any unknown one, so
-# these cases now read as a complete split. Drop the overrides when the fixtures are
-# re-pinned to a contract without the field.
+# The pinned contract still lists `metadata.experiment_id` and `metadata.holdout_id` as
+# known fields. Records no longer carry either: experiments link to rules on the server,
+# and holdouts are rule-local without an ID. The reader ignores both keys like any
+# unknown one. Drop these workarounds when the fixtures are re-pinned to a contract
+# without the fields.
+IGNORED_FIXTURE_METADATA = ("experiment_id", "holdout_id")
+# Cases that depend on `experiment_id`, which now read as a complete split.
 READER_OVERRIDES: Dict[str, Dict[str, Any]] = {
     "readers.partial_split_missing_experiment_id": {"experiment_exposure": True},
     "readers.split_wrong_type_experiment_id": {
@@ -132,8 +135,15 @@ def test_vendored_fixtures_match_the_recorded_release_digests():
         assert digest == entry["sha256"], name
 
 
-def test_reader_overrides_name_vendored_cases():
+def test_fixture_workarounds_name_vendored_cases_and_fields():
     assert set(READER_OVERRIDES) <= {case["id"] for case in READERS["cases"]}
+    sent = {
+        field
+        for case in VALID_RESPONSES
+        for record in _build(RESPONSES, case)["flags"].values()
+        for field in record["metadata"]
+    }
+    assert set(IGNORED_FIXTURE_METADATA) <= sent
 
 
 @pytest.mark.parametrize("case", READERS["cases"], ids=lambda case: case["id"])
@@ -182,8 +192,7 @@ def test_valid_producer_responses_are_retained_as_sent(case):
         assert flag.reason.condition_index == record["reason"]["condition_index"]
         assert isinstance(flag.metadata, FlagMetadata)
         for field, value in record["metadata"].items():
-            # The pinned fixtures still send `experiment_id`, which is ignored.
-            if field not in ("payload", "experiment_id"):
+            if field != "payload" and field not in IGNORED_FIXTURE_METADATA:
                 assert getattr(flag.metadata, field) == value, field
 
 
@@ -411,7 +420,6 @@ def _record(**overrides: Any) -> Dict[str, Any]:
         ("metadata.rule_type", 2),
         ("metadata.rule_id", 3),
         ("metadata.variant_key", True),
-        ("metadata.holdout_id", 4.5),
         ("metadata.forced_variant", "yes"),
     ],
 )
@@ -452,7 +460,7 @@ def test_a_record_that_is_not_an_object_fails_only_that_record():
 def test_unknown_fields_and_null_optional_fields_are_ignored():
     record = _record(**{"future_field": {"nested": True}})
     record["reason"]["future_reason"] = 1
-    record["metadata"].update(future_metadata=[1], holdout_id=None)
+    record["metadata"].update(future_metadata=[1], variant_key=None)
     record["conditions"] = "not read"
 
     flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
@@ -462,14 +470,23 @@ def test_unknown_fields_and_null_optional_fields_are_ignored():
     assert flag.error_code is None
     assert flag.value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
-    assert flag.metadata.holdout_id is None
+    assert flag.metadata.variant_key is None
 
 
-@pytest.mark.parametrize("experiment_id", [301, "301"])
-def test_an_experiment_id_in_the_metadata_is_ignored(experiment_id):
-    # Experiments link to rules on the server, so records carry no experiment ID. A
-    # record that still sends one reads like a record with any other unknown key.
-    record = _record(**{"metadata.experiment_id": experiment_id})
+@pytest.mark.parametrize(
+    "field, value",
+    [
+        ("experiment_id", 301),
+        ("experiment_id", "301"),
+        ("holdout_id", 401),
+        ("holdout_id", "401"),
+    ],
+)
+def test_experiment_and_holdout_ids_in_the_metadata_are_ignored(field, value):
+    # Records carry no experiment or holdout ID: experiments link to rules on the
+    # server, and holdouts are rule-local. A record that still sends one reads like a
+    # record with any other unknown key.
+    record = _record(**{f"metadata.{field}": value})
 
     flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
         "garden-layout"
@@ -478,7 +495,7 @@ def test_an_experiment_id_in_the_metadata_is_ignored(experiment_id):
     assert flag.error_code is None
     assert flag.value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
-    assert not hasattr(flag.metadata, "experiment_id")
+    assert not hasattr(flag.metadata, field)
 
 
 def test_a_record_without_value_is_read_as_an_older_server_record():

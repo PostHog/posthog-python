@@ -163,7 +163,6 @@ class FlagMetadata:
         rule_type: Type of the rule that produced the result, when one did.
         rule_id: ID of the rule that produced the result, when one did.
         variant_key: Key of the assigned variant, when one was assigned.
-        holdout_id: ID of the holdout that excluded the subject, when one did.
         forced_variant: Whether a condition-level variant override produced the
             result.
     """
@@ -177,7 +176,6 @@ class FlagMetadata:
     rule_type: Optional[str] = None
     rule_id: Optional[str] = None
     variant_key: Optional[str] = None
-    holdout_id: Optional[int] = None
     forced_variant: Optional[bool] = None
 
     @classmethod
@@ -447,9 +445,6 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
                 ),
                 variant_key=_read_typed(
                     raw_metadata.get("variant_key"), "metadata.variant_key", str
-                ),
-                holdout_id=_read_int(
-                    raw_metadata.get("holdout_id"), "metadata.holdout_id"
                 ),
                 forced_variant=_read_typed(
                     raw_metadata.get("forced_variant"), "metadata.forced_variant", bool
