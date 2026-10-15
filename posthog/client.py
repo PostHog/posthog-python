@@ -808,6 +808,10 @@ class Client(object):
                 user/system CPU time, current RSS memory and its fraction of total
                 physical RAM, native thread count, CPython GC statistics, and
                 total context switches on macOS without additional dependencies.
+                Separately, ``capture_host_metrics=True`` collects host CPU,
+                estimated available memory, native memory pressure, swap usage,
+                and swap transfers. Enable host collection in only one client
+                per host; inherited clients do not restart it after fork.
                 Sampling uses ``flush_interval`` (10 s by default), including
                 with ``sync_mode=True``. Disabled by default; unsupported
                 platforms warn and do not collect. Call ``shutdown()`` to
@@ -1130,7 +1134,10 @@ class Client(object):
     def _start_runtime_metrics(self) -> None:
         if (
             isinstance(self._metrics_config, dict)
-            and self._metrics_config.get("capture_runtime_metrics") is True
+            and (
+                self._metrics_config.get("capture_runtime_metrics") is True
+                or self._metrics_config.get("capture_host_metrics") is True
+            )
             and not self._shutdown_requested
         ):
             _ = self.metrics

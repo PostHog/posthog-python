@@ -499,7 +499,13 @@ elif choice == "7" and sys.platform == "darwin":
         labels = ", ".join(
             f"{key}={value}"
             for key, value in sample["attributes"].items()
-            if key in ("cpu.mode", "cpython.gc.generation")
+            if key
+            in (
+                "cpu.mode",
+                "cpython.gc.generation",
+                "system.paging.direction",
+                "system.paging.state",
+            )
         )
         name = sample["name"] + (f"{{{labels}}}" if labels else "")
         print(
@@ -511,6 +517,7 @@ elif choice == "7" and sys.platform == "darwin":
 
     posthog.metrics = {
         "capture_runtime_metrics": True,
+        "capture_host_metrics": True,
         "service_name": "python-runtime-metrics-demo",
         "flush_interval": 5,
         "resource_attributes": {"demo.run_id": run_id},

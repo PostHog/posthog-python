@@ -47,7 +47,7 @@ from posthog.version import VERSION
 from .tracing._traceparent import TRACE_FLAGS_SAMPLED, parse_traceparent
 
 if TYPE_CHECKING:
-    from ._runtime_metrics import _MacOSProcessMetrics
+    from ._runtime_metrics import _MacOSHostMetrics, _MacOSProcessMetrics
 
 log = logging.getLogger("posthog")
 
@@ -325,6 +325,28 @@ class PostHogMetrics:
     before collection starts. Each process has ``process.pid`` and a stable
     ``process.runtime_id`` attribute; forked workers get a new identity and
     counter baselines. ``shutdown()`` collects a final sample and stops collection.
+
+    Independently opt in to macOS host collection with ``capture_host_metrics=True``:
+
+    * ``app.system.cpu.utilization``: aggregate busy fraction across all CPUs,
+      including user, system, and nice time. Not per-logical-CPU utilization.
+    * ``app.system.memory.available.estimated``: (free + inactive) pages in bytes,
+      including speculative pages already present in free. This estimate is not
+      guaranteed immediately allocatable memory or a process memory limit.
+    * ``app.system.memory.pressure``: native level, 1=normal, 2=warning, 4=critical.
+      This is categorical, not a percentage. The optional, undocumented polling
+      sysctl may be unavailable or denied; failed and unknown readings are omitted.
+    * ``system.paging.usage``: current used swap bytes, a non-monotonic sum with
+      ``system.paging.state=used``. Not total disk capacity.
+    * ``app.system.swap.io``: cumulative page-accounted compressed-segment swap
+      transfer bytes since collection starts, with ``system.paging.direction``
+      set to ``in`` or ``out``. Not I/O operation counts or physical disk traffic.
+
+    The ``app.system.*`` names are custom, not portable OpenTelemetry instruments.
+    Host samples carry ``host.name``, without automatic process identity. Configure
+    only one host collector per host to avoid duplicate reporting. An inherited
+    client does not restart host collection after fork; a newly created client
+    can explicitly opt in. Sources fail independently and recover on later reads.
     """
 
     def __init__(self, client, config: Optional[dict] = None):
@@ -404,14 +426,26 @@ class PostHogMetrics:
         self._type_collision_warned: set = set()
         self._capture_runtime_metrics = config.get("capture_runtime_metrics", False)
         self._runtime_metrics: Optional["_MacOSProcessMetrics"] = None
+        self._capture_host_metrics = config.get("capture_host_metrics", False)
+        self._host_metrics: Optional["_MacOSHostMetrics"] = None
+        self._host_metrics_owner_pid = self._pid
         self._runtime_lock = threading.RLock()
         self._runtime_collecting = False
         self._runtime_error_warned = False
 
     def _start_runtime_metrics(self) -> None:
-        if self._capture_runtime_metrics is not True:
-            if self._capture_runtime_metrics is not False:
-                log.warning("Ignoring capture_runtime_metrics: expected a boolean")
+        for name, value in (
+            ("capture_runtime_metrics", self._capture_runtime_metrics),
+            ("capture_host_metrics", self._capture_host_metrics),
+        ):
+            if value is not True and value is not False:
+                log.warning("Ignoring %s: expected a boolean", name)
+        capture_runtime = self._capture_runtime_metrics is True
+        capture_host = (
+            self._capture_host_metrics is True
+            and os.getpid() == self._host_metrics_owner_pid
+        )
+        if not capture_runtime and not capture_host:
             return
         with self._runtime_lock:
             if (
@@ -422,50 +456,75 @@ class PostHogMetrics:
             ):
                 return
             if sys.platform == "darwin":
-                try:
-                    from ._runtime_metrics import _MacOSProcessMetrics
+                runtime = None
+                host = None
+                if capture_runtime:
+                    try:
+                        from ._runtime_metrics import _MacOSProcessMetrics
 
-                    collector = _MacOSProcessMetrics()
-                    if (
-                        self._client.disabled
-                        or not self._client.send
-                        or self._client._shutdown_requested
-                        or self._client._join_requested
-                    ):
-                        return
-                    self._runtime_metrics = collector
+                        runtime = _MacOSProcessMetrics()
+                    except Exception as e:
+                        log.warning("Unable to start runtime metrics: %s", e)
+                if capture_host:
+                    try:
+                        from ._runtime_metrics import _MacOSHostMetrics
+
+                        host = _MacOSHostMetrics()
+                    except Exception as e:
+                        log.warning("Unable to start host metrics: %s", e)
+                if (
+                    self._client.disabled
+                    or not self._client.send
+                    or self._client._shutdown_requested
+                    or self._client._join_requested
+                ):
+                    return
+                self._runtime_metrics = runtime
+                self._host_metrics = host
+                if runtime is not None or host is not None:
                     with self._lock:
                         self._arm_flush_timer()
-                except Exception as e:
-                    self._runtime_metrics = None
-                    log.warning("Unable to start runtime metrics: %s", e)
             else:
-                log.warning(
-                    "Automatic runtime metrics are currently supported only on macOS"
-                )
+                for enabled, kind in (
+                    (capture_runtime, "runtime"),
+                    (capture_host, "host"),
+                ):
+                    if enabled:
+                        log.warning(
+                            "Automatic %s metrics are currently supported only on macOS",
+                            kind,
+                        )
 
     def _collect_runtime_metrics(self) -> None:
         with self._runtime_lock:
-            collector = self._runtime_metrics
-            if collector is None or self._runtime_collecting or self._client.disabled:
+            if self._runtime_collecting or self._client.disabled:
                 return
             self._runtime_collecting = True
             callback_context = self._client._lifecycle_callback_context
             token = callback_context.set(True)
             try:
-                for sample in collector.collect():
-                    self._guarded_capture(
-                        sample.metric_type,
-                        sample.name,
-                        sample.value,
-                        sample.unit,
-                        {**collector.attributes, **(sample.attributes or {})},
-                        collector,
-                    )
-            except Exception as e:
-                if not self._runtime_error_warned:
-                    self._runtime_error_warned = True
-                    log.warning("Unable to collect runtime metrics: %s", e)
+                for kind, collector in (
+                    ("runtime", self._runtime_metrics),
+                    ("host", self._host_metrics),
+                ):
+                    if collector is None or (
+                        kind == "host" and os.getpid() != self._host_metrics_owner_pid
+                    ):
+                        continue
+                    try:
+                        for sample in collector.collect():
+                            self._guarded_capture(
+                                sample.metric_type,
+                                sample.name,
+                                sample.value,
+                                sample.unit,
+                                {**collector.attributes, **(sample.attributes or {})},
+                                collector,
+                            )
+                    except Exception as e:
+                        if not self._runtime_error_warned:
+                            self._runtime_error_warned = True
+                            log.warning("Unable to collect %s metrics: %s", kind, e)
             finally:
                 callback_context.reset(token)
                 self._runtime_collecting = False
@@ -475,6 +534,7 @@ class PostHogMetrics:
             self._collect_runtime_metrics()
             with self._lock:
                 self._runtime_metrics = None
+                self._host_metrics = None
                 self._clear_flush_timer()
 
     def count(
@@ -515,7 +575,7 @@ class PostHogMetrics:
                 self._do_flush()
         finally:
             with self._lock:
-                if self._runtime_metrics is not None:
+                if self._runtime_metrics is not None or self._host_metrics is not None:
                     self._arm_flush_timer()
 
     def reset(self) -> None:
@@ -526,7 +586,7 @@ class PostHogMetrics:
             self._series_cap_warned = False
             self._type_by_name = {}
             self._type_collision_warned = set()
-            if self._runtime_metrics is not None:
+            if self._runtime_metrics is not None or self._host_metrics is not None:
                 self._arm_flush_timer()
 
     def _guarded_capture(
@@ -536,7 +596,9 @@ class PostHogMetrics:
         value: float,
         unit: Optional[str],
         attributes: Optional[dict],
-        runtime_collector: Optional["_MacOSProcessMetrics"] = None,
+        runtime_collector: Optional[
+            Union["_MacOSProcessMetrics", "_MacOSHostMetrics"]
+        ] = None,
     ) -> None:
         # A telemetry call must never raise into the host application, whatever the input.
         try:
@@ -553,7 +615,9 @@ class PostHogMetrics:
         value: float,
         unit: Optional[str],
         attributes: Optional[dict],
-        runtime_collector: Optional["_MacOSProcessMetrics"] = None,
+        runtime_collector: Optional[
+            Union["_MacOSProcessMetrics", "_MacOSHostMetrics"]
+        ] = None,
     ) -> None:
         if getattr(self._client, "disabled", False):
             return
@@ -624,6 +688,7 @@ class PostHogMetrics:
             if (
                 runtime_collector is not None
                 and runtime_collector is not self._runtime_metrics
+                and runtime_collector is not self._host_metrics
             ):
                 return
 
@@ -677,6 +742,7 @@ class PostHogMetrics:
         self._runtime_lock = threading.RLock()
         self._runtime_collecting = False
         self._runtime_metrics = None
+        self._host_metrics = None
         self._pid = os.getpid()
         self._drop_inherited_window()
         self._start_runtime_metrics()
@@ -693,6 +759,7 @@ class PostHogMetrics:
         self._drop_inherited_window()
 
     def _drop_inherited_window(self) -> None:
+        self._host_metrics = None
         self._flush_timer = None
         self._timer_flush_in_progress = False
         self._series = {}
