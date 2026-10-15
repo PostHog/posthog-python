@@ -418,20 +418,20 @@ class PostHogMetrics:
             or self._client._join_requested
         ):
             return
-        if sys.platform != "darwin":
+        if sys.platform == "darwin":
+            try:
+                from ._runtime_metrics import _MacOSProcessMetrics
+
+                self._runtime_metrics = _MacOSProcessMetrics()
+                with self._lock:
+                    self._arm_flush_timer()
+            except Exception as e:
+                self._runtime_metrics = None
+                log.warning("Unable to start runtime metrics: %s", e)
+        else:
             log.warning(
                 "Automatic runtime metrics are currently supported only on macOS"
             )
-            return
-        try:
-            from ._runtime_metrics import _MacOSProcessMetrics
-
-            self._runtime_metrics = _MacOSProcessMetrics()
-            with self._lock:
-                self._arm_flush_timer()
-        except Exception as e:
-            self._runtime_metrics = None
-            log.warning("Unable to start runtime metrics: %s", e)
 
     def _collect_runtime_metrics(self) -> None:
         with self._runtime_lock:

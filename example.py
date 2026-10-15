@@ -492,12 +492,7 @@ elif choice == "6":
         posthog.capture("demo_completed")
         print("✅ Demo completed with context tags")
 
-elif choice == "7":
-    if sys.platform != "darwin":
-        print("Automatic runtime metrics are currently supported only on macOS.")
-        posthog.shutdown()
-        exit(1)
-
+elif choice == "7" and sys.platform == "darwin":
     run_id = uuid4().hex
 
     def print_runtime_sample(sample):
@@ -539,6 +534,11 @@ elif choice == "7":
                 sum(i * i for i in range(10000))
             else:
                 time.sleep(min(0.1, max(0, start + end - time.monotonic())))
+
+elif choice == "7":
+    print("Automatic runtime metrics are currently supported only on macOS.")
+    posthog.shutdown()
+    exit(1)
 
 elif choice == "8":
     print("👋 Goodbye!")
