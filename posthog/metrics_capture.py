@@ -3,10 +3,11 @@
 Samples fold into per-series aggregates in memory (counts sum, gauges keep the
 last value, histograms accumulate buckets) and flush as one OTLP/JSON data
 point per series per window to ``/i/v1/metrics`` — a burst of 10k ``count()``
-calls costs one data point on the wire. Sums and histograms use delta
-temporality, so each data point stands alone and process restarts need no
-cross-window state. Mirrors the ``posthog-js`` core implementation so every
-SDK speaks the same wire shape.
+calls costs one data point on the wire. Manually recorded sums and histograms
+use delta temporality, so each data point stands alone and process restarts
+need no cross-window state. Automatic runtime counters and up/down counters
+instead export the latest cumulative observations. Manual metrics mirror the
+``posthog-js`` core implementation so every SDK speaks the same wire shape.
 
 Deliberately unlike event capture, no per-user context (distinct ID, session)
 is attached: every attribute value creates a new series, and per-user series
@@ -31,9 +32,10 @@ import json
 import logging
 import math
 import os
+import sys
 import threading
 import time
-from typing import Any, Callable, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 from urllib.parse import quote
 
 import requests
@@ -43,6 +45,9 @@ from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
 
 from .tracing._traceparent import TRACE_FLAGS_SAMPLED, parse_traceparent
+
+if TYPE_CHECKING:
+    from ._runtime_metrics import _MacOSProcessMetrics
 
 log = logging.getLogger("posthog")
 
@@ -69,7 +74,9 @@ DEFAULT_HISTOGRAM_BOUNDS = [
 ]
 
 _OTLP_TEMPORALITY_DELTA = 1
+_OTLP_TEMPORALITY_CUMULATIVE = 2
 _VALID_METRIC_TYPES = ("count", "gauge", "histogram")
+_RUNTIME_SUM_TYPES = ("observable_counter", "observable_updowncounter")
 # Consecutive failed flushes before the buffered window is dropped (loudly) — bounds
 # memory and payload growth against a permanently unreachable endpoint. The series
 # cap already bounds the buffered window, and backoff spaces the attempts out, so
@@ -235,6 +242,7 @@ class _SeriesState:
         "window_start_ms",
         "total",
         "last",
+        "observation_time_ms",
         "hist",
         "exemplar",
     )
@@ -268,6 +276,7 @@ class _SeriesState:
         self.window_start_ms = int(time.time() * 1000)
         self.total: Optional[float] = None
         self.last: Optional[float] = None
+        self.observation_time_ms = self.window_start_ms
         self.hist: Optional[dict] = None
         self.exemplar: Optional[dict] = None
 
@@ -283,6 +292,38 @@ class PostHogMetrics:
         client.metrics.count("invoices.processed", 1, attributes={"plan": "pro"})
         client.metrics.gauge("queue.depth", 42)
         client.metrics.histogram("job.duration", 187, unit="ms")
+
+    Set ``capture_runtime_metrics=True`` in the config to automatically collect
+    these metrics on macOS without extra dependencies:
+
+    * ``process.cpu.time``: cumulative CPU seconds, with ``cpu.mode`` set to
+      ``user`` or ``system``.
+    * ``process.cpu.utilization``: utilization fractions per ``cpu.mode``,
+      normalized by the CPUs available to the process (falling back to the
+      system CPU count on older Python versions). Omitted if that count is unknown.
+    * ``process.memory.usage``: current resident memory in bytes, exported as
+      a cumulative non-monotonic sum (ObservableUpDownCounter).
+    * ``process.memory.utilization``: RSS divided by total physical RAM,
+      exported as a gauge fraction. This is not a container-limit measurement.
+    * ``process.thread.count``: current native thread count, including threads
+      created by C extensions, also an ObservableUpDownCounter.
+    * ``cpython.gc.collections``, ``cpython.gc.collected_objects``, and
+      ``cpython.gc.uncollectable_objects``: cumulative ``gc.get_stats()``
+      counters, distinguished by ``cpython.gc.generation`` (0, 1, 2).
+      These are CPython-only, and measure neither heap size nor GC pause duration.
+    * ``app.process.cpu.percent``: a custom utilization gauge where 100% is one
+      busy CPU core, and values may exceed 100%.
+    * ``app.process.cpu.ctx_switch.total``: a custom cumulative context-switch
+      counter. The native reader supplies a combined total, not the split
+      required by OpenTelemetry's standard context-switch metric.
+
+    Only this process is measured, not children or host totals. Samples use the
+    configured flush interval (10 seconds by default) and pass through
+    ``before_send``. Automatic cumulative sums use sample types
+    ``observable_counter`` and ``observable_updowncounter``; manual ``count``
+    calls remain delta sums. Each process has ``process.pid`` and a stable
+    ``process.runtime_id`` attribute; forked workers get a new identity and
+    CPU baseline. ``shutdown()`` collects a final sample and stops collection.
     """
 
     def __init__(self, client, config: Optional[dict] = None):
@@ -359,6 +400,71 @@ class PostHogMetrics:
         self._series_cap_warned = False
         self._type_by_name: dict = {}
         self._type_collision_warned: set = set()
+        self._capture_runtime_metrics = config.get("capture_runtime_metrics", False)
+        self._runtime_metrics: Optional["_MacOSProcessMetrics"] = None
+        self._runtime_lock = threading.RLock()
+        self._runtime_collecting = False
+        self._runtime_error_warned = False
+
+    def _start_runtime_metrics(self) -> None:
+        if self._capture_runtime_metrics is not True:
+            if self._capture_runtime_metrics is not False:
+                log.warning("Ignoring capture_runtime_metrics: expected a boolean")
+            return
+        if (
+            self._client.disabled
+            or not self._client.send
+            or self._client._shutdown_requested
+            or self._client._join_requested
+        ):
+            return
+        if sys.platform != "darwin":
+            log.warning(
+                "Automatic runtime metrics are currently supported only on macOS"
+            )
+            return
+        try:
+            from ._runtime_metrics import _MacOSProcessMetrics
+
+            self._runtime_metrics = _MacOSProcessMetrics()
+            with self._lock:
+                self._arm_flush_timer()
+        except Exception as e:
+            self._runtime_metrics = None
+            log.warning("Unable to start runtime metrics: %s", e)
+
+    def _collect_runtime_metrics(self) -> None:
+        with self._runtime_lock:
+            collector = self._runtime_metrics
+            if collector is None or self._runtime_collecting or self._client.disabled:
+                return
+            self._runtime_collecting = True
+            callback_context = self._client._lifecycle_callback_context
+            token = callback_context.set(True)
+            try:
+                for sample in collector.collect():
+                    self._guarded_capture(
+                        sample.metric_type,
+                        sample.name,
+                        sample.value,
+                        sample.unit,
+                        {**collector.attributes, **(sample.attributes or {})},
+                        collector,
+                    )
+            except Exception as e:
+                if not self._runtime_error_warned:
+                    self._runtime_error_warned = True
+                    log.warning("Unable to collect runtime metrics: %s", e)
+            finally:
+                callback_context.reset(token)
+                self._runtime_collecting = False
+
+    def _stop_runtime_metrics(self) -> None:
+        with self._runtime_lock:
+            self._collect_runtime_metrics()
+            with self._lock:
+                self._runtime_metrics = None
+                self._clear_flush_timer()
 
     def count(
         self,
@@ -391,18 +497,26 @@ class PostHogMetrics:
         self._guarded_capture("histogram", name, value, unit, attributes)
 
     def flush(self) -> None:
-        """Sends everything aggregated so far without waiting for the flush interval."""
-        with self._flush_lock:
-            self._do_flush()
+        """Sends buffered metrics, collecting enabled runtime metrics first."""
+        self._collect_runtime_metrics()
+        try:
+            with self._flush_lock:
+                self._do_flush()
+        finally:
+            with self._lock:
+                if self._runtime_metrics is not None:
+                    self._arm_flush_timer()
 
     def reset(self) -> None:
-        """Clears the flush timer and drops the current window."""
-        with self._lock:
+        """Drops the current window; enabled runtime collection continues."""
+        with self._runtime_lock, self._lock:
             self._clear_flush_timer()
             self._series = {}
             self._series_cap_warned = False
             self._type_by_name = {}
             self._type_collision_warned = set()
+            if self._runtime_metrics is not None:
+                self._arm_flush_timer()
 
     def _guarded_capture(
         self,
@@ -411,10 +525,11 @@ class PostHogMetrics:
         value: float,
         unit: Optional[str],
         attributes: Optional[dict],
+        runtime_collector: Optional["_MacOSProcessMetrics"] = None,
     ) -> None:
         # A telemetry call must never raise into the host application, whatever the input.
         try:
-            self._capture(metric_type, name, value, unit, attributes)
+            self._capture(metric_type, name, value, unit, attributes, runtime_collector)
         except Exception as e:
             if not self._capture_error_warned:
                 self._capture_error_warned = True
@@ -427,6 +542,7 @@ class PostHogMetrics:
         value: float,
         unit: Optional[str],
         attributes: Optional[dict],
+        runtime_collector: Optional["_MacOSProcessMetrics"] = None,
     ) -> None:
         if getattr(self._client, "disabled", False):
             return
@@ -460,7 +576,9 @@ class PostHogMetrics:
             unit = sample_dict.get("unit")
             attributes = sample_dict.get("attributes")
 
-        if metric_type not in _VALID_METRIC_TYPES:
+        if metric_type not in _VALID_METRIC_TYPES and not (
+            runtime_collector is not None and metric_type in _RUNTIME_SUM_TYPES
+        ):
             log.warning(
                 "Dropping metric '%s': unknown metric type '%s'", name, metric_type
             )
@@ -476,7 +594,7 @@ class PostHogMetrics:
         ):
             log.warning("Dropping metric '%s': value must be a finite number", name)
             return
-        if metric_type == "count" and value < 0:
+        if metric_type in ("count", "observable_counter") and value < 0:
             log.warning(
                 "Dropping count '%s': counters are monotonic, value must be >= 0", name
             )
@@ -491,6 +609,12 @@ class PostHogMetrics:
 
         with self._lock:
             self._reset_after_fork_locked()
+            # A before_send hook can stop collection or fork while a sample is in flight.
+            if (
+                runtime_collector is not None
+                and runtime_collector is not self._runtime_metrics
+            ):
+                return
 
             state = self._series.get(key)
             if state is None:
@@ -504,6 +628,8 @@ class PostHogMetrics:
                         )
                     return
                 state = _SeriesState(name, metric_type, unit, attributes)
+                if runtime_collector is not None and metric_type in _RUNTIME_SUM_TYPES:
+                    state.window_start_ms = runtime_collector.start_time_ms
                 self._series[key] = state
 
             # Bookkeeping only for admitted samples, so name-cardinality misuse (IDs in
@@ -537,8 +663,12 @@ class PostHogMetrics:
         # exist in the child, so replace them without ever acquiring them.
         self._lock = threading.Lock()
         self._flush_lock = threading.Lock()
+        self._runtime_lock = threading.RLock()
+        self._runtime_collecting = False
+        self._runtime_metrics = None
         self._pid = os.getpid()
         self._drop_inherited_window()
+        self._start_runtime_metrics()
 
     def _reset_after_fork_locked(self) -> None:
         # PID-guard fallback for platforms without os.register_at_fork: a forked child
@@ -564,6 +694,9 @@ class PostHogMetrics:
             state.total = (state.total or 0.0) + value
         elif state.type == "gauge":
             state.last = value
+        elif state.type in _RUNTIME_SUM_TYPES:
+            state.last = value
+            state.observation_time_ms = int(time.time() * 1000)
         else:
             hist = state.hist
             if hist is None:
@@ -739,7 +872,7 @@ class PostHogMetrics:
                     current.hist["max"] = max(current.hist["max"], old.hist["max"])
                     for i, count in enumerate(old.hist["bucket_counts"]):
                         current.hist["bucket_counts"][i] += count
-            # Gauge: the live window's value is newer — keep it.
+            # Gauges and cumulative observations keep the live window's newer value.
         if dropped:
             log.warning(
                 "Dropped %s unsent metric series while merging a failed flush back (series cap %s)",
@@ -787,10 +920,14 @@ class PostHogMetrics:
                 metric = {"name": state.name}
                 if state.unit:
                     metric["unit"] = state.unit
-                if state.type == "count":
+                if state.type == "count" or state.type in _RUNTIME_SUM_TYPES:
                     metric["sum"] = {
-                        "aggregationTemporality": _OTLP_TEMPORALITY_DELTA,
-                        "isMonotonic": True,
+                        "aggregationTemporality": (
+                            _OTLP_TEMPORALITY_DELTA
+                            if state.type == "count"
+                            else _OTLP_TEMPORALITY_CUMULATIVE
+                        ),
+                        "isMonotonic": state.type != "observable_updowncounter",
                         "dataPoints": [],
                     }
                 elif state.type == "gauge":
@@ -806,13 +943,20 @@ class PostHogMetrics:
             start_nano = _ms_to_unix_nano(state.window_start_ms)
             exemplars = _build_exemplars(state.exemplar)
 
-            if state.type == "count":
+            if state.type == "count" or state.type in _RUNTIME_SUM_TYPES:
                 metric["sum"]["dataPoints"].append(
                     {
                         "attributes": attributes,
                         "startTimeUnixNano": start_nano,
-                        "timeUnixNano": now_nano,
-                        "asDouble": state.total or 0.0,
+                        "timeUnixNano": (
+                            now_nano
+                            if state.type == "count"
+                            else _ms_to_unix_nano(state.observation_time_ms)
+                        ),
+                        "asDouble": (
+                            state.total if state.type == "count" else state.last
+                        )
+                        or 0.0,
                         **exemplars,
                     }
                 )
