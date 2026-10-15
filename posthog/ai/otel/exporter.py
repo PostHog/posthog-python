@@ -20,6 +20,8 @@ class PostHogTraceExporter(SpanExporter):
 
     Wraps an OTLPSpanExporter configured for PostHog's OTLP endpoint. Spans
     that are not AI-related are silently dropped, returning SUCCESS immediately.
+    Exporters only see finished spans, so they can't add per-request PostHog
+    context; use ``PostHogSpanProcessor`` for that.
 
     Usage::
 
