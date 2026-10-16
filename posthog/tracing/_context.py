@@ -20,17 +20,21 @@ def _enrich_span(span: object) -> None:
         if not isinstance(attributes, Mapping):
             return
         context = contexts._get_active_span_context()
-        if context is None:
-            return
         extra = {}
-        session_id = context.get_session_id()
-        distinct_id = context.get_distinct_id()
+        session_id = context["session_id"]
+        distinct_id = context["distinct_id"]
         if session_id and "sessionId" not in attributes:
             extra["sessionId"] = session_id
         if distinct_id and not any(key in attributes for key in _IDENTITY_ATTRIBUTES):
             extra["posthogDistinctId"] = distinct_id
-        if extra:
-            getattr(span, "set_attributes")(extra)
+        if not extra:
+            return
+        # The SDK exposes no public capacity getter and evicts old attributes
+        # when full. Skip enrichment if its private limit is unavailable.
+        limit = getattr(getattr(span, "_limits", None), "max_span_attributes", None)
+        if not isinstance(limit, int) or len(attributes) + len(extra) > limit:
+            return
+        getattr(span, "set_attributes")(extra)
     except Exception:
         log.debug("Failed to add PostHog context to span", exc_info=True)
 

@@ -2629,11 +2629,7 @@ class Client(object):
     def _tracing_context(self) -> Dict[str, Optional[str]]:
         # The request context's identity, which the Django middleware fills
         # from the X-POSTHOG-* headers: the span's person/session join keys.
-        context = _get_active_span_context()
-        return {
-            "distinct_id": context.get_distinct_id() if context is not None else None,
-            "session_id": context.get_session_id() if context is not None else None,
-        }
+        return _get_active_span_context()
 
     def start_span(
         self,

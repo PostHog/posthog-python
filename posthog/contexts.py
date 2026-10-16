@@ -157,16 +157,18 @@ def _get_current_context() -> Optional[ContextScope]:
     return current_context
 
 
-def _get_active_span_context() -> Optional[ContextScope]:
-    current_context = _get_current_context()
-    scope = current_context
-    while scope is not None:
-        if not scope._span_context_active:
-            return None
+def _get_active_span_context() -> Dict[str, Optional[str]]:
+    values: Dict[str, Optional[str]] = {"distinct_id": None, "session_id": None}
+    scope = _get_current_context()
+    while scope is not None and scope._span_context_active:
+        if values["distinct_id"] is None:
+            values["distinct_id"] = scope.distinct_id
+        if values["session_id"] is None:
+            values["session_id"] = scope.session_id
         if scope.fresh:
             break
         scope = scope.parent
-    return current_context
+    return values
 
 
 def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:

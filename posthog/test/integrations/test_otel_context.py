@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import pytest
 from django.test import override_settings
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
@@ -194,8 +194,17 @@ def test_context_lookup_failure_does_not_break_span_creation(tracing):
 
 
 @pytest.mark.parametrize("nested", [False, True])
+@pytest.mark.parametrize(
+    "own_ids",
+    [
+        {},
+        {"distinct_id": "background-person"},
+        {"session_id": "background-session"},
+        {"distinct_id": "background-person", "session_id": "background-session"},
+    ],
+)
 def test_spans_started_after_django_request_do_not_use_inherited_ids(
-    tracing, native_client, nested
+    tracing, native_client, nested, own_ids
 ):
     tracer, exporter = tracing
 
@@ -206,9 +215,15 @@ def test_spans_started_after_django_request_do_not_use_inherited_ids(
         async def late_work(held, native_held):
             await release.wait()
             with contexts.new_context() if nested else nullcontext():
+                if "distinct_id" in own_ids:
+                    contexts.identify_context(own_ids["distinct_id"])
+                if "session_id" in own_ids:
+                    contexts.set_context_session(own_ids["session_id"])
                 tracer.start_span("late").end()
                 native_client.start_span("native-late").end()
-                assert contexts.get_context_session_id() == "session"
+                assert contexts.get_context_session_id() == own_ids.get(
+                    "session_id", "session"
+                )
             held.end()
             native_held.end()
 
@@ -240,11 +255,22 @@ def test_spans_started_after_django_request_do_not_use_inherited_ids(
     ):
         asyncio.run(run())
     spans = {span.name: dict(span.attributes) for span in exporter.get_finished_spans()}
-    assert spans["late"] == {}
+    expected = {
+        key: own_ids[field]
+        for field, key in (
+            ("distinct_id", "posthogDistinctId"),
+            ("session_id", "sessionId"),
+        )
+        if nested and field in own_ids
+    }
+    assert spans["late"] == expected
     assert spans["held"] == {"sessionId": "session", "posthogDistinctId": "person"}
     payload, _, _ = flush_and_capture(native_client)
     native = {span["name"]: span for span in spans_from(payload)}
-    assert "attributes" not in native["native-late"]
+    assert {
+        attribute["key"]: attribute["value"]["stringValue"]
+        for attribute in native["native-late"].get("attributes", [])
+    } == expected
     assert {
         attribute["key"]: attribute["value"]["stringValue"]
         for attribute in native["native-held"]["attributes"]
@@ -252,3 +278,30 @@ def test_spans_started_after_django_request_do_not_use_inherited_ids(
         "sessionId": "session",
         "posthogDistinctId": "person",
     }
+
+
+@pytest.mark.parametrize("limit", [0, 1, 2, 3, 128])
+@pytest.mark.parametrize("current_span", [False, True])
+def test_enrichment_does_not_evict_application_attributes(limit, current_span):
+    provider = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
+    provider.add_span_processor(PostHogContextSpanProcessor())
+    tracer = provider.get_tracer(__name__)
+    attributes = {"posthogDistinctId": "application-person", "other": "keep"}
+    baseline = tracer.start_span("baseline", attributes=attributes)
+    baseline.end()
+    try:
+        with contexts.new_context(fresh=True, capture_exceptions=False):
+            if not current_span:
+                contexts.set_context_session("session")
+            with tracer.start_as_current_span("span", attributes=attributes) as span:
+                if current_span:
+                    contexts.set_context_session("session")
+                    enrich_current_span()
+                retained = dict(list(attributes.items())[-limit:]) if limit else {}
+                expected = retained | (
+                    {"sessionId": "session"} if limit > len(attributes) else {}
+                )
+                assert dict(span.attributes) == expected
+                assert span.dropped_attributes == baseline.dropped_attributes
+    finally:
+        provider.shutdown()

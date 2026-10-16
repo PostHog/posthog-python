@@ -107,6 +107,8 @@ Register the processor before requests start. Keep the existing provider,
 exporters, and sampler. The processor adds `sessionId` and `posthogDistinctId`
 from the active PostHog context when each recording span starts. These values
 stay on the span after the request ends. Explicit span attributes take precedence.
+The bridge skips enrichment when there is not enough attribute capacity or the
+SDK does not expose its limit. OpenTelemetry SDK 1.20.0 or later is supported.
 An existing application identity, such as `user.id`, prevents fallback identity
 from being added. Absent IDs are omitted. OpenTelemetry remains optional for
 applications that do not use this integration.
@@ -128,5 +130,7 @@ No provider, exporter, trace, session ID, or recording is created by this bridge
 The bridge does not propagate context into a separate process or a new thread.
 Only spans started during the supported request lifetime inherit request IDs.
 Spans started by an inherited async task after the request ends omit request IDs.
-A background task can set its own IDs in a fresh `new_context(fresh=True)` scope.
+A background task can set its own IDs in a new `new_context()` scope.
+Only IDs from active scopes are used. Set `fresh=True` to prevent inheritance
+from any parent scope.
 The AI OpenTelemetry processor is a separate integration with different attributes.
