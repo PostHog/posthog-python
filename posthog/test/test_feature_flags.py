@@ -118,6 +118,86 @@ class TestCohortMatching(unittest.TestCase):
                     )
 
 
+class TestGroupKeyBucketing(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, send=False)
+        self.client.group_type_mapping = {"0": "company"}
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    def set_group_flag(self, mixed=False, rollout=50):
+        condition = {"properties": [], "rollout_percentage": rollout}
+        filters = {"groups": [condition]}
+        if mixed:
+            condition["aggregation_group_type_index"] = 0
+        else:
+            filters["aggregation_group_type_index"] = 0
+        self.client.feature_flags = [
+            {"id": 1, "key": "group-beta", "active": True, "filters": filters}
+        ]
+
+    @parameterized.expand([(False,), (True,)])
+    @mock.patch("posthog.client.flags")
+    def test_numeric_group_keys_use_server_representation(self, mixed, patch_flags):
+        self.set_group_flag(mixed)
+        # For this flag, "0.00001" hashes below 50%, but Python's "1e-05"
+        # hashes above it. Integer keys should keep their existing bucketing.
+        for group_key in (0.00001, "0.00001", 42, "42"):
+            with self.subTest(group_key=group_key):
+                self.assertTrue(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        only_evaluate_locally=True,
+                        send_feature_flag_events=False,
+                    )
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups={"company": group_key},
+                    only_evaluate_locally=True,
+                )
+                self.assertTrue(flags.get_flag("group-beta"))
+        patch_flags.assert_not_called()
+
+    @parameterized.expand([(False,), (True,)])
+    @mock.patch("posthog.client.flags")
+    def test_unsupported_group_keys_require_remote_evaluation(self, mixed, patch_flags):
+        self.set_group_flag(mixed, rollout=100)
+        patch_flags.return_value = {"featureFlags": {"group-beta": "remote"}}
+        for group_key in (True, False, None, [], {}, float("inf"), float("nan")):
+            with self.subTest(group_key=group_key):
+                self.assertIsNone(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        only_evaluate_locally=True,
+                        send_feature_flag_events=False,
+                    )
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups={"company": group_key},
+                    only_evaluate_locally=True,
+                )
+                self.assertNotIn("group-beta", flags.keys)
+                patch_flags.assert_not_called()
+                self.assertEqual(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        send_feature_flag_events=False,
+                    ),
+                    "remote",
+                )
+                patch_flags.assert_called_once()
+                patch_flags.reset_mock()
+
+
 class TestLocalEvaluation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
