@@ -1,5 +1,15 @@
 # posthog
 
+## 7.71.0 — 2026-10-16
+
+### Minor changes
+
+- [780cba9](https://github.com/posthog/posthog-python/commit/780cba9aeea0d990a65fafe88860905bb4941d81) Align ASGI, Flask, and Django tracing-header capture with peer SDKs. Add capture_tracing_headers and POSTHOG_MW_CAPTURE_TRACING_HEADERS, enabled by default once an integration is installed. Keep the trust-named options as deprecated aliases, honor explicit opt-outs, and prefer the capture-named option when both are configured. Share header sanitization and request-context attribution across integrations; explicit capture identity and session properties retain precedence. — Thanks @dustinbyrne!
+
+### Patch changes
+
+- [d0b6f71](https://github.com/posthog/posthog-python/commit/d0b6f7127f6d60a17d1c67724ad5eb50d12a7dd6) Clarify when to flush reusable clients versus shut down disposable clients, including timeout and delivery limitations. — Thanks @marandaneto!
+
 ## 7.70.2 — 2026-10-15
 
 ### Patch changes
