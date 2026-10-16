@@ -932,7 +932,7 @@ def match_property_group(
     if not isinstance(properties, list):
         raise RequiresServerEvaluation("Cohort property group values must be a list")
     if not properties:
-        return True
+        return is_and
 
     decisive_result = None
     error_matching_locally = False
