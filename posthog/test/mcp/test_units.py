@@ -28,7 +28,6 @@ from posthog.mcp._intent import _get_context_argument, resolve_tool_call_intent
 from posthog.mcp._internal import (
     IdentityCache,
     MCPAnalyticsData,
-    are_identities_equal,
     merge_identities,
 )
 from posthog.mcp.session import (
@@ -383,13 +382,6 @@ async def test_resolve_session_id_rolls_over_after_inactivity():
 
 
 # --- identity cache / merge --------------------------------------------------
-
-
-def test_are_identities_equal():
-    a = UserIdentity(distinct_id="u1", properties={"plan": "pro"}, groups={"org": "o1"})
-    b = UserIdentity(distinct_id="u1", properties={"plan": "pro"}, groups={"org": "o1"})
-    assert are_identities_equal(a, b)
-    assert not are_identities_equal(a, UserIdentity(distinct_id="u2"))
 
 
 def test_merge_identities_merges_properties_and_keeps_distinct_id():
