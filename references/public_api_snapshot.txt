@@ -1224,6 +1224,7 @@ class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Opt
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
 class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None, trust_tracing_headers: Optional[bool] = None, capture_tracing_headers: Optional[bool] = None)
+class posthog.integrations.otel.PostHogContextSpanProcessor 
 class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
@@ -1430,6 +1431,7 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.integrations.drf.create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
 function posthog.integrations.drf.exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
+function posthog.integrations.otel.enrich_current_span() -> None
 function posthog.join() -> None
 function posthog.load_feature_flags()
 function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
@@ -1697,6 +1699,7 @@ method posthog.integrations.django.PosthogContextMiddleware.extract_request_user
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
 method posthog.integrations.flask.PosthogFlaskIntegration.init_app(app: Flask) -> None
+method posthog.integrations.otel.PostHogContextSpanProcessor.on_start(span: Span, parent_context: Optional[Context] = None) -> None
 method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
 method posthog.mcp.McpAnalytics.flush() -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
@@ -1809,6 +1812,7 @@ module posthog.integrations.celery
 module posthog.integrations.django
 module posthog.integrations.drf
 module posthog.integrations.flask
+module posthog.integrations.otel
 module posthog.mcp
 module posthog.mcp.asgi
 module posthog.mcp.constants

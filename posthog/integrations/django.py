@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import contexts
 from ..client import Client
+from ..tracing._context import _enrich_current_span
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
@@ -348,6 +349,7 @@ class PosthogContextMiddleware:
                 for k, v in self.extract_tags(request).items():
                     contexts.tag(k, v)
 
+                _enrich_current_span()
                 return self.get_response(request)
 
     async def __acall__(self, request):
@@ -368,6 +370,7 @@ class PosthogContextMiddleware:
             for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
+            _enrich_current_span()
             return await self.get_response(request)
 
     def process_exception(self, request, exception):

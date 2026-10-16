@@ -90,3 +90,43 @@ request scope it is restored. Background threads do not automatically inherit
 request context; async tasks follow Python's context-variable propagation rules.
 Flask isolates identity and request properties while retaining effective enclosing
 exception code-variable privacy controls.
+
+## OpenTelemetry spans
+
+Native PostHog spans read the active request IDs when `start_span` runs.
+For application-owned OpenTelemetry spans, install `opentelemetry-sdk` and add
+`PostHogContextSpanProcessor` to the application's existing `TracerProvider`:
+
+```python
+from posthog.integrations.otel import PostHogContextSpanProcessor
+
+provider.add_span_processor(PostHogContextSpanProcessor())
+```
+
+Register the processor before requests start. Keep the existing provider,
+exporters, and sampler. The processor adds `sessionId` and `posthogDistinctId`
+from the active PostHog context when each recording span starts. These values
+stay on the span after the request ends. Explicit span attributes take precedence.
+An existing application identity, such as `user.id`, prevents fallback identity
+from being added. Absent IDs are omitted. OpenTelemetry remains optional for
+applications that do not use this integration.
+
+Django's `PosthogContextMiddleware` also adds IDs to the active OpenTelemetry SDK
+request span after it reads the request context. This covers a request span that
+starts before the PostHog middleware. Put the OpenTelemetry request middleware
+outside the PostHog middleware. Put Django's authentication middleware before
+PostHog if you want authenticated user identity. Both sync and async Django
+request handlers use the same bridge. Tracing headers still need
+`POSTHOG_MW_TRUST_TRACING_HEADERS = True`; they are untrusted analytics context.
+
+For a custom request integration, call `enrich_current_span()` from
+`posthog.integrations.otel` once after setting the request IDs. This call handles
+an already active recording SDK span. The processor handles spans started later
+in the request. A context lookup failure does not interrupt the request.
+No provider, exporter, trace, session ID, or recording is created by this bridge.
+
+The bridge does not propagate context into a separate process or a new thread.
+Only spans started during the supported request lifetime inherit request IDs.
+Spans started by an inherited async task after the request ends omit request IDs.
+A background task can set its own IDs in a fresh `new_context(fresh=True)` scope.
+The AI OpenTelemetry processor is a separate integration with different attributes.

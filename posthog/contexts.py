@@ -21,6 +21,7 @@ class ContextScope:
     ):
         self.client: Optional[Client] = client
         self._generation = _context_generation
+        self._span_context_active = True
         self.parent = parent
         self.fresh = fresh
         self.capture_exceptions = capture_exceptions
@@ -156,6 +157,18 @@ def _get_current_context() -> Optional[ContextScope]:
     return current_context
 
 
+def _get_active_span_context() -> Optional[ContextScope]:
+    current_context = _get_current_context()
+    scope = current_context
+    while scope is not None:
+        if not scope._span_context_active:
+            return None
+        if scope.fresh:
+            break
+        scope = scope.parent
+    return current_context
+
+
 def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
     if client is not None:
         return client.enable_exception_autocapture
@@ -245,6 +258,7 @@ def new_context(
                 capture_exception(e)
         raise
     finally:
+        new_context._span_context_active = False
         if context_generation == _context_generation:
             _context_stack.set(new_context.get_parent())
 
