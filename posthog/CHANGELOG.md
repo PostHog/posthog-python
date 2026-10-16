@@ -1,5 +1,17 @@
 # posthog
 
+## 7.70.2 — 2026-10-15
+
+### Patch changes
+
+- [fec41f2](https://github.com/posthog/posthog-python/commit/fec41f24cb497d37a8cd0dd53490b74c98554dfa) Mark cancelled async LLM calls as errors while preserving cancellation. — Thanks @marandaneto!
+
+## 7.70.1 — 2026-10-15
+
+### Patch changes
+
+- [10d094e](https://github.com/posthog/posthog-python/commit/10d094e384efce1422ae1853951b7d2eaa0885ef) `Prompts.get()` now makes one request when several threads ask for the same prompt at once, instead of one request per thread. The other threads wait for that result. With `capture_errors=True`, a shared failure is reported once instead of once per thread. — Thanks @jurajmajerik!
+
 ## 7.70.0 — 2026-10-14
 
 ### Minor changes
