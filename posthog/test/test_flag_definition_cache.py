@@ -10,6 +10,8 @@ import unittest
 from typing import Optional
 from unittest import mock
 
+from parameterized import parameterized
+
 from posthog.client import Client
 from posthog.flag_definition_cache import (
     FlagDefinitionCacheData,
@@ -152,6 +154,54 @@ class TestCacheInitialization(TestFlagDefinitionCacheProvider):
         # Flags should be loaded from cache
         self.assertEqual(len(client.feature_flags), 2)
         self.assertEqual(client.feature_flags[0]["key"], "test-flag")
+
+        client.join()
+
+    @parameterized.expand(
+        [
+            ("explicit_load", lambda client: client.load_feature_flags()),
+            (
+                "lazy_load_on_first_evaluation",
+                lambda client: client.get_feature_flag(
+                    "rolled-out-flag", "some-user", only_evaluate_locally=True
+                ),
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.get")
+    def test_loads_from_cache_provider_without_secret_key(self, _name, load, mock_get):
+        self.cache_provider.should_fetch_return_value = False
+        self.cache_provider.stored_data = {
+            "flags": [
+                {
+                    "key": "rolled-out-flag",
+                    "active": True,
+                    "filters": {
+                        "groups": [{"properties": [], "rollout_percentage": 100}]
+                    },
+                }
+            ],
+            "group_type_mapping": {},
+            "cohorts": {},
+        }
+        client = Client(
+            FAKE_TEST_API_KEY,
+            flag_definition_cache_provider=self.cache_provider,
+            sync_mode=True,
+            enable_local_evaluation=False,
+        )
+
+        load(client)
+
+        mock_get.assert_not_called()
+        self.assertEqual(
+            [flag["key"] for flag in client.feature_flags], ["rolled-out-flag"]
+        )
+        self.assertTrue(
+            client.get_feature_flag(
+                "rolled-out-flag", "some-user", only_evaluate_locally=True
+            )
+        )
 
         client.join()
 

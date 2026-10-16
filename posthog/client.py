@@ -3503,6 +3503,12 @@ class Client(object):
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
 
+    def _can_load_feature_flags(self) -> bool:
+        return (
+            bool(self.personal_api_key)
+            or self._flag_definition_cache_provider is not None
+        )
+
     def load_feature_flags(self):
         """
         Load feature flags for local evaluation.
@@ -3521,7 +3527,7 @@ class Client(object):
                 self._property_matching_version = 1
             return
 
-        if not self.personal_api_key:
+        if not self._can_load_feature_flags():
             self.log.warning(
                 "[FEATURE FLAGS] You have to specify a secret_key to use feature flags."
             )
@@ -4031,7 +4037,7 @@ class Client(object):
         device_id: Optional[str] = None,
     ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
         """Return the local value and its definitions for consistent payload lookup."""
-        if self.feature_flags is None and self.personal_api_key:
+        if self.feature_flags is None and self._can_load_feature_flags():
             self.load_feature_flags()
         response = None
 
@@ -4758,7 +4764,7 @@ class Client(object):
         person_properties = person_properties or {}
         group_properties = group_properties or {}
 
-        if self.feature_flags is None and self.personal_api_key:
+        if self.feature_flags is None and self._can_load_feature_flags():
             self.load_feature_flags()
 
         flags: dict[str, FlagValue] = {}
