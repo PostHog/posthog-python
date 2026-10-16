@@ -1,14 +1,17 @@
+import sys
 import unittest
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from posthog import contexts
+from posthog.exception_capture import ExceptionCapture
 from posthog.integrations.celery import (
     CONTEXT_DISTINCT_ID_HEADER,
     CONTEXT_SESSION_ID_HEADER,
     CONTEXT_TAGS_HEADER,
     PosthogCeleryIntegration,
+    _capture_metadata,
 )
 
 
@@ -22,6 +25,19 @@ class FakeSignal:
 
     def disconnect(self, handler):
         self.disconnected.append(handler)
+
+
+class FakeRetry(Exception):
+    def __init__(self, message, exc=None):
+        super().__init__(message)
+        self.exc = exc
+
+
+RETRY_CAPTURE_METADATA = {
+    "level": "warning",
+    "source": "celery.task_retry",
+    "mechanism": {"type": "task", "handled": True},
+}
 
 
 class TestPosthogCeleryIntegration(unittest.TestCase):
@@ -506,6 +522,45 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         props = retry_call.kwargs["properties"]
         self.assertEqual(props["celery_reason"], "broker down")
 
+    def test_task_retry_captures_retry_exception(self):
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+        task = SimpleNamespace(
+            name="app.tasks.retrying", request=SimpleNamespace(delivery_info={})
+        )
+        exception = KeyError("missing")
+
+        integration._on_task_retry(
+            sender=task,
+            task_id="task-retry",
+            reason=FakeRetry("Retry in 5s", exc=exception),
+        )
+
+        mock_client.capture_exception.assert_called_once_with(
+            exception, _capture_metadata=RETRY_CAPTURE_METADATA
+        )
+        retry_call = [
+            c
+            for c in mock_client.capture.call_args_list
+            if c.args[0] == "celery task retry"
+        ][0]
+        self.assertEqual(retry_call.kwargs["properties"]["error_type"], "KeyError")
+
+    def test_task_retry_without_exception_skips_exception_capture(self):
+        mock_client = Mock()
+        integration = PosthogCeleryIntegration(client=mock_client)
+        task = SimpleNamespace(
+            name="app.tasks.retrying", request=SimpleNamespace(delivery_info={})
+        )
+
+        integration._on_task_retry(
+            sender=task,
+            task_id="task-retry",
+            reason=FakeRetry("Retry in 5s"),
+        )
+
+        mock_client.capture_exception.assert_not_called()
+
     def test_task_filter_applies_to_worker_lifecycle_events(self):
         mock_client = Mock()
         integration = PosthogCeleryIntegration(
@@ -668,7 +723,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         exception = ValueError("boom")
 
         with patch("posthog.capture_exception") as mock_capture_exception:
-            integration._capture_exception(exception)
+            integration._capture_exception(exception, _capture_metadata("failure"))
 
         mock_capture_exception.assert_called_once_with(
             exception,
@@ -716,3 +771,98 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         tags = integration._extract_propagated_tags(request)
 
         self.assertEqual(tags, {})
+
+
+class TestCeleryExceptionAutocapture(unittest.TestCase):
+    def setUp(self):
+        self.fake_signals = SimpleNamespace(
+            **{
+                signal_name: FakeSignal()
+                for signal_name in TestPosthogCeleryIntegration.SIGNAL_NAMES
+            }
+        )
+        fake_celery = ModuleType("celery")
+        fake_celery.signals = self.fake_signals
+        fake_celery.__version__ = "5.0.0"
+        modules_patch = patch.dict("sys.modules", {"celery": fake_celery})
+        modules_patch.start()
+        self.addCleanup(modules_patch.stop)
+        registry_patch = patch(
+            "posthog.integrations.celery._instrumented_integrations", set()
+        )
+        registry_patch.start()
+        self.addCleanup(registry_patch.stop)
+
+        self.client = Mock()
+        self.capture = ExceptionCapture(self.client)
+        self.addCleanup(self.capture.close)
+
+    def _failure_handler(self):
+        return self.fake_signals.task_failure.connected[0][0]
+
+    def _retry_handler(self):
+        return self.fake_signals.task_retry.connected[0][0]
+
+    def test_captures_task_failure(self):
+        exception = KeyError("missing")
+
+        self._failure_handler()(sender=Mock(), task_id="t1", exception=exception)
+
+        self.client.capture_exception.assert_called_once_with(
+            exception,
+            _capture_metadata=_capture_metadata("failure"),
+            distinct_id=None,
+        )
+
+    def test_captures_task_retry_exception(self):
+        exception = ConnectionError("broker down")
+
+        self._retry_handler()(
+            sender=Mock(), reason=FakeRetry("Retry in 5s", exc=exception)
+        )
+
+        self.client.capture_exception.assert_called_once_with(
+            exception,
+            _capture_metadata=RETRY_CAPTURE_METADATA,
+            distinct_id=None,
+        )
+
+    def test_defers_to_instrumented_integration(self):
+        integration = PosthogCeleryIntegration(client=Mock())
+        with patch("posthog.integrations.celery.atexit"):
+            integration.instrument()
+            self.addCleanup(integration.uninstrument)
+
+        self._failure_handler()(sender=Mock(), exception=KeyError("missing"))
+        self.client.capture_exception.assert_not_called()
+
+        integration.uninstrument()
+        self._failure_handler()(sender=Mock(), exception=KeyError("missing"))
+        self.client.capture_exception.assert_called_once()
+
+    def test_captures_when_integration_does_not_capture_exceptions(self):
+        integration = PosthogCeleryIntegration(client=Mock(), capture_exceptions=False)
+        with patch("posthog.integrations.celery.atexit"):
+            integration.instrument()
+            self.addCleanup(integration.uninstrument)
+
+        self._failure_handler()(sender=Mock(), exception=KeyError("missing"))
+
+        self.client.capture_exception.assert_called_once()
+
+    def test_close_disconnects_signals(self):
+        failure_handler = self._failure_handler()
+        retry_handler = self._retry_handler()
+
+        self.capture.close()
+
+        self.assertEqual(self.fake_signals.task_failure.disconnected, [failure_handler])
+        self.assertEqual(self.fake_signals.task_retry.disconnected, [retry_handler])
+
+    def test_skips_celery_when_not_imported(self):
+        with patch.dict("sys.modules"):
+            sys.modules.pop("celery")
+            capture = ExceptionCapture(Mock())
+        self.addCleanup(capture.close)
+
+        self.assertIsNone(capture._disconnect_celery)

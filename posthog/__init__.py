@@ -356,7 +356,9 @@ Attributes:
         serverless handlers should call ``flush()`` before returning. Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
         call if no span has been started yet.
-    enable_exception_autocapture: Automatically capture uncaught exceptions.
+    enable_exception_autocapture: Automatically capture uncaught exceptions,
+        and Celery task exceptions when Celery is imported before the client
+        is created.
     log_captured_exceptions: Also log exceptions captured by error tracking.
     project_root: Root path used to determine in-app exception stack frames.
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
