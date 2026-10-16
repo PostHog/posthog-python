@@ -6,7 +6,9 @@ from parameterized import parameterized
 
 from posthog.client import Client
 from posthog.feature_flag_evaluations import FeatureFlagEvaluations
+from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import UnresolvedFlagReason
 
 
 def _flags_response_fixture():
@@ -550,6 +552,326 @@ class TestEvaluateFlagsLocalDeviceBucketing(unittest.TestCase):
 
         self.assertTrue(flags.get_flag("device-bucketed-flag"))
         patch_flags.assert_not_called()
+
+
+def _always_on_flag(key, **extra):
+    return {
+        "id": 1,
+        "key": key,
+        "active": True,
+        "filters": {"groups": [{"properties": [], "rollout_percentage": 100}]},
+        **extra,
+    }
+
+
+def _flag_called_properties(patch_capture):
+    return {
+        c[1]["properties"]["$feature_flag"]: c[1]["properties"]
+        for c in patch_capture.call_args_list
+        if c[0] and c[0][0] == "$feature_flag_called"
+    }
+
+
+class TestEvaluateFlagsUnresolved(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        self.client.feature_flags = [
+            _always_on_flag("beta-ui"),
+            _always_on_flag("checkout", ensure_experience_continuity=True),
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_local_only_reports_experience_continuity_flag(
+        self, patch_capture, patch_flags
+    ):
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(flags.keys, ["beta-ui"])
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+        )
+        self.assertEqual(flags.unresolved_flags["checkout"], "experience_continuity")
+        patch_flags.assert_not_called()
+        self.assertEqual(_flag_called_properties(patch_capture), {})
+        self.assertEqual(flags.only_accessed().keys, [])
+
+    @mock.patch("posthog.client.flags")
+    def test_unresolved_flags_is_read_only(self, _patch_flags):
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        with self.assertRaises(TypeError):
+            flags.unresolved_flags["beta-ui"] = UnresolvedFlagReason.MISSING_CONTEXT  # type: ignore[index]
+
+    @mock.patch("posthog.client.flags")
+    def test_missing_person_property_is_reported_as_missing_context(self, _patch_flags):
+        checkout = _always_on_flag("checkout")
+        checkout["filters"]["groups"][0]["properties"] = [
+            {"key": "plan", "operator": "exact", "value": "pro", "type": "person"}
+        ]
+        self.client.feature_flags = [checkout]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(flags.keys, [])
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.MISSING_CONTEXT},
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_inconclusive_dependency_is_reported_as_unresolved_dependency(
+        self, _patch_flags
+    ):
+        base = _always_on_flag("base")
+        base["filters"]["groups"][0]["properties"] = [
+            {"key": "plan", "operator": "exact", "value": "pro", "type": "person"}
+        ]
+        dependent = _always_on_flag("dependent")
+        dependent["filters"]["groups"][0]["properties"] = [
+            {
+                "key": "base",
+                "type": "flag",
+                "value": True,
+                "operator": "flag_evaluates_to",
+                "dependency_chain": ["base"],
+            }
+        ]
+        self.client.feature_flags = [base, dependent]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {
+                "base": UnresolvedFlagReason.MISSING_CONTEXT,
+                "dependent": UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            },
+        )
+
+        scoped = self.client.evaluate_flags(
+            "user-123", flag_keys=["dependent"], only_evaluate_locally=True
+        )
+
+        self.assertEqual(
+            dict(scoped.unresolved_flags),
+            {"dependent": UnresolvedFlagReason.UNRESOLVED_DEPENDENCY},
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_dependency_without_loaded_definition_is_unsupported_definition(
+        self, _patch_flags
+    ):
+        dependent = _always_on_flag("dependent")
+        dependent["filters"]["groups"][0]["properties"] = [
+            {
+                "key": "unknown",
+                "type": "flag",
+                "value": True,
+                "operator": "flag_evaluates_to",
+                "dependency_chain": ["unknown"],
+            }
+        ]
+        self.client.feature_flags = [dependent]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"dependent": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_static_cohort_is_reported_as_unsupported_definition(self, _patch_flags):
+        checkout = _always_on_flag("checkout")
+        checkout["filters"]["groups"][0]["properties"] = [
+            {"key": "id", "type": "cohort", "value": 42}
+        ]
+        self.client.feature_flags = [checkout]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+
+    @mock.patch("posthog.client.flags")
+    def test_flag_resolved_by_remote_fallback_is_not_unresolved(self, patch_flags):
+        patch_flags.return_value = {
+            "flags": {"checkout": {"enabled": True, "variant": None}}
+        }
+
+        flags = self.client.evaluate_flags("user-123")
+
+        self.assertIs(flags.get_flag("checkout"), True)
+        self.assertEqual(sorted(flags.keys), ["beta-ui", "checkout"])
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        patch_flags.assert_called_once()
+
+    @parameterized.expand(
+        [
+            ("request_fails", Exception("flags request failed")),
+            ("key_not_returned", None),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_flag_left_without_remote_value_is_unresolved(
+        self, _name, side_effect, patch_flags
+    ):
+        patch_flags.side_effect = side_effect
+        patch_flags.return_value = {"flags": {}}
+
+        flags = self.client.evaluate_flags("user-123")
+
+        self.assertNotIn("checkout", flags.keys)
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_key_without_local_definition_is_missing_not_unresolved(
+        self, patch_capture, _patch_flags
+    ):
+        self.client.feature_flags = [_always_on_flag("beta-ui")]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+        flags.is_enabled("typo-flag")
+
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        properties = _flag_called_properties(patch_capture)["typo-flag"]
+        self.assertEqual(properties["$feature_flag_error"], "flag_missing")
+
+    @mock.patch("posthog.client.flags")
+    def test_flag_outside_requested_keys_is_not_unresolved(self, patch_flags):
+        flags = self.client.evaluate_flags("user-123", flag_keys=["beta-ui"])
+
+        self.assertEqual(flags.keys, ["beta-ui"])
+        self.assertTrue(flags.is_enabled("beta-ui"))
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    def test_inactive_flag_is_false_not_unresolved(self, patch_flags):
+        self.client.feature_flags = [
+            _always_on_flag("checkout", active=False, ensure_experience_continuity=True)
+        ]
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertIs(flags.get_flag("checkout"), False)
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_reading_remote_resolved_flag_reports_no_error(
+        self, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = {
+            "flags": {"checkout": {"enabled": True, "variant": None}}
+        }
+
+        flags = self.client.evaluate_flags("user-123")
+
+        self.assertTrue(flags.is_enabled("checkout"))
+        properties = _flag_called_properties(patch_capture)["checkout"]
+        self.assertNotIn("$feature_flag_error", properties)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_reading_unresolved_flag_reports_local_evaluation_inconclusive(
+        self, patch_capture, _patch_flags
+    ):
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertFalse(flags.is_enabled("checkout"))
+        properties = _flag_called_properties(patch_capture)["checkout"]
+        self.assertEqual(
+            properties["$feature_flag_error"], "local_evaluation_inconclusive"
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_filtered_snapshots_carry_no_unresolved_flags(
+        self, patch_capture, _patch_flags
+    ):
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+        flags.is_enabled("beta-ui")
+
+        for filtered in (flags.only(["beta-ui"]), flags.only_accessed()):
+            self.assertEqual(dict(filtered.unresolved_flags), {})
+            filtered.get_flag("checkout")
+            properties = _flag_called_properties(patch_capture)["checkout"]
+            self.assertEqual(properties["$feature_flag_error"], "flag_missing")
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+        )
+
+
+class TestUnresolvableFlagWarning(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(
+            FAKE_TEST_API_KEY,
+            secret_key="test",
+            enable_local_evaluation=False,
+            send=False,
+        )
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    def _refresh(self, flags):
+        with mock.patch("posthog.client.get") as get:
+            get.return_value = GetResponse(
+                data={"flags": flags, "group_type_mapping": {}, "cohorts": {}},
+                etag=None,
+                not_modified=False,
+            )
+            self.client._load_feature_flags()
+
+    def _warnings(self, log):
+        return [
+            c.args[0]
+            for c in log.warning.call_args_list
+            if "experience_continuity" in c.args[0]
+        ]
+
+    @mock.patch("posthog.client.flags")
+    def test_warns_once_per_definition(self, patch_flags):
+        checkout = _always_on_flag("checkout", ensure_experience_continuity=True)
+
+        with mock.patch.object(self.client, "log") as log:
+            self._refresh([checkout, _always_on_flag("beta-ui")])
+            self._refresh([checkout, _always_on_flag("beta-ui")])
+
+            warnings_logged = self._warnings(log)
+            self.assertEqual(len(warnings_logged), 1)
+            self.assertIn("checkout", warnings_logged[0])
+
+            self._refresh([{**checkout, "id": 2}])
+            self.assertEqual(len(self._warnings(log)), 2)
+
+        patch_flags.assert_not_called()
+
+    def test_does_not_warn_for_inactive_flag(self):
+        with mock.patch.object(self.client, "log") as log:
+            self._refresh(
+                [
+                    _always_on_flag(
+                        "checkout", active=False, ensure_experience_continuity=True
+                    )
+                ]
+            )
+
+        self.assertEqual(self._warnings(log), [])
 
 
 class TestEvaluateFlagsFiltering(unittest.TestCase):

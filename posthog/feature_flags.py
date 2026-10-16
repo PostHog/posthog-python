@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Optional
 
 from posthog import utils as utils
-from posthog.types import FlagValue
+from posthog.types import FlagValue, UnresolvedFlagReason
 from posthog.utils import convert_to_datetime_aware, is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
@@ -94,7 +94,17 @@ PROPERTY_OPERATORS = (
 
 
 class InconclusiveMatchError(Exception):
-    pass
+    """
+    Raised when local evaluation can't determine a flag's value. ``reason`` says
+    why, as reported by ``FeatureFlagEvaluations.unresolved_flags``.
+    """
+
+    reason: UnresolvedFlagReason = UnresolvedFlagReason.MISSING_CONTEXT
+
+    def __init__(self, *args, reason: Optional[UnresolvedFlagReason] = None):
+        super().__init__(*args)
+        if reason is not None:
+            self.reason = reason
 
 
 class RequiresServerEvaluation(Exception):
@@ -106,7 +116,12 @@ class RequiresServerEvaluation(Exception):
     InconclusiveMatchError which allows trying other conditions.
     """
 
-    pass
+    reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+
+    def __init__(self, *args, reason: Optional[UnresolvedFlagReason] = None):
+        super().__init__(*args)
+        if reason is not None:
+            self.reason = reason
 
 
 # This function takes a bucketing value and a feature flag key and returns a float between 0 and 1.
@@ -220,7 +235,8 @@ def evaluate_flag_dependency(
     if flags_by_key is None or evaluation_cache is None:
         # Cannot evaluate flag dependencies without required context
         raise InconclusiveMatchError(
-            f"Cannot evaluate flag dependency on '{property.get('key', 'unknown')}' without flags_by_key and evaluation_cache"
+            f"Cannot evaluate flag dependency on '{property.get('key', 'unknown')}' without flags_by_key and evaluation_cache",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
     # Validate the condition shape before walking the chain. A malformed shape
@@ -244,7 +260,8 @@ def evaluate_flag_dependency(
     if "dependency_chain" not in property:
         # Missing dependency_chain indicates malformed server data
         raise InconclusiveMatchError(
-            f"Flag dependency property for '{property.get('key', 'unknown')}' is missing required 'dependency_chain' field"
+            f"Flag dependency property for '{property.get('key', 'unknown')}' is missing required 'dependency_chain' field",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
     dependency_chain = property["dependency_chain"]
@@ -253,7 +270,8 @@ def evaluate_flag_dependency(
     if len(dependency_chain) == 0:
         log.debug(f"Circular dependency detected for flag: {property.get('key')}")
         raise InconclusiveMatchError(
-            f"Circular dependency detected for flag '{property.get('key', 'unknown')}'"
+            f"Circular dependency detected for flag '{property.get('key', 'unknown')}'",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
     # Evaluate and cache each flag in the chain; members already cached are
@@ -267,7 +285,8 @@ def evaluate_flag_dependency(
             # Missing flag dependency - cannot evaluate locally
             evaluation_cache[dep_flag_key] = None
             raise InconclusiveMatchError(
-                f"Cannot evaluate flag dependency '{dep_flag_key}' - flag not found in local flags"
+                f"Cannot evaluate flag dependency '{dep_flag_key}' - flag not found in local flags",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
             )
 
         # Check if the flag is active (same check as in client._compute_flag_locally)
@@ -305,7 +324,13 @@ def evaluate_flag_dependency(
             # If we can't evaluate a dependency, store None and propagate the error
             evaluation_cache[dep_flag_key] = None
             raise InconclusiveMatchError(
-                f"Cannot evaluate flag dependency '{dep_flag_key}': {e}"
+                f"Cannot evaluate flag dependency '{dep_flag_key}': {e}",
+                reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            ) from e
+        except RequiresServerEvaluation as e:
+            raise RequiresServerEvaluation(
+                f"Cannot evaluate flag dependency '{dep_flag_key}': {e}",
+                reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
             ) from e
 
     # The condition matches iff the referenced flag's value matches the expected
@@ -313,8 +338,16 @@ def evaluate_flag_dependency(
     # definitive False, which must be allowed to match `expected_value=False`.
     actual_value = evaluation_cache.get(flag_key)
     if actual_value is None:
+        # A referenced flag that has no loaded definition or is missing from the
+        # chain is a definition problem, not an unresolved dependency.
+        reason = (
+            UnresolvedFlagReason.UNRESOLVED_DEPENDENCY
+            if flag_key in flags_by_key and flag_key in evaluation_cache
+            else UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
         raise InconclusiveMatchError(
-            f"Flag dependency '{flag_key}' was inconclusive or not evaluated"
+            f"Flag dependency '{flag_key}' was inconclusive or not evaluated",
+            reason=reason,
         )
     return matches_dependency_value(expected_value, actual_value)
 
@@ -369,7 +402,8 @@ def resolve_bucketing_value(flag, distinct_id, device_id=None):
     if bucketing_identifier == "device_id":
         if not device_id:
             raise InconclusiveMatchError(
-                "Flag requires device_id for bucketing but none was provided"
+                "Flag requires device_id for bucketing but none was provided",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
             )
         return device_id
     return distinct_id
@@ -411,6 +445,7 @@ def match_feature_flag_properties(
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
     early_exit_enabled = flag_filters.get("early_exit")
     is_inconclusive = False
+    inconclusive_reason: Optional[UnresolvedFlagReason] = None
     cohort_properties = cohort_properties or {}
     groups = groups or {}
     group_properties = group_properties or {}
@@ -442,6 +477,9 @@ def match_feature_flag_properties(
                         continue
                     if group_name not in group_properties:
                         is_inconclusive = True
+                        inconclusive_reason = (
+                            inconclusive_reason or UnresolvedFlagReason.MISSING_CONTEXT
+                        )
                         continue
                     effective_properties = group_properties[group_name]
                     effective_bucketing = groups[group_name]
@@ -484,14 +522,16 @@ def match_feature_flag_properties(
         except RequiresServerEvaluation:
             # Static cohort or other missing server-side data - must fallback to API
             raise
-        except InconclusiveMatchError:
+        except InconclusiveMatchError as e:
             # Evaluation error (bad regex, invalid date, missing property, etc.)
             # Track that we had an inconclusive match, but try other conditions
             is_inconclusive = True
+            inconclusive_reason = inconclusive_reason or e.reason
 
     if is_inconclusive:
         raise InconclusiveMatchError(
-            "Can't determine if feature flag is enabled or not with given properties"
+            "Can't determine if feature flag is enabled or not with given properties",
+            reason=inconclusive_reason,
         )
 
     # We can only return False when either all conditions are False, or
@@ -568,7 +608,8 @@ _ASCII_LOWER_TRANSLATION = str.maketrans(
 def _format_json_float(value: float) -> str:
     if not math.isfinite(value):
         raise InconclusiveMatchError(
-            "Non-finite property values cannot be represented by the flags service"
+            "Non-finite property values cannot be represented by the flags service",
+            reason=UnresolvedFlagReason.MISSING_CONTEXT,
         )
 
     representation = repr(value)
@@ -600,7 +641,8 @@ def _json_value_to_string(value) -> str:
     if isinstance(value, dict):
         if not all(isinstance(key, str) for key in value):
             raise InconclusiveMatchError(
-                "Property object keys must be strings for local evaluation"
+                "Property object keys must be strings for local evaluation",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
             )
         items = (
             f"{json.dumps(key, ensure_ascii=False)}:{_json_value_to_string(value[key])}"
@@ -609,7 +651,8 @@ def _json_value_to_string(value) -> str:
         return "{" + ",".join(items) + "}"
 
     raise InconclusiveMatchError(
-        f"Property value of type {type(value).__name__} is not JSON-compatible"
+        f"Property value of type {type(value).__name__} is not JSON-compatible",
+        reason=UnresolvedFlagReason.MISSING_CONTEXT,
     )
 
 
@@ -652,11 +695,15 @@ def match_property(
     value = property.get("value")
 
     if operator not in PROPERTY_OPERATORS:
-        raise InconclusiveMatchError(f"Unknown operator {operator}")
+        raise InconclusiveMatchError(
+            f"Unknown operator {operator}",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+        )
 
     if key not in property_values:
         raise InconclusiveMatchError(
-            "can't match properties without a given property value"
+            "can't match properties without a given property value",
+            reason=UnresolvedFlagReason.MISSING_CONTEXT,
         )
 
     if operator in ("is_set", "is_not_set"):
@@ -768,12 +815,14 @@ def match_property(
                 parsed_date = convert_to_datetime_aware(parsed_date)
         except Exception as e:
             raise InconclusiveMatchError(
-                "The date set on the flag is not a valid format"
+                "The date set on the flag is not a valid format",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
             ) from e
 
         if not parsed_date:
             raise InconclusiveMatchError(
-                "The date set on the flag is not a valid format"
+                "The date set on the flag is not a valid format",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
             )
 
         if isinstance(override_value, datetime.datetime):
@@ -796,10 +845,14 @@ def match_property(
                 else:
                     return override_date > parsed_date
             except Exception:
-                raise InconclusiveMatchError("The date provided is not a valid format")
+                raise InconclusiveMatchError(
+                    "The date provided is not a valid format",
+                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
+                )
         else:
             raise InconclusiveMatchError(
-                "The date provided must be a string or date object"
+                "The date provided must be a string or date object",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
             )
 
     if operator in SEMVER_OPERATORS:
@@ -807,7 +860,8 @@ def match_property(
             override_parsed = parse_semver(override_value)
         except (ValueError, TypeError):
             raise InconclusiveMatchError(
-                f"Person property value '{override_value}' is not a valid semver"
+                f"Person property value '{override_value}' is not a valid semver",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
             )
 
         if operator in SEMVER_COMPARISON_OPERATORS:
@@ -815,7 +869,8 @@ def match_property(
                 flag_parsed = parse_semver(value)
             except (ValueError, TypeError):
                 raise InconclusiveMatchError(
-                    f"Flag semver value '{value}' is not a valid semver"
+                    f"Flag semver value '{value}' is not a valid semver",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
                 )
 
             if operator == "semver_eq":
@@ -836,7 +891,8 @@ def match_property(
                 lower, upper = _tilde_bounds(str(value))
             except (ValueError, TypeError):
                 raise InconclusiveMatchError(
-                    f"Flag semver value '{value}' is not valid for tilde operator"
+                    f"Flag semver value '{value}' is not valid for tilde operator",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
                 )
             return lower <= override_parsed < upper
 
@@ -845,7 +901,8 @@ def match_property(
                 lower, upper = _caret_bounds(str(value))
             except (ValueError, TypeError):
                 raise InconclusiveMatchError(
-                    f"Flag semver value '{value}' is not valid for caret operator"
+                    f"Flag semver value '{value}' is not valid for caret operator",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
                 )
             return lower <= override_parsed < upper
 
@@ -854,13 +911,17 @@ def match_property(
                 lower, upper = _wildcard_bounds(str(value))
             except (ValueError, TypeError):
                 raise InconclusiveMatchError(
-                    f"Flag semver value '{value}' is not valid for wildcard operator"
+                    f"Flag semver value '{value}' is not valid for wildcard operator",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
                 )
             return lower <= override_parsed < upper
 
     # Unreachable: all operators in PROPERTY_OPERATORS are handled above,
     # and unknown operators are rejected at the top of this function.
-    raise InconclusiveMatchError(f"Operator {operator} {_UNHANDLED_OPERATOR_MESSAGE}")
+    raise InconclusiveMatchError(
+        f"Operator {operator} {_UNHANDLED_OPERATOR_MESSAGE}",
+        reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+    )
 
 
 def match_cohort(
@@ -905,7 +966,10 @@ def match_cohort(
         return matches
     if operator == "not_in":
         return not matches
-    raise InconclusiveMatchError(f"Unsupported cohort operator: {operator}")
+    raise InconclusiveMatchError(
+        f"Unsupported cohort operator: {operator}",
+        reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+    )
 
 
 def match_property_group(
@@ -936,6 +1000,7 @@ def match_property_group(
 
     decisive_result = None
     error_matching_locally = False
+    inconclusive_reason: Optional[UnresolvedFlagReason] = None
 
     for prop in properties:
         try:
@@ -998,12 +1063,14 @@ def match_property_group(
         except InconclusiveMatchError as e:
             log.debug(f"Failed to compute property {prop} locally: {e}")
             error_matching_locally = True
+            inconclusive_reason = inconclusive_reason or e.reason
 
     if decisive_result is not None:
         return decisive_result
     if error_matching_locally:
         raise InconclusiveMatchError(
-            "Can't match cohort without a given cohort property value"
+            "Can't match cohort without a given cohort property value",
+            reason=inconclusive_reason,
         )
 
     # AND: every entry matched. OR: none matched.

@@ -83,6 +83,7 @@ from posthog.types import (
     FeatureFlagEvaluationRuntime as FeatureFlagEvaluationRuntime,
     FlagValue as FlagValue,
     FlagsAndPayloads as FlagsAndPayloads,
+    UnresolvedFlagReason as UnresolvedFlagReason,
 )
 from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
