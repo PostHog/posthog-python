@@ -44,6 +44,13 @@ class ExceptionCapture:
         self._threading_excepthook = self.thread_exception_handler
         sys.excepthook = self._sys_excepthook
         threading.excepthook = self._threading_excepthook
+        self._disconnect_celery = None
+        try:
+            from .integrations.celery import _instrument_exception_autocapture
+
+            self._disconnect_celery = _instrument_exception_autocapture(self)
+        except Exception:
+            self.log.exception("Failed to set up Celery exception autocapture")
         # opt-in client-side rate limiting: per exception type, allow a burst
         # of captures, then refill over time
         self._rate_limiter = None
@@ -78,6 +85,9 @@ class ExceptionCapture:
             sys.excepthook = original_excepthook
         if threading.excepthook is self._threading_excepthook:
             threading.excepthook = original_threading_excepthook
+
+        if self._disconnect_celery is not None:
+            self._disconnect_celery()
 
         if self._rate_limiter is not None:
             self._rate_limiter.stop()
