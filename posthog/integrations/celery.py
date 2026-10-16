@@ -60,15 +60,24 @@ Event properties:
     Additional properties on specific states:
 
     - **failure**: ``error_type``, ``error_message``
-    - **retry**: ``celery_reason``
+    - **retry**: ``celery_reason``, and ``error_type``, ``error_message`` when
+      the retry has an exception
+
+Exception autocapture:
+    When ``enable_exception_autocapture`` is on and Celery is imported before
+    the PostHog client is created, the client captures task failures and retry
+    exceptions without this integration. An instrumented integration with
+    ``capture_exceptions=True`` replaces that capture and applies its
+    ``task_filter``.
 """
 
 import atexit
 import json
 import logging
+import sys
 import time
 from collections.abc import Mapping
-from typing import Any, Callable, Optional, cast
+from typing import TYPE_CHECKING, Any, Callable, Optional, cast
 
 from .. import contexts
 from ..client import Client
@@ -78,12 +87,19 @@ from ..exception_utils import (
 )
 from ..tracing._context import _enrich_span
 
+if TYPE_CHECKING:
+    from ..exception_capture import ExceptionCapture
+
 
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
 CONTEXT_SESSION_ID_HEADER = "X-POSTHOG-SESSION-ID"
 CONTEXT_TAGS_HEADER = "X-POSTHOG-CONTEXT-TAGS"
 
 logger = logging.getLogger("posthog")
+
+# Instrumented integrations. Exception autocapture defers to them, so a task
+# exception is captured once and respects the integration's task filter.
+_instrumented_integrations: set["PosthogCeleryIntegration"] = set()
 
 
 class PosthogCeleryIntegration:
@@ -160,6 +176,7 @@ class PosthogCeleryIntegration:
         atexit.register(self.shutdown)
 
         self._instrumented = True
+        _instrumented_integrations.add(self)
 
     def _disconnect_signals(self) -> None:
         if not self._instrumented or not self._signals:
@@ -178,6 +195,7 @@ class PosthogCeleryIntegration:
 
         self._signals = None
         self._instrumented = False
+        _instrumented_integrations.discard(self)
 
     def uninstrument(self) -> None:
         """Disconnect Celery signal handlers and unregister exit cleanup.
@@ -358,6 +376,7 @@ class PosthogCeleryIntegration:
             extra_properties={
                 "celery_reason": str(kwargs.get("reason")),
             },
+            exception=_retry_exception(kwargs.get("reason")),
             **kwargs,
         )
 
@@ -398,7 +417,7 @@ class PosthogCeleryIntegration:
                 should_track = self._should_track(task_name, task_properties)
 
             if exception and self.capture_exceptions and should_track:
-                self._capture_exception(exception)
+                self._capture_exception(exception, _capture_metadata(state))
 
             if self.capture_task_lifecycle_events and should_track:
                 self._capture_event(f"celery task {state}", properties=task_properties)
@@ -498,18 +517,78 @@ class PosthogCeleryIntegration:
 
             capture(event, properties=properties)
 
-    def _capture_exception(self, exception: Exception) -> None:
-        capture_metadata: _ExceptionCaptureMetadata = {
-            "level": "error",
-            "source": "celery.task_failure",
-            "mechanism": {"type": "task", "handled": False},
-        }
+    def _capture_exception(
+        self,
+        exception: BaseException,
+        capture_metadata: _ExceptionCaptureMetadata,
+    ) -> None:
         if self.client:
             _capture_exception_with_metadata(self.client, exception, capture_metadata)
         else:
             from posthog import capture_exception
 
             cast(Any, capture_exception)(exception, _capture_metadata=capture_metadata)
+
+
+def _retry_exception(reason: Any) -> Optional[BaseException]:
+    # Celery sends a ``Retry`` as the reason. Its ``exc`` is the exception
+    # that caused the retry, or ``None`` when the task retried without one.
+    exc = getattr(reason, "exc", None)
+    return exc if isinstance(exc, BaseException) else None
+
+
+def _capture_metadata(state: str) -> _ExceptionCaptureMetadata:
+    if state == "retry":
+        # Celery handles the exception and runs the task again.
+        return {
+            "level": "warning",
+            "source": "celery.task_retry",
+            "mechanism": {"type": "task", "handled": True},
+        }
+    return {
+        "level": "error",
+        "source": "celery.task_failure",
+        "mechanism": {"type": "task", "handled": False},
+    }
+
+
+def _instrument_exception_autocapture(
+    exception_capture: "ExceptionCapture",
+) -> Optional[Callable[[], None]]:
+    """Capture Celery task exceptions with exception autocapture.
+
+    Celery catches task exceptions, so ``sys.excepthook`` never sees them.
+    Returns a callable that disconnects the handlers, or ``None`` when the
+    process does not use Celery.
+    """
+    if "celery" not in sys.modules:
+        return None
+
+    from celery import signals
+
+    def capture(exception: Optional[BaseException], state: str) -> None:
+        if exception is None or exception_capture._closed:
+            return
+        if any(i.capture_exceptions for i in _instrumented_integrations):
+            return
+        exception_capture._capture_exception(
+            exception, capture_metadata=_capture_metadata(state)
+        )
+
+    def on_task_failure(*args, **kwargs):
+        capture(kwargs.get("exception"), "failure")
+
+    def on_task_retry(*args, **kwargs):
+        capture(_retry_exception(kwargs.get("reason")), "retry")
+
+    signals.task_failure.connect(on_task_failure, weak=False)
+    signals.task_retry.connect(on_task_retry, weak=False)
+
+    def disconnect() -> None:
+        signals.task_failure.disconnect(on_task_failure)
+        signals.task_retry.disconnect(on_task_retry)
+
+    return disconnect
 
 
 __all__ = [

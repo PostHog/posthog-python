@@ -795,7 +795,8 @@ class Client(object):
                 Set to 0 when a job runner already retries the send.
             super_properties: Properties merged into every captured event.
             enable_exception_autocapture: Automatically capture uncaught
-                exceptions.
+                exceptions, and Celery task exceptions when Celery is
+                imported before the client is created.
             log_captured_exceptions: Also log exceptions captured by error
                 tracking.
             project_root: Root path used to determine in-app stack frames for
