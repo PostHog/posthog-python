@@ -10,6 +10,11 @@ Example::
 
     app = Flask(__name__)
     PosthogFlaskIntegration(app)
+
+The request context enriches events captured by any client while the request is
+running. Passing ``client`` only selects where automatically captured exceptions
+are sent; it does not redirect application calls to ``posthog.capture`` or
+``another_client.capture``.
 """
 
 from __future__ import annotations
@@ -100,16 +105,24 @@ class PosthogFlaskIntegration:
     Args:
         app: An optional Flask application. If omitted, call :meth:`init_app`
             later (the Flask application-factory pattern).
-        client: Optional PostHog client used to capture exceptions. The global
-            client is used by default.
+        client: Optional destination for automatically captured exceptions. The
+            global client is used by default. Request context still enriches events
+            captured through any client and does not redirect capture calls.
         capture_exceptions: Capture exceptions that reach Flask's unhandled
-            exception machinery. Defaults to ``True``.
+            exception machinery. If omitted, inherit the effective client's
+            ``enable_exception_autocapture`` setting. Pass ``True`` or ``False``
+            to override it.
         request_filter: Optional callback receiving Flask's request object. A
             false return value disables both context and exception capture for
             that request.
         extra_properties: Optional callback returning additional event properties.
             This is useful for application-specific metadata such as an authenticated
             user's role. Values should not contain secrets or request bodies.
+        trust_tracing_headers: Use client-provided PostHog distinct and session ID
+            headers as analytics context. Disabled by default because these headers
+            are not authenticated. Enable only when deliberately accepting browser
+            attribution or when a trusted upstream replaces incoming values. Never
+            use these identifiers for authorization.
 
     The integration intentionally does not capture exceptions handled by an
     application error handler, expected HTTP exceptions, request or response
@@ -123,14 +136,16 @@ class PosthogFlaskIntegration:
         app: Optional[Flask] = None,
         *,
         client: Optional[Client] = None,
-        capture_exceptions: bool = True,
+        capture_exceptions: Optional[bool] = None,
         request_filter: Optional[Callable[[Request], bool]] = None,
         extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None,
+        trust_tracing_headers: bool = False,
     ) -> None:
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_properties = extra_properties
+        self.trust_tracing_headers = trust_tracing_headers
 
         if app is not None:
             self.init_app(app)
@@ -175,17 +190,18 @@ class PosthogFlaskIntegration:
         privacy_settings.apply()
         setattr(g, _REQUEST_STATE_KEY, _RequestState(scope=scope))
 
-        session_id = _sanitize_tracing_header_value(
-            request.headers.get("X-POSTHOG-SESSION-ID")
-        )
-        if session_id:
-            contexts.set_context_session(session_id)
+        if self.trust_tracing_headers:
+            session_id = _sanitize_tracing_header_value(
+                request.headers.get("X-POSTHOG-SESSION-ID")
+            )
+            if session_id:
+                contexts.set_context_session(session_id)
 
-        distinct_id = _sanitize_tracing_header_value(
-            request.headers.get("X-POSTHOG-DISTINCT-ID")
-        )
-        if distinct_id:
-            contexts.identify_context(distinct_id)
+            distinct_id = _sanitize_tracing_header_value(
+                request.headers.get("X-POSTHOG-DISTINCT-ID")
+            )
+            if distinct_id:
+                contexts.identify_context(distinct_id)
 
         for key, value in self._request_properties(request).items():
             contexts.tag(key, value)
@@ -223,7 +239,14 @@ class PosthogFlaskIntegration:
     def _handle_unhandled_exception(
         self, sender: Flask, exception: BaseException, **kwargs: Any
     ) -> None:
-        if not self.capture_exceptions or not self._request_is_tracked():
+        if not self._request_is_tracked():
+            return
+        capture_exceptions = (
+            self.capture_exceptions
+            if self.capture_exceptions is not None
+            else contexts._default_capture_exceptions(self.client)
+        )
+        if not capture_exceptions:
             return
 
         capture_metadata: _ExceptionCaptureMetadata = {
