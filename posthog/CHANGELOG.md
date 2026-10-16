@@ -1,5 +1,29 @@
 # posthog
 
+## 7.70.2 — 2026-10-15
+
+### Patch changes
+
+- [fec41f2](https://github.com/posthog/posthog-python/commit/fec41f24cb497d37a8cd0dd53490b74c98554dfa) Mark cancelled async LLM calls as errors while preserving cancellation. — Thanks @marandaneto!
+
+## 7.70.1 — 2026-10-15
+
+### Patch changes
+
+- [10d094e](https://github.com/posthog/posthog-python/commit/10d094e384efce1422ae1853951b7d2eaa0885ef) `Prompts.get()` now makes one request when several threads ask for the same prompt at once, instead of one request per thread. The other threads wait for that result. With `capture_errors=True`, a shared failure is reported once instead of once per thread. — Thanks @jurajmajerik!
+
+## 7.70.0 — 2026-10-14
+
+### Minor changes
+
+- [6916499](https://github.com/posthog/posthog-python/commit/69164994c920bbaf445c3a2c20b9f558f6a5a473) `PostHogSpanProcessor` now adds the active PostHog context to the AI spans it exports: the distinct ID from `identify_context`, the session ID from `set_context_session` (sent as `$session_id`), and context tags as properties. Spans started inside `posthog.new_context()` reach PostHog under the right person, so one process can trace many users. Tags set by the request middleware (for example `email`, `$ip`, `$user_agent` and `$current_url`) now appear on AI events too. Attributes already on a span are kept, and other processors on the provider never see the context. Apps already using PostHog contexts (for example the Django, Flask or ASGI request middleware) will see their AI events attributed to the context's person after upgrading. — Thanks @carlos-marchal-ph!
+
+## 7.69.0 — 2026-10-13
+
+### Minor changes
+
+- [3cc2d64](https://github.com/posthog/posthog-python/commit/3cc2d6468d22306897db285bf5fa291a94287e71) `client.metrics` now attaches a trace exemplar to each series it flushes. A sample recorded inside a sampled span (a PostHog `start_span` span, or the current OpenTelemetry span) stamps its data point with that span's trace ID, span ID, and value, so metric charts can link to a representative trace. One exemplar per series per flush window; the last sample wins. — Thanks @DanielVisca!
+
 ## 7.68.0 — 2026-10-12
 
 ### Minor changes

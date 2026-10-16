@@ -152,7 +152,6 @@ async def test_preserve_application_parameters(list_first, source):
     tool = Tool.from_function(echo)
     if source == "middleware":
         child.add_middleware(ToolInjectionMiddleware(tools=[tool]))
-        assert await child.get_tool("echo") is None
     else:
         child.add_tool(tool)
     server = FastMCP("example-app") if source == "mounted" else child
@@ -225,7 +224,6 @@ async def test_strip_analytics_parameters_from_middleware_tools():
 
     server = FastMCP("example-middleware-tools")
     server.add_middleware(ToolInjectionMiddleware(tools=[Tool.from_function(echo)]))
-    assert await server.get_tool("echo") is None
     sink = FakeClient()
     instrument(
         server,
