@@ -8,10 +8,8 @@ from flask import Flask, abort, jsonify
 import posthog
 from posthog import contexts
 from posthog.client import Client
-from posthog.integrations.flask import (
-    PosthogFlaskIntegration,
-    _sanitize_tracing_header_value,
-)
+from posthog.integrations.flask import PosthogFlaskIntegration
+from posthog.integrations._tracing_headers import _sanitize_tracing_header_value
 
 
 def _app() -> Flask:
@@ -25,7 +23,7 @@ def test_adds_request_context_and_restores_parent_context() -> None:
     PosthogFlaskIntegration(
         app,
         extra_properties=lambda request: {"tenant": "acme"},
-        trust_tracing_headers=True,
+        capture_tracing_headers=True,
     )
 
     @app.get("/users/<user_id>")
@@ -319,10 +317,10 @@ def test_context_enriches_events_without_redirecting_capture_calls() -> None:
     exception_client.capture.assert_not_called()
 
 
-def test_tracing_headers_are_ignored_by_default_and_can_be_trusted() -> None:
-    def request_identity(trust_tracing_headers: bool) -> dict:
+def test_tracing_header_capture_can_be_disabled() -> None:
+    def request_identity(capture_tracing_headers: bool) -> dict:
         app = _app()
-        PosthogFlaskIntegration(app, trust_tracing_headers=trust_tracing_headers)
+        PosthogFlaskIntegration(app, capture_tracing_headers=capture_tracing_headers)
 
         @app.get("/identity")
         def identity():

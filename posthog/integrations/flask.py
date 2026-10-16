@@ -19,7 +19,6 @@ are sent; it does not redirect application calls to ``posthog.capture`` or
 
 from __future__ import annotations
 
-import re
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
@@ -30,6 +29,10 @@ from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
 )
+from ._tracing_headers import (
+    _apply_tracing_headers,
+    _resolve_capture_tracing_headers,
+)
 
 if TYPE_CHECKING:
     from flask import Flask, Request
@@ -37,23 +40,8 @@ if TYPE_CHECKING:
 
 __all__ = ["PosthogFlaskIntegration"]
 
-_MAX_TRACING_HEADER_LENGTH = 1000
-_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
 _EXTENSION_KEY = "posthog"
 _REQUEST_STATE_KEY = "_posthog_integration_state"
-
-
-def _sanitize_tracing_header_value(value: object) -> Optional[str]:
-    """Return a bounded tracing header value safe for event properties."""
-    if not isinstance(value, str) or not value:
-        return None
-
-    return (
-        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[
-            :_MAX_TRACING_HEADER_LENGTH
-        ]
-        or None
-    )
 
 
 @dataclass
@@ -118,11 +106,11 @@ class PosthogFlaskIntegration:
         extra_properties: Optional callback returning additional event properties.
             This is useful for application-specific metadata such as an authenticated
             user's role. Values should not contain secrets or request bodies.
-        trust_tracing_headers: Use client-provided PostHog distinct and session ID
-            headers as analytics context. Disabled by default because these headers
-            are not authenticated. Enable only when deliberately accepting browser
-            attribution or when a trusted upstream replaces incoming values. Never
-            use these identifiers for authorization.
+        capture_tracing_headers: Read PostHog distinct and session ID headers as
+            request-scoped analytics context. Defaults to True. Explicit capture IDs
+            and event properties take precedence. Never use these values for security.
+        trust_tracing_headers: Deprecated alias for ``capture_tracing_headers``.
+            The capture-named option takes precedence when both are supplied.
 
     The integration intentionally does not capture exceptions handled by an
     application error handler, expected HTTP exceptions, request or response
@@ -139,16 +127,28 @@ class PosthogFlaskIntegration:
         capture_exceptions: Optional[bool] = None,
         request_filter: Optional[Callable[[Request], bool]] = None,
         extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None,
-        trust_tracing_headers: bool = False,
+        trust_tracing_headers: Optional[bool] = None,
+        capture_tracing_headers: Optional[bool] = None,
     ) -> None:
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_properties = extra_properties
-        self.trust_tracing_headers = trust_tracing_headers
+        self.capture_tracing_headers = _resolve_capture_tracing_headers(
+            capture_tracing_headers, trust_tracing_headers
+        )
 
         if app is not None:
             self.init_app(app)
+
+    @property
+    def trust_tracing_headers(self) -> bool:
+        """Deprecated alias for ``capture_tracing_headers``."""
+        return self.capture_tracing_headers
+
+    @trust_tracing_headers.setter
+    def trust_tracing_headers(self, enabled: bool) -> None:
+        self.capture_tracing_headers = enabled
 
     def init_app(self, app: Flask) -> None:
         """Register the integration with a Flask application once."""
@@ -190,18 +190,7 @@ class PosthogFlaskIntegration:
         privacy_settings.apply()
         setattr(g, _REQUEST_STATE_KEY, _RequestState(scope=scope))
 
-        if self.trust_tracing_headers:
-            session_id = _sanitize_tracing_header_value(
-                request.headers.get("X-POSTHOG-SESSION-ID")
-            )
-            if session_id:
-                contexts.set_context_session(session_id)
-
-            distinct_id = _sanitize_tracing_header_value(
-                request.headers.get("X-POSTHOG-DISTINCT-ID")
-            )
-            if distinct_id:
-                contexts.identify_context(distinct_id)
+        _apply_tracing_headers(request.headers.get, self.capture_tracing_headers)
 
         for key, value in self._request_properties(request).items():
             contexts.tag(key, value)
