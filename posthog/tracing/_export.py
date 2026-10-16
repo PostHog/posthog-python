@@ -23,7 +23,7 @@ from ._otlp import (
     build_traces_payload,
     to_resource_key_value_list,
 )
-from ._transport import SendOutcome, send_traces_batch
+from ._transport import SendOutcome, capture_blocked_reason, send_traces_batch
 
 log = logging.getLogger("posthog")
 
@@ -278,7 +278,7 @@ class SpanExporter:
         Returns ``(removed, stop)``; ``stop`` means no follow-up pass now.
         """
         with self._lock:
-            if self._is_closed() or self._discard_if_disabled_locked():
+            if self._is_closed() or self._discard_if_blocked_locked():
                 return 0, True
             remaining = len(self._queue)
         removed = 0
@@ -288,7 +288,7 @@ class SpanExporter:
         local_cap: Optional[int] = None
         while remaining > 0:
             with self._lock:
-                if self._is_closed() or self._discard_if_disabled_locked():
+                if self._is_closed() or self._discard_if_blocked_locked():
                     return removed, True
                 if not self._queue:
                     break
@@ -445,13 +445,14 @@ class SpanExporter:
                 failed.append(index)
         return encoded, failed
 
-    def _discard_if_disabled_locked(self) -> bool:
-        if not getattr(self._client, "disabled", False):
+    def _discard_if_blocked_locked(self) -> bool:
+        blocked_reason = capture_blocked_reason(self._client)
+        if blocked_reason is None:
             return False
-        # Spans carry person and session ids: once the client is disabled,
-        # nothing queued may export.
+        # Spans carry person and session ids: once the client is disabled or
+        # opted out, nothing queued may export.
         if self._queue:
-            self._drops.record(len(self._queue), "the client is disabled")
+            self._drops.record(len(self._queue), blocked_reason)
             self._queue = []
         self._end_failure_sequence_locked()
         return True

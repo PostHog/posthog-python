@@ -81,6 +81,11 @@ class TestGates:
         assert outcome.kind == "fatal"
         assert not session.post.called
 
+    def test_opted_out_client_is_fatal_without_a_request(self):
+        outcome, session = send(fake_client(_opted_out=True))
+        assert outcome.kind == "fatal"
+        assert not session.post.called
+
     def test_send_false_is_ok_without_a_request(self):
         outcome, session = send(fake_client(send=False))
         assert outcome.kind == "ok"
