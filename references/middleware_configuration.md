@@ -164,3 +164,30 @@ A background task can set its own IDs in a new `new_context()` scope.
 Only IDs from active scopes are used. Set `fresh=True` to prevent inheritance
 from any parent scope.
 The AI OpenTelemetry processor is a separate integration with different attributes.
+
+## Celery task spans
+
+`PosthogCeleryIntegration` carries context through its existing task message
+headers when `propagate_context=True` (the default). Instrument the producer and
+each worker process. A worker starts a fresh PostHog context before each task and
+restores the prior context after success, failure, or retry. A task without
+PostHog headers does not inherit identity or session IDs from an enclosing scope.
+
+Add `PostHogContextSpanProcessor` to the application's existing provider for
+child spans. The Celery integration also enriches an active task span after it
+reads the message headers. It does not create task spans. To create task spans,
+install and configure `opentelemetry-instrumentation-celery` separately.
+
+Call `PosthogCeleryIntegration.instrument()` before
+`CeleryInstrumentor().instrument(tracer_provider=provider)`. This order ensures
+that PostHog restores the job context before OpenTelemetry starts the task span.
+This also matters for eager and nested tasks: with the reverse order, the span
+processor can read the enclosing context before the task context is available.
+Existing span attributes are preserved, so the later task hook cannot replace
+those values.
+
+Celery's eager execution does not emit task publish signals. To carry context
+into an eager task, pass the task's PostHog headers explicitly with
+`task.apply(headers=...)` or `task.apply_async(headers=...)`. Do not use these
+analytics headers for authentication or authorization. Task context propagation
+does not grant a background task access to an ended request scope.
