@@ -125,8 +125,8 @@ headers remain untrusted analytics context.
 Flask's `PosthogFlaskIntegration` adds IDs to the active OpenTelemetry SDK
 request span after its request hook sets the context. Keep OpenTelemetry's WSGI
 middleware outside the Flask app so that its request span is active before
-Flask runs `before_request` hooks. Set `trust_tracing_headers=True` to accept
-browser session and person headers. Register the shared processor above for
+Flask runs `before_request` hooks. Browser session and person headers are captured
+by default. Set `capture_tracing_headers=False` to disable extraction. Register the shared processor above for
 child spans; the request hook alone does not enrich later OpenTelemetry spans.
 The application must set authenticated identity on the request span before the
 PostHog hook if that identity must take precedence over a browser header.
@@ -140,7 +140,7 @@ FastAPI applications use the same ASGI middleware:
 ```python
 from posthog.integrations.asgi import PosthogASGIMiddleware
 
-app.add_middleware(PosthogASGIMiddleware, trust_tracing_headers=True)
+app.add_middleware(PosthogASGIMiddleware)
 ```
 
 Keep OpenTelemetry request tracing outside this middleware and register

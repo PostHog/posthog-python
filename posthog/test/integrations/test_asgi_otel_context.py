@@ -96,7 +96,7 @@ async def test_asgi_enriches_existing_request_and_child_spans(
     if headers is not None:
         scope["headers"] = headers
     middleware = PosthogASGIMiddleware(
-        app, capture_exceptions=False, trust_tracing_headers=trust
+        app, capture_exceptions=False, capture_tracing_headers=trust
     )
     with contexts.new_context(fresh=True, capture_exceptions=False):
         with (
@@ -134,7 +134,7 @@ async def test_asgi_concurrent_requests_and_ended_task_context(tracing):
         await both_started.wait()
         tracer.start_span("child-" + name).end()
 
-    middleware = PosthogASGIMiddleware(app, trust_tracing_headers=True)
+    middleware = PosthogASGIMiddleware(app, capture_tracing_headers=True)
 
     async def request(name):
         with tracer.start_as_current_span("request-" + name):
@@ -176,7 +176,7 @@ async def test_asgi_bypassed_scopes_do_not_enrich_spans(tracing, scope_type, fil
 
     middleware = PosthogASGIMiddleware(
         app,
-        trust_tracing_headers=True,
+        capture_tracing_headers=True,
         request_filter=(lambda scope: False) if filtered else None,
     )
     with contexts.new_context(fresh=True, capture_exceptions=False):
@@ -206,7 +206,7 @@ async def test_fastapi_sync_and_async_handlers_enrich_native_and_otel_spans(
     app = FastAPI()
     app.add_api_route("/api/items", async_handler if asynchronous else handler)
     app.add_middleware(
-        PosthogASGIMiddleware, trust_tracing_headers=True, capture_exceptions=False
+        PosthogASGIMiddleware, capture_tracing_headers=True, capture_exceptions=False
     )
     responses = []
 
