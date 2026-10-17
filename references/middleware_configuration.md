@@ -133,6 +133,24 @@ PostHog hook if that identity must take precedence over a browser header.
 Requests excluded by `request_filter` receive no enrichment. Flask request
 context closes in `teardown_request`, including when the view raises an error.
 
+ASGI's `PosthogASGIMiddleware` also adds IDs after it reads the headers. This
+covers an active recording request span started by outer tracing middleware.
+FastAPI applications use the same ASGI middleware:
+
+```python
+from posthog.integrations.asgi import PosthogASGIMiddleware
+
+app.add_middleware(PosthogASGIMiddleware, trust_tracing_headers=True)
+```
+
+Keep OpenTelemetry request tracing outside this middleware and register
+`PostHogContextSpanProcessor` for child spans. Both async handlers and FastAPI's
+sync handlers run within the request context. HTTP and WebSocket scopes are
+supported; WebSocket tracing requires the application to supply a recording span.
+Lifespan scopes and requests rejected by `request_filter` pass through without
+span enrichment. The middleware does not create request spans. Spans started by
+outer error-response handlers after the PostHog scope exits omit request IDs.
+
 For a custom request integration, call `enrich_current_span()` from
 `posthog.integrations.otel` once after setting the request IDs. This call handles
 an already active recording SDK span. The processor handles spans started later

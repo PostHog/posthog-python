@@ -34,6 +34,7 @@ from typing import Any, Optional, Union, cast
 
 from .. import contexts
 from ..client import Client
+from ..tracing._context import _enrich_current_span
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
@@ -248,6 +249,8 @@ class PosthogASGIMiddleware:
                 lambda name: headers.get(name.lower().encode(), b"").decode("latin-1"),
                 self.capture_tracing_headers,
             )
+
+            _enrich_current_span()
 
             properties = _extract_properties(scope, headers)
             if self.extra_properties:
