@@ -122,6 +122,17 @@ request handlers use the same bridge. Tracing headers are captured by default.
 Set `POSTHOG_MW_CAPTURE_TRACING_HEADERS = False` to disable extraction. These
 headers remain untrusted analytics context.
 
+Flask's `PosthogFlaskIntegration` adds IDs to the active OpenTelemetry SDK
+request span after its request hook sets the context. Keep OpenTelemetry's WSGI
+middleware outside the Flask app so that its request span is active before
+Flask runs `before_request` hooks. Set `trust_tracing_headers=True` to accept
+browser session and person headers. Register the shared processor above for
+child spans; the request hook alone does not enrich later OpenTelemetry spans.
+The application must set authenticated identity on the request span before the
+PostHog hook if that identity must take precedence over a browser header.
+Requests excluded by `request_filter` receive no enrichment. Flask request
+context closes in `teardown_request`, including when the view raises an error.
+
 For a custom request integration, call `enrich_current_span()` from
 `posthog.integrations.otel` once after setting the request IDs. This call handles
 an already active recording SDK span. The processor handles spans started later
