@@ -71,6 +71,7 @@ test = [
     "freezegun==1.5.1",
     "flask>=2.2",
     "celery>=5.3,<6",
+    "opentelemetry-instrumentation-celery>=0.41b0",
     "fastapi>=0.115,<1",
     "python-dateutil>=2.9.0.post0",
     "tzdata",

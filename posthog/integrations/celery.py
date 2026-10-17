@@ -67,6 +67,7 @@ import atexit
 import json
 import logging
 import time
+from collections.abc import Mapping
 from typing import Any, Callable, Optional, cast
 
 from .. import contexts
@@ -75,7 +76,7 @@ from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
 )
-from ..tracing._context import _enrich_current_span
+from ..tracing._context import _enrich_span
 
 
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
@@ -310,7 +311,7 @@ class PosthogCeleryIntegration:
                 request._posthog_start = time.monotonic()
 
             self._apply_propagated_identity(request)
-            _enrich_current_span()
+            self._enrich_task_span(task_id)
 
             merged_tags = {**task_properties, **context_tags}
             for key, value in merged_tags.items():
@@ -327,6 +328,23 @@ class PosthogCeleryIntegration:
                     context_manager.__exit__(None, None, None)
                 except Exception:
                     pass
+
+    @staticmethod
+    def _enrich_task_span(task_id: str) -> None:
+        try:
+            from opentelemetry.trace import get_current_span
+
+            span = get_current_span()
+            attributes = getattr(span, "attributes", None)
+            if (
+                isinstance(attributes, Mapping)
+                and attributes.get("celery.task_id") == task_id
+            ):
+                _enrich_span(span)
+        except ImportError:
+            pass
+        except Exception:
+            logger.debug("Failed to read current Celery task span", exc_info=True)
 
     def _on_task_success(self, *args, **kwargs):
         self._handle_task_end("success", **kwargs)

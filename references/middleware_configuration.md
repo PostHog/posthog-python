@@ -175,7 +175,9 @@ PostHog headers does not inherit identity or session IDs from an enclosing scope
 
 Add `PostHogContextSpanProcessor` to the application's existing provider for
 child spans. The Celery integration also enriches an active task span after it
-reads the message headers. It does not create task spans. To create task spans,
+reads the message headers, but only when its public `celery.task_id` attribute
+exactly matches the current task ID. Other active spans remain unchanged.
+It does not create task spans. To create task spans,
 install and configure `opentelemetry-instrumentation-celery` separately.
 
 Call `PosthogCeleryIntegration.instrument()` before
@@ -184,7 +186,9 @@ that PostHog restores the job context before OpenTelemetry starts the task span.
 This also matters for eager and nested tasks: with the reverse order, the span
 processor can read the enclosing context before the task context is available.
 Existing span attributes are preserved, so the later task hook cannot replace
-those values.
+those values. Official Celery instrumentation does not expose a matching
+`celery.task_id` at this hook. The later task hook therefore cannot repair task
+spans created in the reverse order.
 
 Celery's eager execution does not emit task publish signals. To carry context
 into an eager task, pass the task's PostHog headers explicitly with
