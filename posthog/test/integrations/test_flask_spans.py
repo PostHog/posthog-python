@@ -45,7 +45,7 @@ def test_flask_enriches_existing_request_and_child_spans_and_cleans_up(
     tracer, exporter = tracing
     app = Flask(__name__)
     app.config["TESTING"] = True
-    PosthogFlaskIntegration(app, trust_tracing_headers=True, capture_exceptions=False)
+    PosthogFlaskIntegration(app, capture_tracing_headers=True, capture_exceptions=False)
 
     @app.get("/")
     def view():
@@ -121,7 +121,9 @@ def test_flask_request_span_respects_header_policy_and_explicit_identity(
 ):
     tracer, exporter = tracing
     app = Flask(__name__)
-    PosthogFlaskIntegration(app, trust_tracing_headers=trust, capture_exceptions=False)
+    PosthogFlaskIntegration(
+        app, capture_tracing_headers=trust, capture_exceptions=False
+    )
     app.add_url_rule("/", view_func=lambda: "response")
 
     with contexts.new_context(fresh=True, capture_exceptions=False):
@@ -135,7 +137,7 @@ def test_flask_concurrent_requests_keep_separate_span_context(tracing):
     tracer, exporter = tracing
     app = Flask(__name__)
     both_started = Barrier(2)
-    PosthogFlaskIntegration(app, trust_tracing_headers=True, capture_exceptions=False)
+    PosthogFlaskIntegration(app, capture_tracing_headers=True, capture_exceptions=False)
 
     @app.get("/<identity>")
     def view(identity):
