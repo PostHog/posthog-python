@@ -75,6 +75,7 @@ from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
 )
+from ..tracing._context import _enrich_current_span
 
 
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
@@ -309,6 +310,7 @@ class PosthogCeleryIntegration:
                 request._posthog_start = time.monotonic()
 
             self._apply_propagated_identity(request)
+            _enrich_current_span()
 
             merged_tags = {**task_properties, **context_tags}
             for key, value in merged_tags.items():
