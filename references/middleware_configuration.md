@@ -118,8 +118,9 @@ request span after it reads the request context. This covers a request span that
 starts before the PostHog middleware. Put the OpenTelemetry request middleware
 outside the PostHog middleware. Put Django's authentication middleware before
 PostHog if you want authenticated user identity. Both sync and async Django
-request handlers use the same bridge. Tracing headers still need
-`POSTHOG_MW_TRUST_TRACING_HEADERS = True`; they are untrusted analytics context.
+request handlers use the same bridge. Tracing headers are captured by default.
+Set `POSTHOG_MW_CAPTURE_TRACING_HEADERS = False` to disable extraction. These
+headers remain untrusted analytics context.
 
 For a custom request integration, call `enrich_current_span()` from
 `posthog.integrations.otel` once after setting the request IDs. This call handles

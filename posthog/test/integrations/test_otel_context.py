@@ -108,7 +108,7 @@ def test_django_enriches_existing_request_and_child_spans(
     )
     with (
         override_settings(
-            POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_TRUST_TRACING_HEADERS=True
+            POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_CAPTURE_TRACING_HEADERS=True
         ),
         contexts.new_context(fresh=True, capture_exceptions=False),
     ):
@@ -171,7 +171,7 @@ def test_async_django_requests_keep_separate_span_context(tracing):
         )
 
     with override_settings(
-        POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_TRUST_TRACING_HEADERS=True
+        POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_CAPTURE_TRACING_HEADERS=True
     ):
         middleware = PosthogContextMiddleware(view)
         asyncio.run(run())
@@ -251,7 +251,7 @@ def test_spans_started_after_django_request_do_not_use_inherited_ids(
         await asyncio.gather(*tasks)
 
     with override_settings(
-        POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_TRUST_TRACING_HEADERS=True
+        POSTHOG_MW_CAPTURE_EXCEPTIONS=False, POSTHOG_MW_CAPTURE_TRACING_HEADERS=True
     ):
         asyncio.run(run())
     spans = {span.name: dict(span.attributes) for span in exporter.get_finished_spans()}
