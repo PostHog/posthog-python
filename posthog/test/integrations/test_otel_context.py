@@ -21,7 +21,8 @@ from posthog.test.tracing.test_client_traces import (
 
 
 @pytest.fixture
-def tracing():
+def tracing(monkeypatch):
+    monkeypatch.setattr("posthog.project_api_key", "phc_key")
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(PostHogContextSpanProcessor())
@@ -64,6 +65,118 @@ def test_child_span_snapshots_context_and_preserves_identity(
         contexts.set_context_session("later-session")
     span.end()
     assert dict(exporter.get_finished_spans()[0].attributes) == expected
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+@pytest.mark.parametrize(
+    "owner",
+    ["scope", "inherited", "fresh", "global-client", "global-setting", "global-no-key"],
+)
+def test_enrichment_respects_owning_client_disabled_state(
+    tracing, monkeypatch, owner, disabled
+):
+    tracer, exporter = tracing
+    client = make_client(send=False, disabled=disabled)
+    monkeypatch.setattr(
+        "posthog.default_client", client if owner == "global-client" else None
+    )
+    monkeypatch.setattr(
+        "posthog.disabled",
+        disabled
+        if owner in {"global-setting", "global-no-key"}
+        else owner in {"scope", "inherited", "fresh"} and not disabled,
+    )
+    monkeypatch.setattr("posthog.api_key", None)
+    monkeypatch.setattr(
+        "posthog.project_api_key", "phc_key" if owner == "global-setting" else " "
+    )
+    disabled = disabled or owner == "global-no-key"
+    try:
+        with contexts.new_context(
+            fresh=True,
+            capture_exceptions=False,
+            client=client if owner in {"scope", "inherited", "fresh"} else None,
+        ):
+            nested = (
+                contexts.new_context(fresh=owner == "fresh", capture_exceptions=False)
+                if owner in {"inherited", "fresh"}
+                else nullcontext()
+            )
+            with (
+                nested,
+                tracer.start_as_current_span(
+                    "request", attributes={"posthogDistinctId": "application-person"}
+                ),
+            ):
+                contexts.identify_context("person")
+                contexts.set_context_session("session")
+                enrich_current_span()
+                tracer.start_span("child", attributes={"app.key": "keep"}).end()
+    finally:
+        client.shutdown()
+    spans = {span.name: dict(span.attributes) for span in exporter.get_finished_spans()}
+    assert spans["request"] == {"posthogDistinctId": "application-person"} | (
+        {} if disabled else {"sessionId": "session"}
+    )
+    assert spans["child"] == {"app.key": "keep"} | (
+        {} if disabled else {"posthogDistinctId": "person", "sessionId": "session"}
+    )
+
+
+@pytest.mark.parametrize("outer_disabled", [False, True])
+def test_explicit_client_owns_fresh_nested_enrichment(
+    tracing, monkeypatch, outer_disabled
+):
+    tracer, exporter = tracing
+    outer = make_client(send=False, disabled=outer_disabled)
+    inner = make_client(send=False, disabled=not outer_disabled)
+    monkeypatch.setattr("posthog.default_client", outer)
+    monkeypatch.setattr("posthog.disabled", outer_disabled)
+    try:
+        with contexts.new_context(fresh=True, client=outer, capture_exceptions=False):
+            contexts.identify_context("outer-person")
+            with contexts.new_context(
+                fresh=True, client=inner, capture_exceptions=False
+            ):
+                contexts.identify_context("inner-person")
+                contexts.set_context_session("inner-session")
+                tracer.start_span("child").end()
+    finally:
+        inner.shutdown()
+        outer.shutdown()
+    assert dict(exporter.get_finished_spans()[0].attributes) == (
+        {"posthogDistinctId": "inner-person", "sessionId": "inner-session"}
+        if outer_disabled
+        else {}
+    )
+
+
+@pytest.mark.parametrize("initially_disabled", [False, True])
+def test_enrichment_observes_runtime_disabled_changes(tracing, initially_disabled):
+    tracer, exporter = tracing
+    client = make_client(send=False, disabled=initially_disabled)
+    try:
+        with contexts.new_context(fresh=True, client=client, capture_exceptions=False):
+            contexts.identify_context("person")
+            contexts.set_context_session("session")
+            before = tracer.start_span("before")
+            client.disabled = True
+            with tracer.start_as_current_span(
+                "disabled", attributes={"sessionId": "application-session"}
+            ):
+                enrich_current_span()
+                tracer.start_span("disabled-child").end()
+            client.disabled = False
+            tracer.start_span("enabled").end()
+            before.end()
+    finally:
+        client.shutdown()
+    spans = {span.name: dict(span.attributes) for span in exporter.get_finished_spans()}
+    ids = {"posthogDistinctId": "person", "sessionId": "session"}
+    assert spans["before"] == ({} if initially_disabled else ids)
+    assert spans["disabled"] == {"sessionId": "application-session"}
+    assert spans["disabled-child"] == {}
+    assert spans["enabled"] == ids
 
 
 @pytest.mark.parametrize("failure", [ImportError("optional"), RuntimeError("lookup")])
@@ -282,7 +395,10 @@ def test_spans_started_after_django_request_do_not_use_inherited_ids(
 
 @pytest.mark.parametrize("limit", [0, 1, 2, 3, 128])
 @pytest.mark.parametrize("current_span", [False, True])
-def test_enrichment_does_not_evict_application_attributes(limit, current_span):
+def test_enrichment_does_not_evict_application_attributes(
+    monkeypatch, limit, current_span
+):
+    monkeypatch.setattr("posthog.project_api_key", "phc_key")
     provider = TracerProvider(span_limits=SpanLimits(max_span_attributes=limit))
     provider.add_span_processor(PostHogContextSpanProcessor())
     tracer = provider.get_tracer(__name__)

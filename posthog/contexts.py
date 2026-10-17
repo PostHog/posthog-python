@@ -207,8 +207,9 @@ def new_context(
         client: Optional client instance to use for capturing exceptions (default: None).
                 If provided, the client will be used to capture exceptions within the context.
                 If not provided, the default (global) client will be used. Note that the passed
-                client is only used to capture exceptions within the context - other events captured
-                within the context via `Client.capture` or `posthog.capture` will still carry the context
+                client controls exception capture and OpenTelemetry ID enrichment within the context.
+                Nested span enrichment keeps the nearest supplied client, including in fresh scopes.
+                Other events captured via `Client.capture` or `posthog.capture` still carry the context
                 state (tags, identity, session id), but will be captured by the client directly used (or
                 the global one, in the case of `posthog.capture`)
 

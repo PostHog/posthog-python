@@ -12,9 +12,25 @@ _IDENTITY_ATTRIBUTES = (
 )
 
 
+def _enrichment_is_enabled() -> bool:
+    scope = contexts._get_current_context()
+    while scope is not None:
+        if scope.client is not None:
+            return not scope.client.disabled
+        scope = scope.parent
+
+    from .. import api_key, default_client, disabled, project_api_key
+
+    if disabled:
+        return False
+    if default_client is not None:
+        return not default_client.disabled
+    return bool((project_api_key or "").strip() or (api_key or "").strip())
+
+
 def _enrich_span(span: object) -> None:
     try:
-        if not getattr(span, "is_recording")():
+        if not _enrichment_is_enabled() or not getattr(span, "is_recording")():
             return
         attributes = getattr(span, "attributes", None)
         if not isinstance(attributes, Mapping):
