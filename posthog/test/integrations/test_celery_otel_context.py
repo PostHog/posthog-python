@@ -21,7 +21,9 @@ from posthog.integrations.otel import PostHogContextSpanProcessor
 def celery_tracing():
     app = Celery("span-context", broker="memory://")
     integration = PosthogCeleryIntegration(
-        client=Mock(), capture_exceptions=False, capture_task_lifecycle_events=False
+        client=Mock(disabled=False),
+        capture_exceptions=False,
+        capture_task_lifecycle_events=False,
     )
     exporter = InMemorySpanExporter()
     provider = TracerProvider()

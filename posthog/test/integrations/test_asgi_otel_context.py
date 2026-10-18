@@ -25,7 +25,8 @@ from posthog.test.tracing.test_client_traces import (
 
 
 @pytest.fixture
-def tracing():
+def tracing(monkeypatch):
+    monkeypatch.setattr("posthog.project_api_key", "phc_key")
     exporter = InMemorySpanExporter()
     provider = TracerProvider()
     provider.add_span_processor(PostHogContextSpanProcessor())
