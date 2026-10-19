@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import re
 import socket
 import time
@@ -479,9 +480,29 @@ RequestsTimeout = requests.exceptions.Timeout
 RequestsConnectionError = requests.exceptions.ConnectionError
 
 
+def _replace_non_finite_floats(value: Any) -> Any:
+    """Recursively replace inf/nan floats with None.
+
+    json.dumps with the default allow_nan=True emits bare Infinity/NaN tokens,
+    which are not valid JSON and get rejected by strict-parsing ingestion (and
+    intermediaries). posthog-js avoids this because JSON.stringify converts
+    non-finite numbers to null; this mirrors that behavior.
+    """
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {key: _replace_non_finite_floats(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_replace_non_finite_floats(item) for item in value]
+    return value
+
+
 class DatetimeSerializer(json.JSONEncoder):
     def default(self, obj: Any):
         if isinstance(obj, (date, datetime)):
             return obj.isoformat()
 
         return json.JSONEncoder.default(self, obj)
+
+    def encode(self, o: Any) -> str:
+        return super().encode(_replace_non_finite_floats(o))
