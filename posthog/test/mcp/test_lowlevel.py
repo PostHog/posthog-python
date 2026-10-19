@@ -291,7 +291,7 @@ async def test_failed_resource_listing_is_captured() -> None:
     assert "listing unavailable" in json.dumps(exceptions[0]["properties"])
 
 
-async def test_identify_on_a_resource_read_is_named_by_the_uri() -> None:
+async def test_identify_attributes_a_resource_read_without_an_identify_event() -> None:
     server = make_server()
     client = FakeClient()
     instrument(
@@ -304,21 +304,13 @@ async def test_identify_on_a_resource_read_is_named_by_the_uri() -> None:
 
     await server.request_handlers[mcp_types.ReadResourceRequest](
         mcp_types.ReadResourceRequest(
-            params=mcp_types.ReadResourceRequestParams(
-                uri="https://fakeuser:fakepass@example.com/guide"
-            )
+            params=mcp_types.ReadResourceRequestParams(uri="https://example.com/guide")
         )
     )
     await _flush()
 
-    identified = _events(client, "$identify")
-    assert len(identified) == 1
-    # A resources/read request carries no `name`, so the uri is the only thing
-    # that can name it — sanitized like any other captured URL.
-    assert (
-        identified[0]["properties"]["$mcp_resource_name"]
-        == "https://%5Bredacted%5D@example.com/guide"
-    )
+    assert not _events(client, "$identify")
+    assert _events(client, "$mcp_resource_read")[0]["distinct_id"] == "user_42"
 
 
 async def test_tool_call_success_captures_intent():

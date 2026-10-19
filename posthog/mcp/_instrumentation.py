@@ -377,9 +377,9 @@ async def prepare_request(
     the session id to stamp on the event for this request.
 
     ``conversation_id`` is the agent's handle for this request, and when present
-    it anchors the session (ADR-0004) so every event of the request — identify,
-    initialize, and the call itself — lands in the conversation's session rather
-    than this instance's.
+    it anchors the session (ADR-0004) so every event of the request — initialize
+    and the call itself — lands in the conversation's session rather than this
+    instance's.
 
     Callers pass it only for a handle the agent **echoed**. A freshly minted one
     is unproven: this runs before the call, so delivery cannot be known yet, and
@@ -412,9 +412,7 @@ async def prepare_request(
         and not _is_sse_request(extra)
     ):
         _warn_stateless_session_not_wired(data)
-    identify_event = await handle_identify(data, session_id, request, extra)
-    if identify_event:
-        fire_and_forget(capture_event(data, identify_event), data)
+    await handle_identify(data, session_id, request, extra)
     await _maybe_emit_initialize(
         data, session_id, client_name, client_version, extra, protocol_version
     )

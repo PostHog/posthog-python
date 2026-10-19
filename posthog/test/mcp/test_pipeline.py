@@ -704,11 +704,6 @@ def test_redact_pii_is_not_quadratic_on_pathological_input():
             "Get_Organization_Memberships",
         ),
         (
-            MCPAnalyticsEventType.IDENTIFY,
-            "https://fakeuser:fakepass@example.com/doc",
-            "https://%5Bredacted%5D@example.com/doc",
-        ),
-        (
             MCPAnalyticsEventType.MCP_RESOURCES_READ,
             "https://example.com/guide?token=fakesecret",
             "https://example.com/guide?token=%5Bredacted%5D",
