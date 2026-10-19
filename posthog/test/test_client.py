@@ -24,6 +24,7 @@ from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
+from posthog.utils import RedisFlagCache
 from posthog.version import VERSION
 from posthog.contexts import tag
 
@@ -2588,6 +2589,32 @@ class TestClient(unittest.TestCase):
         client.shutdown()
 
         self.assertEqual(len(client.distinct_ids_feature_flags_reported), 0)
+
+    @parameterized.expand(
+        [
+            ("redis://localhost:6379/0/?ttl=120", "redis://localhost:6379/0/"),
+            (
+                "rediss://user:secret@cache.example.com:6380/1?ttl=120",
+                "rediss://user:secret@cache.example.com:6380/1",
+            ),
+        ]
+    )
+    def test_flag_fallback_cache_url_accepts_redis_schemes(
+        self, cache_url, expected_redis_url
+    ):
+        fake_redis = mock.Mock()
+        with mock.patch.dict(sys.modules, {"redis": fake_redis}):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                send=False,
+                thread=0,
+                flag_fallback_cache_url=cache_url,
+            )
+
+        fake_redis.from_url.assert_called_once_with(expected_redis_url)
+        self.assertIsInstance(client.flag_cache, RedisFlagCache)
+        self.assertEqual(client.flag_cache.default_ttl, 120)
+        client.shutdown()
 
     def test_shutdown_flushes_without_timeout(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)

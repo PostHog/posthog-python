@@ -4823,6 +4823,7 @@ class Client(object):
                 - "memory://local/?ttl=300&size=10000": Memory cache with TTL and size
                 - "redis://localhost:6379/0/?ttl=300": Redis cache with TTL
                 - "redis://username:password@host:port/?ttl=300": Redis with auth
+                - "rediss://username:password@host:port/?ttl=300": Redis over TLS
 
         Example usage:
             # Memory cache
@@ -4858,7 +4859,7 @@ class Client(object):
                 size = int(query_params.get("size", [10000])[0])
                 return FlagCache(size, ttl)
 
-            elif scheme == "redis":
+            elif scheme in ("redis", "rediss"):
                 try:
                     # Not worth importing redis if we're not using it
                     import redis
@@ -4891,7 +4892,7 @@ class Client(object):
                     return None
             else:
                 raise ValueError(
-                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis"
+                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis, rediss"
                 )
 
         except Exception as e:
