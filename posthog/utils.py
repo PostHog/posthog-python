@@ -1,5 +1,6 @@
 import json
 import logging
+import math
 import numbers
 import re
 import threading
@@ -84,9 +85,11 @@ def remove_trailing_slash(host: str) -> str:
 
 def clean(item):
     if isinstance(item, Decimal):
-        return float(item)
+        return clean(float(item))
     if isinstance(item, UUID):
         return str(item)
+    if isinstance(item, float) and not math.isfinite(item):
+        return None
     if isinstance(item, (str, bool, numbers.Number, datetime, date, type(None))):
         return item
     if isinstance(item, (set, list, tuple)):
