@@ -52,6 +52,7 @@ class PostHogMCPAnalyticsEvent:
     CUSTOM = "$mcp_custom"
     EXCEPTION = "$exception"
     FEEDBACK = "$mcp_feedback"
+    # Deprecated: the SDK no longer sends `$identify`.
     IDENTIFY = "$identify"
     INITIALIZE = "$mcp_initialize"
     MISSING_CAPABILITY = "$mcp_missing_capability"

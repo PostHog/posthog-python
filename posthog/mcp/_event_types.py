@@ -13,7 +13,6 @@ sent to PostHog directly.
 class MCPAnalyticsEventType:
     """Protocol-shaped event types observed by the SDK (internal dispatch keys)."""
 
-    IDENTIFY = "posthog:identify"
     CUSTOM = "posthog:custom"
     MCP_FEEDBACK = "mcp:feedback"
     MCP_MISSING_CAPABILITY = "mcp:missing_capability"
