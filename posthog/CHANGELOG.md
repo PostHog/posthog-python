@@ -1,5 +1,11 @@
 # posthog
 
+## 7.72.0 — 2026-10-19
+
+### Minor changes
+
+- [facd617](https://github.com/posthog/posthog-python/commit/facd617491a74d8c3c751f0a628661b3817b250d) MCP analytics no longer sends standalone `$identify` events, so insights, funnels, or cohorts built on MCP `$identify` stop receiving new data. The `identify` callback still sets `distinct_id`, `$set` and `$groups` on every event. — Thanks @gesh!
+
 ## 7.71.0 — 2026-10-16
 
 ### Minor changes
