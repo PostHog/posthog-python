@@ -19,6 +19,7 @@ import json
 from contextlib import asynccontextmanager
 
 import httpx
+import pytest
 from mcp.server.mcpserver import MCPServer
 
 from posthog.mcp import (
@@ -26,7 +27,7 @@ from posthog.mcp import (
     derive_session_id_from_conversation,
     instrument,
 )
-from posthog.mcp.types import MCPAnalyticsOptions
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -239,6 +240,48 @@ async def test_modern_result_shape_survives_instrumentation():
     assert result["content"] == bare_result["content"]
     assert result["isError"] is bare_result["isError"]
     assert result.get("structuredContent") == bare_result.get("structuredContent")
+
+
+@pytest.mark.parametrize("era", ["legacy", "modern"])
+async def test_identify_sends_no_identify_event_across_instances(era):
+    """Each call lands on a fresh instance with no session token, so every
+    identity is first-seen. Attribution must still come from the callback."""
+    client = FakeClient()
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=False,
+        identify=lambda request, extra: UserIdentity(
+            distinct_id="user_42", properties={"plan": "paid"}
+        ),
+    )
+
+    for request_id in (1, 2):
+        server = make_server()
+        instrument(server, client, options)
+        async with wire(server) as http:
+            if era == "modern":
+                response = await modern_call(
+                    http, "add", {"a": 1, "b": 2, "context": "pod"}, request_id
+                )
+            else:
+                call = rpc(
+                    "tools/call",
+                    {"name": "add", "arguments": {"a": 1, "b": 2, "context": "pod"}},
+                    request_id,
+                )
+                headers = {
+                    **legacy_headers(),
+                    "mcp-protocol-version": LEGACY_PROTOCOL_VERSION,
+                }
+                response = await http.post("/mcp", json=call, headers=headers)
+        assert response.status_code == 200
+    await _flush()
+
+    assert not _events(client, "$identify")
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 2
+    for call in calls:
+        assert call["distinct_id"] == "user_42"
+        assert call["properties"]["$set"] == {"plan": "paid"}
 
 
 # --- legacy era (2025-11-25) on the v2 SDK -------------------------------------
