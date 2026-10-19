@@ -96,6 +96,7 @@ class Scorer(Generic[_ConfigT]):
     Read ``current_version_id`` once to pin the version for an experiment.
     Names are not unique; use ``id`` for subsequent management operations.
     Configuration dictionaries are local snapshots, not live server state.
+    ``tags`` contains normalized tag names and is independent of versions.
     """
 
     id: str
@@ -110,6 +111,7 @@ class Scorer(Generic[_ConfigT]):
     updated_at: datetime
     created_by: dict[str, Any] | None
     team: int
+    tags: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

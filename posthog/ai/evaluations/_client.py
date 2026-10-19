@@ -23,6 +23,7 @@ from ._serialization import (
     _timestamp,
     _uuid,
 )
+from ._tags import _response_tags, _tag_names
 from ._transport import AsyncTransport, SyncTransport
 from ._types import (
     BulkUploadError,
@@ -36,6 +37,20 @@ from ._types import (
     _experiment_receipt,
     _upload_receipt,
 )
+
+
+def _experiment_tags(data: dict[str, Any], identity: str) -> tuple[str, ...]:
+    try:
+        if _uuid(data["id"]) != identity:
+            raise ValueError("Mismatched experiment ID.")
+        return _response_tags(data["tags"])
+    except (KeyError, TypeError, ValueError):
+        raise EvaluationAPIError(
+            code="invalid_response",
+            detail="The experiment API returned invalid tag metadata.",
+            response=data,
+            persistence="unknown",
+        ) from None
 
 
 def _experiment_body(name: str, options: ExperimentOptions) -> bytes:
@@ -179,6 +194,26 @@ class Experiment:
         """Copy of original creation fields; unavailable on a resumed handle."""
         return None if self._submission is None else json.loads(self._submission)
 
+    def get_tags(self) -> tuple[str, ...]:
+        """Fetch current tags using a personal key with ``evaluation:read``."""
+        with self._lock:
+            data = self._transport.request("GET", self._path)
+            return _experiment_tags(data, self.id)
+
+    def set_tags(self, tags: Sequence[str]) -> tuple[str, ...]:
+        """Replace tags and return the server's normalized names; [] clears them.
+
+        Requires a personal key with ``evaluation:write``. Tags can change after
+        completion and are separate from the immutable creation ``submission``.
+        Updates are not retried automatically: inspect tags after a lost response.
+        """
+        body = _encode({"tags": _tag_names(tags)})
+        with self._lock:
+            data = self._transport.request(
+                "PATCH", self._path, body=body, retry_safe=False
+            )
+            return _experiment_tags(data, self.id)
+
     def upload_result(
         self,
         *,
@@ -288,6 +323,21 @@ class AsyncExperiment:
     def submission(self) -> dict[str, Any] | None:
         """Copy of original creation fields; unavailable on a resumed handle."""
         return None if self._submission is None else json.loads(self._submission)
+
+    async def get_tags(self) -> tuple[str, ...]:
+        """Fetch current tags. See Experiment.get_tags for key requirements."""
+        async with self._lock:
+            data = await self._transport.request("GET", self._path)
+            return _experiment_tags(data, self.id)
+
+    async def set_tags(self, tags: Sequence[str]) -> tuple[str, ...]:
+        """Replace tags. See Experiment.set_tags for permissions and recovery."""
+        body = _encode({"tags": _tag_names(tags)})
+        async with self._lock:
+            data = await self._transport.request(
+                "PATCH", self._path, body=body, retry_safe=False
+            )
+            return _experiment_tags(data, self.id)
 
     async def upload_result(
         self,
