@@ -11,6 +11,8 @@ Offline evaluations must be enabled for your PostHog project. Use the project's 
 | Create experiments, upload results, complete/fail | Personal API key or project secret key with `offline_evaluation_ingestion:write` |
 | Fetch scorers and versions | Personal API key with `llm_analytics:read` |
 | Create/update scorers and create versions | Personal API key with `llm_analytics:write` |
+| Read experiment tags | Personal API key with `evaluation:read` |
+| Replace experiment tags | Personal API key with `evaluation:write` |
 
 A personal key can cover both scorer management and uploads. Project secret keys can upload using a known scorer-version UUID without scorer read access. All operations use the explicit project/environment; scorer names are not unique.
 
@@ -146,6 +148,41 @@ version = evaluations.scorers.get_version(scorer.id, updated.current_version_id)
 `scorers.list(limit=100, offset=0, search=..., kind=..., archived=..., order_by=...)` returns a page with `results`, `count`, and `next_offset`; preserve the filters when continuing. Omitted `archived` lists active scorers. `list_versions(scorer_id, limit=50, cursor=...)` returns newest versions first and a `next_cursor`; its maximum limit is 100. Stop when the corresponding continuation is `None`.
 
 Scorer creation, version creation, and metadata updates are never automatically retried. If a response is lost, inspect server state before repeating a mutation. Version creation is not made idempotent by `base_version`.
+
+## Tags
+
+Assign tags when creating a scorer, or replace them with a metadata update:
+
+```python
+scorer = evaluations.scorers.create(
+    name="Answer relevance",
+    kind="numeric",
+    config=NumericScorerConfig(min=0, max=1),
+    tags=["quality", "production"],
+)
+print(scorer.tags)  # ("production", "quality")
+scorer = evaluations.scorers.update(scorer.id, tags=["quality"])
+page = evaluations.scorers.list(tags=["quality", "production"], tag_match="all")
+evaluations.scorers.update(scorer.id, tags=[])  # Remove all tags.
+```
+
+Omitting `tags` preserves existing tags on updates. `tags=[]` clears them; `None` is not a valid replacement. Lists and tuples are accepted. The server trims and lowercases names, removes duplicates, and sorts them. Returned tags are immutable tuples. Writes accept up to 100 names, each nonblank and at most 255 characters after trimming.
+
+List filters accept up to 20 tags. `tag_match="any"` (the default) matches at least one selected tag; `"all"` requires every selected tag. An empty filter disables tag filtering. Preserve these filters when requesting subsequent pages.
+
+Experiment tags are separate from the creation/upload declaration. Set them on a newly created or resumed handle, including after completion:
+
+```python
+experiment = evaluations.resume_experiment(experiment_id)
+tags = experiment.set_tags(["quality", "baseline"])
+print(tags)  # ("baseline", "quality")
+print(experiment.get_tags())
+experiment.set_tags([])  # Remove all tags.
+```
+
+Reading and writing experiment tags require the personal-key scopes listed above; an upload-only project secret key cannot manage tags. Tag updates do not change the saved `submission`, lifecycle `receipt`, or scorer versions. They are not retried automatically: after a lost acknowledgment, read the current tags before deciding whether to repeat the replacement, since another caller may have edited them.
+
+The async client exposes the same API: await scorer methods and `experiment.get_tags()` / `experiment.set_tags(...)`.
 
 ## Receipts, errors, and recovery
 
