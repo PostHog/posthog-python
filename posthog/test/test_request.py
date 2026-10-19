@@ -776,3 +776,43 @@ class TestFlagsRetries(unittest.TestCase):
 
         self.assertEqual(cm.exception.status, status_code)
         self.assertEqual(mock_session.post.call_count, 1)
+
+
+def test_post_serializes_non_finite_floats_as_null():
+    mock_response = requests.Response()
+    mock_response.status_code = 200
+    mock_session = mock.MagicMock()
+    mock_session.post.return_value = mock_response
+
+    request_module.post(
+        TEST_API_KEY,
+        host="https://test.posthog.com",
+        path="/batch/",
+        session=mock_session,
+        batch=[
+            {
+                "event": "score_computed",
+                "distinct_id": "user-1",
+                "properties": {
+                    "score": float("inf"),
+                    "nested": [float("nan"), {"depth": float("-inf")}],
+                    "ok": 1.5,
+                },
+            }
+        ],
+    )
+
+    raw = mock_session.post.call_args.kwargs["data"]
+    # Bare Infinity/NaN tokens are not valid JSON; a strict parser must accept the body.
+    data = json.loads(
+        raw, parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x))
+    )
+    props = data["batch"][0]["properties"]
+    assert props["score"] is None
+    assert props["nested"] == [None, {"depth": None}]
+    assert props["ok"] == 1.5
+
+
+def test_datetime_serializer_keeps_finite_values():
+    body = {"n": 1.5, "s": "x", "b": True, "i": 3, "none": None}
+    assert json.loads(json.dumps(body, cls=DatetimeSerializer)) == body
