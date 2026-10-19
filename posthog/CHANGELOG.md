@@ -1,5 +1,11 @@
 # posthog
 
+## 7.73.0 — 2026-10-19
+
+### Minor changes
+
+- [b086f65](https://github.com/posthog/posthog-python/commit/b086f65437c4904310279646da76321a80294056) Support tags in synchronous and asynchronous AI observability scorer creation, metadata updates, responses, and list filters. Add `get_tags()` and `set_tags()` to offline experiment handles for reading, replacing, and clearing experiment tags independently of uploads and completion. — Thanks @Radu-Raicea!
+
 ## 7.72.0 — 2026-10-19
 
 ### Minor changes
