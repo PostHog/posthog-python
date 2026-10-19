@@ -252,6 +252,23 @@ class TestUtils(unittest.TestCase):
 
     @parameterized.expand(
         [
+            ("inf", float("inf"), None),
+            ("negative_inf", float("-inf"), None),
+            ("nan", float("nan"), None),
+            ("decimal_inf", Decimal("Infinity"), None),
+            ("finite_float", 1.5, 1.5),
+            ("finite_decimal", Decimal("1.25"), 1.25),
+        ]
+    )
+    def test_clean_non_finite_floats(self, _name, value, expected):
+        assert utils.clean(value) == expected
+
+    def test_clean_non_finite_floats_nested(self):
+        cleaned = utils.clean({"a": [float("nan"), {"b": float("inf")}], "ok": 2.0})
+        assert cleaned == {"a": [None, {"b": None}], "ok": 2.0}
+
+    @parameterized.expand(
+        [
             ("http://posthog.io/", "http://posthog.io"),
             ("http://posthog.io", "http://posthog.io"),
             ("https://example.com/path/", "https://example.com/path"),
