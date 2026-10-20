@@ -1,5 +1,11 @@
 # posthog
 
+## 7.73.2 — 2026-10-20
+
+### Patch changes
+
+- [63b5dcc](https://github.com/posthog/posthog-python/commit/63b5dcca4ebaf3d42fee4cf6c9639e516dc2df4a) Fix local feature flag `gt`, `gte`, `lt`, and `lte` comparisons to compare numeric strings numerically rather than lexicographically. This can change which users match flags targeting numeric-string properties. Only complete, unpadded decimal strings and finite numbers are accepted: invalid properties no longer compare lexicographically, and invalid filter values allow remote evaluation fallback. — Thanks @dustinbyrne!
+
 ## 7.73.1 — 2026-10-20
 
 ### Patch changes
