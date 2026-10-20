@@ -76,6 +76,7 @@ from posthog.feature_flag_evaluations import (
 from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
+    _group_key_to_string,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -3606,7 +3607,7 @@ class Client(object):
                     f"Flag has no group properties for group '{group_name}'"
                 )
             focused_group_properties = group_properties[group_name]
-            group_key = groups[group_name]
+            group_key = _group_key_to_string(groups[group_name])
             return match_feature_flag_properties(
                 feature_flag,
                 group_key,
