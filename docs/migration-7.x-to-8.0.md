@@ -135,7 +135,8 @@ The SDK moves them out of `properties` for you.
 
 - An empty or whitespace-only `distinct_id` counts as missing, so the event gets a generated personless distinct ID. 7.x sent a whitespace-only ID, and capture dropped the event.
 - Generated personless distinct IDs are UUIDv7. 7.x generated UUIDv4.
-- `group_identify` uses the `distinct_id` you pass, then the context distinct ID, then `$<group_type>_<group_key>`. 7.x fell back to a random ID, which created a new person on every call.
+- `group_identify` uses the `distinct_id` you pass, then the context distinct ID, then `$<group_type>_<group_key>`. 7.x fell back to a random ID, which created a new person on every call. If `$<group_type>_<group_key>` is over 200 bytes, pass `distinct_id`: PostHog drops an event whose distinct ID is over 200 bytes.
+- PostHog drops an event whose `distinct_id` is over 200 UTF-8 bytes (`distinct_id_too_large`), and `on_error` reports it. 7.x sent events to legacy capture, which shortened the ID to 200 characters and kept the event.
 - `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
 - `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
@@ -158,7 +159,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 - `super_options`, a new `Client`, `AsyncPosthog` and module setting, sets options on every event, like `super_properties`.
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`. `get_context_options()` returns the options of the current context. Both exist on `Client` and as module functions. `AsyncPosthog` has no context methods, like it has no `tag()`, so call the module functions. They apply to every client in the context.
-- Context tags and options reach `capture`, `capture_ai` and `capture_exception`. Context options also reach `set` and `set_once`. Neither reaches `alias` or `group_identify`. `super_properties` and `super_options` reach every method.
+- Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
 - The legacy properties still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
