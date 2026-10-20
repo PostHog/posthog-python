@@ -12,6 +12,7 @@ from posthog.args import (
 from posthog.capture_compression import CaptureCompression as CaptureCompression
 from posthog.capture_send import CaptureError as CaptureError
 from posthog.client import Client
+from posthog.utils import _is_personal_api_key
 from posthog.tracing.span import Span as Span
 from posthog.async_client import AsyncClient as AsyncClient
 from posthog.async_client import AsyncPosthog as AsyncPosthog
@@ -1497,8 +1498,12 @@ def setup() -> Client:
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state
-    # for API keys that become empty after trimming.
-    default_client.disabled = disabled or not default_client.api_key
+    # for API keys that are empty after trimming or personal (`phx_`).
+    default_client.disabled = (
+        disabled
+        or not default_client.api_key
+        or _is_personal_api_key(default_client.api_key)
+    )
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)

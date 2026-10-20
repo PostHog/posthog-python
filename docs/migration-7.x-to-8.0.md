@@ -100,7 +100,7 @@ When the whole request is over the billing limit, capture returns a `402` with n
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
 - The SDK retries `408`, `500`, `502`, `503` and `504` responses and network errors. Other error statuses fail the batch at once, including `429` and the other 5xx codes. 7.x also retried `429` and every 5xx. Capture itself does not return `429`; a proxy in front of it can.
 - Retries start at 100 ms and double each attempt, up to 30 seconds. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
-- Logs never contain event content. The debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. To inspect events, use `before_send`.
+- The SDK's own log lines no longer contain event content: the debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. An exception your `before_send` hook raises is still logged with its message. To inspect events, use `before_send`.
 - A personal API key (`phx_...`) passed as the project API key disables the client and logs one error, as an empty key does. Capture rejects personal API keys, and the SDK no longer sends one with every request.
 
 ## Invalid events
@@ -110,7 +110,7 @@ Capture rejects a whole batch when one event cannot be parsed.
 
 - An event whose name is missing, `None`, empty or not a string is dropped. The SDK logs one warning per reason per process. 7.x sent it.
 - An event that cannot be serialized to JSON is dropped and logged, for example one with `NaN` or `Infinity` in its properties. 7.x sent `NaN` as invalid JSON.
-- A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, `float`, `bool` and `None` keys are still converted to strings.
+- A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key drops the event, as a `NaN` value does.
 
 ## Event uuids
 
