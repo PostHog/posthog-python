@@ -29,7 +29,8 @@ You need to change code if your app does any of these:
 | Method | Endpoint |
 | --- | --- |
 | `capture`, `set`, `set_once`, `alias`, `group_identify`, `capture_exception` | `/i/v1/analytics/events` |
-| `capture_ai`, `capture_ai_immediate`, and every built-in AI integration | `/i/v1/ai/events` |
+| `capture_ai`, `capture_ai_immediate`, and the AI wrapper integrations | `/i/v1/ai/events` |
+| OpenTelemetry (`posthog.ai.otel`) | `/i/v0/ai/otel`, unchanged |
 
 If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
 An endpoint that is not served drops every event sent to it.
@@ -174,7 +175,8 @@ These changes follow from this order:
 
 ## AI capture
 
-- `capture_ai` and every built-in AI integration send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
+- `capture_ai` and the AI wrapper integrations send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
+- The OpenTelemetry integration (`PostHogSpanProcessor`, `PostHogTraceExporter`) is unchanged: it still exports spans over OTLP to `/i/v0/ai/otel`.
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
 - The AI integrations call your client's `capture_ai`, and never `capture`. A custom client object must implement `capture_ai` and accept its `options` keyword argument. If the client has no `capture_ai`, the wrapper, callback handler or tracing processor logs one error when you create it and captures no AI events; provider calls still work. Before, such a client got `capture` calls.
 - Tests that pass a `Mock` client to an AI integration must assert on `mock.capture_ai`, not `mock.capture`.

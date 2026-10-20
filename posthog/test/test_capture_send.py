@@ -238,6 +238,18 @@ class TestPostV1(unittest.TestCase):
                 "https://us.i.posthog.com:443/other",
                 "https://us.i.posthog.com/other",
             ),
+            (
+                "unicode_host_idna_location",
+                "https://bücher.example",
+                "https://xn--bcher-kva.example/ingest",
+                "https://bücher.example/ingest",
+            ),
+            (
+                "idna_host_unicode_location",
+                "https://xn--bcher-kva.example",
+                "https://bücher.example/ingest",
+                "https://xn--bcher-kva.example/ingest",
+            ),
         ]
     )
     def test_follows_same_origin_redirect_with_same_body(
@@ -261,6 +273,7 @@ class TestPostV1(unittest.TestCase):
     @parameterized.expand(
         [
             ("other_host", 307, "https://attacker.example.com/collect"),
+            ("other_unicode_host", 307, "https://bücher-andere.example/collect"),
             ("loopback", 308, "http://127.0.0.1:8080/collect"),
             ("https_to_http", 307, "http://us.i.posthog.com/i/v1/analytics/events"),
             ("other_port", 308, "https://us.i.posthog.com:8443/i/v1/analytics/events"),
@@ -274,14 +287,16 @@ class TestPostV1(unittest.TestCase):
         )
         session = _RecordingSession(redirect, _results_response({}))
         body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
-        res = _post_v1(
-            "phc_key",
-            "https://us.i.posthog.com",
-            body,
-            attempt=1,
-            request_id="r",
-            session=session,
-        )
+        # Failed-batch reporting owns warnings, so the transport logs nothing here.
+        with self.assertNoLogs("posthog", level="WARNING"):
+            res = _post_v1(
+                "phc_key",
+                "https://us.i.posthog.com",
+                body,
+                attempt=1,
+                request_id="r",
+                session=session,
+            )
 
         self.assertIs(res, redirect)
         self.assertEqual(len(session.calls), 1)
@@ -290,14 +305,15 @@ class TestPostV1(unittest.TestCase):
         loop = _FakeResponse(307, headers={"Location": "/i/v1/analytics/events"})
         session = _RecordingSession(loop)
         body = _build_v1_batch_body([_to_v1_event(_msg("u-1"))])
-        res = _post_v1(
-            "phc_key",
-            "https://us.i.posthog.com",
-            body,
-            attempt=1,
-            request_id="r",
-            session=session,
-        )
+        with self.assertNoLogs("posthog", level="WARNING"):
+            res = _post_v1(
+                "phc_key",
+                "https://us.i.posthog.com",
+                body,
+                attempt=1,
+                request_id="r",
+                session=session,
+            )
 
         self.assertIs(res, loop)
         self.assertEqual(len(session.calls), 6)

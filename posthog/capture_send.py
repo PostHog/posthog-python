@@ -32,6 +32,9 @@ from typing import TYPE_CHECKING, Optional
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID
 
+from requests.exceptions import RequestException
+from requests.models import PreparedRequest
+
 from posthog.capture_compression import CaptureCompression, _zstandard
 from posthog.capture_event import _build_v1_batch_body, _to_v1_event
 from posthog.request import (
@@ -280,10 +283,13 @@ def _compress_v1(
 
 
 def _origin(url: str) -> Optional[tuple[str, str, int]]:
-    parsed = urlsplit(url)
+    # Prepare the URL as requests sends it, so a Unicode host matches its IDNA form.
+    prepared = PreparedRequest()
     try:
+        prepared.prepare_url(url, None)
+        parsed = urlsplit(prepared.url or "")
         port = parsed.port
-    except ValueError:
+    except (RequestException, UnicodeError, ValueError):
         return None
     if port is None:
         port = 443 if parsed.scheme.lower() == "https" else 80
@@ -362,13 +368,13 @@ def _post_v1(
             trimmed_host, url, res.headers.get("Location")
         )
         if target is None:
-            log.warning(
+            log.debug(
                 "capture v1 did not follow a %s redirect to another origin",
                 res.status_code,
             )
             return res
         url = target
-    log.warning("capture v1 stopped after %d redirects", _MAX_REDIRECTS)
+    log.debug("capture v1 stopped after %d redirects", _MAX_REDIRECTS)
     return res
 
 
