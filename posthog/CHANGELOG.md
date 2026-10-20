@@ -1,5 +1,11 @@
 # posthog
 
+## 7.73.1 — 2026-10-20
+
+### Patch changes
+
+- [20dabaa](https://github.com/posthog/posthog-python/commit/20dabaa258b810bae3696bcb67b9679c18ef8f25) Accept rediss:// URLs in flag_fallback_cache_url so the flag fallback cache can use Redis over TLS. — Thanks @auraseb for your first contribution 🎉!
+
 ## 7.73.0 — 2026-10-19
 
 ### Minor changes
