@@ -162,13 +162,12 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
-- The legacy properties still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
+- The legacy option properties, the `$`-prefixed properties legacy capture reads as settings, still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
 
-  | Legacy property | Option |
+  | Legacy option property | Option |
   | --- | --- |
   | `$cookieless_mode` | `cookieless_mode` |
   | `$ignore_sent_at` | `disable_skew_correction` |
-  | `$product_tour_id` | `product_tour_id` |
   | `$process_person_profile` | `process_person_profile` |
 
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
@@ -197,7 +196,7 @@ These changes follow from this order:
 - A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
 - To change an option in `before_send`, edit `options`. A legacy property that `before_send` adds does not replace an option that is already set.
-- When the server enables minimal `$feature_flag_called` events, those events now keep `$window_id`, `$cookieless_mode`, `$ignore_sent_at` and `$product_tour_id`, so their options still apply.
+- When the server enables minimal `$feature_flag_called` events, those events now keep `$window_id` and the legacy option properties, so their options still apply.
 
 ## AI capture
 
