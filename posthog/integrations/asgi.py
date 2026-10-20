@@ -23,9 +23,8 @@ are sent; it does not redirect application calls to ``posthog.capture`` or
 ``another_client.capture``.
 
 ``X-PostHog-Distinct-ID`` and ``X-PostHog-Session-ID`` are client-controlled
-analytics context, not authentication. They are ignored by default. Set
-``trust_tracing_headers=True`` only when deliberately accepting browser analytics
-attribution or when a trusted upstream strips and replaces incoming values.
+analytics context, not authentication or authorization. They are read by default
+once middleware is installed. Set ``capture_tracing_headers=False`` to ignore them.
 """
 
 import inspect
@@ -38,6 +37,11 @@ from ..client import Client
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
+)
+from ._tracing_headers import (
+    _apply_tracing_headers,
+    _resolve_capture_tracing_headers,
+    _sanitize_tracing_header_value,
 )
 
 _ASGIApp = Callable[
@@ -92,9 +96,14 @@ def _headers_from_scope(scope: Mapping[str, Any]) -> dict[bytes, bytes]:
             and isinstance(item[0], bytes)
             and isinstance(item[1], bytes)
         ):
-            # Keep the first value. Tracing headers are singular, and joining arbitrary
-            # duplicate user input can create misleading identity values.
-            result.setdefault(item[0].lower(), item[1])
+            name, value = item[0].lower(), item[1]
+            # Tracing headers use the first usable value, never a joined identity.
+            if name in {
+                b"x-posthog-distinct-id",
+                b"x-posthog-session-id",
+            } and not _sanitize_tracing_header_value(value.decode("latin-1")):
+                continue
+            result.setdefault(name, value)
     return result
 
 
@@ -184,11 +193,11 @@ class PosthogASGIMiddleware:
             Returning ``False`` bypasses all instrumentation for that scope.
         extra_properties: Optional sync or async callback receiving the ASGI scope and
             returning additional event properties.
-        trust_tracing_headers: Use client-provided PostHog distinct and session ID
-            headers as analytics context. Disabled by default because these headers
-            are not authenticated. Enable only when deliberately accepting browser
-            attribution or when a trusted upstream replaces incoming values. Never
-            use these identifiers for authorization.
+        capture_tracing_headers: Read PostHog distinct and session ID headers as
+            request-scoped analytics context. Defaults to True. Explicit capture IDs
+            and event properties take precedence. Never use these values for security.
+        trust_tracing_headers: Deprecated alias for ``capture_tracing_headers``.
+            The capture-named option takes precedence when both are supplied.
     """
 
     def __init__(
@@ -198,14 +207,27 @@ class PosthogASGIMiddleware:
         capture_exceptions: Optional[bool] = None,
         request_filter: Optional[_RequestFilter] = None,
         extra_properties: Optional[_ExtraProperties] = None,
-        trust_tracing_headers: bool = False,
+        trust_tracing_headers: Optional[bool] = None,
+        *,
+        capture_tracing_headers: Optional[bool] = None,
     ) -> None:
         self.app = app
         self.client = client
         self.capture_exceptions = capture_exceptions
         self.request_filter = request_filter
         self.extra_properties = extra_properties
-        self.trust_tracing_headers = trust_tracing_headers
+        self.capture_tracing_headers = _resolve_capture_tracing_headers(
+            capture_tracing_headers, trust_tracing_headers
+        )
+
+    @property
+    def trust_tracing_headers(self) -> bool:
+        """Deprecated alias for ``capture_tracing_headers``."""
+        return self.capture_tracing_headers
+
+    @trust_tracing_headers.setter
+    def trust_tracing_headers(self, enabled: bool) -> None:
+        self.capture_tracing_headers = enabled
 
     async def __call__(self, scope, receive, send) -> None:
         if scope.get("type") not in {"http", "websocket"}:
@@ -222,14 +244,10 @@ class PosthogASGIMiddleware:
         # metadata is preserved. The context itself must not capture a second time.
         with contexts.new_context(capture_exceptions=False, client=self.client):
             headers = _headers_from_scope(scope)
-            if self.trust_tracing_headers:
-                session_id = _decode_header(headers.get(b"x-posthog-session-id"))
-                if session_id:
-                    contexts.set_context_session(session_id)
-
-                distinct_id = _decode_header(headers.get(b"x-posthog-distinct-id"))
-                if distinct_id:
-                    contexts.identify_context(distinct_id)
+            _apply_tracing_headers(
+                lambda name: headers.get(name.lower().encode(), b"").decode("latin-1"),
+                self.capture_tracing_headers,
+            )
 
             properties = _extract_properties(scope, headers)
             if self.extra_properties:

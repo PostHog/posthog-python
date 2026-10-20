@@ -1,5 +1,45 @@
 # posthog
 
+## 7.73.1 — 2026-10-20
+
+### Patch changes
+
+- [20dabaa](https://github.com/posthog/posthog-python/commit/20dabaa258b810bae3696bcb67b9679c18ef8f25) Accept rediss:// URLs in flag_fallback_cache_url so the flag fallback cache can use Redis over TLS. — Thanks @auraseb for your first contribution 🎉!
+
+## 7.73.0 — 2026-10-19
+
+### Minor changes
+
+- [b086f65](https://github.com/posthog/posthog-python/commit/b086f65437c4904310279646da76321a80294056) Support tags in synchronous and asynchronous AI observability scorer creation, metadata updates, responses, and list filters. Add `get_tags()` and `set_tags()` to offline experiment handles for reading, replacing, and clearing experiment tags independently of uploads and completion. — Thanks @Radu-Raicea!
+
+## 7.72.0 — 2026-10-19
+
+### Minor changes
+
+- [facd617](https://github.com/posthog/posthog-python/commit/facd617491a74d8c3c751f0a628661b3817b250d) MCP analytics no longer sends standalone `$identify` events, so insights, funnels, or cohorts built on MCP `$identify` stop receiving new data. The `identify` callback still sets `distinct_id`, `$set` and `$groups` on every event. — Thanks @gesh!
+
+## 7.71.0 — 2026-10-16
+
+### Minor changes
+
+- [780cba9](https://github.com/posthog/posthog-python/commit/780cba9aeea0d990a65fafe88860905bb4941d81) Align ASGI, Flask, and Django tracing-header capture with peer SDKs. Add capture_tracing_headers and POSTHOG_MW_CAPTURE_TRACING_HEADERS, enabled by default once an integration is installed. Keep the trust-named options as deprecated aliases, honor explicit opt-outs, and prefer the capture-named option when both are configured. Share header sanitization and request-context attribution across integrations; explicit capture identity and session properties retain precedence. — Thanks @dustinbyrne!
+
+### Patch changes
+
+- [d0b6f71](https://github.com/posthog/posthog-python/commit/d0b6f7127f6d60a17d1c67724ad5eb50d12a7dd6) Clarify when to flush reusable clients versus shut down disposable clients, including timeout and delivery limitations. — Thanks @marandaneto!
+
+## 7.70.2 — 2026-10-15
+
+### Patch changes
+
+- [fec41f2](https://github.com/posthog/posthog-python/commit/fec41f24cb497d37a8cd0dd53490b74c98554dfa) Mark cancelled async LLM calls as errors while preserving cancellation. — Thanks @marandaneto!
+
+## 7.70.1 — 2026-10-15
+
+### Patch changes
+
+- [10d094e](https://github.com/posthog/posthog-python/commit/10d094e384efce1422ae1853951b7d2eaa0885ef) `Prompts.get()` now makes one request when several threads ask for the same prompt at once, instead of one request per thread. The other threads wait for that result. With `capture_errors=True`, a shared failure is reported once instead of once per thread. — Thanks @jurajmajerik!
+
 ## 7.70.0 — 2026-10-14
 
 ### Minor changes
