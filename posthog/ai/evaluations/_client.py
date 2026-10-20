@@ -11,6 +11,8 @@ from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
+from ._async_datasets import AsyncDatasets
+from ._datasets import Datasets
 from ._errors import EvaluationAPIError
 from ._scorers import AsyncScorers, Scorers
 from ._serialization import (
@@ -402,11 +404,12 @@ class AsyncExperiment:
 
 
 class OfflineEvaluations:
-    """Upload offline evaluations and manage scorers in one project/environment.
+    """Upload offline evaluations and manage scorers and datasets in one project.
 
     ``secret_key`` accepts personal or project secret keys with
     offline_evaluation_ingestion:write. Scorer reads/writes require a personal
-    key with llm_analytics:read/write. The offline feature must be enabled.
+    key with llm_analytics:read/write; datasets require dataset:read/write.
+    Each operation requires its corresponding product feature to be enabled.
     ``host`` defaults to the US app API; known ingestion hosts are mapped to
     their app hosts. Custom hosts are preserved. Requests use a 15 second
     timeout and at most three retries by default. Scorer creation/version bumps
@@ -427,6 +430,7 @@ class OfflineEvaluations:
         )
         self._project_id = project_id
         self.scorers = Scorers(self._transport, project_id)
+        self.datasets = Datasets(self._transport, project_id)
         self._path = f"/api/projects/{project_id}/ai_observability/offline_experiments/"
 
     def create_experiment(
@@ -501,6 +505,7 @@ class AsyncOfflineEvaluations:
         )
         self._project_id = project_id
         self.scorers = AsyncScorers(self._transport, project_id)
+        self.datasets = AsyncDatasets(self._transport, project_id)
         self._path = f"/api/projects/{project_id}/ai_observability/offline_experiments/"
 
     async def create_experiment(
