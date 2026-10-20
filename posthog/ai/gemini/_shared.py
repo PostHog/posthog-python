@@ -9,11 +9,11 @@ except ImportError:
         "Please install the Google Gemini SDK to use this feature: 'pip install google-genai'"
     )
 
-from ... import setup
 from ...client import Client as PostHogClient
 from ..types import StreamingEventData, TokenUsage
 from ..utils import (
     _capture_ai_event,
+    _resolve_ai_client,
     capture_streaming_event,
     finalize_ai_content,
     merge_system_prompt,
@@ -25,15 +25,6 @@ from .gemini_converter import (
 )
 
 _GEMINI_BASE_URL = "https://generativelanguage.googleapis.com"
-
-
-def _resolve_posthog_client(
-    posthog_client: Optional[PostHogClient],
-) -> PostHogClient:
-    client = posthog_client or setup()
-    if client is None:
-        raise ValueError("posthog_client is required for PostHog tracking")
-    return client
 
 
 def _build_gemini_client_args(
@@ -138,7 +129,7 @@ class _GeminiModelsPolicy:
         posthog_groups: Optional[Dict[str, Any]],
         provider_client: Optional[Any] = None,
     ) -> None:
-        self._ph_client = _resolve_posthog_client(posthog_client)
+        self._ph_client = _resolve_ai_client(posthog_client)
         self._default_distinct_id = posthog_distinct_id
         self._default_properties = posthog_properties or {}
         self._default_privacy_mode = posthog_privacy_mode

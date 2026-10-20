@@ -12,6 +12,7 @@ except ImportError:
     )
 
 from posthog.ai.utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage,
     extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content as finalize_ai_content,
@@ -27,7 +28,6 @@ from posthog.ai.openai.openai_converter import (
     format_openai_streaming_output as _format_openai_streaming_output,
 )
 from posthog.client import Client as PostHogClient
-from posthog import setup
 from posthog.ai.openai._streaming import (
     _ChatCompletionsStreamState,
     _ResponsesStreamState,
@@ -64,7 +64,7 @@ class OpenAI(openai.OpenAI):
         """
 
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         _wrap_openai_resources(self, _SYNC_RESOURCE_WRAPPERS)
 
