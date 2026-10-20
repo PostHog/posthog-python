@@ -12,6 +12,7 @@ You need to change code if your app does any of these:
 - sets `capture_mode`, `POSTHOG_CAPTURE_MODE` or `gzip`
 - imports `CaptureV1Error`, `posthog.capture_v1`, `request.batch_post`, `EVENTS_ENDPOINT` or `AI_EVENTS_ENDPOINT`
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
+- sends events through a proxy that redirects capture requests to another host
 - reuses one event `uuid` for more than one event
 - sets `$process_person_profile` to turn person processing on for events without a distinct ID
 - passes strings such as `"true"` for `$cookieless_mode`, `$ignore_sent_at` or `$process_person_profile`
@@ -30,6 +31,11 @@ You need to change code if your app does any of these:
 
 If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
 An endpoint that is not served drops every event sent to it.
+
+The SDK follows a `307` or `308` redirect only to the origin of `host` (same scheme, host and port), at most 5 times.
+Any other redirect fails the batch and reaches `on_error`.
+In 7.x the sync client followed redirects to any origin.
+If a proxy redirects capture requests to another host, point `host` at the final host.
 
 ## SDK identity
 
