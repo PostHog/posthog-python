@@ -109,6 +109,7 @@ Capture rejects a whole batch when one event cannot be parsed.
 8.0 drops only the invalid event, so the rest of the batch is delivered.
 
 - An event whose name is missing, `None`, empty or not a string is dropped. The SDK logs one warning per reason per process. 7.x sent it.
+- PostHog drops an event whose name is over 200 UTF-8 bytes (`event_name_too_long`), and `on_error` reports it. 7.x sent events to legacy capture, which had no event name limit.
 - An event that cannot be serialized to JSON is dropped and logged, for example one with `NaN` or `Infinity` in its properties. 7.x sent `NaN` as invalid JSON.
 - A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key drops the event, as a `NaN` value does.
 
