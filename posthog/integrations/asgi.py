@@ -17,6 +17,11 @@ It can also wrap an application directly::
 Only HTTP and WebSocket connections are instrumented. Lifespan and custom ASGI
 scope types pass through unchanged.
 
+The request context enriches events captured by any client while the request is
+running. Passing ``client`` only selects where automatically captured exceptions
+are sent; it does not redirect application calls to ``posthog.capture`` or
+``another_client.capture``.
+
 ``X-PostHog-Distinct-ID`` and ``X-PostHog-Session-ID`` are client-controlled
 analytics context, not authentication. They are ignored by default. Set
 ``trust_tracing_headers=True`` only when deliberately accepting browser analytics
@@ -169,8 +174,12 @@ class PosthogASGIMiddleware:
 
     Args:
         app: The downstream ASGI application.
-        client: Optional PostHog client. The global client is used by default.
-        capture_exceptions: Capture exceptions escaping the downstream app.
+        client: Optional destination for automatically captured exceptions. The
+            global client is used by default. Request context still enriches events
+            captured through any client and does not redirect capture calls.
+        capture_exceptions: Capture exceptions escaping the downstream app. If
+            omitted, inherit the effective client's ``enable_exception_autocapture``
+            setting. Pass ``True`` or ``False`` to override it.
         request_filter: Optional sync or async callback receiving the ASGI scope.
             Returning ``False`` bypasses all instrumentation for that scope.
         extra_properties: Optional sync or async callback receiving the ASGI scope and
@@ -186,7 +195,7 @@ class PosthogASGIMiddleware:
         self,
         app: _ASGIApp,
         client: Optional[Client] = None,
-        capture_exceptions: bool = True,
+        capture_exceptions: Optional[bool] = None,
         request_filter: Optional[_RequestFilter] = None,
         extra_properties: Optional[_ExtraProperties] = None,
         trust_tracing_headers: bool = False,
@@ -235,7 +244,12 @@ class PosthogASGIMiddleware:
             try:
                 await self.app(scope, receive, send)
             except Exception as exception:
-                if self.capture_exceptions:
+                capture_exceptions = (
+                    self.capture_exceptions
+                    if self.capture_exceptions is not None
+                    else contexts._default_capture_exceptions(self.client)
+                )
+                if capture_exceptions:
                     if self.client:
                         _capture_exception_with_metadata(
                             self.client, exception, _CAPTURE_METADATA
