@@ -272,7 +272,11 @@ def test_archive_and_restore_use_explicit_transitions(client, scope):
     )
 
 
-def test_filtered_dataset_pages_keep_continuation_and_normalized_tags(client):
+@pytest.mark.parametrize("tags", [None, [], [" Quality "]])
+@pytest.mark.parametrize("tag_match", ["any", "all"])
+def test_filtered_dataset_pages_keep_continuation_and_normalized_tags(
+    client, tags, tag_match
+):
     evaluations, transport = client
     transport.request.return_value = page_response(
         dataset_response(tags=["quality"]), next_offset=50, count=51
@@ -282,8 +286,8 @@ def test_filtered_dataset_pages_keep_continuation_and_normalized_tags(client):
         search="capital",
         archived=True,
         order_by="updated_at",
-        tags=[" Quality "],
-        tag_match="all",
+        tags=tags,
+        tag_match=tag_match,
     )
     assert page.next_offset == 50
     assert page.count == 51
@@ -294,8 +298,8 @@ def test_filtered_dataset_pages_keep_continuation_and_normalized_tags(client):
         "search": "capital",
         "archived": "true",
         "order_by": "updated_at",
-        "tags": '[" Quality "]',
-        "tag_match": "all",
+        **({"tags": json.dumps(tags)} if tags is not None else {}),
+        "tag_match": tag_match,
     }
 
 
@@ -444,6 +448,8 @@ def test_invalid_item_responses_cannot_enter_a_pinned_run(client, overrides):
         invoke(evaluations.datasets.list_items, DATASET_ID, revision=3)
     assert caught.value.code == "invalid_response"
     assert caught.value.persistence == "unknown"
+    assert caught.value.detail == "The dataset API returned an invalid response."
+    assert caught.value.response == transport.request.return_value
 
 
 @pytest.mark.parametrize(

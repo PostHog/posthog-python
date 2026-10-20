@@ -9,7 +9,6 @@ from typing import Any, Callable, Literal, Sequence, TypeVar, cast, overload
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
-from ._errors import EvaluationAPIError
 from ._scorer_types import (
     BooleanScorerConfig,
     CategoricalScorerConfig,
@@ -22,7 +21,8 @@ from ._scorer_types import (
     ScorerVersion,
     ScorerVersionPage,
 )
-from ._tags import _response_tags, _tag_names
+from ._serialization import _parse_response
+from ._tags import _response_tags, _tag_names, _tag_params
 from ._transport import AsyncTransport, SyncTransport
 
 
@@ -155,15 +155,9 @@ def _version_page(data: dict[str, Any]) -> ScorerVersionPage:
 def _parse(
     parser: Callable[[dict[str, Any]], _ResultT], data: dict[str, Any]
 ) -> _ResultT:
-    try:
-        return parser(data)
-    except (KeyError, TypeError, ValueError, OverflowError):
-        raise EvaluationAPIError(
-            code="invalid_response",
-            detail="The scorer API returned an invalid response.",
-            response=data,
-            persistence="unknown",
-        ) from None
+    return _parse_response(
+        parser, data, detail="The scorer API returned an invalid response."
+    )
 
 
 def _encode(data: dict[str, Any]) -> bytes:
@@ -235,8 +229,7 @@ def _list_params(
     tags: Sequence[str] | None,
     tag_match: Literal["any", "all"],
 ) -> dict[str, str | int]:
-    if tag_match not in ("any", "all"):
-        raise ValueError("tag_match must be any or all.")
+    tag_params = _tag_params(tags, tag_match)
     params: dict[str, str | int] = {
         "limit": _integer(limit, minimum=1),
         "offset": _integer(offset),
@@ -251,11 +244,7 @@ def _list_params(
         params["archived"] = "true" if archived else "false"
     if order_by is not None:
         params["order_by"] = order_by
-    if tags is not None:
-        params["tags"] = json.dumps(_tag_names(tags, limit=20), ensure_ascii=False)
-        params["tag_match"] = tag_match
-    elif tag_match != "any":
-        params["tag_match"] = tag_match
+    params.update(tag_params)
     return params
 
 

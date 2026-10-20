@@ -9,14 +9,16 @@ from uuid import UUID
 
 from ._dataset_serialization import (
     _body,
+    _create_item_body,
     _dataset,
     _integer,
     _item,
+    _item_list_params,
+    _list_params,
     _page,
     _page_params,
     _parse,
     _revision,
-    _tag_params,
 )
 from ._dataset_types import (
     Dataset,
@@ -30,9 +32,6 @@ from ._serialization import (
     JSONValue,
     _UNSET,
     _Unset,
-    _boolean,
-    _identifier,
-    _timestamp,
     _uuid,
 )
 from ._transport import SyncTransport
@@ -104,16 +103,9 @@ class Datasets:
         Search matches names, descriptions, and metadata. Keep filters and pass
         ``next_offset`` to continue. Maximum limit is 100; tags accept 20 names.
         """
-        params = _page_params(limit, offset, 100)
-        params.update(_tag_params(tags, tag_match))
-        params["archived"] = "true" if _boolean(archived) else "false"
-        if order_by not in ("created_at", "-created_at", "updated_at", "-updated_at"):
-            raise ValueError("Unsupported dataset order.")
-        params["order_by"] = order_by
-        if search is not None:
-            if not isinstance(search, str) or not search.strip():
-                raise ValueError("search must be a nonempty string.")
-            params["search"] = search
+        params = _list_params(
+            limit, offset, search, archived, order_by, tags, tag_match
+        )
         return _parse(
             lambda data: DatasetPage(
                 *_page(data, lambda row: _dataset(row, self._project_id), offset)
@@ -203,11 +195,7 @@ class Datasets:
         by default; archived=True selects only archived items. Maximum limit is 25.
         """
         identity = _uuid(dataset_id)
-        params = _page_params(limit, offset, 25)
-        params["dataset"] = identity
-        params["archived"] = "true" if _boolean(archived) else "false"
-        if revision is not None:
-            params["revision"] = _integer(revision)
+        params = _item_list_params(identity, revision, archived, limit, offset)
         return _parse(
             lambda data: DatasetItemPage(
                 *_page(
@@ -260,29 +248,16 @@ class Datasets:
         source event ID additionally identifies an event within that trace.
         """
         identity = _uuid(dataset_id)
-        client_item_id = _identifier(client_item_id, "client_item_id")
-        source_trace_id = _identifier(source_trace_id, "source_trace_id")
-        source_event_id = _identifier(source_event_id, "source_event_id")
-        if (source_trace_id is None) != (source_timestamp is None) or (
-            source_trace_id is None and source_event_id is not None
-        ):
-            raise ValueError(
-                "Source provenance requires both source_trace_id and source_timestamp."
-            )
-        body = _body(
-            dict(
-                dataset=identity,
-                input=input,
-                expected_output=expected_output,
-                source_output=source_output,
-                metadata=metadata,
-                client_item_id=client_item_id,
-                source_trace_id=source_trace_id,
-                source_event_id=source_event_id,
-                source_timestamp=None
-                if source_timestamp is None
-                else _timestamp(source_timestamp),
-            )
+        body = _create_item_body(
+            identity,
+            input=input,
+            expected_output=expected_output,
+            source_output=source_output,
+            metadata=metadata,
+            client_item_id=client_item_id,
+            source_trace_id=source_trace_id,
+            source_event_id=source_event_id,
+            source_timestamp=source_timestamp,
         )
         return _parse(
             lambda data: _item(

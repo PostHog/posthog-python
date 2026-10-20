@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Callable, Sequence, TypeVar, cast
 from urllib.parse import parse_qs, urlsplit
 
-from ._dataset_types import Dataset, DatasetItem, DatasetRevision
-from ._errors import EvaluationAPIError
+from ._dataset_types import Dataset, DatasetItem, DatasetOrder, DatasetRevision
 from ._serialization import (
     JSONValue,
     _Unset,
@@ -16,10 +16,12 @@ from ._serialization import (
     _encode,
     _identifier,
     _object,
+    _parse_response,
+    _timestamp,
     _uuid,
     _validate_json,
 )
-from ._tags import _response_tags, _tag_names
+from ._tags import _response_tags, _tag_names, _tag_params
 
 _T = TypeVar("_T")
 
@@ -143,15 +145,9 @@ def _item(
 
 
 def _parse(parser: Callable[[dict[str, Any]], _T], data: dict[str, Any]) -> _T:
-    try:
-        return parser(data)
-    except (KeyError, TypeError, ValueError, OverflowError):
-        raise EvaluationAPIError(
-            code="invalid_response",
-            detail="The dataset API returned an invalid response.",
-            response=data,
-            persistence="unknown",
-        ) from None
+    return _parse_response(
+        parser, data, detail="The dataset API returned an invalid response."
+    )
 
 
 def _page(
@@ -180,6 +176,40 @@ def _page_params(limit: int, offset: int, maximum: int) -> dict[str, str | int]:
     return {"limit": limit, "offset": _integer(offset, 0)}
 
 
+def _list_params(
+    limit: int,
+    offset: int,
+    search: str | None,
+    archived: bool,
+    order_by: DatasetOrder,
+    tags: Sequence[str] | None,
+    tag_match: str,
+) -> dict[str, str | int]:
+    params = _page_params(limit, offset, 100)
+    params.update(_tag_params(tags, tag_match))
+    params["tag_match"] = tag_match
+    params["archived"] = "true" if _boolean(archived) else "false"
+    if order_by not in ("created_at", "-created_at", "updated_at", "-updated_at"):
+        raise ValueError("Unsupported dataset order.")
+    params["order_by"] = order_by
+    if search is not None:
+        if not isinstance(search, str) or not search.strip():
+            raise ValueError("search must be a nonempty string.")
+        params["search"] = search
+    return params
+
+
+def _item_list_params(
+    dataset_id: str, revision: int | None, archived: bool, limit: int, offset: int
+) -> dict[str, str | int]:
+    params = _page_params(limit, offset, 25)
+    params["dataset"] = dataset_id
+    params["archived"] = "true" if _boolean(archived) else "false"
+    if revision is not None:
+        params["revision"] = _integer(revision)
+    return params
+
+
 def _body(fields: dict[str, Any]) -> bytes:
     data = {
         key: value for key, value in fields.items() if not isinstance(value, _Unset)
@@ -200,10 +230,39 @@ def _body(fields: dict[str, Any]) -> bytes:
     return _encode(data)
 
 
-def _tag_params(tags: Sequence[str] | None, tag_match: str) -> dict[str, str | int]:
-    if tag_match not in ("any", "all"):
-        raise ValueError("tag_match must be any or all.")
-    params: dict[str, str | int] = {"tag_match": tag_match}
-    if tags is not None:
-        params["tags"] = json.dumps(_tag_names(tags, limit=20), ensure_ascii=False)
-    return params
+def _create_item_body(
+    dataset_id: str,
+    *,
+    input: JSONValue,
+    expected_output: JSONValue | _Unset,
+    source_output: JSONValue | _Unset,
+    metadata: dict[str, JSONValue] | _Unset,
+    client_item_id: str | None,
+    source_trace_id: str | None,
+    source_event_id: str | None,
+    source_timestamp: datetime | str | None,
+) -> bytes:
+    client_item_id = _identifier(client_item_id, "client_item_id")
+    source_trace_id = _identifier(source_trace_id, "source_trace_id")
+    source_event_id = _identifier(source_event_id, "source_event_id")
+    if (source_trace_id is None) != (source_timestamp is None) or (
+        source_trace_id is None and source_event_id is not None
+    ):
+        raise ValueError(
+            "Source provenance requires both source_trace_id and source_timestamp."
+        )
+    return _body(
+        dict(
+            dataset=dataset_id,
+            input=input,
+            expected_output=expected_output,
+            source_output=source_output,
+            metadata=metadata,
+            client_item_id=client_item_id,
+            source_trace_id=source_trace_id,
+            source_event_id=source_event_id,
+            source_timestamp=None
+            if source_timestamp is None
+            else _timestamp(source_timestamp),
+        )
+    )

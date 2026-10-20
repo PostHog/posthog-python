@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime, timezone
-from typing import Any, Iterable, Union, cast
+from typing import Any, Callable, Iterable, TypeVar, Union, cast
 from uuid import UUID
+
+from ._errors import EvaluationAPIError
 
 JSONValue = Union[
     None, bool, int, float, str, list["JSONValue"], dict[str, "JSONValue"]
@@ -22,6 +24,24 @@ _MAX_RESULTS = 1000
 _MAX_REQUEST_BYTES = 5 * 1024 * 1024
 _MAX_ITEM_BYTES = 1024 * 1024
 _MAX_RESULT_BYTES = 256 * 1024
+_ResponseT = TypeVar("_ResponseT")
+
+
+def _parse_response(
+    parser: Callable[[dict[str, Any]], _ResponseT],
+    data: dict[str, Any],
+    *,
+    detail: str,
+) -> _ResponseT:
+    try:
+        return parser(data)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise EvaluationAPIError(
+            code="invalid_response",
+            detail=detail,
+            response=data,
+            persistence="unknown",
+        ) from None
 
 
 def _uuid(value: object) -> str:
