@@ -70,7 +70,7 @@ from .exception_utils import (
     try_attach_code_variables_to_frames,
 )
 from .consumer import MAX_MSG_SIZE
-from .emails import AsyncEmails
+from .emails import AsyncEmails, _client_emails
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -256,11 +256,13 @@ class AsyncClient:
         Send transactional email from PostHog email templates.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
-        scope, and ``posthog[async]``. A disabled client sends nothing.
+        scope, and ``posthog[async]``. Sends go to the PostHog Cloud app host of
+        ``host``. For any other host, create ``posthog.emails.AsyncEmails`` with
+        the app host. A disabled client sends nothing.
 
         Examples:
             ```python
-            await posthog.emails.send(
+            await client.emails.send(
                 to="user@example.com",
                 template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
                 distinct_id="user_123",
@@ -268,8 +270,9 @@ class AsyncClient:
             ```
         """
         if self._emails is None:
-            self._emails = AsyncEmails(self.secret_key, host=self.host)
-        self._emails.disabled = self.disabled
+            self._emails = _client_emails(
+                AsyncEmails, self.secret_key, self.host, lambda: self.disabled
+            )
         return self._emails
 
     async def __aenter__(self) -> AsyncClient:
@@ -1241,6 +1244,13 @@ class AsyncClient:
             except Exception as error:
                 self.log.exception("Failed to close async capture transport")
                 errors.append(error)
+
+            if self._emails is not None:
+                try:
+                    await self._emails.aclose()
+                except Exception as error:
+                    self.log.exception("Failed to close the async email transport")
+                    errors.append(error)
 
             try:
                 self._unregister_duplicate_client()
