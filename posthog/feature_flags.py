@@ -698,6 +698,7 @@ def match_property(
 
     if (
         operator not in NONE_VALUES_ALLOWED_OPERATORS
+        and operator not in STRING_OPERATORS
         and operator != "exact"
         and override_value is None
     ):
@@ -750,17 +751,12 @@ def match_property(
             return not matched
         return matched
 
-    if operator == "regex":
-        return (
-            is_valid_regex(str(value))
-            and re.compile(str(value)).search(str(override_value)) is not None
-        )
-
-    if operator == "not_regex":
-        return (
-            is_valid_regex(str(value))
-            and re.compile(str(value)).search(str(override_value)) is None
-        )
+    if operator in ("regex", "not_regex"):
+        if not is_valid_regex(str(value)):
+            return False
+        property_string = "null" if override_value is None else str(override_value)
+        matched = re.compile(str(value)).search(property_string) is not None
+        return not matched if operator == "not_regex" else matched
 
     if operator in ["is_date_before", "is_date_after"]:
         try:
