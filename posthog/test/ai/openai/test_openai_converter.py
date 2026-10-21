@@ -82,6 +82,37 @@ def test_message_object_does_not_crash():
     assert out[1]["content"] == "hello"
 
 
+def test_chat_response_keeps_refusal():
+    """A refused chat completion has no content, only message.refusal, and used to be captured as []."""
+    from openai.types.chat import ChatCompletion
+    from openai.types.chat.chat_completion import Choice
+
+    from posthog.ai.openai.openai_converter import format_openai_response
+
+    response = ChatCompletion(
+        id="chatcmpl-1",
+        object="chat.completion",
+        created=0,
+        model="gpt-4o",
+        choices=[
+            Choice(
+                index=0,
+                finish_reason="stop",
+                message=ChatCompletionMessage(
+                    role="assistant", content=None, refusal="I can't help with that"
+                ),
+            )
+        ],
+    )
+
+    assert format_openai_response(response) == [
+        {
+            "role": "assistant",
+            "content": [{"type": "refusal", "refusal": "I can't help with that"}],
+        }
+    ]
+
+
 def test_responses_output_keeps_all_items():
     from posthog.ai.openai.openai_converter import format_openai_response
 
