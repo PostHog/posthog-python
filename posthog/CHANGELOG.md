@@ -1,5 +1,11 @@
 # posthog
 
+## 7.74.0 — 2026-10-21
+
+### Minor changes
+
+- [b8879a7](https://github.com/posthog/posthog-python/commit/b8879a7550e1bc2728bb5d23d8ddb215ba3602a7) Manage AI observability datasets and items through `OfflineEvaluations.datasets` and `AsyncOfflineEvaluations.datasets`, including history, tags, and archive/restore operations. Pin a dataset snapshot for lazy, consistent reads and use `EvaluationItem.from_dataset_item()` to preserve case provenance across offline experiments and scorers. Item creates with a caller-supplied `client_item_id` support safe retries; updates use explicit version checks. — Thanks @Radu-Raicea!
+
 ## 7.73.3 — 2026-10-21
 
 ### Patch changes
