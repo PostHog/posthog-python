@@ -214,7 +214,7 @@ def test_invalid_scorer_response_tags_raise(scorers, tags):
 
 
 @pytest.mark.parametrize("tag_match", ["any", "all"])
-@pytest.mark.parametrize("tags", [[], ("quality", 'a,b"c', "品質")])
+@pytest.mark.parametrize("tags", [None, [], ("quality", 'a,b"c', "品質")])
 def test_scorer_list_tag_filters_use_json_and_preserve_other_filters(
     scorers, tags, tag_match
 ):
@@ -229,8 +229,14 @@ def test_scorer_list_tag_filters_use_json_and_preserve_other_filters(
         namespace.list, tags=tags, tag_match=tag_match, offset=3, search="score"
     )
     params = transport.request.call_args.kwargs["params"]
-    assert json.loads(params["tags"]) == list(tags)
-    assert params["tag_match"] == tag_match
+    if tags is None:
+        assert "tags" not in params
+    else:
+        assert json.loads(params["tags"]) == list(tags)
+    if tags is None and tag_match == "any":
+        assert "tag_match" not in params
+    else:
+        assert params["tag_match"] == tag_match
     assert params["offset"] == 3
     assert params["search"] == "score"
     assert page.results[0].tags == ("quality",)
@@ -418,6 +424,8 @@ def test_malformed_success_preserves_unknown_persistence(scorers, override):
         )
     assert caught.value.code == "invalid_response"
     assert caught.value.persistence == "unknown"
+    assert caught.value.detail == "The scorer API returned an invalid response."
+    assert caught.value.response == transport.request.return_value
     assert "Quality" not in str(caught.value)
     transport.request.assert_called_once()
 
