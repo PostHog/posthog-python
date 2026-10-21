@@ -1,5 +1,12 @@
 # posthog
 
+## 7.73.3 — 2026-10-21
+
+### Patch changes
+
+- [57d1607](https://github.com/posthog/posthog-python/commit/57d160712e8d01750031c953bea093065d217128) Streamed Anthropic generations now take the input and cache token counts from the final `message_delta` usage, which is cumulative. With server tools such as web search, those counts grow past the `message_start` values, so streamed calls under-reported input tokens and cache writes. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [f70b3cc](https://github.com/posthog/posthog-python/commit/f70b3cc3f0c5054f35ffc974b50005431aea511d) Keep the `openai.Stream` API on sync OpenAI chat completions and Responses streams, so `with`, `close()` and attributes such as `.response` work as they do without PostHog. — Thanks @mosafariuk for your first contribution 🎉!
+
 ## 7.73.2 — 2026-10-20
 
 ### Patch changes
