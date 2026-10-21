@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping, Optional, cast
 
 from .. import contexts
 from ..client import Client
+from ..tracing._context import _enrich_current_span
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
@@ -200,6 +201,8 @@ class PosthogFlaskIntegration:
             if extra_properties:
                 for key, value in extra_properties.items():
                     contexts.tag(key, value)
+
+        _enrich_current_span()
 
     @staticmethod
     def _request_properties(request: Request) -> dict[str, Any]:
