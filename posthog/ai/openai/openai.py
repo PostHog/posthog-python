@@ -33,6 +33,7 @@ from posthog.ai.openai._streaming import (
     _ResponsesStreamState,
     _build_streaming_event_data,
 )
+from ..stream import _StreamWrapper
 from ._embeddings import _capture_embedding_event
 from .wrapper_utils import (
     _OpenAIWrapperResource,
@@ -185,7 +186,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     time.time() - start_time,
                 )
 
-        return generator()
+        return _StreamWrapper(generator(), stream=response)
 
     def _capture_streaming_event(
         self,
@@ -403,7 +404,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     time.time() - start_time,
                 )
 
-        return generator()
+        return _StreamWrapper(generator(), stream=response)
 
     def _capture_streaming_event(
         self,
