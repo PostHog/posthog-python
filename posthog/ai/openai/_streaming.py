@@ -102,6 +102,7 @@ def _build_streaming_event_data(
     model_from_response: Optional[str],
     stop_reason: Optional[str],
     service_tier: Optional[str] = None,
+    error: Optional[BaseException] = None,
 ) -> StreamingEventData:
     """Build the fields shared by both OpenAI streaming endpoint events."""
 
@@ -121,4 +122,5 @@ def _build_streaming_event_data(
         groups=groups,
         stop_reason=stop_reason,
         service_tier=service_tier,
+        **({"error": error} if error is not None else {}),
     )

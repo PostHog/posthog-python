@@ -203,6 +203,7 @@ class _GeminiModelsPolicy:
         latency: float,
         output: Any,
         stop_reason: Optional[str] = None,
+        error: Optional[BaseException] = None,
     ) -> None:
         formatted_input = merge_system_prompt(
             {"contents": contents, **kwargs}, "gemini"
@@ -222,6 +223,7 @@ class _GeminiModelsPolicy:
             privacy_mode=privacy_mode,
             groups=groups,
             stop_reason=stop_reason,
+            **({"error": error} if error is not None else {}),
         )
         capture_streaming_event(self._ph_client, event_data)
 
