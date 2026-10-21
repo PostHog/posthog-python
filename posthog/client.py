@@ -50,6 +50,7 @@ from posthog.capture_send import (
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.contexts import (
     _get_current_context,
+    _get_active_span_context,
     get_capture_exception_code_variables_context,
     get_code_variables_detect_secrets_context,
     get_code_variables_ignore_patterns_context,
@@ -2791,10 +2792,7 @@ class Client(object):
     def _tracing_context(self) -> Dict[str, Optional[str]]:
         # The request context's identity, which the Django middleware fills
         # from the X-POSTHOG-* headers: the span's person/session join keys.
-        return {
-            "distinct_id": get_context_distinct_id(),
-            "session_id": get_context_session_id(),
-        }
+        return _get_active_span_context()
 
     def start_span(
         self,
