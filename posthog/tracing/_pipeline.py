@@ -29,6 +29,7 @@ from ._span import (
     inert_span,
 )
 from ._traceparent import parse_traceparent, sanitize_tracestate, traceparent_header
+from ._transport import capture_blocked_reason
 
 log = logging.getLogger("posthog")
 
@@ -137,7 +138,7 @@ class PostHogTraces:
         tracestate: Any,
         start_time: Any,
     ) -> Span:
-        if self._closed or getattr(self._client, "disabled", False):
+        if self._closed or capture_blocked_reason(self._client) is not None:
             return inert_span(parent, tracestate, self._active_var)
 
         parent = traceparent_header(parent)
@@ -304,9 +305,9 @@ class PostHogTraces:
             # A miss means it was evicted for age, or tracing was shut down.
             if self._live_spans.pop(record.span_id, None) is None:
                 return
-            disabled = getattr(self._client, "disabled", False)
-        if disabled:
-            self._drops.record(1, "the client is disabled")
+            blocked_reason = capture_blocked_reason(self._client)
+        if blocked_reason is not None:
+            self._drops.record(1, blocked_reason)
         else:
             # The hook is application code, so it runs with no lock held.
             hooked = run_before_span_send(record, self._config, self._drops)

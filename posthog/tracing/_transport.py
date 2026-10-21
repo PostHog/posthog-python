@@ -83,6 +83,15 @@ def parse_retry_after(value: Any, now: Optional[datetime] = None) -> Optional[fl
     return seconds
 
 
+def capture_blocked_reason(client: Any) -> Optional[str]:
+    """Why the client may not send spans right now, or ``None`` when it may."""
+    if getattr(client, "disabled", False):
+        return "the client is disabled"
+    if getattr(client, "_opted_out", False):
+        return "capturing is opted out"
+    return None
+
+
 def send_traces_batch(client: Any, payload: dict) -> SendOutcome:
     """POST one OTLP batch with bearer auth and gzip, classifying the response.
 
@@ -90,7 +99,7 @@ def send_traces_batch(client: Any, payload: dict) -> SendOutcome:
     retriable; any other status is fatal. A 2xx is not proof of ingestion: an
     unknown but well-formed key is accepted and the spans dropped downstream.
     """
-    if getattr(client, "disabled", False):
+    if capture_blocked_reason(client) is not None:
         return FATAL
     if not getattr(client, "send", True):
         return OK

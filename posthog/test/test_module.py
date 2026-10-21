@@ -48,6 +48,20 @@ class TestModule(unittest.TestCase):
         self.assertEqual(event["properties"]["alias"], "distinct_id")
         self.assertEqual(event["uuid"], res)
 
+    def test_opt_out_capturing_drops_module_level_capture(self):
+        with mock.patch.object(posthog, "default_client", self.posthog):
+            posthog.opt_out_capturing()
+            self.assertTrue(posthog.is_opted_out())
+            self.assertIsNone(
+                posthog.capture("ignored event", distinct_id="distinct_id")
+            )
+
+            posthog.opt_in_capturing()
+            self.assertFalse(posthog.is_opted_out())
+            self._assert_enqueue_result(
+                posthog.capture("python module event", distinct_id="distinct_id")
+            )
+
     def test_flush(self):
         self.posthog.flush()
 
