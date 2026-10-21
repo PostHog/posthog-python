@@ -299,8 +299,24 @@ def test_filtered_dataset_pages_keep_continuation_and_normalized_tags(
         "archived": "true",
         "order_by": "updated_at",
         **({"tags": json.dumps(tags)} if tags is not None else {}),
-        "tag_match": tag_match,
+        **({"tag_match": tag_match} if tags is not None or tag_match != "any" else {}),
     }
+
+
+@pytest.mark.parametrize(
+    "field", ["input", "expected_output", "source_output", "metadata"]
+)
+def test_item_json_preserves_response_key_order_without_aliasing(client, field):
+    evaluations, transport = client
+    value = {"z": [{"y": 1, "b": 2}], "a": 3}
+    transport.request.return_value = item_response(**{field: value})
+
+    item = invoke(evaluations.datasets.get_item, ITEM_ID)
+    copied = getattr(item, field)
+    assert list(copied) == ["z", "a"]
+    assert list(copied["z"][0]) == ["y", "b"]
+    value["z"][0]["y"] = 99
+    assert copied["z"][0]["y"] == 1
 
 
 def test_item_history_and_historical_get_keep_stable_and_version_ids_separate(client):
@@ -346,10 +362,51 @@ def test_snapshot_pins_before_iteration_and_never_follows_remote_pagination_urls
     assert transport.request.call_args.kwargs["params"]["offset"] == 1
 
 
+def test_historical_snapshot_looks_up_expected_offset_without_scanning(client):
+    evaluations, transport = client
+    transport.request.side_effect = [
+        dataset_response(current_revision=10_000),
+        page_response(revision_response(), count=10_000),
+    ]
+
+    snapshot = invoke(evaluations.datasets.snapshot, DATASET_ID, revision=1)
+
+    assert snapshot.revision == 1 and snapshot.revision_id == OLD_REVISION_ID
+    assert transport.request.call_count == 2
+    assert transport.request.call_args.args == (
+        "GET",
+        BASE + DATASET_ID + "/revisions/",
+    )
+    assert transport.request.call_args.kwargs["params"] == {"limit": 1, "offset": 9999}
+
+
+def test_historical_snapshot_falls_back_when_concurrent_writes_shift_offset(client):
+    evaluations, transport = client
+    transport.request.side_effect = [
+        dataset_response(),
+        page_response(revision_response(revision=2), next_offset=3, count=4),
+        page_response(
+            revision_response(revision=4),
+            revision_response(revision=3),
+            revision_response(revision=2),
+            revision_response(),
+        ),
+    ]
+
+    snapshot = invoke(evaluations.datasets.snapshot, DATASET_ID, revision=1)
+
+    assert snapshot.revision == 1 and snapshot.revision_id == OLD_REVISION_ID
+    assert [call.kwargs["params"] for call in transport.request.call_args_list[1:]] == [
+        {"limit": 1, "offset": 2},
+        {"limit": 100, "offset": 0},
+    ]
+
+
 def test_historical_snapshot_resolves_revision_uuid_across_pages(client):
     evaluations, transport = client
     transport.request.side_effect = [
         dataset_response(),
+        page_response(count=2),
         page_response(
             revision_response(id=REVISION_ID, revision=3), next_offset=1, count=2
         ),
@@ -360,6 +417,9 @@ def test_historical_snapshot_resolves_revision_uuid_across_pages(client):
     assert snapshot.revision_id == OLD_REVISION_ID
     assert transport.request.call_args.kwargs["params"]["offset"] == 1
     assert snapshot.dataset.current_revision == 3
+    assert [
+        call.kwargs["params"]["offset"] for call in transport.request.call_args_list[1:]
+    ] == [2, 0, 1]
     assert len(collect(snapshot.iter_items())) == 1
     assert transport.request.call_args.kwargs["params"]["revision"] == 1
 
@@ -384,11 +444,12 @@ def test_missing_historical_revision_stops_once_history_passes_it(client):
     evaluations, transport = client
     transport.request.side_effect = [
         dataset_response(),
+        page_response(revision_response(), count=2),
         page_response(revision_response(), next_offset=1, count=2),
     ]
     with pytest.raises(ValueError, match="revision 2 does not exist"):
         invoke(evaluations.datasets.snapshot, DATASET_ID, revision=2)
-    assert transport.request.call_count == 2
+    assert transport.request.call_count == 3
 
 
 def test_snapshot_propagates_partial_read_failure_and_can_be_iterated_again(client):

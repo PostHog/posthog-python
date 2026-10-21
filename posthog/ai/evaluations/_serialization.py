@@ -4,6 +4,7 @@ import json
 import math
 from datetime import datetime, timezone
 from typing import Any, Callable, Iterable, TypeVar, Union, cast
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
 from ._errors import EvaluationAPIError
@@ -44,6 +45,28 @@ def _parse_response(
         ) from None
 
 
+def _integer(value: Any, *, minimum: int = 1) -> int:
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"Expected an integer greater than or equal to {minimum}.")
+    return value
+
+
+def _text(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Expected a string.")
+    return value
+
+
+def _next_offset(value: Any, *, minimum: int = 0) -> int | None:
+    if value is None:
+        return None
+    # Extract only the continuation. Never send credentials to a response URL.
+    offsets = parse_qs(urlsplit(_text(value)).query).get("offset")
+    if offsets is None or len(offsets) != 1:
+        raise ValueError("Missing page offset.")
+    return _integer(int(offsets[0]), minimum=minimum)
+
+
 def _uuid(value: object) -> str:
     if not isinstance(value, (str, UUID)):
         raise ValueError("Provide a UUID or a valid UUID string.")
@@ -71,14 +94,14 @@ def _identifier(value: object, field: str, limit: int = 255) -> str | None:
     return value
 
 
-def _encode(value: object) -> bytes:
+def _encode(value: object, *, sort_keys: bool = True) -> bytes:
     try:
         return json.dumps(
             value,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
-            sort_keys=True,
+            sort_keys=sort_keys,
         ).encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(

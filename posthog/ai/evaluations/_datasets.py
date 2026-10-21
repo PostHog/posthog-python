@@ -11,7 +11,6 @@ from ._dataset_serialization import (
     _body,
     _create_item_body,
     _dataset,
-    _integer,
     _item,
     _item_list_params,
     _list_params,
@@ -32,6 +31,7 @@ from ._serialization import (
     JSONValue,
     _UNSET,
     _Unset,
+    _integer,
     _uuid,
 )
 from ._transport import SyncTransport
@@ -381,6 +381,14 @@ class Datasets:
             and dataset.current_revision_id is not None
         ):
             return DatasetSnapshot(dataset, selected, dataset.current_revision_id, self)
+        # Revisions are consecutive and newest first. Concurrent writes can
+        # shift their offsets, so verify the result and scan on a miss.
+        page = self.list_revisions(
+            dataset.id, limit=1, offset=dataset.current_revision - selected
+        )
+        for candidate in page.results:
+            if candidate.revision == selected:
+                return DatasetSnapshot(dataset, selected, candidate.id, self)
         offset = 0
         while True:
             page = self.list_revisions(dataset.id, limit=100, offset=offset)

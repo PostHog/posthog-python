@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from typing import Any, Callable, Sequence, TypeVar, cast
-from urllib.parse import parse_qs, urlsplit
 
 from ._dataset_types import Dataset, DatasetItem, DatasetOrder, DatasetRevision
 from ._serialization import (
@@ -15,8 +14,11 @@ from ._serialization import (
     _date,
     _encode,
     _identifier,
+    _integer,
+    _next_offset,
     _object,
     _parse_response,
+    _text,
     _timestamp,
     _uuid,
     _validate_json,
@@ -26,20 +28,8 @@ from ._tags import _response_tags, _tag_names, _tag_params
 _T = TypeVar("_T")
 
 
-def _integer(value: Any, minimum: int = 1) -> int:
-    if type(value) is not int or value < minimum:
-        raise ValueError(f"Expected an integer greater than or equal to {minimum}.")
-    return value
-
-
-def _text(value: Any) -> str:
-    if not isinstance(value, str):
-        raise ValueError("Expected a string.")
-    return value
-
-
 def _json(value: Any) -> JSONValue:
-    return cast(JSONValue, json.loads(_encode(value)))
+    return cast(JSONValue, json.loads(_encode(value, sort_keys=False)))
 
 
 def _metadata(value: Any) -> dict[str, JSONValue]:
@@ -157,23 +147,17 @@ def _page(
     if not isinstance(rows, list):
         raise ValueError("Expected a list of dataset results.")
     results = tuple(parser(_object(row)) for row in rows)
-    count = _integer(data["count"], 0)
-    next_offset = None
-    if data["next"] is not None:
-        # Extract only the continuation. Never send credentials to a response URL.
-        offsets = parse_qs(urlsplit(_text(data["next"])).query).get("offset")
-        if offsets is None or len(offsets) != 1:
-            raise ValueError("Missing dataset page offset.")
-        next_offset = _integer(int(offsets[0]), offset + 1)
-        if not results:
-            raise ValueError("An empty page must not have a continuation.")
+    count = _integer(data["count"], minimum=0)
+    next_offset = _next_offset(data["next"], minimum=offset + 1)
+    if next_offset is not None and not results:
+        raise ValueError("An empty page must not have a continuation.")
     return count, results, next_offset
 
 
 def _page_params(limit: int, offset: int, maximum: int) -> dict[str, str | int]:
     if _integer(limit) > maximum:
         raise ValueError(f"Page limit must be between 1 and {maximum}.")
-    return {"limit": limit, "offset": _integer(offset, 0)}
+    return {"limit": limit, "offset": _integer(offset, minimum=0)}
 
 
 def _list_params(
@@ -187,7 +171,6 @@ def _list_params(
 ) -> dict[str, str | int]:
     params = _page_params(limit, offset, 100)
     params.update(_tag_params(tags, tag_match))
-    params["tag_match"] = tag_match
     params["archived"] = "true" if _boolean(archived) else "false"
     if order_by not in ("created_at", "-created_at", "updated_at", "-updated_at"):
         raise ValueError("Unsupported dataset order.")
