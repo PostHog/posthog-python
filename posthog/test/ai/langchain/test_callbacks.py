@@ -2953,3 +2953,65 @@ def test_stop_reason_resolution(
 
     props = mock_client.capture.call_args.kwargs["properties"]
     assert props.get("$ai_stop_reason") == expected
+
+
+class TestWebSearchCount:
+    @staticmethod
+    def _captured_properties(llm_output):
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+
+        from langchain_core.messages import AIMessage
+        from langchain_core.outputs import ChatGeneration, LLMResult
+
+        from posthog.ai.langchain import CallbackHandler
+
+        client = MagicMock()
+        client.privacy_mode = False
+        callback = CallbackHandler(client)
+        run_id = uuid4()
+        callback._set_llm_metadata(
+            serialized={},
+            run_id=run_id,
+            messages=[{"role": "user", "content": "test"}],
+            metadata={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet"},
+        )
+        response = LLMResult(
+            generations=[[ChatGeneration(message=AIMessage(content="r"))]],
+            llm_output=llm_output,
+        )
+        callback._pop_run_and_capture_generation(run_id, None, response)
+        return client.capture.call_args_list[0][1]["properties"]
+
+    def test_records_the_web_searches_of_an_anthropic_response(self):
+        properties = self._captured_properties(
+            {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "server_tool_use": {"web_search_requests": 2},
+                }
+            }
+        )
+
+        assert properties["$ai_web_search_count"] == 2
+
+    def test_records_zero_when_anthropic_reports_no_searches(self):
+        properties = self._captured_properties(
+            {
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 5,
+                    "server_tool_use": {"web_search_requests": 0},
+                }
+            }
+        )
+
+        assert properties["$ai_web_search_count"] == 0
+
+    def test_omits_the_count_when_the_provider_reports_none(self):
+        properties = self._captured_properties(
+            {"usage": {"input_tokens": 10, "output_tokens": 5}}
+        )
+
+        assert "$ai_web_search_count" not in properties
