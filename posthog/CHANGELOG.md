@@ -1,5 +1,17 @@
 # posthog
 
+## 7.75.0 — 2026-10-21
+
+### Minor changes
+
+- [5f01fe9](https://github.com/posthog/posthog-python/commit/5f01fe93b893944f9b04c9e0f0536df46810143f) Add an optional OpenTelemetry span processor for PostHog request IDs and enrich active Django request spans after request context is available. — Thanks @pauldambra!
+
+### Patch changes
+
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add available PostHog request IDs to active Flask OpenTelemetry request spans. — Thanks @pauldambra!
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add propagated task context to active Celery OpenTelemetry spans. — Thanks @pauldambra!
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add active PostHog request IDs to existing OpenTelemetry spans in ASGI middleware. — Thanks @pauldambra!
+
 ## 7.74.0 — 2026-10-21
 
 ### Minor changes
