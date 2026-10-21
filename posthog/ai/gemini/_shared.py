@@ -223,7 +223,7 @@ class _GeminiModelsPolicy:
             privacy_mode=privacy_mode,
             groups=groups,
             stop_reason=stop_reason,
-            **({"error": error} if error is not None else {}),
+            error=error,
         )
         capture_streaming_event(self._ph_client, event_data)
 

@@ -258,7 +258,7 @@ class WrappedMessages(Messages):
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,
-            **({"error": error} if error is not None else {}),
+            error=error,
         )
 
         # Use the common capture function

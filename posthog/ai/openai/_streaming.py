@@ -122,5 +122,5 @@ def _build_streaming_event_data(
         groups=groups,
         stop_reason=stop_reason,
         service_tier=service_tier,
-        **({"error": error} if error is not None else {}),
+        error=error,
     )
