@@ -43,6 +43,27 @@ def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
         return None
 
 
+def _usage_detail(usage: Any, details_keys: tuple, key: str) -> Optional[int]:
+    """Read a token count nested under a usage details field.
+
+    Agents span usage is a dict (generation spans) or an OpenAI usage object
+    (response spans), with details under ``input_tokens_details``/
+    ``output_tokens_details`` (Responses) or ``prompt_tokens_details``/
+    ``completion_tokens_details`` (Chat Completions).
+    """
+
+    def get(container: Any, name: str) -> Any:
+        if isinstance(container, dict):
+            return container.get(name)
+        return getattr(container, name, None)
+
+    for details_key in details_keys:
+        value = get(get(usage, details_key), key)
+        if isinstance(value, int):
+            return value
+    return None
+
+
 class PostHogTracingProcessor(TracingProcessor):
     """
     A tracing processor that sends OpenAI Agents SDK traces to PostHog.
@@ -528,11 +549,20 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
         }
 
-        # Add optional token fields if present
-        if usage.get("reasoning_tokens"):
-            properties["$ai_reasoning_tokens"] = usage["reasoning_tokens"]
-        if usage.get("cache_read_input_tokens"):
-            properties["$ai_cache_read_input_tokens"] = usage["cache_read_input_tokens"]
+        # Add optional token fields if present. The Agents SDK nests these under
+        # the usage details fields; flat keys are kept for custom models.
+        reasoning_tokens = usage.get("reasoning_tokens") or _usage_detail(
+            usage,
+            ("output_tokens_details", "completion_tokens_details"),
+            "reasoning_tokens",
+        )
+        if reasoning_tokens:
+            properties["$ai_reasoning_tokens"] = reasoning_tokens
+        cache_read_tokens = usage.get("cache_read_input_tokens") or _usage_detail(
+            usage, ("input_tokens_details", "prompt_tokens_details"), "cached_tokens"
+        )
+        if cache_read_tokens:
+            properties["$ai_cache_read_input_tokens"] = cache_read_tokens
         if usage.get("cache_creation_input_tokens"):
             properties["$ai_cache_creation_input_tokens"] = usage[
                 "cache_creation_input_tokens"
@@ -707,6 +737,18 @@ class PostHogTracingProcessor(TracingProcessor):
 
         if total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = total_cost_usd
+
+        if usage:
+            reasoning_tokens = _usage_detail(
+                usage, ("output_tokens_details",), "reasoning_tokens"
+            )
+            if reasoning_tokens:
+                properties["$ai_reasoning_tokens"] = reasoning_tokens
+            cache_read_tokens = _usage_detail(
+                usage, ("input_tokens_details",), "cached_tokens"
+            )
+            if cache_read_tokens:
+                properties["$ai_cache_read_input_tokens"] = cache_read_tokens
 
         # Extract output content from response
         if response:

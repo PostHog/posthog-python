@@ -288,6 +288,81 @@ class TestPostHogTracingProcessor:
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$ai_reasoning_tokens"] == 400
 
+    def test_generation_span_reads_nested_cache_and_reasoning_tokens(
+        self, processor, mock_client, mock_span
+    ):
+        """The Agents SDK nests cached and reasoning tokens under the usage
+        details fields of generation span usage."""
+        from agents.usage import Usage, model_usage_to_span_usage
+        from openai.types.responses.response_usage import (
+            InputTokensDetails,
+            OutputTokensDetails,
+        )
+
+        usage = Usage(
+            requests=1,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=60, cache_write_tokens=0
+            ),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=40),
+        )
+        mock_span.span_data = GenerationSpanData(
+            model="gpt-5-mini", usage=model_usage_to_span_usage(usage)
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_output_tokens"] == 50
+        assert props["$ai_reasoning_tokens"] == 40
+
+    def test_response_span_reads_cache_and_reasoning_tokens(
+        self, processor, mock_client, mock_span
+    ):
+        """Response spans carry the OpenAI Responses usage object, with cached
+        and reasoning tokens in its details fields."""
+        from openai.types.responses import Response
+
+        response = Response.model_validate(
+            {
+                "id": "resp_123",
+                "object": "response",
+                "created_at": 0,
+                "model": "gpt-5-mini",
+                "status": "completed",
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "output": [],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "input_tokens_details": {
+                        "cached_tokens": 60,
+                        "cache_write_tokens": 0,
+                    },
+                    "output_tokens_details": {"reasoning_tokens": 40},
+                },
+            }
+        )
+        mock_span.span_data = ResponseSpanData(response=response, input="Hi")
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_output_tokens"] == 50
+        assert props["$ai_reasoning_tokens"] == 40
+
     def test_function_span_mapping(self, processor, mock_client, mock_span):
         """Test FunctionSpanData maps to $ai_span event with type=tool."""
         span_data = FunctionSpanData(
