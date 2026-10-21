@@ -53,7 +53,15 @@ class _AnthropicStreamAccumulator:
         event_usage = extract_anthropic_usage_from_event(event)
         merge_usage_stats(self.usage_stats, event_usage)
         if getattr(event, "type", None) == "message_delta":
-            self._apply_cumulative_input_usage(getattr(event, "usage", None))
+            usage = getattr(event, "usage", None)
+            self._apply_cumulative_input_usage(usage)
+            output_tokens = getattr(usage, "output_tokens", None)
+            if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
+                # output_tokens on a message_delta is cumulative too, so the
+                # incremental merge above must not stack successive deltas
+                # (server tools can emit several in one stream). Keep the
+                # latest total; a field the event omits leaves the prior one.
+                self.usage_stats["output_tokens"] = output_tokens
 
         if getattr(event, "type", None) == "content_block_start":
             block, tool = handle_anthropic_content_block_start(event)
