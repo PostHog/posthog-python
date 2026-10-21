@@ -51,6 +51,7 @@ class _GenerationData:
     output_tokens: Optional[int] = None
     cache_read_input_tokens: Optional[int] = None
     cache_creation_input_tokens: Optional[int] = None
+    web_search_count: Optional[int] = None
     raw_usage: Optional[Dict[str, Any]] = None
     start_time: float = 0.0
     end_time: float = 0.0
@@ -92,9 +93,25 @@ class _GenerationTracker:
         elif event_type == "message_delta" and self._current is not None:
             usage = raw.get("usage", {})
             self._current.raw_usage = {**(self._current.raw_usage or {}), **usage}
-            # message_delta usage reports cumulative output tokens
+            # message_delta usage is cumulative: output tokens, and with server
+            # tools (web search, ...) the input and cache counts grow past the
+            # message_start values. Keep the larger count; a field the delta
+            # omits keeps the message_start value.
             if usage.get("output_tokens"):
                 self._current.output_tokens = usage["output_tokens"]
+            for field_name in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            ):
+                delta_value = usage.get(field_name)
+                current_value = getattr(self._current, field_name)
+                if isinstance(delta_value, int) and delta_value > (current_value or 0):
+                    setattr(self._current, field_name, delta_value)
+            server_tool_use = usage.get("server_tool_use") or {}
+            web_search_requests = server_tool_use.get("web_search_requests")
+            if isinstance(web_search_requests, int) and web_search_requests > 0:
+                self._current.web_search_count = web_search_requests
             # Extract stop reason from message_delta
             delta_stop_reason = raw.get("delta", {}).get("stop_reason")
             if delta_stop_reason is not None:
@@ -443,6 +460,8 @@ class PostHogClaudeAgentProcessor:
             properties["$ai_cache_creation_input_tokens"] = (
                 gen.cache_creation_input_tokens
             )
+        if gen.web_search_count:
+            properties["$ai_web_search_count"] = gen.web_search_count
         if gen.raw_usage:
             properties["$ai_usage"] = gen.raw_usage
 
