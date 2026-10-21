@@ -378,9 +378,13 @@ attribute posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock.message
 attribute posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex.messages = AsyncWrappedMessages(self)
 attribute posthog.ai.claude_agent_sdk.client.log = logging.getLogger('posthog')
 attribute posthog.ai.claude_agent_sdk.processor.log = logging.getLogger('posthog')
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.dataset: Dataset
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.revision: int
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.revision_id: str
 attribute posthog.ai.evaluations.AsyncExperiment.id: str
 attribute posthog.ai.evaluations.AsyncExperiment.receipt = receipt
 attribute posthog.ai.evaluations.AsyncExperiment.submission: dict[str, Any] | None
+attribute posthog.ai.evaluations.AsyncOfflineEvaluations.datasets = AsyncDatasets(self._transport, project_id)
 attribute posthog.ai.evaluations.AsyncOfflineEvaluations.scorers = AsyncScorers(self._transport, project_id)
 attribute posthog.ai.evaluations.BooleanScorerConfig.false_label: str
 attribute posthog.ai.evaluations.BooleanScorerConfig.true_is_failure: bool | None
@@ -398,6 +402,58 @@ attribute posthog.ai.evaluations.CategoricalScorerConfig.passing_rule: Categoric
 attribute posthog.ai.evaluations.CategoricalScorerConfig.selection_mode: Literal['single', 'multiple']
 attribute posthog.ai.evaluations.CategoricalScorerOption.key: str
 attribute posthog.ai.evaluations.CategoricalScorerOption.label: str
+attribute posthog.ai.evaluations.Dataset.archived: bool
+attribute posthog.ai.evaluations.Dataset.created_at: datetime
+attribute posthog.ai.evaluations.Dataset.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.Dataset.current_revision: int | None
+attribute posthog.ai.evaluations.Dataset.current_revision_id: str | None
+attribute posthog.ai.evaluations.Dataset.description: str
+attribute posthog.ai.evaluations.Dataset.id: str
+attribute posthog.ai.evaluations.Dataset.metadata: dict[str, JSONValue] = field(repr=False)
+attribute posthog.ai.evaluations.Dataset.name: str
+attribute posthog.ai.evaluations.Dataset.tags: tuple[str, ...]
+attribute posthog.ai.evaluations.Dataset.team_id: int
+attribute posthog.ai.evaluations.Dataset.updated_at: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.archived: bool
+attribute posthog.ai.evaluations.DatasetItem.client_item_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.created_at: datetime
+attribute posthog.ai.evaluations.DatasetItem.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetItem.dataset_id: str
+attribute posthog.ai.evaluations.DatasetItem.dataset_revision: int
+attribute posthog.ai.evaluations.DatasetItem.dataset_revision_id: str
+attribute posthog.ai.evaluations.DatasetItem.expected_output: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.id: str
+attribute posthog.ai.evaluations.DatasetItem.input: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.metadata: dict[str, JSONValue] = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.source_event_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.source_output: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.source_timestamp: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.source_trace_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.team_id: int
+attribute posthog.ai.evaluations.DatasetItem.updated_at: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.version: int
+attribute posthog.ai.evaluations.DatasetItem.version_created_at: datetime
+attribute posthog.ai.evaluations.DatasetItem.version_created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetItem.version_id: str
+attribute posthog.ai.evaluations.DatasetItemPage.count: int
+attribute posthog.ai.evaluations.DatasetItemPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetItemPage.results: tuple[DatasetItem, ...]
+attribute posthog.ai.evaluations.DatasetOrder = Literal['created_at', '-created_at', 'updated_at', '-updated_at']
+attribute posthog.ai.evaluations.DatasetPage.count: int
+attribute posthog.ai.evaluations.DatasetPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetPage.results: tuple[Dataset, ...]
+attribute posthog.ai.evaluations.DatasetRevision.created_at: datetime
+attribute posthog.ai.evaluations.DatasetRevision.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetRevision.dataset_id: str
+attribute posthog.ai.evaluations.DatasetRevision.id: str
+attribute posthog.ai.evaluations.DatasetRevision.revision: int
+attribute posthog.ai.evaluations.DatasetRevision.team_id: int
+attribute posthog.ai.evaluations.DatasetRevisionPage.count: int
+attribute posthog.ai.evaluations.DatasetRevisionPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetRevisionPage.results: tuple[DatasetRevision, ...]
+attribute posthog.ai.evaluations.DatasetSnapshot.dataset: Dataset
+attribute posthog.ai.evaluations.DatasetSnapshot.revision: int
+attribute posthog.ai.evaluations.DatasetSnapshot.revision_id: str
 attribute posthog.ai.evaluations.EvaluationAPIError.attr = attr
 attribute posthog.ai.evaluations.EvaluationAPIError.code = code
 attribute posthog.ai.evaluations.EvaluationAPIError.detail = deepcopy(detail)
@@ -447,6 +503,7 @@ attribute posthog.ai.evaluations.NumericScorerConfig.max: float | None
 attribute posthog.ai.evaluations.NumericScorerConfig.min: float | None
 attribute posthog.ai.evaluations.NumericScorerConfig.passing_rule: NumericPassingRule | None
 attribute posthog.ai.evaluations.NumericScorerConfig.step: float | None
+attribute posthog.ai.evaluations.OfflineEvaluations.datasets = Datasets(self._transport, project_id)
 attribute posthog.ai.evaluations.OfflineEvaluations.scorers = Scorers(self._transport, project_id)
 attribute posthog.ai.evaluations.ResultOptions.error_code: str | None
 attribute posthog.ai.evaluations.ResultOptions.error_message: str | None
@@ -1120,6 +1177,8 @@ class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock(posthog_cli
 class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient(options: Optional[ClaudeAgentOptions] = None, transport: Any = None, *, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
 class posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
+class posthog.ai.evaluations.AsyncDatasetSnapshot(dataset: Dataset, revision: int, revision_id: str, _datasets: AsyncDatasets)
+class posthog.ai.evaluations.AsyncDatasets(transport: AsyncTransport, project_id: int)
 class posthog.ai.evaluations.AsyncExperiment(transport: AsyncTransport, project_id: int, id: str, *, receipt: ExperimentReceipt | None = None, submission: bytes | None = None)
 class posthog.ai.evaluations.AsyncOfflineEvaluations(*, project_id: int, secret_key: str, host: str | None = None, timeout: float = 15, max_retries: int = 3)
 class posthog.ai.evaluations.AsyncScorers(transport: AsyncTransport, project_id: int)
@@ -1129,6 +1188,14 @@ class posthog.ai.evaluations.BulkUploadReceipt(chunks: tuple[UploadReceipt, ...]
 class posthog.ai.evaluations.CategoricalPassingRule
 class posthog.ai.evaluations.CategoricalScorerConfig
 class posthog.ai.evaluations.CategoricalScorerOption
+class posthog.ai.evaluations.Dataset(id: str, name: str, description: str, metadata: dict[str, JSONValue], tags: tuple[str, ...], archived: bool, current_revision: int | None, current_revision_id: str | None, created_at: datetime, updated_at: datetime | None, created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetItem(id: str, dataset_id: str, client_item_id: str | None, version: int, version_id: str, dataset_revision: int, dataset_revision_id: str, archived: bool, input: JSONValue, expected_output: JSONValue, source_output: JSONValue, metadata: dict[str, JSONValue], source_trace_id: str | None, source_event_id: str | None, source_timestamp: datetime | None, created_at: datetime, updated_at: datetime | None, created_by: dict[str, Any] | None, version_created_at: datetime, version_created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetItemPage(count: int, results: tuple[DatasetItem, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetPage(count: int, results: tuple[Dataset, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetRevision(id: str, dataset_id: str, revision: int, created_at: datetime, created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetRevisionPage(count: int, results: tuple[DatasetRevision, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetSnapshot(dataset: Dataset, revision: int, revision_id: str, _datasets: Datasets)
+class posthog.ai.evaluations.Datasets(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.EvaluationAPIError(*, status: int | None = None, code: str | None = None, detail: Any = None, attr: str | None = None, errors: Any = None, response: dict[str, Any] | None = None, retry_after: float | None = None, persistence: Literal['rejected', 'unknown', 'not_sent'] = 'unknown', submission: dict[str, Any] | None = None)
 class posthog.ai.evaluations.EvaluationItem(*, id: str | UUID | None = None, input: JSONValue | _Unset = _UNSET, output: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, case_key: str | None = None, trial: str | None = None, dataset_item_identifier: str | None = None, dataset_item_version_identifier: str | None = None, dataset_item_version_id: str | UUID | None = None, application_trace_id: str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
 class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
@@ -1496,6 +1563,22 @@ method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.receive_respons
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_model(model: Optional[str] = None) -> None
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_permission_mode(mode: str) -> None
 method posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None)
+method posthog.ai.evaluations.AsyncDatasetSnapshot.iter_items(*, page_size: int = 25)
+method posthog.ai.evaluations.AsyncDatasets.archive(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.archive_item(item_id: str | UUID, *, base_version: int)
+method posthog.ai.evaluations.AsyncDatasets.create(*, name: str, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.AsyncDatasets.create_item(dataset_id: str | UUID, *, input: JSONValue, expected_output: JSONValue | _Unset = _UNSET, source_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, client_item_id: str | None = None, source_trace_id: str | None = None, source_event_id: str | None = None, source_timestamp: datetime | str | None = None)
+method posthog.ai.evaluations.AsyncDatasets.get(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.get_item(item_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.list(*, limit: int = 50, offset: int = 0, search: str | None = None, archived: bool = False, order_by: DatasetOrder = '-created_at', tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.AsyncDatasets.list_item_versions(item_id: str | UUID, *, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.list_items(dataset_id: str | UUID, *, revision: int | None = None, archived: bool = False, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.list_revisions(dataset_id: str | UUID, *, limit: int = 50, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.restore(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.restore_item(item_id: str | UUID, *, base_version: int, source_version: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.snapshot(dataset_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.update(dataset_id: str | UUID, *, name: str | _Unset = _UNSET, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.AsyncDatasets.update_item(item_id: str | UUID, *, base_version: int, input: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET)
 method posthog.ai.evaluations.AsyncExperiment.complete()
 method posthog.ai.evaluations.AsyncExperiment.fail()
 method posthog.ai.evaluations.AsyncExperiment.get_tags()
@@ -1512,6 +1595,23 @@ method posthog.ai.evaluations.AsyncScorers.get_version(scorer_id: str | UUID, ve
 method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
 method posthog.ai.evaluations.AsyncScorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
 method posthog.ai.evaluations.AsyncScorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
+method posthog.ai.evaluations.DatasetSnapshot.iter_items(*, page_size: int = 25)
+method posthog.ai.evaluations.Datasets.archive(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.archive_item(item_id: str | UUID, *, base_version: int)
+method posthog.ai.evaluations.Datasets.create(*, name: str, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.Datasets.create_item(dataset_id: str | UUID, *, input: JSONValue, expected_output: JSONValue | _Unset = _UNSET, source_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, client_item_id: str | None = None, source_trace_id: str | None = None, source_event_id: str | None = None, source_timestamp: datetime | str | None = None)
+method posthog.ai.evaluations.Datasets.get(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.get_item(item_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.Datasets.list(*, limit: int = 50, offset: int = 0, search: str | None = None, archived: bool = False, order_by: DatasetOrder = '-created_at', tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.Datasets.list_item_versions(item_id: str | UUID, *, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.Datasets.list_items(dataset_id: str | UUID, *, revision: int | None = None, archived: bool = False, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.Datasets.list_revisions(dataset_id: str | UUID, *, limit: int = 50, offset: int = 0)
+method posthog.ai.evaluations.Datasets.restore(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.restore_item(item_id: str | UUID, *, base_version: int, source_version: int | None = None)
+method posthog.ai.evaluations.Datasets.snapshot(dataset_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.Datasets.update(dataset_id: str | UUID, *, name: str | _Unset = _UNSET, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.Datasets.update_item(item_id: str | UUID, *, base_version: int, input: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET)
+method posthog.ai.evaluations.EvaluationItem.from_dataset_item(item: DatasetItem, *, output: JSONValue | _Unset = _UNSET, id: str | UUID | None = None, case_key: str | None = None, trial: str | None = None, application_trace_id: str | None = None)
 method posthog.ai.evaluations.EvaluationItem.from_dict(data: Mapping[str, Any])
 method posthog.ai.evaluations.EvaluationItem.to_dict()
 method posthog.ai.evaluations.EvaluationResult.from_dict(data: Mapping[str, Any], *, item: EvaluationItem | None = None)

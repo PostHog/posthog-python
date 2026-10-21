@@ -14,6 +14,7 @@ from posthog.ai.evaluations import (
     EvaluationAPIError,
     EvaluationItem,
     EvaluationResult,
+    JSONValue,
     OfflineEvaluations,
 )
 
@@ -33,8 +34,39 @@ def resolve_version(evaluations: OfflineEvaluations) -> str:
     return scorer.current_version_id
 
 
+def capital_answer(input: JSONValue) -> str:
+    """A deterministic application to replace with your own model or agent."""
+    if not isinstance(input, str):
+        raise ValueError("The capital-city example expects string dataset inputs.")
+    return {"Capital of France?": "Paris", "Capital of Italy?": "Milan"}.get(
+        input, "I don't know"
+    )
+
+
+def exact_match_result(item: EvaluationItem, version_id: str) -> EvaluationResult:
+    payload = item.to_dict()["payload"]
+    if payload.get("expected_output") is None:
+        return EvaluationResult(
+            item=item,
+            scorer_version_id=version_id,
+            status="not_applicable",
+            reasoning="This case has no expected answer.",
+        )
+    return EvaluationResult(
+        item=item,
+        scorer_version_id=version_id,
+        value=payload["output"] == payload["expected_output"],
+        reasoning="Exact string comparison",
+    )
+
+
 def prepare_state(
-    evaluations: OfflineEvaluations, project_id: int, host: str
+    evaluations: OfflineEvaluations,
+    project_id: int,
+    host: str,
+    *,
+    dataset_id: str | None = None,
+    dataset_revision: int | None = None,
 ) -> dict[str, Any]:
     version_id = resolve_version(evaluations)
     cases = [
@@ -51,24 +83,24 @@ def prepare_state(
             "expected": "Rome",
         },
     ]
-    items = [
-        EvaluationItem(
-            case_key=case["key"],
-            input=case["input"],
-            output=case["output"],
-            expected_output=case["expected"],
-        )
-        for case in cases
-    ]
-    results = [
-        EvaluationResult(
-            item=item,
-            scorer_version_id=version_id,
-            value=case["output"] == case["expected"],
-            reasoning="Exact string comparison",
-        )
-        for item, case in zip(items, cases)
-    ]
+    snapshot = None
+    if dataset_id is not None:
+        snapshot = evaluations.datasets.snapshot(dataset_id, revision=dataset_revision)
+        items = [
+            EvaluationItem.from_dataset_item(case, output=capital_answer(case.input))
+            for case in snapshot.iter_items()
+        ]
+    else:
+        items = [
+            EvaluationItem(
+                case_key=case["key"],
+                input=case["input"],
+                output=case["output"],
+                expected_output=case["expected"],
+            )
+            for case in cases
+        ]
+    results = [exact_match_result(item, version_id) for item in items]
     return {
         "project_id": project_id,
         "host": host,
@@ -79,6 +111,11 @@ def prepare_state(
             "run_source": "local",
             "expected_item_count": len(items),
             "expected_result_count": len(results),
+            **(
+                {"dataset_revision_id": snapshot.revision_id}
+                if snapshot is not None
+                else {}
+            ),
         },
         "items": [item.to_dict() for item in items],
         "results": [result.to_dict() for result in results],
@@ -108,7 +145,17 @@ def main() -> None:
         default=Path("offline-evaluation-state.json"),
         help="Create a new prepared run here, or replay the existing run exactly.",
     )
+    parser.add_argument(
+        "--dataset-id", help="Run the capital-city application on a PostHog dataset."
+    )
+    parser.add_argument(
+        "--dataset-revision",
+        type=int,
+        help="Pin this numeric revision; defaults to latest once.",
+    )
     args = parser.parse_args()
+    if args.dataset_revision is not None and args.dataset_id is None:
+        parser.error("--dataset-revision requires --dataset-id")
     project_id = int(os.environ["POSTHOG_PROJECT_ID"])
     host = os.environ.get("POSTHOG_HOST", "https://us.posthog.com")
     with OfflineEvaluations(
@@ -133,7 +180,13 @@ def main() -> None:
                     "The saved run belongs to a different project or host."
                 )
         else:
-            state = prepare_state(evaluations, project_id, host)
+            state = prepare_state(
+                evaluations,
+                project_id,
+                host,
+                dataset_id=args.dataset_id,
+                dataset_revision=args.dataset_revision,
+            )
             save_state(args.state, state)
 
         items = {item["id"]: EvaluationItem.from_dict(item) for item in state["items"]}
