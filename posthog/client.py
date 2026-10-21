@@ -52,6 +52,7 @@ from posthog.contexts import (
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
+from posthog.emails import Emails
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -1129,6 +1130,33 @@ class Client(object):
 
     def _request_identity_kwargs(self) -> Dict[str, str]:
         return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
+
+    _emails: Optional[Emails] = None
+
+    @property
+    def emails(self) -> Emails:
+        """
+        Send transactional email from PostHog email templates.
+
+        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        scope. Sends go to the app host of ``host``. A disabled client sends
+        nothing. To send email without capturing events, create
+        ``posthog.emails.Emails`` directly.
+
+        Examples:
+            ```python
+            posthog.emails.send(
+                to="user@example.com",
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                template_data={"name": "Ada"},
+                distinct_id="user_123",
+            )
+            ```
+        """
+        if self._emails is None:
+            self._emails = Emails(self.secret_key, host=self.host)
+        self._emails.disabled = self.disabled
+        return self._emails
 
     @property
     def queue(self) -> Queue:

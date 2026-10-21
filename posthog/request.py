@@ -185,6 +185,8 @@ def disable_connection_reuse() -> None:
 
 US_INGESTION_ENDPOINT = "https://us.i.posthog.com"
 EU_INGESTION_ENDPOINT = "https://eu.i.posthog.com"
+US_APP_ENDPOINT = "https://us.posthog.com"
+EU_APP_ENDPOINT = "https://eu.posthog.com"
 DEFAULT_HOST = US_INGESTION_ENDPOINT
 USER_AGENT = "posthog-python/" + VERSION
 
@@ -210,6 +212,17 @@ def determine_server_host(host: Optional[str]) -> str:
         return EU_INGESTION_ENDPOINT
     else:
         return host_or_default
+
+
+def determine_app_host(host: Optional[str]) -> str:
+    """Determines the host for app API calls. PostHog Cloud ingestion hosts don't serve them."""
+    trimmed_host = remove_trailing_slash(normalize_host(host))
+    if trimmed_host in (US_INGESTION_ENDPOINT, "https://app.posthog.com"):
+        return US_APP_ENDPOINT
+    elif trimmed_host == EU_INGESTION_ENDPOINT:
+        return EU_APP_ENDPOINT
+    else:
+        return trimmed_host
 
 
 def post(
