@@ -1908,6 +1908,45 @@ class TestClient(unittest.TestCase):
         mock_post.assert_not_called()
         mock_warning.assert_called_once()
 
+    @parameterized.expand(
+        [
+            ("int", 123),
+            ("float", 1.5),
+            ("none", None),
+            ("list", ["user"]),
+            ("dict", {"id": "user"}),
+        ]
+    )
+    def test_capture_drops_an_event_whose_before_send_distinct_id_is_not_a_string(
+        self, _, bad_id
+    ):
+        def before_send(msg):
+            if msg["event"] == "bad":
+                msg["distinct_id"] = bad_id
+            return msg
+
+        with (
+            patch_capture_send("client") as mock_post,
+            mock.patch("posthog.utils._warned_reasons", set()),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, before_send=before_send)
+            results = [
+                client.capture(event, distinct_id="user")
+                for event in ("bad", "good", "bad")
+            ]
+
+        self.assertIsNone(results[0])
+        self.assertIsNotNone(results[1])
+        self.assertIsNone(results[2])
+        self.assertEqual(
+            [(m["event"], m["distinct_id"]) for m in sent_batch(mock_post)],
+            [("good", "user")],
+        )
+        mock_warning.assert_called_once()
+        self.assertIn("distinct IDs must be strings", mock_warning.call_args[0][0])
+        self.assertNotIn(repr(bad_id), repr(mock_warning.call_args))
+
     def test_capture_does_not_normalize_datetime_properties(self):
         property_value = datetime(
             2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))

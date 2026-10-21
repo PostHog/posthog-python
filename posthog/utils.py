@@ -183,6 +183,25 @@ def _drop_invalid_event_name(logger: logging.Logger, msg: dict) -> bool:
     return True
 
 
+def _drop_invalid_distinct_id(logger: logging.Logger, msg: dict) -> bool:
+    """True when `msg` has no string distinct_id; logs once per reason.
+
+    Runs after before_send, which may set any value; the SDK never converts it there.
+    """
+    distinct_id = msg.get("distinct_id")
+    if isinstance(distinct_id, str):
+        return False
+    reason = "missing" if distinct_id is None else "non-string"
+    _warn_once(
+        logger,
+        f"distinct_id_{reason}",  # pragma: no mutate
+        "Dropping an event with a %s distinct_id: distinct IDs must be strings. "
+        "Later events dropped for the same reason are not logged.",
+        reason,
+    )
+    return True
+
+
 # The key types json.dumps can write; it converts the non-string ones to strings.
 _JSON_KEY_TYPES = (str, int, float, bool, type(None))
 

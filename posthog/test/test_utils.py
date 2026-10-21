@@ -391,6 +391,31 @@ class TestUtils(unittest.TestCase):
             mock.call(message, "empty"),
         ]
 
+    def test_drop_invalid_distinct_id_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            dropped = [
+                utils._drop_invalid_distinct_id(logger, msg)
+                for msg in (
+                    {"distinct_id": None},
+                    {},
+                    {"distinct_id": 123},
+                    {"distinct_id": ["a"]},
+                    {"distinct_id": "user"},
+                    {"distinct_id": ""},
+                )
+            ]
+
+        assert dropped == [True, True, True, True, False, False]
+        message = (
+            "Dropping an event with a %s distinct_id: distinct IDs must be strings. "
+            "Later events dropped for the same reason are not logged."
+        )
+        assert logger.warning.call_args_list == [
+            mock.call(message, "missing"),
+            mock.call(message, "non-string"),
+        ]
+
     def test_warn_once_logs_each_reason_once(self):
         logger = mock.Mock()
         with mock.patch.object(utils, "_warned_reasons", set()):

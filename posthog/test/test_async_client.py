@@ -205,6 +205,41 @@ async def test_capture_runs_async_before_send_in_consumer():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_id", [123, 1.5, None, ["user"], {"id": "user"}])
+async def test_capture_drops_an_event_whose_before_send_distinct_id_is_not_a_string(
+    bad_id,
+):
+    batches = []
+
+    def before_send(event):
+        if event["event"] == "bad":
+            event["distinct_id"] = bad_id
+        return event
+
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
+
+    with (
+        patch_async_capture_send(side_effect=send_batch),
+        mock.patch("posthog.utils._warned_reasons", set()),
+        mock.patch.object(AsyncPosthog.log, "warning") as mock_warning,
+    ):
+        async with AsyncPosthog(
+            "test-key", before_send=before_send, flush_interval=30
+        ) as client:
+            client.capture("bad", distinct_id="user")
+            client.capture("good", distinct_id="user")
+            assert await client.capture_immediate("bad", distinct_id="user") is None
+            await client.flush(timeout_seconds=1)
+
+    events = [event for batch in batches for event in batch]
+    assert [(e["event"], e["distinct_id"]) for e in events] == [("good", "user")]
+    mock_warning.assert_called_once()
+    assert "distinct IDs must be strings" in mock_warning.call_args[0][0]
+    assert repr(bad_id) not in repr(mock_warning.call_args)
+
+
+@pytest.mark.asyncio
 async def test_capture_preserves_context_for_each_buffered_event():
     request_id = contextvars.ContextVar("request_id")
     batches = []

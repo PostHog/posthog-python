@@ -138,6 +138,7 @@ from posthog.utils import (
     clean,
     _normalize_timestamp,
     _is_personal_api_key,
+    _drop_invalid_distinct_id,
     _drop_invalid_event_name,
     guess_timezone as guess_timezone,
     system_context,
@@ -2588,6 +2589,8 @@ class Client(object):
         sent_uuid = msg["uuid"]
 
         if _drop_invalid_event_name(self.log, msg):
+            return None
+        if _drop_invalid_distinct_id(self.log, msg):
             return None
 
         self.log.debug("queueing %s on the %s lane", msg["event"], lane.name)

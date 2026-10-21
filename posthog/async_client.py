@@ -101,6 +101,7 @@ from .utils import (
     _is_personal_api_key,
     _normalize_timestamp,
     clean,
+    _drop_invalid_distinct_id,
     _drop_invalid_event_name,
     system_context,
 )
@@ -508,7 +509,11 @@ class AsyncClient:
     ) -> Optional[dict[str, Any]]:
         _fill_event_defaults(msg, defaults)
         processed = await self._run_before_send(msg)
-        if processed is None or _drop_invalid_event_name(self.log, processed):
+        if (
+            processed is None
+            or _drop_invalid_event_name(self.log, processed)
+            or _drop_invalid_distinct_id(self.log, processed)
+        ):
             return None
         return processed
 
