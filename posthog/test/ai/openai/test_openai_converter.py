@@ -350,3 +350,42 @@ def test_stream_tool_calls_without_index_or_id_start_a_call_per_name():
         (tc["function"]["name"], tc["function"]["arguments"])
         for tc in tool_calls.values()
     ] == [("a", '{"x": 1}'), ("b", '{"y": 2}')]
+
+
+def test_indexless_call_does_not_corrupt_later_indexed_call():
+    # A call without an index must not take a key that a later real index reuses.
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls, [{"id": "call_b", "function": {"name": "b", "arguments": "{}"}}]
+    )
+    accumulate_openai_tool_calls(
+        tool_calls,
+        [{"index": 0, "id": "call_a", "function": {"name": "a", "arguments": "{}"}}],
+    )
+
+    assert [(tc["id"], tc["function"]["arguments"]) for tc in tool_calls.values()] == [
+        ("call_b", "{}"),
+        ("call_a", "{}"),
+    ]
+
+
+def test_indexless_calls_keep_their_order_around_indexed_ones():
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls,
+        [
+            {"index": 0, "id": "call_a", "function": {"name": "a", "arguments": "{"}},
+            {"id": "call_b", "function": {"name": "b", "arguments": "{}"}},
+            {"index": 0, "function": {"arguments": "}"}},
+            {"id": "call_c", "function": {"name": "c", "arguments": "{}"}},
+        ],
+    )
+
+    assert [
+        (tc["id"], tc["function"]["name"], tc["function"]["arguments"])
+        for tc in tool_calls.values()
+    ] == [
+        ("call_a", "a", "{}"),
+        ("call_b", "b", "{}"),
+        ("call_c", "c", "{}"),
+    ]

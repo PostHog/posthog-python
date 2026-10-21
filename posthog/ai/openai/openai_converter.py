@@ -6,7 +6,7 @@ into standardized formats for PostHog tracking. It supports both
 Chat Completions API and Responses API formats.
 """
 
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Union, cast
 
 from posthog.ai.media import to_plain
 from posthog.ai.types import (
@@ -732,7 +732,7 @@ def extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, 
 
 
 def accumulate_openai_tool_calls(
-    accumulated_tool_calls: Dict[int, Dict[str, Any]],
+    accumulated_tool_calls: Dict[Union[int, str], Dict[str, Any]],
     chunk_tool_calls: List[Dict[str, Any]],
 ) -> None:
     """
@@ -753,12 +753,13 @@ def accumulate_openai_tool_calls(
         if index is None:
             # Some OpenAI-compatible providers omit the index. A delta with a new id
             # or a function name starts a call, and one with neither continues the
-            # latest call.
+            # latest call. Those calls get keys of their own, so they can never
+            # collide with an index the provider sends later.
             call_id = tool_call_delta.get("id")
             index = next(
                 (
-                    i
-                    for i, tc in accumulated_tool_calls.items()
+                    key
+                    for key, tc in accumulated_tool_calls.items()
                     if call_id and tc["id"] == call_id
                 ),
                 None,
@@ -766,9 +767,9 @@ def accumulate_openai_tool_calls(
             if index is None:
                 has_name = bool((tool_call_delta.get("function") or {}).get("name"))
                 if accumulated_tool_calls and not call_id and not has_name:
-                    index = max(accumulated_tool_calls)
+                    index = next(reversed(accumulated_tool_calls))
                 else:
-                    index = max(accumulated_tool_calls, default=-1) + 1
+                    index = f"no-index-{len(accumulated_tool_calls)}"
 
         # Initialize tool call if first time seeing this index
         if index not in accumulated_tool_calls:
