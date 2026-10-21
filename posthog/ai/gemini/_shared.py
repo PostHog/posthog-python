@@ -16,6 +16,7 @@ from ..utils import (
     _capture_ai_event,
     capture_streaming_event,
     finalize_ai_content,
+    _get_http_status,
     merge_system_prompt,
     with_privacy_mode,
 )
@@ -250,9 +251,7 @@ class _GeminiModelsPolicy:
                 privacy_mode,
                 finalize_ai_content(contents, self._ph_client),
             ),
-            "$ai_http_status": (
-                getattr(error, "status_code", 0) if error is not None else 200
-            ),
+            "$ai_http_status": (_get_http_status(error) if error is not None else 200),
             # Omitted when the provider never reported a count: absent means
             # unknown, 0 is a report of nothing.
             **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
