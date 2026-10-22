@@ -1,5 +1,13 @@
 # posthog
 
+## 7.75.3 — 2026-10-22
+
+### Patch changes
+
+- [a6ddc2e](https://github.com/posthog/posthog-python/commit/a6ddc2ed3227a1f8efa170f3eb7fce5b9aef36db) The LangChain callback handler now records `$ai_http_status` as an integer for failed generations. An error that carries a string `code` and no status code (such as OpenAI's `rate_limit_exceeded`) gave a string status; it now gives `0`, as an error without a status already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [42c8b7b](https://github.com/posthog/posthog-python/commit/42c8b7bc1ba1b1acca1b931830ded4818b26df33) A non-streamed OpenAI chat completion that the model refused is no longer captured with an empty `$ai_output_choices`: the refusal text is recorded as a `refusal` content block, as it already is for streamed responses. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [dc2a2b4](https://github.com/posthog/posthog-python/commit/dc2a2b4e33659e7909786fa48c625d37dc4da94d) Streamed OpenAI, Anthropic and Gemini generations that raise mid-stream are now captured with `$ai_is_error` and `$ai_error` (and the error's status code as `$ai_http_status`) instead of being recorded as a successful 200. The error is still re-raised to the caller, matching what non-streaming calls already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+
 ## 7.75.2 — 2026-10-22
 
 ### Patch changes
