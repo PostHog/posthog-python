@@ -283,21 +283,29 @@ async def record_initialize(
     fire_and_forget(capture_event(data, event), data)
 
 
+# ASGI scope key a bound ``PostHogMcpStatelessSessionMiddleware`` sets to the
+# tracking state whose handshakes it captures, on each request it passes on.
+HANDSHAKE_OBSERVER_KEY = "posthog_mcp_handshake_observer"
+
+
 def _first_request_stands_in_for_initialize(
     data: MCPAnalyticsData, session_source: str, extra: Optional[Dict[str, Any]]
 ) -> bool:
     """Whether this request has to stand in for an ``initialize`` nothing observed.
 
     Only where no seam sees the real handshake: mcp 1.x over stdio (one client per
-    process, so its first request is as good as the handshake) and mcp 1.x over HTTP
-    without a bound ASGI middleware. Never for a conversation-anchored session: it
-    belongs to a chat, not to a handshake, and synthesizing one there is how a single
-    connection used to report two."""
+    process, so its first request is as good as the handshake), and an mcp 1.x HTTP
+    request that did not pass a middleware bound to this server. Never for a
+    conversation-anchored session: it belongs to a chat, not to a handshake, and
+    synthesizing one there is how a single connection used to report two. So a
+    client whose first request already echoes a conversation reports no initialize
+    here."""
     if data.handshake_observed_in_process:
         return False
     if session_source == "conversation":
         return False
-    return not (data.handshake_observed_at_asgi and get_request(extra) is not None)
+    scope = getattr(get_request(extra), "scope", None)
+    return not (isinstance(scope, dict) and scope.get(HANDSHAKE_OBSERVER_KEY) is data)
 
 
 async def _maybe_emit_initialize(

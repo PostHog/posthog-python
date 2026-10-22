@@ -107,13 +107,11 @@ class MCPAnalyticsData:
     # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
-    # Where this server sees the client's real `initialize`. mcp 2.x hands it to
-    # `Server.middleware` on every transport; on mcp 1.x only an ASGI middleware
-    # bound to this server sees it, and only over HTTP. Whatever neither covers
-    # (mcp 1.x stdio, or HTTP without a bound middleware) falls back to the
-    # first request of the session.
+    # True once mcp 2.x `Server.middleware` observes this server's real
+    # `initialize`, on every transport. On mcp 1.x an ASGI middleware bound to
+    # this server observes it over HTTP and marks each request it passes on;
+    # whatever neither covers falls back to the first request of the session.
     handshake_observed_in_process: bool = False
-    handshake_observed_at_asgi: bool = False
     server_name: Optional[str] = None
     # Validated once during setup. Keep it separate from the caller-owned
     # options object so later option changes cannot alter event attribution.

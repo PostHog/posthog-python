@@ -49,6 +49,7 @@ from ._instrumentation import (
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
+    _is_sse_request,
     _to_jsonable,
     copy_tools_list_result,
     fire_and_forget,
@@ -77,7 +78,7 @@ from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
 from .request_headers import get_request_headers
-from .session import resolve_session_id
+from .session import handshake_session_id
 from .session_token import SessionTokenPayload, read_mcp_session_header
 from .tools import (
     get_more_tools_result_text,
@@ -180,6 +181,10 @@ def _initialize_session(
     exposes no public accessor. A stateless one has none, and the session lives in
     the token our ASGI middleware minted for this response. stdio has neither and
     resolves to this process's own session, as its later requests do."""
+    if _is_sse_request({"ctx": ctx}):
+        # The SSE transport keys its session on a query parameter that later
+        # requests do not resolve from: they land in this process's own session.
+        return None, None
     connection = getattr(getattr(ctx, "session", None), "_connection", None)
     transport_session_id = getattr(connection, "session_id", None)
     if isinstance(transport_session_id, str) and transport_session_id:
@@ -195,7 +200,7 @@ async def _record_v2_initialize(
         mcp_session_id, token = _initialize_session(ctx)
         await record_initialize(
             data,
-            session_id=await resolve_session_id(data, mcp_session_id, token=token),
+            session_id=await handshake_session_id(data, mcp_session_id, token),
             params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},

@@ -61,7 +61,7 @@ def make_pod(
     options: Optional[MCPAnalyticsOptions] = None,
     bind: bool = True,
 ):
-    """One instrumented server of ``kind``, as ``(asgi_app, lifespan)``.
+    """One instrumented server of ``kind``, as ``(asgi_app, lifespan, server)``.
 
     ``bind`` only matters for an mcp 1.x low-level server: nothing autowires it,
     so the middleware is mounted by hand, with or without ``server=``."""
@@ -96,7 +96,7 @@ def make_pod(
         app = server.streamable_http_app()
     else:
         app = server.streamable_http_app(json_response=True, stateless_http=stateless)
-    return app, server.session_manager.run()
+    return app, server.session_manager.run(), server
 
 
 def _fastmcp_pod(client, options, stateless):
@@ -110,7 +110,7 @@ def _fastmcp_pod(client, options, stateless):
 
     instrument(server, client, options)
     app = server.http_app(json_response=True, stateless_http=stateless)
-    return app, app.router.lifespan_context(app)
+    return app, app.router.lifespan_context(app), server
 
 
 def _lowlevel_pod(client, options, stateless, bind):
@@ -144,7 +144,7 @@ def _lowlevel_pod(client, options, stateless, bind):
         )
         instrument(server, client, options)
         app = server.streamable_http_app(json_response=True, stateless_http=stateless)
-        return app, server.session_manager.run()
+        return app, server.session_manager.run(), server
 
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 
@@ -169,7 +169,7 @@ def _lowlevel_pod(client, options, stateless, bind):
         if bind
         else PostHogMcpStatelessSessionMiddleware(manager.handle_request)
     )
-    return app, manager.run()
+    return app, manager.run(), server
 
 
 @asynccontextmanager
@@ -180,7 +180,7 @@ async def fleet(client: FakeClient, pods: int = 1, **pod_options: Any):
     async with AsyncExitStack() as stack:
         surfaces: List[httpx.AsyncClient] = []
         for _ in range(pods):
-            app, lifespan = make_pod(client, **pod_options)
+            app, lifespan, _ = make_pod(client, **pod_options)
             await stack.enter_async_context(lifespan)
             surfaces.append(
                 await stack.enter_async_context(
@@ -635,3 +635,159 @@ async def test_a_posthogmcp_dispatcher_reports_only_its_own_initialize():
     assert token is not None
     assert inits[0]["properties"]["$session_id"] == token.session_id
     assert bystander.events == []
+
+
+# --- the deprecated SSE transport: session in a query parameter ---------------------
+
+
+@asynccontextmanager
+async def sse_server(client: FakeClient):
+    """An instrumented server's ``sse_app()`` on a real port. The SSE transport keeps
+    its session in the ``session_id`` query parameter of ``/messages/``, not in a
+    header, and answers each POST with 202 and the reply on the event stream."""
+    import uvicorn
+
+    if MCP_MAJOR < 2:
+        from mcp.server.fastmcp import FastMCP
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        server = FastMCP(
+            "handshake",
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            ),
+        )
+    else:
+        from mcp.server.mcpserver import MCPServer
+
+        server = MCPServer("handshake")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
+    config = uvicorn.Config(server.sse_app(), port=0, log_level="error", ws="none")
+    http_server = uvicorn.Server(config)
+    serving = asyncio.create_task(http_server.serve())
+    while not http_server.started:
+        await asyncio.sleep(0.01)
+    port = http_server.servers[0].sockets[0].getsockname()[1]
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        http_server.should_exit = True
+        await asyncio.wait_for(serving, timeout=10)
+
+
+async def test_sse_transport_handshake_then_calls():
+    client = FakeClient()
+    async with sse_server(client) as url:
+        async with httpx.AsyncClient(base_url=url, timeout=20) as http:
+            async with http.stream("GET", "/sse") as stream:
+                lines = stream.aiter_lines()
+
+                async def next_data() -> str:
+                    async for line in lines:
+                        if line.startswith("data:"):
+                            return line[len("data:") :].strip()
+                    raise AssertionError("the event stream closed")
+
+                endpoint = await next_data()
+
+                async def send(method, params, request_id=None):
+                    response = await http.post(
+                        endpoint, json=rpc(method, params, request_id)
+                    )
+                    assert response.status_code == 202, response.text
+                    return json.loads(await next_data()) if request_id else None
+
+                await send("initialize", initialize_params("sse-client"), 1)
+                await send("notifications/initialized", {})
+                await send("tools/list", {}, 2)
+                for request_id in (3, 4):
+                    arguments = {"a": 1, "b": 2, "context": "sse"}
+                    reply = await send(
+                        "tools/call",
+                        {"name": "add", "arguments": arguments},
+                        request_id,
+                    )
+                    assert reply["result"]["isError"] is False, reply
+    await _flush()
+
+    (init,) = _events(client, "$mcp_initialize")
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 2
+    assert {c["properties"]["$session_id"] for c in calls} == {
+        init["properties"]["$session_id"]
+    }
+
+
+# --- the middleware is per request and fail-safe -----------------------------------
+
+
+@pytest.mark.skipif(MCP_MAJOR >= 2, reason="mcp 2.x has no first-request fallback")
+async def test_a_route_without_the_middleware_keeps_the_fallback():
+    # One process, one server, two routes: the autowired app with the bound
+    # middleware, and the session manager mounted by hand without it. Each route
+    # reports its own handshakes, once.
+    client = FakeClient()
+    app, lifespan, server = make_pod(client)
+    async with lifespan:
+        for surface in (app, server.session_manager.handle_request):
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=surface),
+                base_url="http://127.0.0.1:8000",
+            ) as http:
+                lb = RoundRobin([http])
+                headers, _ = await handshake(lb)
+                await call_add(lb, headers)
+                await call_add(lb, headers, 4)
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert len(inits) == 2
+    calls = _events(client, "$mcp_tool_call")
+    assert {c["properties"]["$session_id"] for c in calls} == {
+        e["properties"]["$session_id"] for e in inits
+    }
+
+
+async def test_a_handshake_leaves_the_shared_session_alone():
+    # McpAnalytics.capture() reads the server's shared session. A handshake that
+    # carries its own session (a token here) must not move it.
+    from posthog.mcp._internal import get_server_tracking_data, tracking_key
+
+    client = FakeClient()
+    app, lifespan, server = make_pod(client)
+    data = get_server_tracking_data(tracking_key(server))
+    before = (data.session_id, data.session_source)
+    async with lifespan:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        ) as http:
+            await handshake(RoundRobin([http]))
+    await _flush()
+
+    assert len(_events(client, "$mcp_initialize")) == 1
+    assert (data.session_id, data.session_source) == before
+
+
+async def test_a_server_that_cannot_be_bound_does_not_break_requests():
+    from posthog.mcp import PostHogMcpStatelessSessionMiddleware
+
+    async def echo(scope, receive, send):
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}"})
+
+    for unbindable in (object(), {"not": "hashable"}):
+        app = PostHogMcpStatelessSessionMiddleware(echo, server=unbindable)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        ) as http:
+            response = await http.post(
+                "/mcp",
+                json=rpc("initialize", initialize_params("x")),
+                headers=BASE_HEADERS,
+            )
+        assert response.status_code == 200

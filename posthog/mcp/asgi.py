@@ -46,11 +46,16 @@ import json
 import weakref
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import parse_qs
 
-from ._instrumentation import fire_and_forget, record_initialize
+from ._instrumentation import (
+    HANDSHAKE_OBSERVER_KEY,
+    fire_and_forget,
+    record_initialize,
+)
 from ._internal import MCPAnalyticsData, get_server_tracking_data, tracking_key
 from .logger import log, warn
-from .session import new_session_id, resolve_session_id
+from .session import handshake_session_id, new_session_id
 from .session_token import (
     MCP_SESSION_HEADER,
     SessionTokenPayload,
@@ -61,9 +66,6 @@ from .session_token import (
 
 # Scope key the middleware stashes the decoded token payload under.
 _SCOPE_KEY = "posthog_mcp_session"
-
-# Scope key set once a middleware has taken an ``initialize`` to capture.
-_HANDSHAKE_KEY = "posthog_mcp_initialize"
 
 # JSON-RPC request bodies are tiny; cap what we buffer so a stray large POST on
 # the same app can't be read into memory in full before minting.
@@ -97,25 +99,36 @@ class PostHogMcpStatelessSessionMiddleware:
 
     def __init__(self, app: Any, server: Any = None) -> None:
         self.app = app
-        self._server = weakref.ref(tracking_key(server)) if server is not None else None
-        self._analytics()
+        self._server: Optional[weakref.ReferenceType[Any]] = None
+        if server is not None:
+            try:
+                self._server = weakref.ref(tracking_key(server))
+            except TypeError as error:
+                log(f"PostHog MCP session middleware: cannot bind server= - {error}")
 
     def _analytics(self) -> Optional[MCPAnalyticsData]:
         """The bound server's tracking state, when this middleware is the one that
-        observes its handshakes: on mcp 2.x ``Server.middleware`` already does."""
-        server = self._server() if self._server is not None else None
-        data = get_server_tracking_data(server) if server is not None else None
-        if data is None or data.handshake_observed_in_process:
+        captures its handshakes: on mcp 2.x ``Server.middleware`` already does."""
+        try:
+            server = self._server() if self._server is not None else None
+            data = get_server_tracking_data(server) if server is not None else None
+        except TypeError:  # an unhashable server= can never be instrumented
             return None
-        data.handshake_observed_at_asgi = True
-        return data
+        return None if data is None or data.handshake_observed_in_process else data
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        # Bound late if instrument() ran after this middleware was built.
-        self._analytics()
+        # Tell the in-process fallback that this request's handshake is captured
+        # here. Two stacked middlewares see the same request; the outer one owns it.
+        # The SSE transport stays unmarked: its session is in a query parameter, so
+        # its first request captures the handshake, in the session its calls use.
+        observer = None
+        if HANDSHAKE_OBSERVER_KEY not in scope and not _is_sse(scope):
+            observer = self._analytics()
+            if observer is not None:
+                scope[HANDSHAKE_OBSERVER_KEY] = observer
 
         try:
             incoming_header = read_mcp_session_header(_headers_dict(scope))
@@ -150,12 +163,8 @@ class PostHogMcpStatelessSessionMiddleware:
             await self.app(scope, receive, send)
             return
 
-        # Two stacked middlewares (autowired plus a manual one) see the same
-        # handshake; the outer one captures it.
-        data = None if scope.get(_HANDSHAKE_KEY) else self._analytics()
         recorder = None
-        if data is not None:
-            scope[_HANDSHAKE_KEY] = True
+        if observer is not None:
             recorder = _InitializeResponse(send)
             send = recorder
         if token is not None:
@@ -164,10 +173,20 @@ class PostHogMcpStatelessSessionMiddleware:
 
         started = datetime.now(timezone.utc)
         await self.app(scope, receive, send)
-        if data is not None and recorder is not None:
+        if observer is not None and recorder is not None:
             fire_and_forget(
-                _record_initialize(data, initialize, recorder, scope, started), data
+                _record_initialize(observer, initialize, recorder, scope, started),
+                observer,
             )
+
+
+def _is_sse(scope: Any) -> bool:
+    """The deprecated SSE transport, which keys its session on ``?session_id=``."""
+    try:
+        query = parse_qs((scope.get("query_string") or b"").decode("latin-1"))
+    except Exception:  # noqa: BLE001
+        return False
+    return "session_id" in query
 
 
 def _headers_dict(scope: Any) -> dict[str, str]:
@@ -245,15 +264,9 @@ def _parse_initialize(body: bytes) -> Optional[Dict[str, Any]]:
     return message
 
 
-def _mint_token_if_initialize(body: bytes) -> Optional[str]:
-    """If ``body`` is an ``initialize`` JSON-RPC request, mint and return a token
-    string carrying a fresh session id + the client's self-reported identity.
-    Returns ``None`` for anything else (never raises)."""
-    message = _parse_initialize(body)
-    return _mint_token(message) if message is not None else None
-
-
 def _mint_token(message: Dict[str, Any]) -> Optional[str]:
+    """Mint a token carrying a fresh session id + the client's self-reported
+    identity from an ``initialize`` message. Returns ``None`` on failure."""
     params, client_info = _initialize_params(message)
     try:
         return encode_session_id(
@@ -327,8 +340,8 @@ async def _record_initialize(
         header = response.session_header
         await record_initialize(
             data,
-            session_id=await resolve_session_id(
-                data, header, token=decode_session_id(header)
+            session_id=await handshake_session_id(
+                data, header, decode_session_id(header)
             ),
             params=_initialize_params(message)[0],
             result=None,
