@@ -736,6 +736,92 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         assert props["$ai_http_status"] == 200
 
 
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_custom_tool_calls_are_captured(mock_client, is_async):
+    """A custom tool call has `custom` instead of `function`. The wrapped call
+    must return the completion and capture it, not raise AttributeError."""
+    completion = ChatCompletion.model_validate(
+        {
+            "id": "test",
+            "model": "gpt-5",
+            "object": "chat.completion",
+            "created": 0,
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_fn",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"location": "New York"}',
+                                },
+                            },
+                            {
+                                "id": "call_custom",
+                                "type": "custom",
+                                "custom": {"name": "code_exec", "input": "print(1)"},
+                            },
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 25, "completion_tokens": 10, "total_tokens": 35},
+        }
+    )
+    kwargs = dict(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Run it"}],
+        tools=[{"type": "custom", "custom": {"name": "code_exec"}}],
+        posthog_distinct_id="test-id",
+    )
+
+    if is_async:
+        with patch(
+            "openai.resources.chat.completions.AsyncCompletions.create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ):
+            client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+            response = await client.chat.completions.create(**kwargs)
+    else:
+        with patch(
+            "openai.resources.chat.completions.Completions.create",
+            return_value=completion,
+        ):
+            client = OpenAI(api_key="test-key", posthog_client=mock_client)
+            response = client.chat.completions.create(**kwargs)
+
+    assert response == completion
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args[1]["properties"]
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "function",
+                    "id": "call_fn",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "New York"}',
+                    },
+                },
+                {
+                    "type": "function",
+                    "id": "call_custom",
+                    "function": {"name": "code_exec", "arguments": "print(1)"},
+                },
+            ],
+        }
+    ]
+
+
 def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_calls):
     with patch(
         "openai.resources.responses.Responses.create",
