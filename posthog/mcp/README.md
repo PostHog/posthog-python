@@ -67,6 +67,28 @@ The value must contain 1 to 256 characters. The SDK records it as
 `$mcp_server_build` on all MCP events. `PostHogMCP.capture()` also adds it to
 custom events unless the event provides its own value.
 
+## When the SDK sends `$mcp_initialize`
+
+One `$mcp_initialize` per `initialize` request the client sends, in the session
+its later requests belong to. A client that reconnects five times reports five,
+however many pods its requests land on. A client that connects and leaves still
+reports one. Requests on the 2026-07-28 revision, which has no `initialize`,
+report none.
+
+The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
+
+- **MCP SDK 2.x**: through `Server.middleware`, on every transport.
+- **MCP SDK 1.x over HTTP**: through `PostHogMcpStatelessSessionMiddleware`, which
+  `instrument()` adds to the apps it autowires. If you mount the middleware
+  yourself, pass the server: `app.add_middleware(PostHogMcpStatelessSessionMiddleware, server=mcp)`.
+  Without it, each pod reports the session's first request as its initialize.
+- **MCP SDK 1.x over stdio**: from the session's first request. A stdio server
+  serves one client, so this misses only a client that never sends a request.
+
+`identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the
+SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
+`get_request_headers(extra)` works the same as for any other request.
+
 ## Capture safe input field names
 
 Tool-call events include `$mcp_input_keys`. The SDK records names from the
@@ -385,11 +407,14 @@ a fragmented per-process id. Add the middleware to your app explicitly:
 from posthog.mcp import PostHogMcpStatelessSessionMiddleware, get_mcp_session
 
 app = mcp.streamable_http_app()
-app.add_middleware(PostHogMcpStatelessSessionMiddleware)
+app.add_middleware(PostHogMcpStatelessSessionMiddleware, server=mcp)
 ```
 
+`server=` lets the middleware capture `$mcp_initialize` from the handshake (see
+[When the SDK sends `$mcp_initialize`](#when-the-sdk-sends-mcp_initialize)).
+
 This is also the path for a custom `PostHogMCP` dispatcher (you own the ASGI app),
-where you then read the recovered session per request:
+where you leave `server=` out and read the recovered session per request:
 
 ```python
 sess = get_mcp_session(request)   # sess.session_id, sess.client_name, ...

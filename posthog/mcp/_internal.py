@@ -107,6 +107,13 @@ class MCPAnalyticsData:
     # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
+    # Where this server sees the client's real `initialize`. mcp 2.x hands it to
+    # `Server.middleware` on every transport; on mcp 1.x only an ASGI middleware
+    # bound to this server sees it, and only over HTTP. Whatever neither covers
+    # (mcp 1.x stdio, or HTTP without a bound middleware) falls back to the
+    # first request of the session.
+    handshake_observed_in_process: bool = False
+    handshake_observed_at_asgi: bool = False
     server_name: Optional[str] = None
     # Validated once during setup. Keep it separate from the caller-owned
     # options object so later option changes cannot alter event attribution.
@@ -128,6 +135,18 @@ _MAX_INITIALIZED_SESSIONS = 1000
 _server_tracking: "weakref.WeakKeyDictionary[Any, MCPAnalyticsData]" = (
     weakref.WeakKeyDictionary()
 )
+
+
+def tracking_key(server: Any) -> Any:
+    """The underlying low-level server for high-level wrappers (SDK 1.x FastMCP and
+    jlowin's fastmcp expose ``_mcp_server``; SDK 2.x MCPServer renamed it
+    ``_lowlevel_server``), else the server itself. Used as the tracking key so
+    instrumenting a wrapper and its underlying server resolve to one state instead
+    of two divergent ones (matching the TS SDK)."""
+    low_level = getattr(server, "_mcp_server", None) or getattr(
+        server, "_lowlevel_server", None
+    )
+    return low_level if low_level is not None else server
 
 
 def get_server_tracking_data(server: Any) -> Optional[MCPAnalyticsData]:

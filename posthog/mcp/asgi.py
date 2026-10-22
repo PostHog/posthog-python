@@ -12,6 +12,11 @@ initialize handler -- there is no in-SDK seam to mint from. We mint at the HTTP
 layer instead, with a pure-ASGI middleware that works for both a mounted FastMCP
 app and a custom ``PostHogMCP`` dispatcher, across every SDK routing path.
 
+The same blind spot hides the handshake from analytics on MCP SDK 1.x, so a
+middleware bound to an instrumented server also captures ``$mcp_initialize`` here,
+once per ``initialize``, in the session the response hands the client. (MCP SDK
+2.x exposes ``Server.middleware``, which ``instrument()`` uses instead.)
+
 On the ``instrument()`` path this is **wired up automatically**:
 ``instrument(server, ...)`` wraps the FastMCP server's app factories
 (``streamable_http_app()`` / ``sse_app()``, which ``mcp.run()`` also calls), so the
@@ -38,10 +43,14 @@ from __future__ import annotations
 
 import functools
 import json
-from typing import Any, Optional
+import weakref
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
+from ._instrumentation import fire_and_forget, record_initialize
+from ._internal import MCPAnalyticsData, get_server_tracking_data, tracking_key
 from .logger import log, warn
-from .session import new_session_id
+from .session import new_session_id, resolve_session_id
 from .session_token import (
     MCP_SESSION_HEADER,
     SessionTokenPayload,
@@ -52,6 +61,9 @@ from .session_token import (
 
 # Scope key the middleware stashes the decoded token payload under.
 _SCOPE_KEY = "posthog_mcp_session"
+
+# Scope key set once a middleware has taken an ``initialize`` to capture.
+_HANDSHAKE_KEY = "posthog_mcp_initialize"
 
 # JSON-RPC request bodies are tiny; cap what we buffer so a stray large POST on
 # the same app can't be read into memory in full before minting.
@@ -73,16 +85,37 @@ class PostHogMcpStatelessSessionMiddleware:
     response header at ``initialize`` (when the client sent none) and decodes the
     replayed token on every request, exposing it via :func:`get_mcp_session`.
 
+    Pass the instrumented ``server`` to also capture ``$mcp_initialize`` from the
+    handshake itself on MCP SDK 1.x, which answers ``initialize`` outside anything
+    ``instrument()`` can wrap. ``instrument()`` does this for the apps it autowires;
+    add it yourself when you mount the middleware by hand on an instrumented server.
+    Leave it out for a custom ``PostHogMCP`` dispatcher, which captures its own
+    events.
+
     Fail-safe: any error while sniffing/minting is logged and the request passes
     through untouched -- analytics must never break the host."""
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, server: Any = None) -> None:
         self.app = app
+        self._server = weakref.ref(tracking_key(server)) if server is not None else None
+        self._analytics()
+
+    def _analytics(self) -> Optional[MCPAnalyticsData]:
+        """The bound server's tracking state, when this middleware is the one that
+        observes its handshakes: on mcp 2.x ``Server.middleware`` already does."""
+        server = self._server() if self._server is not None else None
+        data = get_server_tracking_data(server) if server is not None else None
+        if data is None or data.handshake_observed_in_process:
+            return None
+        data.handshake_observed_at_asgi = True
+        return data
 
     async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
+        # Bound late if instrument() ran after this middleware was built.
+        self._analytics()
 
         try:
             incoming_header = read_mcp_session_header(_headers_dict(scope))
@@ -105,24 +138,46 @@ class PostHogMcpStatelessSessionMiddleware:
         # Guard the whole sniff+mint path: on any failure (a raising receive() or
         # adversarial body) the request passes through untouched, per the contract.
         token = None
+        initialize = None
         try:
             body, receive = await _buffer_body(receive)
-            token = _mint_token_if_initialize(body)
+            initialize = _parse_initialize(body)
+            token = _mint_token(initialize) if initialize is not None else None
         except Exception as error:  # noqa: BLE001
             log(f"PostHog MCP session middleware: mint failed - {error}")
 
-        if token is None:
+        if initialize is None:
             await self.app(scope, receive, send)
             return
 
-        scope[_SCOPE_KEY] = decode_session_id(token)
-        await self.app(scope, receive, _sending_session_header(send, token))
+        # Two stacked middlewares (autowired plus a manual one) see the same
+        # handshake; the outer one captures it.
+        data = None if scope.get(_HANDSHAKE_KEY) else self._analytics()
+        recorder = None
+        if data is not None:
+            scope[_HANDSHAKE_KEY] = True
+            recorder = _InitializeResponse(send)
+            send = recorder
+        if token is not None:
+            scope[_SCOPE_KEY] = decode_session_id(token)
+            send = _sending_session_header(send, token)
+
+        started = datetime.now(timezone.utc)
+        await self.app(scope, receive, send)
+        if data is not None and recorder is not None:
+            fire_and_forget(
+                _record_initialize(data, initialize, recorder, scope, started), data
+            )
 
 
 def _headers_dict(scope: Any) -> dict[str, str]:
     """ASGI raw headers (list of (bytes, bytes)) -> a lowercased str dict."""
+    return _decode_headers(scope.get("headers") or [])
+
+
+def _decode_headers(raw: Any) -> dict[str, str]:
     result: dict[str, str] = {}
-    for key, value in scope.get("headers") or []:
+    for key, value in raw:
         try:
             result[key.decode("latin-1").lower()] = value.decode("latin-1")
         except Exception:  # noqa: BLE001
@@ -174,10 +229,9 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
     return sniff, replay
 
 
-def _mint_token_if_initialize(body: bytes) -> Optional[str]:
-    """If ``body`` is an ``initialize`` JSON-RPC request, mint and return a token
-    string carrying a fresh session id + the client's self-reported identity.
-    Returns ``None`` for anything else (never raises)."""
+def _parse_initialize(body: bytes) -> Optional[Dict[str, Any]]:
+    """The JSON-RPC message in ``body`` if it is an ``initialize`` request, else
+    ``None`` (never raises)."""
     if not body:
         return None
     try:
@@ -188,10 +242,19 @@ def _mint_token_if_initialize(body: bytes) -> Optional[str]:
         return None
     if not isinstance(message, dict) or message.get("method") != "initialize":
         return None
-    params = message.get("params")
-    params = params if isinstance(params, dict) else {}
-    client_info = params.get("clientInfo")
-    client_info = client_info if isinstance(client_info, dict) else {}
+    return message
+
+
+def _mint_token_if_initialize(body: bytes) -> Optional[str]:
+    """If ``body`` is an ``initialize`` JSON-RPC request, mint and return a token
+    string carrying a fresh session id + the client's self-reported identity.
+    Returns ``None`` for anything else (never raises)."""
+    message = _parse_initialize(body)
+    return _mint_token(message) if message is not None else None
+
+
+def _mint_token(message: Dict[str, Any]) -> Optional[str]:
+    params, client_info = _initialize_params(message)
     try:
         return encode_session_id(
             SessionTokenPayload(
@@ -204,6 +267,143 @@ def _mint_token_if_initialize(body: bytes) -> Optional[str]:
     except Exception as error:  # noqa: BLE001
         log(f"PostHog MCP session middleware: mint failed - {error}")
         return None
+
+
+def _initialize_params(
+    message: Dict[str, Any],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    params = message.get("params")
+    params = params if isinstance(params, dict) else {}
+    client_info = params.get("clientInfo")
+    return params, client_info if isinstance(client_info, dict) else {}
+
+
+class _InitializeResponse:
+    """A ``send`` that passes the ``initialize`` response through and keeps what
+    the event needs: the status, the ``Mcp-Session-Id`` the client will replay
+    (whichever of the transport or the mint set it), and the body, capped like the
+    request sniff."""
+
+    def __init__(self, send: Any) -> None:
+        self._send = send
+        self.status: Optional[int] = None
+        self.session_header: Optional[str] = None
+        self.content_type = ""
+        self._chunks: list[bytes] = []
+        self._size = 0
+
+    async def __call__(self, message: Dict[str, Any]) -> None:
+        try:
+            self._observe(message)
+        except Exception as error:  # noqa: BLE001
+            log(f"PostHog MCP session middleware: response read failed - {error}")
+        await self._send(message)
+
+    def _observe(self, message: Dict[str, Any]) -> None:
+        if message.get("type") == "http.response.start":
+            self.status = message.get("status")
+            headers = _decode_headers(message.get("headers") or [])
+            self.session_header = headers.get(MCP_SESSION_HEADER.lower()) or None
+            self.content_type = headers.get("content-type", "")
+        elif message.get("type") == "http.response.body":
+            chunk = message.get("body", b"") or b""
+            if self._size + len(chunk) <= _MAX_SNIFF_BODY:
+                self._chunks.append(chunk)
+            self._size += len(chunk)
+
+    def reply(self, request_id: Any) -> Optional[Dict[str, Any]]:
+        """The JSON-RPC reply to ``request_id``, from a JSON body or an SSE stream.
+        ``None`` when there is none to read: the deprecated SSE transport answers
+        the POST with 202 and delivers the reply on its event stream."""
+        if self._size > _MAX_SNIFF_BODY:
+            return None
+        body = b"".join(self._chunks).decode("utf-8", errors="replace")
+        if self.content_type.startswith("text/event-stream"):
+            candidates = [
+                line[len("data:") :]
+                for line in body.splitlines()
+                if line.startswith("data:")
+            ]
+        else:
+            candidates = [body]
+        for candidate in candidates:
+            try:
+                message = json.loads(candidate)
+            except Exception:  # noqa: BLE001
+                continue
+            if isinstance(message, dict) and message.get("id") == request_id:
+                return message
+        return None
+
+
+class _InitializeContext:
+    """``extra["ctx"]`` for callbacks run on an ``initialize`` observed here.
+
+    MCP SDK 1.x answers ``initialize`` inside its session layer, outside any request
+    context, so there is no SDK context object to hand over. This carries only the
+    HTTP request, which is what :func:`~posthog.mcp.get_request_headers` reads."""
+
+    def __init__(self, request: Any) -> None:
+        self.request = request
+
+
+def _http_request(scope: Any) -> Any:
+    try:
+        from starlette.requests import Request
+
+        return Request(scope)
+    except Exception:  # noqa: BLE001 - only headers are read; never fail the capture
+        return _Headers(_headers_dict(scope))
+
+
+class _Headers:
+    def __init__(self, headers: Dict[str, str]) -> None:
+        self.headers = headers
+
+
+async def _record_initialize(
+    data: MCPAnalyticsData,
+    message: Dict[str, Any],
+    response: _InitializeResponse,
+    scope: Any,
+    started: datetime,
+) -> None:
+    """Emit ``$mcp_initialize`` for a handshake that succeeded, in the session the
+    client's later requests resolve to: the ``Mcp-Session-Id`` they replay (a
+    stateful transport's id or our token), or this process's own session when the
+    response carried none."""
+    try:
+        if response.status is None or not 200 <= response.status < 300:
+            return
+        reply = response.reply(message.get("id"))
+        if reply is not None and "error" in reply:
+            return
+        result = reply.get("result") if reply is not None else None
+        params, client_info = _initialize_params(message)
+        header = response.session_header
+        session_id = await resolve_session_id(
+            data, header, token=decode_session_id(header)
+        )
+        negotiated = result.get("protocolVersion") if isinstance(result, dict) else None
+        await record_initialize(
+            data,
+            session_id=session_id,
+            client_name=_str_or_none(client_info.get("name")),
+            client_version=_str_or_none(client_info.get("version")),
+            protocol_version=_str_or_none(negotiated)
+            or _str_or_none(params.get("protocolVersion")),
+            request={"method": "initialize", "params": params},
+            response=result,
+            extra={
+                "session_id": header,
+                "ctx": _InitializeContext(_http_request(scope)),
+            },
+            timestamp=started,
+        )
+    except Exception as error:  # noqa: BLE001 - analytics must never break the host
+        log(
+            f"PostHog MCP session middleware: failed to capture $mcp_initialize - {error}"
+        )
 
 
 def _sending_session_header(send: Any, token: str) -> Any:
@@ -251,7 +451,7 @@ def autowire_stateless_mint(server: Any) -> None:
         if not callable(original) or getattr(original, _AUTOWIRED, False):
             continue
         try:
-            setattr(server, attr, _wrap_app_factory(original))
+            setattr(server, attr, _wrap_app_factory(original, server))
         except Exception as error:  # noqa: BLE001 - never let wiring break instrument()
             log(f"PostHog MCP: could not auto-wire stateless mint on {attr} - {error}")
 
@@ -312,7 +512,7 @@ def _app_already_wrapped(app: Any) -> bool:
     return False
 
 
-def _wrap_app_factory(original: Any) -> Any:
+def _wrap_app_factory(original: Any, server: Any = None) -> Any:
     @functools.wraps(original)
     def factory(*args: Any, **kwargs: Any) -> Any:
         app = original(*args, **kwargs)
@@ -320,10 +520,10 @@ def _wrap_app_factory(original: Any) -> Any:
             return app
         add_middleware = getattr(app, "add_middleware", None)
         if callable(add_middleware):
-            add_middleware(PostHogMcpStatelessSessionMiddleware)
+            add_middleware(PostHogMcpStatelessSessionMiddleware, server=server)
             return app
         # Not a Starlette app -- wrap as raw ASGI so minting still happens.
-        return PostHogMcpStatelessSessionMiddleware(app)
+        return PostHogMcpStatelessSessionMiddleware(app, server=server)
 
     setattr(factory, _AUTOWIRED, True)
     return factory

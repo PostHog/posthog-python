@@ -1,0 +1,738 @@
+"""``$mcp_initialize`` is one event per ``initialize`` the client actually sent.
+
+The spec (sdk-specs ``mcp-analytics``) allows ``$mcp_initialize`` only for a legacy
+``initialize`` request, and never without one. Python cannot wrap ``initialize``
+the way posthog-js does — mcp 1.x answers it inside ``ServerSession`` and mcp 2.x
+refuses a handler for it — so these tests drive a real streamable-HTTP app over
+raw JSON-RPC and count what comes out. Written once, collected under both SDK
+majors; the version-specific code is :func:`make_pod`, which builds each server
+shape a host might run.
+
+The shapes are the ones agents produce in the field: a client that reconnects
+before every few calls (Codex, hosted connectors), a probe that handshakes and
+leaves, and a stateless fleet behind a load balancer with no stickiness, where
+one handshake's requests land on several pods.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import os
+import sys
+from contextlib import AsyncExitStack, asynccontextmanager
+from typing import Any, Dict, List, Optional
+
+import httpx
+import pytest
+
+from posthog.mcp import (
+    MCPAnalyticsOptions,
+    UserIdentity,
+    decode_session_id,
+    get_request_headers,
+    instrument,
+)
+from posthog.test.mcp._helpers import (
+    MCP_MAJOR,
+    FakeClient,
+    events_named as _events,
+    flush_background as _flush,
+)
+
+PROTOCOL_VERSION = "2025-06-18"
+BASE_HEADERS = {
+    "content-type": "application/json",
+    "accept": "application/json, text/event-stream",
+}
+
+
+#: The server shapes a host builds, each served the way that shape is served:
+#: the official SDK's high-level server, standalone ``fastmcp`` (jlowin's 2.x/3.x
+#: on mcp 1.x, 4.x on mcp 2.x), and a low-level ``Server``.
+KINDS = ["official", "fastmcp", "lowlevel"]
+
+
+def make_pod(
+    client: FakeClient,
+    *,
+    kind: str = "official",
+    stateless: bool = True,
+    json_response: bool = True,
+    options: Optional[MCPAnalyticsOptions] = None,
+    bind: bool = True,
+):
+    """One instrumented server of ``kind``, as ``(asgi_app, lifespan)``.
+
+    ``bind`` only matters for an mcp 1.x low-level server: nothing autowires it,
+    so the middleware is mounted by hand, with or without ``server=``."""
+    options = options or MCPAnalyticsOptions(enable_conversation_id=False)
+    if kind == "fastmcp":
+        return _fastmcp_pod(client, options, stateless, json_response)
+    if kind == "lowlevel":
+        return _lowlevel_pod(client, options, stateless, json_response, bind)
+    if MCP_MAJOR < 2:
+        from mcp.server.fastmcp import FastMCP
+        from mcp.server.transport_security import TransportSecuritySettings
+
+        server = FastMCP(
+            "handshake",
+            stateless_http=stateless,
+            json_response=json_response,
+            transport_security=TransportSecuritySettings(
+                enable_dns_rebinding_protection=False
+            ),
+        )
+    else:
+        from mcp.server.mcpserver import MCPServer
+
+        server = MCPServer("handshake")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    instrument(server, client, options)
+    if MCP_MAJOR < 2:
+        app = server.streamable_http_app()
+    else:
+        app = server.streamable_http_app(
+            json_response=json_response, stateless_http=stateless
+        )
+    return app, server.session_manager.run()
+
+
+def _fastmcp_pod(client, options, stateless, json_response):
+    fastmcp = pytest.importorskip("fastmcp")
+
+    server = fastmcp.FastMCP("handshake")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    instrument(server, client, options)
+    app = server.http_app(json_response=json_response, stateless_http=stateless)
+    return app, app.router.lifespan_context(app)
+
+
+def _lowlevel_pod(client, options, stateless, json_response, bind):
+    import mcp.types as mcp_types
+    from mcp.server.lowlevel import Server
+
+    schema = {
+        "type": "object",
+        "properties": {"a": {"type": "integer"}, "b": {"type": "integer"}},
+    }
+
+    def total(arguments):
+        return str((arguments or {}).get("a", 0) + (arguments or {}).get("b", 0))
+
+    if MCP_MAJOR >= 2:
+
+        async def on_list_tools(ctx, params):
+            return mcp_types.ListToolsResult(
+                tools=[mcp_types.Tool(name="add", input_schema=schema)]
+            )
+
+        async def on_call_tool(ctx, params):
+            return mcp_types.CallToolResult(
+                content=[
+                    mcp_types.TextContent(type="text", text=total(params.arguments))
+                ]
+            )
+
+        server = Server(
+            "handshake", on_list_tools=on_list_tools, on_call_tool=on_call_tool
+        )
+        instrument(server, client, options)
+        app = server.streamable_http_app(
+            json_response=json_response, stateless_http=stateless
+        )
+        return app, server.session_manager.run()
+
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+
+    from posthog.mcp import PostHogMcpStatelessSessionMiddleware
+
+    server = Server("handshake")
+
+    @server.list_tools()
+    async def list_tools_handler():
+        return [mcp_types.Tool(name="add", inputSchema=schema)]
+
+    @server.call_tool()
+    async def call_tool_handler(name, arguments):
+        return [mcp_types.TextContent(type="text", text=total(arguments))]
+
+    instrument(server, client, options)
+    manager = StreamableHTTPSessionManager(
+        app=server, stateless=stateless, json_response=json_response
+    )
+    app = (
+        PostHogMcpStatelessSessionMiddleware(manager.handle_request, server=server)
+        if bind
+        else PostHogMcpStatelessSessionMiddleware(manager.handle_request)
+    )
+    return app, manager.run()
+
+
+@asynccontextmanager
+async def fleet(client: FakeClient, pods: int = 1, **pod_options: Any):
+    """``pods`` independently instrumented servers, each a live HTTP surface. Every
+    pod has its own tracking state, exactly like separate processes behind a
+    load balancer."""
+    async with AsyncExitStack() as stack:
+        surfaces: List[httpx.AsyncClient] = []
+        for _ in range(pods):
+            app, lifespan = make_pod(client, **pod_options)
+            await stack.enter_async_context(lifespan)
+            surfaces.append(
+                await stack.enter_async_context(
+                    httpx.AsyncClient(
+                        transport=httpx.ASGITransport(app=app),
+                        base_url="http://127.0.0.1:8000",
+                    )
+                )
+            )
+        yield RoundRobin(surfaces)
+
+
+class RoundRobin:
+    """A load balancer with no stickiness: each request goes to the next pod."""
+
+    def __init__(self, pods: List[httpx.AsyncClient]):
+        self.pods = pods
+        self.turn = 0
+
+    async def post(
+        self, body: Dict[str, Any], headers: Dict[str, str]
+    ) -> httpx.Response:
+        pod = self.pods[self.turn % len(self.pods)]
+        self.turn += 1
+        return await pod.post("/mcp", json=body, headers=headers)
+
+
+def rpc(method: str, params: Dict[str, Any], request_id: Optional[int] = 1):
+    body: Dict[str, Any] = {"jsonrpc": "2.0", "method": method, "params": params}
+    if request_id is not None:
+        body["id"] = request_id
+    return body
+
+
+def result_of(response: httpx.Response) -> Dict[str, Any]:
+    """The JSON-RPC message in a response, whether it came back as JSON or as SSE."""
+    if response.headers.get("content-type", "").startswith("text/event-stream"):
+        for line in response.text.splitlines():
+            if line.startswith("data:"):
+                return json.loads(line[len("data:") :])
+        raise AssertionError(f"no SSE data frame in {response.text!r}")
+    return response.json()
+
+
+async def handshake(
+    lb: RoundRobin,
+    *,
+    client_name: str = "codex-mcp-client",
+    extra_headers: Optional[Dict[str, str]] = None,
+    send_initialized: bool = True,
+):
+    """``initialize`` then ``notifications/initialized``, as every MCP client
+    connects. Returns the headers the client replays afterwards and the
+    negotiated protocol version."""
+    headers = {**BASE_HEADERS, **(extra_headers or {})}
+    response = await lb.post(
+        rpc(
+            "initialize",
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": client_name, "version": "0.50.0"},
+            },
+        ),
+        headers,
+    )
+    assert response.status_code == 200, response.text
+    negotiated = result_of(response)["result"]["protocolVersion"]
+    replay = {**headers, "mcp-protocol-version": negotiated}
+    session_header = response.headers.get("mcp-session-id")
+    if session_header:
+        replay["mcp-session-id"] = session_header
+    if send_initialized:
+        await lb.post(rpc("notifications/initialized", {}, None), replay)
+    return replay, negotiated
+
+
+async def call_add(lb: RoundRobin, headers: Dict[str, str], request_id: int = 3):
+    response = await lb.post(
+        rpc(
+            "tools/call",
+            {"name": "add", "arguments": {"a": 2, "b": 3, "context": "adding"}},
+            request_id,
+        ),
+        headers,
+    )
+    assert response.status_code == 200, response.text
+    return response
+
+
+async def list_tools(lb: RoundRobin, headers: Dict[str, str]):
+    response = await lb.post(rpc("tools/list", {}, 2), headers)
+    assert response.status_code == 200, response.text
+    return response
+
+
+# --- one event per handshake ------------------------------------------------------
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_one_initialize_per_handshake_across_stateless_pods(kind):
+    # The overcount this file exists for: dedupe used to be per process, so every
+    # pod a session touched emitted its own $mcp_initialize.
+    client = FakeClient()
+    async with fleet(client, pods=2, kind=kind) as lb:
+        headers, negotiated = await handshake(lb)
+        await list_tools(lb, headers)
+        await call_add(lb, headers, 3)
+        await call_add(lb, headers, 4)
+        await call_add(lb, headers, 5)
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert len(inits) == 1
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 3
+    sessions = {c["properties"]["$session_id"] for c in calls}
+    assert sessions == {inits[0]["properties"]["$session_id"]}
+    props = inits[0]["properties"]
+    assert props["$mcp_client_name"] == "codex-mcp-client"
+    assert props["$mcp_client_version"] == "0.50.0"
+    assert props["$mcp_protocol_version"] == negotiated
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_each_reconnect_is_one_initialize(kind):
+    client = FakeClient()
+    async with fleet(client, pods=2, kind=kind) as lb:
+        for _ in range(3):
+            headers, _ = await handshake(lb)
+            await list_tools(lb, headers)
+            await call_add(lb, headers)
+            await call_add(lb, headers, 4)
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert len(inits) == 3
+    assert len({e["properties"]["$session_id"] for e in inits}) == 3
+    assert len(_events(client, "$mcp_tool_call")) == 6
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_bare_handshake_is_counted(kind):
+    # Probes and health checkers connect and leave. There is no later request to
+    # hang a synthesized event on, which used to make them invisible.
+    client = FakeClient()
+    async with fleet(client, kind=kind) as lb:
+        await handshake(lb, send_initialized=False)
+        await handshake(lb)
+    await _flush()
+
+    assert len(_events(client, "$mcp_initialize")) == 2
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_initialize_session_matches_a_stateful_transport(kind):
+    # On a stateful server the transport assigns Mcp-Session-Id in the initialize
+    # response; the event must land in the session every later request resolves to.
+    client = FakeClient()
+    async with fleet(client, stateless=False, kind=kind) as lb:
+        headers, _ = await handshake(lb)
+        await call_add(lb, headers)
+        await call_add(lb, headers, 4)
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert len(inits) == 1
+    calls = _events(client, "$mcp_tool_call")
+    assert {c["properties"]["$session_id"] for c in calls} == {
+        inits[0]["properties"]["$session_id"]
+    }
+
+
+async def test_sse_response_mode():
+    # json_response=False answers each POST as an SSE stream, so the negotiated
+    # version has to come out of an SSE frame.
+    client = FakeClient()
+    async with fleet(client, pods=2, json_response=False) as lb:
+        headers, negotiated = await handshake(lb)
+        await call_add(lb, headers)
+        await call_add(lb, headers, 4)
+    await _flush()
+
+    inits = _events(client, "$mcp_initialize")
+    assert len(inits) == 1
+    assert inits[0]["properties"]["$mcp_protocol_version"] == negotiated
+
+
+async def test_initialize_carries_the_handshake_payload():
+    client = FakeClient()
+    async with fleet(client) as lb:
+        await handshake(lb)
+    await _flush()
+
+    (init,) = _events(client, "$mcp_initialize")
+    request = init["properties"]["$mcp_parameters"]
+    assert request["method"] == "initialize"
+    assert request["params"]["clientInfo"]["name"] == "codex-mcp-client"
+    response = init["properties"]["$mcp_response"]
+    assert response["serverInfo"]["name"] == "handshake"
+    assert init["properties"]["$mcp_duration_ms"] >= 0
+
+
+async def test_initialize_is_attributed_on_the_pod_that_served_it():
+    def identify(request, extra):
+        headers = get_request_headers(extra) or {}
+        token = headers.get("authorization", "")
+        return (
+            UserIdentity(distinct_id=token.removeprefix("Bearer ")) if token else None
+        )
+
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=False, identify=identify)
+    async with fleet(client, pods=2, options=options) as lb:
+        headers, _ = await handshake(
+            lb, extra_headers={"authorization": "Bearer user_alice"}
+        )
+        await call_add(lb, headers)
+    await _flush()
+
+    (init,) = _events(client, "$mcp_initialize")
+    assert init["distinct_id"] == "user_alice"
+    assert init["properties"]["$mcp_client_user_agent"]
+
+
+async def test_a_failed_initialize_is_not_captured():
+    client = FakeClient()
+    async with fleet(client) as lb:
+        response = await lb.post(rpc("initialize", {"capabilities": {}}), BASE_HEADERS)
+    await _flush()
+
+    assert "error" in result_of(response)
+    assert _events(client, "$mcp_initialize") == []
+
+
+async def test_an_echoed_conversation_does_not_initialize_again():
+    # ADR-0004 anchors echoed calls to the conversation's session. That session
+    # never sent an initialize, so it gets no $mcp_initialize of its own.
+    from posthog.mcp._conversation_id import _uuid7
+
+    conversation_id = _uuid7()
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=True)
+    async with fleet(client, pods=2, options=options) as lb:
+        headers, _ = await handshake(lb)
+        for request_id in (3, 4, 5):
+            response = await lb.post(
+                rpc(
+                    "tools/call",
+                    {
+                        "name": "add",
+                        "arguments": {
+                            "a": 1,
+                            "b": 1,
+                            "context": "again",
+                            "conversation_id": conversation_id,
+                        },
+                    },
+                    request_id,
+                ),
+                headers,
+            )
+            assert response.status_code == 200, response.text
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert len(calls) == 3
+    assert {c["properties"]["$mcp_conversation_id"] for c in calls} == {conversation_id}
+    assert len(_events(client, "$mcp_initialize")) == 1
+
+
+# --- the 2026-07-28 revision has no initialize -------------------------------------
+
+
+@pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 1.x cannot serve 2026-07-28")
+async def test_modern_era_requests_emit_no_initialize():
+    from posthog.test.mcp._helpers_v2 import modern_headers, modern_meta
+
+    client = FakeClient()
+    async with fleet(client, pods=2) as lb:
+        for request_id in (1, 2, 3):
+            response = await lb.post(
+                rpc(
+                    "tools/call",
+                    {
+                        "name": "add",
+                        "arguments": {"a": 1, "b": 2, "context": "modern"},
+                        "_meta": modern_meta(),
+                    },
+                    request_id,
+                ),
+                {**BASE_HEADERS, **modern_headers("tools/call", "add")},
+            )
+            assert response.status_code == 200, response.text
+    await _flush()
+
+    assert len(_events(client, "$mcp_tool_call")) == 3
+    assert _events(client, "$mcp_initialize") == []
+
+
+# --- mcp 1.x low-level server, middleware mounted by hand --------------------------
+
+
+@pytest.mark.skipif(MCP_MAJOR >= 2, reason="mcp 2.x observes initialize in-process")
+async def test_an_unbound_middleware_keeps_the_first_request_fallback():
+    # Without server= the middleware cannot reach the tracking state, so the first
+    # request of the session on each pod still stands in for the handshake: the
+    # pre-existing behaviour, kept so a hand-mounted middleware never goes dark.
+    client = FakeClient()
+    async with fleet(client, pods=2, kind="lowlevel", bind=False) as lb:
+        headers, _ = await handshake(lb)
+        await call_add(lb, headers)
+        await call_add(lb, headers, 4)
+    await _flush()
+
+    assert len(_events(client, "$mcp_initialize")) == 2
+
+
+# --- stdio: a real server process, driven over its pipes ---------------------------
+
+_STDIO_SERVER = """
+import importlib.metadata
+import json
+import os
+
+from posthog.mcp import MCPAnalyticsOptions, instrument
+
+
+class FileClient:
+    # Appends each capture to a file the test reads, one JSON line per event.
+    def capture(self, event, distinct_id=None, properties=None, **kwargs):
+        with open(os.environ["EVENTS_FILE"], "a") as sink:
+            sink.write(json.dumps({"event": event, "properties": properties or {}}, default=str) + "\\n")
+
+
+if int(importlib.metadata.version("mcp").split(".")[0]) < 2:
+    from mcp.server.fastmcp import FastMCP as Server
+else:
+    from mcp.server.mcpserver import MCPServer as Server
+
+server = Server("stdio-handshake")
+
+
+@server.tool()
+def add(a: int, b: int) -> int:
+    return a + b
+
+
+instrument(server, FileClient(), MCPAnalyticsOptions(enable_conversation_id=False))
+server.run()
+"""
+
+
+class StdioServer:
+    """The instrumented server as a child process on stdio, the way a desktop client
+    launches it: newline-delimited JSON-RPC on stdin/stdout."""
+
+    def __init__(self, process, events_file):
+        self.process = process
+        self.events_file = events_file
+
+    async def send(self, method, params, request_id=None):
+        self.process.stdin.write(
+            (json.dumps(rpc(method, params, request_id)) + "\n").encode()
+        )
+        await self.process.stdin.drain()
+        if request_id is None:
+            return None
+        line = await asyncio.wait_for(self.process.stdout.readline(), timeout=20)
+        return json.loads(line)
+
+    def events(self, name):
+        if not self.events_file.exists():
+            return []
+        lines = self.events_file.read_text().splitlines()
+        return [e for e in map(json.loads, lines) if e["event"] == name]
+
+    async def wait_for(self, name, count, timeout=5.0):
+        """Captures are fire-and-forget in the child, so give them a moment to land."""
+        for _ in range(int(timeout / 0.05)):
+            if len(self.events(name)) >= count:
+                break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)  # and anything that would make it one too many
+        return self.events(name)
+
+
+@asynccontextmanager
+async def stdio_server(tmp_path):
+    script = tmp_path / "stdio_server.py"
+    script.write_text(_STDIO_SERVER)
+    events_file = tmp_path / "events.jsonl"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script),
+        stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.DEVNULL,
+        env={**os.environ, "EVENTS_FILE": str(events_file)},
+        cwd=str(tmp_path),
+    )
+    try:
+        yield StdioServer(process, events_file)
+    finally:
+        if process.stdin and not process.stdin.is_closing():
+            process.stdin.close()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except asyncio.TimeoutError:
+            process.kill()
+            await process.wait()
+
+
+def _initialize_params():
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": "claude-desktop", "version": "1.2.0"},
+    }
+
+
+async def test_stdio_handshake_then_calls(tmp_path):
+    async with stdio_server(tmp_path) as server:
+        reply = await server.send("initialize", _initialize_params(), 1)
+        assert "result" in reply, reply
+        await server.send("notifications/initialized", {})
+        await server.send("tools/list", {}, 2)
+        for request_id in (3, 4):
+            reply = await server.send(
+                "tools/call",
+                {"name": "add", "arguments": {"a": 1, "b": 2, "context": "stdio"}},
+                request_id,
+            )
+            assert reply["result"]["isError"] is False, reply
+        calls = await server.wait_for("$mcp_tool_call", 2)
+        inits = await server.wait_for("$mcp_initialize", 1)
+
+    assert len(calls) == 2
+    assert len(inits) == 1
+    props = inits[0]["properties"]
+    assert props["$mcp_client_name"] == "claude-desktop"
+    assert {c["properties"]["$session_id"] for c in calls} == {props["$session_id"]}
+
+
+@pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 1.x stdio has no handshake seam")
+async def test_stdio_bare_handshake_is_counted(tmp_path):
+    async with stdio_server(tmp_path) as server:
+        reply = await server.send("initialize", _initialize_params(), 1)
+        assert "result" in reply, reply
+        inits = await server.wait_for("$mcp_initialize", 1)
+
+    assert len(inits) == 1
+    assert (
+        inits[0]["properties"]["$mcp_protocol_version"]
+        == reply["result"]["protocolVersion"]
+    )
+
+
+@pytest.mark.skipif(MCP_MAJOR >= 2, reason="mcp 2.x observes the stdio handshake")
+async def test_stdio_bare_handshake_is_missed_on_mcp_1(tmp_path):
+    # The documented limit of the first-request fallback: a stdio client that
+    # handshakes and never sends a request reports nothing on mcp 1.x.
+    async with stdio_server(tmp_path) as server:
+        reply = await server.send("initialize", _initialize_params(), 1)
+        assert "result" in reply, reply
+        inits = await server.wait_for("$mcp_initialize", 1, timeout=1.0)
+
+    assert inits == []
+
+
+# --- custom dispatcher: PostHogMCP behind an unbound middleware ---------------------
+
+
+def make_dispatcher(posthog_mcp):
+    """A hand-rolled JSON-RPC endpoint, the shape ``PostHogMCP`` exists for: the host
+    answers ``initialize`` itself and captures it through the manual API."""
+    from posthog.mcp import get_mcp_session
+
+    async def app(scope, receive, send):
+        body = b""
+        while True:
+            message = await receive()
+            body += message.get("body", b"")
+            if not message.get("more_body"):
+                break
+        request = json.loads(body)
+        session = get_mcp_session(scope)
+        if "id" not in request:  # a notification: accepted, nothing to answer
+            await send({"type": "http.response.start", "status": 202, "headers": []})
+            await send({"type": "http.response.body", "body": b""})
+            return
+        if request["method"] == "initialize":
+            client_info = request["params"]["clientInfo"]
+            posthog_mcp.capture_initialize(
+                client_name=client_info["name"],
+                client_version=client_info["version"],
+                session_id=session.session_id if session else None,
+            )
+            result = {
+                "protocolVersion": request["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "dispatcher", "version": "1.0.0"},
+            }
+        else:
+            result = {"tools": []}
+        payload = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result})
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"application/json")],
+            }
+        )
+        await send({"type": "http.response.body", "body": payload.encode()})
+
+    return app
+
+
+async def test_a_posthogmcp_dispatcher_reports_only_its_own_initialize():
+    from posthog.mcp import PostHogMCP, PostHogMcpStatelessSessionMiddleware
+
+    captured: List[Dict[str, Any]] = []
+
+    def keep(event):
+        captured.append(event)
+        return event
+
+    posthog_mcp = PostHogMCP("phc_test", send=False, before_send=keep)
+    # An instrumented server in the same process: an unbound middleware must never
+    # attach the dispatcher's handshakes to it.
+    bystander = FakeClient()
+    make_pod(bystander)
+
+    app = PostHogMcpStatelessSessionMiddleware(make_dispatcher(posthog_mcp))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+    ) as http:
+        lb = RoundRobin([http])
+        headers, _ = await handshake(lb, client_name="dispatcher-client")
+        await list_tools(lb, headers)
+    await _flush()
+
+    inits = [e for e in captured if e["event"] == "$mcp_initialize"]
+    assert len(inits) == 1
+    assert inits[0]["properties"]["$mcp_client_name"] == "dispatcher-client"
+    # The session the host read back from the minted token, not a second one.
+    token = decode_session_id(headers["mcp-session-id"])
+    assert token is not None
+    assert inits[0]["properties"]["$session_id"] == token.session_id
+    assert bystander.events == []
