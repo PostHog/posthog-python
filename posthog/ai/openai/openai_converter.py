@@ -153,13 +153,23 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
 
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
+                        # Custom tools carry their free-form text in `custom.input`,
+                        # with no `function` object.
+                        is_custom = getattr(tool_call, "type", None) == "custom"
+                        call = getattr(
+                            tool_call, "custom" if is_custom else "function", None
+                        )
+                        if call is None:
+                            continue
                         content.append(
                             {
                                 "type": "function",
                                 "id": tool_call.id,
                                 "function": {
-                                    "name": tool_call.function.name,
-                                    "arguments": tool_call.function.arguments,
+                                    "name": call.name,
+                                    "arguments": call.input
+                                    if is_custom
+                                    else call.arguments,
                                 },
                             }
                         )
