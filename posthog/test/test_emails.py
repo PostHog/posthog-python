@@ -562,3 +562,143 @@ def test_a_local_template_is_sent_by_key_and_content_hash(_name, overrides, hash
         "from": "Acme <hello@example.com>",
         "identifiers": {"distinct_id": "user_123"},
     }
+
+
+def uploaded(result: str = "created") -> Reply:
+    return (201, {"id": "tpl_1", "key": "welcome", "result": result}, {})
+
+
+def test_an_outdated_local_template_is_uploaded_then_sent_again_with_the_same_key():
+    emails, adapter = emails_with(
+        [rejected(409, "template_outdated"), uploaded(), accepted("msg_1")]
+    )
+
+    result = send_local_template(emails, text="Hi {{ variables.first_name }}")
+
+    assert result.id == "msg_1"
+    first_send, upload, second_send = adapter.requests
+    assert (upload.method, upload.url) == ("PUT", UPLOAD_URL)
+    assert json.loads(upload.body) == {
+        "name": "welcome",
+        "subject": "Welcome, {{ variables.first_name }}",
+        "html": "<p>Hi {{ variables.first_name }}</p>",
+        "text": "Hi {{ variables.first_name }}",
+        "if_not_superseded": True,
+        "if_code_managed": True,
+    }
+    assert "Idempotency-Key" not in upload.headers
+    assert upload.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert second_send.body == first_send.body
+    assert (
+        second_send.headers["Idempotency-Key"] == first_send.headers["Idempotency-Key"]
+    )
+
+
+@parameterized.expand(
+    [
+        ("refused_upload", rejected(409, "template_edited_in_posthog"), 2),
+        ("outdated_again", None, 3),
+    ]
+)
+def test_a_local_template_uploads_at_most_once_per_send(
+    _name, upload_reply, requests_made
+):
+    replies = (
+        [rejected(409, "template_outdated"), upload_reply]
+        if upload_reply
+        else [
+            rejected(409, "template_outdated"),
+            uploaded(),
+            rejected(409, "template_outdated"),
+        ]
+    )
+    emails, adapter = emails_with(replies)
+
+    with pytest.raises(EmailError) as raised:
+        send_local_template(emails)
+
+    assert (raised.value.status_code, raised.value.name) == (409, "validation_error")
+    assert len(adapter.requests) == requests_made
+
+
+def test_rendered_content_is_never_uploaded():
+    emails, adapter = emails_with([rejected(409, "template_outdated")])
+
+    with pytest.raises(EmailError):
+        send_code(emails, html=HTML)
+
+    assert [request.method for request in adapter.requests] == ["POST"]
+
+
+@pytest.mark.asyncio
+async def test_async_uploads_an_outdated_local_template_then_sends_again():
+    seen: list[httpx.Request] = []
+    replies = [
+        httpx.Response(409, json={"code": "template_outdated"}),
+        httpx.Response(201, json={"id": "tpl_1", "result": "created"}),
+        httpx.Response(202, json={"message_id": "msg_1"}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(SECRET_KEY)
+    emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    result = await emails.send(
+        to="user@example.com", **WELCOME, template_data={"first_name": "Jane"}
+    )
+
+    assert result.id == "msg_1"
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("POST", CODE_SEND_URL),
+        ("PUT", UPLOAD_URL),
+        ("POST", CODE_SEND_URL),
+    ]
+    first_send, upload, second_send = seen
+    assert json.loads(first_send.content)["template"] == {
+        "key": "welcome",
+        "hash": WELCOME_HASH,
+    }
+    assert "Idempotency-Key" not in upload.headers
+    assert second_send.content == first_send.content
+    assert (
+        second_send.headers["Idempotency-Key"] == first_send.headers["Idempotency-Key"]
+    )
+    await emails.aclose()
+
+
+@parameterized.expand(
+    [
+        ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
+        ("no_form", {"template_key": None}, TypeError),
+        ("no_content", {}, TypeError),
+        ("no_subject", {"subject": None, "html": HTML}, TypeError),
+        ("from_keyword", {"html": HTML, "from": "a@example.com"}, TypeError),
+        (
+            "key_with_space",
+            {"template_key": "reset password", "html": HTML},
+            ValueError,
+        ),
+        ("key_too_long", {"template_key": "k" * 401, "html": HTML}, ValueError),
+        ("empty_html", {"html": ""}, ValueError),
+        ("no_reply_to", {"html": HTML, "reply_to": []}, ValueError),
+        ("template_data_list", {"html": HTML, "template_data": [1]}, TypeError),
+    ]
+)
+def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
+    emails, adapter = emails_with([])
+    args = {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        **overrides,
+    }
+
+    with pytest.raises(error):
+        emails.send(
+            **{name: value for name, value in args.items() if value is not None}
+        )
+
+    assert adapter.requests == []

@@ -1,4 +1,4 @@
-"""Transactional email, sent from an email template in PostHog.
+"""Transactional email, sent from an email template in PostHog or from content in your code.
 
 Setup:
 
@@ -22,6 +22,26 @@ result = posthog.emails.send(
     idempotency_key="welcome:user_123",
 )
 print(result.id)  # the queued email
+
+# Content you rendered for this recipient, named by a key
+posthog.emails.send(
+    to="user@example.com",
+    template_key="password-reset",
+    subject="Reset your password",
+    html=rendered_html,
+    distinct_id="user_123",
+)
+
+# A template in your code. PostHog fills in the variables, and the client
+# uploads the template whenever its content changes.
+posthog.emails.send(
+    to="user@example.com",
+    template_key="welcome",
+    subject="Welcome, {{ variables.name }}",
+    html=welcome_html,
+    template_data={"name": "Ada"},
+    distinct_id="user_123",
+)
 ```
 
 ``posthog.emails`` above is the client's property. For async code, use
@@ -350,7 +370,9 @@ def _addresses(reply_to: Any) -> list[str]:
     if (
         not isinstance(addresses, Sequence)
         or not addresses
-        or not all(isinstance(address, str) and address.strip() for address in addresses)
+        or not all(
+            isinstance(address, str) and address.strip() for address in addresses
+        )
     ):
         raise ValueError("reply_to must be one address or a list of addresses.")
     return list(addresses)
@@ -458,9 +480,9 @@ def _error_name(status: Optional[int], code: str) -> str:
         return "not_found"
     if status == 409:
         return (
-            "validation_error"
-            if code == "template_outdated"
-            else "concurrent_idempotent_requests"
+            "concurrent_idempotent_requests"
+            if code in _IN_FLIGHT_CODES
+            else "validation_error"
         )
     if status == 422:
         return "invalid_idempotent_request"
@@ -512,8 +534,20 @@ def _parse_response(
                 if isinstance(warning, dict)
             ),
         )
+    raise _api_error(status, fields, retry_after_header)
+
+
+def _parse_upload(status: int, payload: Any, retry_after_header: Optional[str]) -> None:
+    if not 200 <= status < 300:
+        fields = payload if isinstance(payload, dict) else {}
+        raise _api_error(status, fields, retry_after_header)
+
+
+def _api_error(
+    status: int, fields: Mapping[str, Any], retry_after_header: Optional[str]
+) -> EmailError:
     code = _text(fields.get("code")) or "api_error"
-    raise EmailError(
+    return EmailError(
         name=_error_name(status, code),
         code=code,
         message=_text(fields.get("detail")) or f"PostHog answered HTTP {status}.",
@@ -551,23 +585,33 @@ def _no_op() -> None:
     pass
 
 
+def _is_outdated(error: EmailError) -> bool:
+    return error.status_code == 409 and error.code == "template_outdated"
+
+
 def _log_warnings(result: SendEmailResult) -> None:
     for warning in result.warnings:
         log.warning("PostHog email warning %s: %s", warning.code, warning.message)
 
 
-def _headers(secret_key: str, idempotency_key: str) -> dict[str, str]:
-    return {
+def _headers(secret_key: str, idempotency_key: Optional[str]) -> dict[str, str]:
+    headers = {
         "Authorization": f"Bearer {secret_key}",
         "Accept": "application/json",
         "Content-Type": "application/json",
-        "Idempotency-Key": idempotency_key,
         "User-Agent": f"posthog-python/{VERSION}",
     }
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
+
+
+_ResultT = TypeVar("_ResultT")
+_Parse = Callable[[int, Any, Optional[str]], _ResultT]
 
 
 class _BearerAuth(requests.auth.AuthBase):
-    def __init__(self, secret_key: str, idempotency_key: str) -> None:
+    def __init__(self, secret_key: str, idempotency_key: Optional[str]) -> None:
         self._headers = _headers(secret_key, idempotency_key)
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
@@ -722,15 +766,44 @@ class Emails(_EmailsBase):
             finish()
 
     def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
-        auth = _BearerAuth(self._secret_key(), prepared.idempotency_key)
+        secret_key = self._secret_key()
+        auth = _BearerAuth(secret_key, prepared.idempotency_key)
+        try:
+            result = self._request(
+                "POST", prepared.path, prepared.body, auth, _parse_response
+            )
+        except EmailError as error:
+            if prepared.upload is None or not _is_outdated(error):
+                raise
+            self._request(
+                "PUT",
+                prepared.upload.path,
+                prepared.upload.body,
+                _BearerAuth(secret_key, None),
+                _parse_upload,
+            )
+            result = self._request(
+                "POST", prepared.path, prepared.body, auth, _parse_response
+            )
+        _log_warnings(result)
+        return result
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        auth: _BearerAuth,
+        parse: _Parse[_ResultT],
+    ) -> _ResultT:
         session = self._get_session()
-        url = self.host + prepared.path
+        url = self.host + path
         for attempt in range(self.max_retries + 1):
             try:
                 response = session.request(
-                    "POST",
+                    method,
                     url,
-                    data=prepared.body,
+                    data=body,
                     auth=auth,
                     timeout=self.timeout,
                     allow_redirects=False,
@@ -740,15 +813,13 @@ class Emails(_EmailsBase):
                         payload = response.json()
                     except ValueError:
                         payload = None
-                    result = _parse_response(
+                    return parse(
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
                     )
                 finally:
                     response.close()
-                _log_warnings(result)
-                return result
             except requests.exceptions.RequestException:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
             except EmailError as exc:
@@ -847,28 +918,55 @@ class AsyncEmails(_EmailsBase):
             finish()
 
     async def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
-        headers = _headers(self._secret_key(), prepared.idempotency_key)
+        secret_key = self._secret_key()
+        headers = _headers(secret_key, prepared.idempotency_key)
+        try:
+            result = await self._request(
+                "POST", prepared.path, prepared.body, headers, _parse_response
+            )
+        except EmailError as error:
+            if prepared.upload is None or not _is_outdated(error):
+                raise
+            await self._request(
+                "PUT",
+                prepared.upload.path,
+                prepared.upload.body,
+                _headers(secret_key, None),
+                _parse_upload,
+            )
+            result = await self._request(
+                "POST", prepared.path, prepared.body, headers, _parse_response
+            )
+        _log_warnings(result)
+        return result
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        body: bytes,
+        headers: Mapping[str, str],
+        parse: _Parse[_ResultT],
+    ) -> _ResultT:
         httpx, client = self._get_client()
-        url = self.host + prepared.path
+        url = self.host + path
         for attempt in range(self.max_retries + 1):
             try:
-                response = await client.post(
-                    url, content=prepared.body, headers=headers
+                response = await client.request(
+                    method, url, content=body, headers=headers
                 )
                 try:
                     try:
                         payload = response.json()
                     except ValueError:
                         payload = None
-                    result = _parse_response(
+                    return parse(
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
                     )
                 finally:
                     await response.aclose()
-                _log_warnings(result)
-                return result
             except httpx.RequestError:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
             except EmailError as exc:
