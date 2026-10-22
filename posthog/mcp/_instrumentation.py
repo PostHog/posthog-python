@@ -244,11 +244,8 @@ async def record_initialize(
     data: MCPAnalyticsData,
     *,
     session_id: str,
-    client_name: Optional[str],
-    client_version: Optional[str],
-    protocol_version: Optional[str],
-    request: Dict[str, Any],
-    response: Any,
+    params: Dict[str, Any],
+    result: Any,
     extra: Optional[Dict[str, Any]],
     timestamp: datetime,
 ) -> None:
@@ -257,19 +254,28 @@ async def record_initialize(
     The Python MCP SDK answers ``initialize`` itself (mcp 1.x inside
     ``ServerSession``; mcp 2.x refuses a handler for it), so the seams that observe
     it — ``Server.middleware`` on 2.x, the ASGI middleware on 1.x over HTTP — call
-    this once the handshake has succeeded. Identify runs first so the event is
+    this once the handshake has succeeded. ``result`` is the server's reply where
+    the seam can read it, else ``None``. Identify runs first so the event is
     attributed on the pod that served the handshake, which on a stateless fleet
     may never see this client again."""
+
+    def text(value: Any) -> Optional[str]:
+        return value if isinstance(value, str) and value else None
+
+    client_info = params.get("clientInfo")
+    client_info = client_info if isinstance(client_info, dict) else {}
+    agreed = result.get("protocolVersion") if isinstance(result, dict) else None
+    request = {"method": "initialize", "params": params}
     await handle_identify(data, session_id, request, extra)
     data.mark_session_initialized(session_id)
     event: Dict[str, Any] = {
         "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
         "session_id": session_id,
-        "client_name": client_name,
-        "client_version": client_version,
-        "protocol_version": protocol_version,
+        "client_name": text(client_info.get("name")),
+        "client_version": text(client_info.get("version")),
+        "protocol_version": text(agreed) or text(params.get("protocolVersion")),
         "parameters": request,
-        "response": response,
+        "response": result,
         "timestamp": timestamp,
     }
     await _apply_event_properties(data, event, request, extra)

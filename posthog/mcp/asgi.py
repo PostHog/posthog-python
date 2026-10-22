@@ -279,61 +279,21 @@ def _initialize_params(
 
 
 class _InitializeResponse:
-    """A ``send`` that passes the ``initialize`` response through and keeps what
-    the event needs: the status, the ``Mcp-Session-Id`` the client will replay
-    (whichever of the transport or the mint set it), and the body, capped like the
-    request sniff."""
+    """A ``send`` that passes the ``initialize`` response through and keeps its
+    status and the ``Mcp-Session-Id`` the client will send back (whichever of the
+    transport or the mint set it). The body is not read."""
 
     def __init__(self, send: Any) -> None:
         self._send = send
         self.status: Optional[int] = None
         self.session_header: Optional[str] = None
-        self.content_type = ""
-        self._chunks: list[bytes] = []
-        self._size = 0
 
     async def __call__(self, message: Dict[str, Any]) -> None:
-        try:
-            self._observe(message)
-        except Exception as error:  # noqa: BLE001
-            log(f"PostHog MCP session middleware: response read failed - {error}")
-        await self._send(message)
-
-    def _observe(self, message: Dict[str, Any]) -> None:
         if message.get("type") == "http.response.start":
             self.status = message.get("status")
             headers = _decode_headers(message.get("headers") or [])
             self.session_header = headers.get(MCP_SESSION_HEADER.lower()) or None
-            self.content_type = headers.get("content-type", "")
-        elif message.get("type") == "http.response.body":
-            chunk = message.get("body", b"") or b""
-            if self._size + len(chunk) <= _MAX_SNIFF_BODY:
-                self._chunks.append(chunk)
-            self._size += len(chunk)
-
-    def reply(self, request_id: Any) -> Optional[Dict[str, Any]]:
-        """The JSON-RPC reply to ``request_id``, from a JSON body or an SSE stream.
-        ``None`` when there is none to read: the deprecated SSE transport answers
-        the POST with 202 and delivers the reply on its event stream."""
-        if self._size > _MAX_SNIFF_BODY:
-            return None
-        body = b"".join(self._chunks).decode("utf-8", errors="replace")
-        if self.content_type.startswith("text/event-stream"):
-            candidates = [
-                line[len("data:") :]
-                for line in body.splitlines()
-                if line.startswith("data:")
-            ]
-        else:
-            candidates = [body]
-        for candidate in candidates:
-            try:
-                message = json.loads(candidate)
-            except Exception:  # noqa: BLE001
-                continue
-            if isinstance(message, dict) and message.get("id") == request_id:
-                return message
-        return None
+        await self._send(message)
 
 
 class _InitializeContext:
@@ -347,20 +307,6 @@ class _InitializeContext:
         self.request = request
 
 
-def _http_request(scope: Any) -> Any:
-    try:
-        from starlette.requests import Request
-
-        return Request(scope)
-    except Exception:  # noqa: BLE001 - only headers are read; never fail the capture
-        return _Headers(_headers_dict(scope))
-
-
-class _Headers:
-    def __init__(self, headers: Dict[str, str]) -> None:
-        self.headers = headers
-
-
 async def _record_initialize(
     data: MCPAnalyticsData,
     message: Dict[str, Any],
@@ -368,36 +314,25 @@ async def _record_initialize(
     scope: Any,
     started: datetime,
 ) -> None:
-    """Emit ``$mcp_initialize`` for a handshake that succeeded, in the session the
-    client's later requests resolve to: the ``Mcp-Session-Id`` they replay (a
+    """Emit ``$mcp_initialize`` for a handshake the app answered, in the session the
+    client's later requests resolve to: the ``Mcp-Session-Id`` they send back (a
     stateful transport's id or our token), or this process's own session when the
-    response carried none."""
+    response carried none. The body is not read, so the event carries the protocol
+    version the client asked for."""
     try:
         if response.status is None or not 200 <= response.status < 300:
             return
-        reply = response.reply(message.get("id"))
-        if reply is not None and "error" in reply:
-            return
-        result = reply.get("result") if reply is not None else None
-        params, client_info = _initialize_params(message)
+        from starlette.requests import Request
+
         header = response.session_header
-        session_id = await resolve_session_id(
-            data, header, token=decode_session_id(header)
-        )
-        negotiated = result.get("protocolVersion") if isinstance(result, dict) else None
         await record_initialize(
             data,
-            session_id=session_id,
-            client_name=_str_or_none(client_info.get("name")),
-            client_version=_str_or_none(client_info.get("version")),
-            protocol_version=_str_or_none(negotiated)
-            or _str_or_none(params.get("protocolVersion")),
-            request={"method": "initialize", "params": params},
-            response=result,
-            extra={
-                "session_id": header,
-                "ctx": _InitializeContext(_http_request(scope)),
-            },
+            session_id=await resolve_session_id(
+                data, header, token=decode_session_id(header)
+            ),
+            params=_initialize_params(message)[0],
+            result=None,
+            extra={"session_id": header, "ctx": _InitializeContext(Request(scope))},
             timestamp=started,
         )
     except Exception as error:  # noqa: BLE001 - analytics must never break the host

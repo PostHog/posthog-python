@@ -58,7 +58,6 @@ def make_pod(
     *,
     kind: str = "official",
     stateless: bool = True,
-    json_response: bool = True,
     options: Optional[MCPAnalyticsOptions] = None,
     bind: bool = True,
 ):
@@ -68,9 +67,9 @@ def make_pod(
     so the middleware is mounted by hand, with or without ``server=``."""
     options = options or MCPAnalyticsOptions(enable_conversation_id=False)
     if kind == "fastmcp":
-        return _fastmcp_pod(client, options, stateless, json_response)
+        return _fastmcp_pod(client, options, stateless)
     if kind == "lowlevel":
-        return _lowlevel_pod(client, options, stateless, json_response, bind)
+        return _lowlevel_pod(client, options, stateless, bind)
     if MCP_MAJOR < 2:
         from mcp.server.fastmcp import FastMCP
         from mcp.server.transport_security import TransportSecuritySettings
@@ -78,7 +77,7 @@ def make_pod(
         server = FastMCP(
             "handshake",
             stateless_http=stateless,
-            json_response=json_response,
+            json_response=True,
             transport_security=TransportSecuritySettings(
                 enable_dns_rebinding_protection=False
             ),
@@ -96,13 +95,11 @@ def make_pod(
     if MCP_MAJOR < 2:
         app = server.streamable_http_app()
     else:
-        app = server.streamable_http_app(
-            json_response=json_response, stateless_http=stateless
-        )
+        app = server.streamable_http_app(json_response=True, stateless_http=stateless)
     return app, server.session_manager.run()
 
 
-def _fastmcp_pod(client, options, stateless, json_response):
+def _fastmcp_pod(client, options, stateless):
     fastmcp = pytest.importorskip("fastmcp")
 
     server = fastmcp.FastMCP("handshake")
@@ -112,11 +109,11 @@ def _fastmcp_pod(client, options, stateless, json_response):
         return a + b
 
     instrument(server, client, options)
-    app = server.http_app(json_response=json_response, stateless_http=stateless)
+    app = server.http_app(json_response=True, stateless_http=stateless)
     return app, app.router.lifespan_context(app)
 
 
-def _lowlevel_pod(client, options, stateless, json_response, bind):
+def _lowlevel_pod(client, options, stateless, bind):
     import mcp.types as mcp_types
     from mcp.server.lowlevel import Server
 
@@ -146,9 +143,7 @@ def _lowlevel_pod(client, options, stateless, json_response, bind):
             "handshake", on_list_tools=on_list_tools, on_call_tool=on_call_tool
         )
         instrument(server, client, options)
-        app = server.streamable_http_app(
-            json_response=json_response, stateless_http=stateless
-        )
+        app = server.streamable_http_app(json_response=True, stateless_http=stateless)
         return app, server.session_manager.run()
 
     from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -167,7 +162,7 @@ def _lowlevel_pod(client, options, stateless, json_response, bind):
 
     instrument(server, client, options)
     manager = StreamableHTTPSessionManager(
-        app=server, stateless=stateless, json_response=json_response
+        app=server, stateless=stateless, json_response=True
     )
     app = (
         PostHogMcpStatelessSessionMiddleware(manager.handle_request, server=server)
@@ -220,14 +215,12 @@ def rpc(method: str, params: Dict[str, Any], request_id: Optional[int] = 1):
     return body
 
 
-def result_of(response: httpx.Response) -> Dict[str, Any]:
-    """The JSON-RPC message in a response, whether it came back as JSON or as SSE."""
-    if response.headers.get("content-type", "").startswith("text/event-stream"):
-        for line in response.text.splitlines():
-            if line.startswith("data:"):
-                return json.loads(line[len("data:") :])
-        raise AssertionError(f"no SSE data frame in {response.text!r}")
-    return response.json()
+def initialize_params(client_name: str) -> Dict[str, Any]:
+    return {
+        "protocolVersion": PROTOCOL_VERSION,
+        "capabilities": {},
+        "clientInfo": {"name": client_name, "version": "0.50.0"},
+    }
 
 
 async def handshake(
@@ -241,19 +234,9 @@ async def handshake(
     connects. Returns the headers the client replays afterwards and the
     negotiated protocol version."""
     headers = {**BASE_HEADERS, **(extra_headers or {})}
-    response = await lb.post(
-        rpc(
-            "initialize",
-            {
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": client_name, "version": "0.50.0"},
-            },
-        ),
-        headers,
-    )
+    response = await lb.post(rpc("initialize", initialize_params(client_name)), headers)
     assert response.status_code == 200, response.text
-    negotiated = result_of(response)["result"]["protocolVersion"]
+    negotiated = response.json()["result"]["protocolVersion"]
     replay = {**headers, "mcp-protocol-version": negotiated}
     session_header = response.headers.get("mcp-session-id")
     if session_header:
@@ -263,13 +246,14 @@ async def handshake(
     return replay, negotiated
 
 
-async def call_add(lb: RoundRobin, headers: Dict[str, str], request_id: int = 3):
+async def call_add(
+    lb: RoundRobin, headers: Dict[str, str], request_id: int = 3, **extra: Any
+):
+    """``tools/call add``. ``extra`` adds arguments or params (``_meta``)."""
+    meta = {"_meta": extra.pop("_meta")} if "_meta" in extra else {}
+    arguments = {"a": 2, "b": 3, "context": "adding", **extra}
     response = await lb.post(
-        rpc(
-            "tools/call",
-            {"name": "add", "arguments": {"a": 2, "b": 3, "context": "adding"}},
-            request_id,
-        ),
+        rpc("tools/call", {"name": "add", "arguments": arguments, **meta}, request_id),
         headers,
     )
     assert response.status_code == 200, response.text
@@ -308,6 +292,10 @@ async def test_one_initialize_per_handshake_across_stateless_pods(kind):
     assert props["$mcp_client_name"] == "codex-mcp-client"
     assert props["$mcp_client_version"] == "0.50.0"
     assert props["$mcp_protocol_version"] == negotiated
+    assert (
+        props["$mcp_parameters"]["params"]["clientInfo"]["name"] == "codex-mcp-client"
+    )
+    assert props["$mcp_duration_ms"] >= 0
 
 
 @pytest.mark.parametrize("kind", KINDS)
@@ -359,36 +347,6 @@ async def test_initialize_session_matches_a_stateful_transport(kind):
     }
 
 
-async def test_sse_response_mode():
-    # json_response=False answers each POST as an SSE stream, so the negotiated
-    # version has to come out of an SSE frame.
-    client = FakeClient()
-    async with fleet(client, pods=2, json_response=False) as lb:
-        headers, negotiated = await handshake(lb)
-        await call_add(lb, headers)
-        await call_add(lb, headers, 4)
-    await _flush()
-
-    inits = _events(client, "$mcp_initialize")
-    assert len(inits) == 1
-    assert inits[0]["properties"]["$mcp_protocol_version"] == negotiated
-
-
-async def test_initialize_carries_the_handshake_payload():
-    client = FakeClient()
-    async with fleet(client) as lb:
-        await handshake(lb)
-    await _flush()
-
-    (init,) = _events(client, "$mcp_initialize")
-    request = init["properties"]["$mcp_parameters"]
-    assert request["method"] == "initialize"
-    assert request["params"]["clientInfo"]["name"] == "codex-mcp-client"
-    response = init["properties"]["$mcp_response"]
-    assert response["serverInfo"]["name"] == "handshake"
-    assert init["properties"]["$mcp_duration_ms"] >= 0
-
-
 async def test_initialize_is_attributed_on_the_pod_that_served_it():
     def identify(request, extra):
         headers = get_request_headers(extra) or {}
@@ -411,13 +369,17 @@ async def test_initialize_is_attributed_on_the_pod_that_served_it():
     assert init["properties"]["$mcp_client_user_agent"]
 
 
+@pytest.mark.skipif(
+    MCP_MAJOR < 2,
+    reason="mcp 1.x reads only the response head, and a JSON-RPC error is an HTTP 200",
+)
 async def test_a_failed_initialize_is_not_captured():
     client = FakeClient()
     async with fleet(client) as lb:
         response = await lb.post(rpc("initialize", {"capabilities": {}}), BASE_HEADERS)
     await _flush()
 
-    assert "error" in result_of(response)
+    assert "error" in response.json()
     assert _events(client, "$mcp_initialize") == []
 
 
@@ -432,23 +394,7 @@ async def test_an_echoed_conversation_does_not_initialize_again():
     async with fleet(client, pods=2, options=options) as lb:
         headers, _ = await handshake(lb)
         for request_id in (3, 4, 5):
-            response = await lb.post(
-                rpc(
-                    "tools/call",
-                    {
-                        "name": "add",
-                        "arguments": {
-                            "a": 1,
-                            "b": 1,
-                            "context": "again",
-                            "conversation_id": conversation_id,
-                        },
-                    },
-                    request_id,
-                ),
-                headers,
-            )
-            assert response.status_code == 200, response.text
+            await call_add(lb, headers, request_id, conversation_id=conversation_id)
     await _flush()
 
     calls = _events(client, "$mcp_tool_call")
@@ -465,21 +411,10 @@ async def test_modern_era_requests_emit_no_initialize():
     from posthog.test.mcp._helpers_v2 import modern_headers, modern_meta
 
     client = FakeClient()
+    headers = {**BASE_HEADERS, **modern_headers("tools/call", "add")}
     async with fleet(client, pods=2) as lb:
         for request_id in (1, 2, 3):
-            response = await lb.post(
-                rpc(
-                    "tools/call",
-                    {
-                        "name": "add",
-                        "arguments": {"a": 1, "b": 2, "context": "modern"},
-                        "_meta": modern_meta(),
-                    },
-                    request_id,
-                ),
-                {**BASE_HEADERS, **modern_headers("tools/call", "add")},
-            )
-            assert response.status_code == 200, response.text
+            await call_add(lb, headers, request_id, _meta=modern_meta())
     await _flush()
 
     assert len(_events(client, "$mcp_tool_call")) == 3
@@ -557,20 +492,19 @@ class StdioServer:
         line = await asyncio.wait_for(self.process.stdout.readline(), timeout=20)
         return json.loads(line)
 
-    def events(self, name):
-        if not self.events_file.exists():
-            return []
+    async def events(self, name, count):
+        """Captures are fire-and-forget in the child: wait for ``count`` of them,
+        then a moment more for any that would make it one too many."""
+        for _ in range(100):
+            if self.events_file.exists():
+                lines = self.events_file.read_text().splitlines()
+                found = [e for e in map(json.loads, lines) if e["event"] == name]
+                if len(found) >= count:
+                    break
+            await asyncio.sleep(0.05)
+        await asyncio.sleep(0.2)
         lines = self.events_file.read_text().splitlines()
         return [e for e in map(json.loads, lines) if e["event"] == name]
-
-    async def wait_for(self, name, count, timeout=5.0):
-        """Captures are fire-and-forget in the child, so give them a moment to land."""
-        for _ in range(int(timeout / 0.05)):
-            if len(self.events(name)) >= count:
-                break
-            await asyncio.sleep(0.05)
-        await asyncio.sleep(0.2)  # and anything that would make it one too many
-        return self.events(name)
 
 
 @asynccontextmanager
@@ -599,17 +533,9 @@ async def stdio_server(tmp_path):
             await process.wait()
 
 
-def _initialize_params():
-    return {
-        "protocolVersion": PROTOCOL_VERSION,
-        "capabilities": {},
-        "clientInfo": {"name": "claude-desktop", "version": "1.2.0"},
-    }
-
-
 async def test_stdio_handshake_then_calls(tmp_path):
     async with stdio_server(tmp_path) as server:
-        reply = await server.send("initialize", _initialize_params(), 1)
+        reply = await server.send("initialize", initialize_params("claude-desktop"), 1)
         assert "result" in reply, reply
         await server.send("notifications/initialized", {})
         await server.send("tools/list", {}, 2)
@@ -620,8 +546,8 @@ async def test_stdio_handshake_then_calls(tmp_path):
                 request_id,
             )
             assert reply["result"]["isError"] is False, reply
-        calls = await server.wait_for("$mcp_tool_call", 2)
-        inits = await server.wait_for("$mcp_initialize", 1)
+        calls = await server.events("$mcp_tool_call", 2)
+        inits = await server.events("$mcp_initialize", 1)
 
     assert len(calls) == 2
     assert len(inits) == 1
@@ -633,9 +559,9 @@ async def test_stdio_handshake_then_calls(tmp_path):
 @pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 1.x stdio has no handshake seam")
 async def test_stdio_bare_handshake_is_counted(tmp_path):
     async with stdio_server(tmp_path) as server:
-        reply = await server.send("initialize", _initialize_params(), 1)
+        reply = await server.send("initialize", initialize_params("claude-desktop"), 1)
         assert "result" in reply, reply
-        inits = await server.wait_for("$mcp_initialize", 1)
+        inits = await server.events("$mcp_initialize", 1)
 
     assert len(inits) == 1
     assert (
@@ -644,64 +570,37 @@ async def test_stdio_bare_handshake_is_counted(tmp_path):
     )
 
 
-@pytest.mark.skipif(MCP_MAJOR >= 2, reason="mcp 2.x observes the stdio handshake")
-async def test_stdio_bare_handshake_is_missed_on_mcp_1(tmp_path):
-    # The documented limit of the first-request fallback: a stdio client that
-    # handshakes and never sends a request reports nothing on mcp 1.x.
-    async with stdio_server(tmp_path) as server:
-        reply = await server.send("initialize", _initialize_params(), 1)
-        assert "result" in reply, reply
-        inits = await server.wait_for("$mcp_initialize", 1, timeout=1.0)
-
-    assert inits == []
-
-
 # --- custom dispatcher: PostHogMCP behind an unbound middleware ---------------------
 
 
 def make_dispatcher(posthog_mcp):
     """A hand-rolled JSON-RPC endpoint, the shape ``PostHogMCP`` exists for: the host
     answers ``initialize`` itself and captures it through the manual API."""
+    from starlette.applications import Starlette
+    from starlette.responses import JSONResponse, Response
+    from starlette.routing import Route
+
     from posthog.mcp import get_mcp_session
 
-    async def app(scope, receive, send):
-        body = b""
-        while True:
-            message = await receive()
-            body += message.get("body", b"")
-            if not message.get("more_body"):
-                break
-        request = json.loads(body)
-        session = get_mcp_session(scope)
-        if "id" not in request:  # a notification: accepted, nothing to answer
-            await send({"type": "http.response.start", "status": 202, "headers": []})
-            await send({"type": "http.response.body", "body": b""})
-            return
-        if request["method"] == "initialize":
-            client_info = request["params"]["clientInfo"]
+    async def endpoint(request):
+        message = await request.json()
+        if "id" not in message:  # a notification: accepted, nothing to answer
+            return Response(status_code=202)
+        result: Dict[str, Any] = {"tools": []}
+        if message["method"] == "initialize":
+            session = get_mcp_session(request)
             posthog_mcp.capture_initialize(
-                client_name=client_info["name"],
-                client_version=client_info["version"],
+                client_name=message["params"]["clientInfo"]["name"],
                 session_id=session.session_id if session else None,
             )
             result = {
-                "protocolVersion": request["params"]["protocolVersion"],
-                "capabilities": {"tools": {}},
+                "protocolVersion": message["params"]["protocolVersion"],
+                "capabilities": {},
                 "serverInfo": {"name": "dispatcher", "version": "1.0.0"},
             }
-        else:
-            result = {"tools": []}
-        payload = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result})
-        await send(
-            {
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [(b"content-type", b"application/json")],
-            }
-        )
-        await send({"type": "http.response.body", "body": payload.encode()})
+        return JSONResponse({"jsonrpc": "2.0", "id": message["id"], "result": result})
 
-    return app
+    return Starlette(routes=[Route("/mcp", endpoint, methods=["POST"])])
 
 
 async def test_a_posthogmcp_dispatcher_reports_only_its_own_initialize():

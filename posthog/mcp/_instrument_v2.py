@@ -192,33 +192,17 @@ async def _record_v2_initialize(
     data: MCPAnalyticsData, ctx: Any, result: Any, started: datetime
 ) -> None:
     try:
-        params = dict(ctx.params) if isinstance(ctx.params, Mapping) else {}
-        client_info = params.get("clientInfo")
-        client_info = client_info if isinstance(client_info, Mapping) else {}
-        response = _to_jsonable(result)
-        negotiated = (
-            response.get("protocolVersion") if isinstance(response, dict) else None
-        )
         mcp_session_id, token = _initialize_session(ctx)
-        session_id = await resolve_session_id(data, mcp_session_id, token=token)
         await record_initialize(
             data,
-            session_id=session_id,
-            client_name=_str_or_none(client_info.get("name")),
-            client_version=_str_or_none(client_info.get("version")),
-            protocol_version=_str_or_none(negotiated)
-            or _str_or_none(params.get("protocolVersion")),
-            request={"method": "initialize", "params": params},
-            response=response,
+            session_id=await resolve_session_id(data, mcp_session_id, token=token),
+            params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
+            result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
             timestamp=started,
         )
     except Exception as error:  # noqa: BLE001 - analytics must never break the handshake
         log(f"Error: failed to capture $mcp_initialize - {error}")
-
-
-def _str_or_none(value: Any) -> Optional[str]:
-    return value if isinstance(value, str) and value else None
 
 
 # --- registry plumbing ---------------------------------------------------------

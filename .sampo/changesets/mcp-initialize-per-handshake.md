@@ -8,4 +8,4 @@ Before, the SDK sent the event on the first request of each session, once per pr
 
 On MCP SDK 2.x, the event comes from `Server.middleware` on every transport. Requests on the 2026-07-28 spec, which has no `initialize`, no longer send one. On MCP SDK 1.x over HTTP, the event comes from `PostHogMcpStatelessSessionMiddleware`. The apps that `instrument()` autowires get this with no change. If you mount the middleware by hand, pass the server as `server=`. MCP SDK 1.x over stdio keeps the first request as the trigger.
 
-The event now also has the handshake request and the server reply as `$mcp_parameters` and `$mcp_response`.
+The event now also has the handshake request as `$mcp_parameters`. On MCP SDK 2.x, it also has the server reply as `$mcp_response`.
