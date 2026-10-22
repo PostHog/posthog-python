@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.6 — 2026-10-22
+
+### Patch changes
+
+- [a95331f](https://github.com/posthog/posthog-python/commit/a95331f171a33ca0674833a5aada371cc6446bc9) Retain the minimal-event gate and experiment metadata from the local definitions used by `evaluate_flags()`, including first-use loading and definition refreshes during evaluation. — Thanks @dustinbyrne!
+
 ## 7.75.5 — 2026-10-22
 
 ### Patch changes
