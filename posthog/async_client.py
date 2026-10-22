@@ -98,8 +98,11 @@ from .request import QuotaLimitError, determine_server_host, normalize_host
 from .types import FlagMetadata, FlagValue, normalize_flags_response
 from .utils import (
     SizeLimitedDict,
+    _is_personal_api_key,
     _normalize_timestamp,
     clean,
+    _drop_invalid_distinct_id,
+    _drop_invalid_event_name,
     system_context,
 )
 from .version import VERSION
@@ -189,7 +192,9 @@ class AsyncClient:
         self.on_error = on_error
         self.max_retries = max(0, max_retries)
         self.timeout = timeout
-        self.disabled = disabled or not self.api_key
+        self.disabled = (
+            disabled or not self.api_key or _is_personal_api_key(self.api_key)
+        )
         self.disable_geoip = disable_geoip
         self.is_server = is_server
         self.historical_migration = historical_migration
@@ -275,6 +280,11 @@ class AsyncClient:
         if not self.api_key:
             self.log.error(
                 "api_key is empty after trimming whitespace; check your project API key"
+            )
+        elif _is_personal_api_key(self.api_key):
+            self.log.error(
+                "api_key is a personal API key (phx_...), not a project API key; "
+                "PostHog is disabled. Use the project API key (phc_...)."
             )
 
         self._analytics_lane = _AsyncLane(
@@ -472,8 +482,8 @@ class AsyncClient:
             msg["timestamp"] = _normalize_timestamp(timestamp)
         except ValueError:
             self.log.warning(
-                "Invalid timestamp %r. Falling back to the current UTC time.",
-                timestamp,
+                "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
+                "Falling back to the current UTC time."
             )
             msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
@@ -498,7 +508,14 @@ class AsyncClient:
         self, msg: dict[str, Any], defaults: Optional[_EventDefaults]
     ) -> Optional[dict[str, Any]]:
         _fill_event_defaults(msg, defaults)
-        return await self._run_before_send(msg)
+        processed = await self._run_before_send(msg)
+        if (
+            processed is None
+            or _drop_invalid_event_name(self.log, processed)
+            or _drop_invalid_distinct_id(self.log, processed)
+        ):
+            return None
+        return processed
 
     async def _run_before_send(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
         if self.before_send is None:

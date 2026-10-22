@@ -115,6 +115,23 @@ class TestModuleLevelSetup(unittest.TestCase):
         self.assertTrue(client.disabled)
         self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
 
+    @parameterized.expand(
+        [
+            ("api_key", "api_key"),
+            ("project_api_key", "project_api_key"),
+        ]
+    )
+    def test_setup_keeps_client_disabled_for_personal_api_key(self, _name, setting):
+        setattr(posthog, setting, " phx_not_a_real_key ")
+
+        client = posthog.setup()
+
+        # Module calls re-run setup(), which must not re-enable the client.
+        self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+        self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+        self.assertIs(client, posthog.default_client)
+        self.assertTrue(client.disabled)
+
     def test_setup_uses_project_api_key_when_api_key_is_unset(self):
         posthog.project_api_key = " phc_project_key "
 

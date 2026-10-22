@@ -2,6 +2,8 @@ import importlib
 import unittest
 from unittest import mock
 
+from parameterized import parameterized
+
 import posthog
 
 from posthog.client import Client
@@ -243,28 +245,45 @@ class TestClient(unittest.TestCase):
             "before_send must return a dict or None", mock_log.call_args.args[0]
         )
 
-    def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(self):
-        def add_invalid_mapping_key(event):
+    @parameterized.expand(
+        [
+            # A key json cannot write costs only that key.
+            (
+                "unwritable_key",
+                ("private-key",),
+                "private-value",
+                ["malformed", "valid"],
+            ),
+            # A value json cannot write costs only that event, never the batch.
+            ("non_finite_value", "private-key", float("nan"), ["valid"]),
+        ]
+    )
+    def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(
+        self, _name, key, value, expected_events
+    ):
+        def add_malformed_property(event):
             if event["event"] == "malformed":
-                event["properties"][("private-key",)] = "private-value"
+                event["properties"][key] = value
             return event
 
         client = Client(
             FAKE_TEST_API_KEY,
-            before_send=add_invalid_mapping_key,
-            flush_at=1,
+            before_send=add_malformed_property,
+            flush_at=2,
             flush_interval=0.01,
         )
         with (
             patch_capture_send("consumer") as mock_post,
-            self.assertLogs("posthog", level="ERROR") as logs,
+            self.assertLogs("posthog", level="DEBUG") as logs,
         ):
             client.capture("malformed", distinct_id="user1")
             client.capture("valid", distinct_id="user1")
             client.shutdown()
 
         mock_post.assert_called_once()
-        self.assertEqual([event["event"] for event in sent_batch(mock_post)], ["valid"])
+        sent = sent_batch(mock_post)
+        self.assertEqual([event["event"] for event in sent], expected_events)
+        self.assertTrue(all(key not in event["properties"] for event in sent))
         self.assertEqual(client.queue.unfinished_tasks, 0)
         self.assertTrue(all(not consumer.is_alive() for consumer in client.consumers))
         self.assertNotIn("private-key", "\n".join(logs.output))

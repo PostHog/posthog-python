@@ -136,16 +136,88 @@ def _clean_list(list_):
     return [clean(item) for item in list_]
 
 
+_warned_reasons: set[str] = set()
+_warned_reasons_lock = threading.Lock()
+
+
+def _warn_once(logger: logging.Logger, reason: str, message: str, *args: Any) -> None:
+    """Log `message` the first time `reason` occurs in this process, then stay silent.
+
+    For drops caused by caller input, which can repeat at event rate.
+    """
+    with _warned_reasons_lock:
+        if reason in _warned_reasons:
+            return
+        _warned_reasons.add(reason)
+    logger.warning(message, *args)
+
+
+def _is_personal_api_key(api_key: str) -> bool:
+    """A personal API key (phx_...) is never a project API key; capture rejects it."""
+    return api_key.startswith("phx_")
+
+
+def _invalid_event_name_reason(event: Any) -> Optional[str]:
+    """Why capture would reject `event` as an event name, or None if it is valid."""
+    if event is None:
+        return "missing"
+    if not isinstance(event, str):
+        return "non-string"
+    if not event:
+        return "empty"
+    return None
+
+
+def _drop_invalid_event_name(logger: logging.Logger, msg: dict) -> bool:
+    """True when `msg` has an event name capture would reject; logs once per reason."""
+    reason = _invalid_event_name_reason(msg.get("event"))
+    if reason is None:
+        return False
+    _warn_once(
+        logger,
+        f"event_name_{reason}",  # pragma: no mutate
+        "Dropping an event with a %s name: event names must be non-empty strings. "
+        "Later events dropped for the same reason are not logged.",
+        reason,
+    )
+    return True
+
+
+def _drop_invalid_distinct_id(logger: logging.Logger, msg: dict) -> bool:
+    """True when `msg` has no string distinct_id; logs once per reason.
+
+    Runs after before_send, which may set any value; the SDK never converts it there.
+    """
+    distinct_id = msg.get("distinct_id")
+    if isinstance(distinct_id, str):
+        return False
+    reason = "missing" if distinct_id is None else "non-string"
+    _warn_once(
+        logger,
+        f"distinct_id_{reason}",  # pragma: no mutate
+        "Dropping an event with a %s distinct_id: distinct IDs must be strings. "
+        "Later events dropped for the same reason are not logged.",
+        reason,
+    )
+    return True
+
+
+# The key types json.dumps can write; it converts the non-string ones to strings.
+_JSON_KEY_TYPES = (str, int, float, bool, type(None))
+
+
 def _clean_dict(dict_):
     data = {}
     for k, v in dict_.items():
+        # Drop only a key json cannot write, so one bad key never costs the event.
+        if not isinstance(k, _JSON_KEY_TYPES):
+            continue
         try:
             data[k] = clean(v)
         except TypeError:
             log.warning(
-                'Dictionary values must be serializeable to JSON "%s" value %s of type %s is unsupported.',
+                'Dictionary value for key "%s" of type %s is not JSON serializable, dropping it.',
                 k,
-                v,
                 type(v),
             )
     return data

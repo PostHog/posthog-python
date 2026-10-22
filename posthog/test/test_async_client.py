@@ -205,6 +205,41 @@ async def test_capture_runs_async_before_send_in_consumer():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("bad_id", [123, 1.5, None, ["user"], {"id": "user"}])
+async def test_capture_drops_an_event_whose_before_send_distinct_id_is_not_a_string(
+    bad_id,
+):
+    batches = []
+
+    def before_send(event):
+        if event["event"] == "bad":
+            event["distinct_id"] = bad_id
+        return event
+
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
+
+    with (
+        patch_async_capture_send(side_effect=send_batch),
+        mock.patch("posthog.utils._warned_reasons", set()),
+        mock.patch.object(AsyncPosthog.log, "warning") as mock_warning,
+    ):
+        async with AsyncPosthog(
+            "test-key", before_send=before_send, flush_interval=30
+        ) as client:
+            client.capture("bad", distinct_id="user")
+            client.capture("good", distinct_id="user")
+            assert await client.capture_immediate("bad", distinct_id="user") is None
+            await client.flush(timeout_seconds=1)
+
+    events = [event for batch in batches for event in batch]
+    assert [(e["event"], e["distinct_id"]) for e in events] == [("good", "user")]
+    mock_warning.assert_called_once()
+    assert "distinct IDs must be strings" in mock_warning.call_args[0][0]
+    assert repr(bad_id) not in repr(mock_warning.call_args)
+
+
+@pytest.mark.asyncio
 async def test_capture_preserves_context_for_each_buffered_event():
     request_id = contextvars.ContextVar("request_id")
     batches = []
@@ -408,8 +443,23 @@ async def test_ai_capture_handles_a_non_string_event_name_like_capture(event):
     try:
         expected = client.capture(event, distinct_id="user-1") is None
         assert (client.capture_ai(event, distinct_id="user-1") is None) is expected
-        immediate = await client.capture_ai_immediate(event, distinct_id="user-1")
-        assert (immediate is None) is expected
+        # The immediate paths process the event, so they drop the invalid name.
+        assert await client.capture_immediate(event, distinct_id="user-1") is None
+        assert await client.capture_ai_immediate(event, distinct_id="user-1") is None
+    finally:
+        await client.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", ["", " ", "phx_secret"])
+async def test_missing_or_personal_api_key_disables_the_client(api_key):
+    with mock.patch.object(AsyncPosthog.log, "error") as mock_error:
+        client = AsyncPosthog(api_key, send=False)
+    try:
+        assert client.disabled
+        assert client.capture("event", distinct_id="user-1") is None
+        mock_error.assert_called_once()
+        assert "secret" not in repr(mock_error.call_args)
     finally:
         await client.shutdown()
 
