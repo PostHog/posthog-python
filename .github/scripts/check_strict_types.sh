@@ -15,6 +15,7 @@ import atexit
 
 import posthog
 from posthog import FeatureFlagEvaluations, FlagValue, Posthog
+from posthog.emails import AsyncEmails, Emails, SendEmailResult
 from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
@@ -40,6 +41,17 @@ span.end()
 
 _ = (flag_value, all_flags, enabled, payload, evaluations, active)
 
+emails = Emails("phs_example")
+template_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_data={"name": "Ada"})
+rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"])
+local_template_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Hi {{ variables.name }}", text="Hi", template_data={"name": "Ada"})
+_ = (template_send, rendered_send, local_template_send)
+
+
+async def async_email_types() -> None:
+    sent: SendEmailResult = await AsyncEmails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>")
+    _ = sent
+
 
 async def offline_evaluation_types(
     sync_client: OfflineEvaluations, async_client: AsyncOfflineEvaluations
@@ -64,15 +76,22 @@ async def offline_evaluation_types(
     _ = config
 PY
 
-cat > "$tmp/invalid_offline_types.py" <<'PY'
+cat > "$tmp/invalid_types.py" <<'PY'
 # pyright: strict
 from posthog.ai.evaluations import BooleanScorerConfig, CategoricalScorerConfig, NumericPassingRule, NumericScorerConfig, OfflineEvaluations
+from posthog.emails import AsyncEmails, Emails
 
 client = OfflineEvaluations(project_id=123, secret_key="phx_example")
 NumericPassingRule(operator="gt", threshold=0.8)  # expected-type-error
 NumericScorerConfig(unknown_setting=True)  # expected-type-error
 CategoricalScorerConfig(selection_mode="single")  # expected-type-error
 client.scorers.create(name="Bad config", kind="numeric", config=BooleanScorerConfig(true_is_failure=True))  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_key="welcome", subject="Hi", html="<p>Hi</p>")  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_key="welcome", html="<p>Hi</p>")  # expected-type-error
+
+
+async def invalid_async_email() -> None:
+    await AsyncEmails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", subject="Hi")  # expected-type-error
 PY
 
 "$tmp/.venv/bin/python" - <<'PY' > "$tmp/public_api_access.py"
@@ -116,8 +135,8 @@ JSON
 cd "$tmp"
 "$tmp/.venv/bin/python" -m pyright strict_posthog_types.py public_api_access.py
 
-if "$tmp/.venv/bin/python" -m pyright --outputjson invalid_offline_types.py > invalid_types.json; then
-    echo "Invalid offline evaluation configurations unexpectedly passed type checking."
+if "$tmp/.venv/bin/python" -m pyright --outputjson invalid_types.py > invalid_types.json; then
+    echo "Invalid offline evaluation configurations and email sends unexpectedly passed type checking."
     exit 1
 fi
 "$tmp/.venv/bin/python" - <<'PY'
@@ -125,11 +144,11 @@ import json
 from pathlib import Path
 
 expected = {
-    index for index, line in enumerate(Path("invalid_offline_types.py").read_text().splitlines())
+    index for index, line in enumerate(Path("invalid_types.py").read_text().splitlines())
     if "expected-type-error" in line
 }
 diagnostics = json.loads(Path("invalid_types.json").read_text())["generalDiagnostics"]
 actual = {item["range"]["start"]["line"] for item in diagnostics if item["severity"] == "error"}
 assert actual == expected, diagnostics
-print("Offline evaluation configuration types reject invalid inputs.")
+print("Offline evaluation configuration and email send types reject invalid inputs.")
 PY

@@ -302,14 +302,13 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
             "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
         )
     content = {
-        "subject": _nonempty_text(args, "subject"),
-        "html": _optional_text(args, "html"),
-        "text": _optional_text(args, "text"),
+        field: _nonempty_text(args, field)
+        for field in ("subject", "html", "text")
+        if field in args
     }
-    if content["html"] is None and content["text"] is None:
+    if "html" not in content and "text" not in content:
         raise TypeError("send() needs html, text or both.")
 
-    present = {field: value for field, value in content.items() if value is not None}
     payload: dict[str, Any] = {"to": to}
     upload = None
     if "template_data" in args:
@@ -323,14 +322,14 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
             body=_encode(
                 {
                     "name": template_key,
-                    **present,
+                    **content,
                     "if_not_superseded": True,
                     "if_code_managed": True,
                 }
             ),
         )
     else:
-        payload.update({"template_key": template_key, **present})
+        payload.update({"template_key": template_key, **content})
     payload.update(_sender(args))
     if distinct_id is not None:
         payload["identifiers"] = {"distinct_id": distinct_id}
@@ -342,11 +341,11 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     )
 
 
-def _content_hash(content: Mapping[str, Optional[str]]) -> str:
+def _content_hash(content: Mapping[str, str]) -> str:
     """PostHog's content hash v1 of a template, so a send can say which content it holds."""
     encoded = bytearray(_CONTENT_HASH_HEADER)
     for field in ("subject", "preheader", "html", "text"):
-        value = (content.get(field) or "").replace("\r\n", "\n").replace("\r", "\n")
+        value = content.get(field, "").replace("\r\n", "\n").replace("\r", "\n")
         data = value.encode("utf-8")
         encoded += f"{len(data)}:".encode() + data + b"\n"
     return "v1:" + hashlib.sha256(encoded).hexdigest()
@@ -383,10 +382,6 @@ def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a nonempty string.")
     return value
-
-
-def _optional_text(args: Mapping[str, Any], name: str) -> Optional[str]:
-    return _nonempty_text(args, name) if name in args else None
 
 
 def _encode(payload: Mapping[str, Any]) -> bytes:
