@@ -224,10 +224,13 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
     total = 0
     complete = False
     overflow = False
+    # A non-body message (e.g. http.disconnect) ends the read early. It is kept
+    # and handed to the app after the prefix, so the app sees the disconnect.
+    held: Optional[dict[str, Any]] = None
     while True:
         message = await receive()
         if message.get("type") != "http.request":
-            # A non-body message (e.g. http.disconnect); stop with what we have.
+            held = message
             break
         chunks.append(message.get("body", b"") or b"")
         total += len(chunks[-1])
@@ -243,11 +246,14 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
 
     async def replay() -> dict[str, Any]:
         # Replay the buffered prefix once; if we stopped early, flag more_body so
-        # the app keeps pulling the rest straight from the original transport.
-        nonlocal replayed
+        # the app keeps reading: the held message, then the original transport.
+        nonlocal replayed, held
         if not replayed:
             replayed = True
-            return {"type": "http.request", "body": buffered, "more_body": overflow}
+            return {"type": "http.request", "body": buffered, "more_body": not complete}
+        if held is not None:
+            message, held = held, None
+            return message
         return await receive()
 
     # Only sniff (parse for `initialize`) when we captured the whole small body.
