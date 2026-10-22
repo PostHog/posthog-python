@@ -823,3 +823,25 @@ async def test_flush_waits_for_the_handshake_capture(kind):
             await handshake(RoundRobin([http]), send_initialized=False)
         await McpAnalytics(tracking_key(server)).flush()
         assert len(_events(client, "$mcp_initialize")) == 1
+
+
+@pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 1.x: see the next fix")
+@pytest.mark.parametrize("kind", KINDS)
+async def test_an_initialize_with_a_session_header_keeps_that_session(kind):
+    # A stateless client that sends initialize with an existing Mcp-Session-Id
+    # keeps sending it, and its later requests resolve their session from it.
+    client = FakeClient()
+    async with fleet(client, pods=2, kind=kind) as lb:
+        headers, _ = await handshake(
+            lb, extra_headers={"mcp-session-id": "an-existing-session"}
+        )
+        assert headers["mcp-session-id"] == "an-existing-session"
+        await call_add(lb, headers)
+        await call_add(lb, headers, 4)
+    await _flush()
+
+    (init,) = _events(client, "$mcp_initialize")
+    calls = _events(client, "$mcp_tool_call")
+    assert {c["properties"]["$session_id"] for c in calls} == {
+        init["properties"]["$session_id"]
+    }
