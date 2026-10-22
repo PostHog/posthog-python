@@ -118,7 +118,7 @@ Capture rejects a whole batch when one event cannot be parsed.
 
 ## Event uuids
 
-- Each event needs its own uuid. Capture rejects a whole batch that contains the same uuid twice, so the other events in that batch are lost too.
+- Each event needs its own uuid. Capture keeps the first event for each uuid in a request and drops the later copies. `on_error` reports each dropped copy in `CaptureError.drops` as `(uuid, "duplicate_event_uuid")`. 7.x sent every copy.
 - The SDK accepts a uuid with hyphens, 32 hex digits, `{...}` braces or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
 - Any other value is replaced with a generated uuid, and the SDK logs one warning that names the rule, not the value. An empty string counts as unset, so the SDK generates a uuid without a warning. This applies to `AsyncPosthog` too.
 - Generated uuids are UUIDv7.
