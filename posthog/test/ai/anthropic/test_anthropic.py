@@ -907,6 +907,87 @@ async def test_streaming_takes_cumulative_message_delta_usage_async(mock_client)
     assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs["properties"])
 
 
+def anthropic_stream_with_two_cumulative_deltas():
+    # Server tools can emit more than one message_delta in a single stream,
+    # and each delta's usage is cumulative: later values replace earlier ones
+    # rather than adding to them.
+    return [
+        RawMessageStartEvent(
+            type="message_start",
+            message=Message(
+                id="msg_1",
+                type="message",
+                role="assistant",
+                model="claude-haiku-4-5",
+                content=[],
+                stop_reason=None,
+                stop_sequence=None,
+                usage=Usage(
+                    input_tokens=100,
+                    output_tokens=1,
+                    cache_creation_input_tokens=0,
+                    cache_read_input_tokens=0,
+                ),
+            ),
+        ),
+        RawMessageDeltaEvent(
+            type="message_delta",
+            delta=Delta(stop_reason="pause_turn", stop_sequence=None),
+            usage=MessageDeltaUsage(output_tokens=50),
+        ),
+        RawMessageDeltaEvent(
+            type="message_delta",
+            delta=Delta(stop_reason="end_turn", stop_sequence=None),
+            usage=MessageDeltaUsage(output_tokens=110),
+        ),
+        RawMessageStopEvent(type="message_stop"),
+    ]
+
+
+def test_streaming_multiple_message_deltas_do_not_stack_output_tokens(mock_client):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=iter(anthropic_stream_with_two_cumulative_deltas()),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        list(response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_output_tokens"] == 110
+
+
+@pytest.mark.asyncio
+async def test_streaming_multiple_message_deltas_do_not_stack_output_tokens_async(
+    mock_client,
+):
+    async def mock_async_stream():
+        for event in anthropic_stream_with_two_cumulative_deltas():
+            yield event
+
+    async def mock_async_create(**kwargs):
+        return mock_async_stream()
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        [event async for event in response]
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_output_tokens"] == 110
+
+
 def test_anthropic_bedrock_preserves_cache_creation_ttl_breakdown(
     mock_client, mock_anthropic_response_with_cache_ttl
 ):
