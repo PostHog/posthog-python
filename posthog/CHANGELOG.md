@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.4 — 2026-10-22
+
+### Patch changes
+
+- [34ec4f8](https://github.com/posthog/posthog-python/commit/34ec4f828a45728c91e452e960aa0119a3052812) Streamed Anthropic generations no longer stack output tokens when a stream emits more than one `message_delta` (server tools can send several). Each delta's usage is cumulative, so the accumulator now keeps the latest total instead of adding every delta together. — Thanks @Harsh23Kashyap!
+
 ## 7.75.3 — 2026-10-22
 
 ### Patch changes
