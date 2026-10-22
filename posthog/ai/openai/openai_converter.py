@@ -151,6 +151,11 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
                         }
                     )
 
+                # A refused request carries its text in `refusal` and leaves `content` empty
+                refusal = getattr(choice.message, "refusal", None)
+                if refusal:
+                    content.append({"type": "refusal", "refusal": refusal})
+
                 if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
                     for tool_call in choice.message.tool_calls:
                         # Custom tools carry their free-form text in `custom.input`,
