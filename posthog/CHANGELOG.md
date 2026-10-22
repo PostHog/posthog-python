@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.5 — 2026-10-22
+
+### Patch changes
+
+- [b3fcec6](https://github.com/posthog/posthog-python/commit/b3fcec639aa9c49514344ba97b24492f03e87b86) Annotate `timeout` and `feature_flags_request_timeout_seconds` as `float` on `Client`, `AsyncClient`, `Consumer` and the request helpers, so type checkers accept fractional timeouts such as `timeout=2.5`. The values were already passed straight to `requests` and `httpx`, which take floats, so runtime behaviour is unchanged. — Thanks @turnipdabeets!
+
 ## 7.75.4 — 2026-10-22
 
 ### Patch changes
