@@ -52,7 +52,7 @@ from posthog.contexts import (
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
-from posthog.emails import Emails, _client_emails
+from posthog.emails import Emails, _client_emails, _no_op
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -1155,7 +1155,11 @@ class Client(object):
         """
         if self._emails is None:
             self._emails = _client_emails(
-                Emails, self.secret_key, self.host, lambda: self.disabled
+                Emails,
+                self.secret_key,
+                self.host,
+                lambda: self.disabled,
+                lambda: None if self._shutdown_requested else _no_op,
             )
         return self._emails
 

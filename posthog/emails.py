@@ -281,6 +281,10 @@ def _retry_delay(error: EmailError, attempt: int, max_retries: int) -> Optional[
     return max(backoff, error.retry_after or 0.0)
 
 
+def _no_op() -> None:
+    pass
+
+
 def _log_warnings(result: SendEmailResult) -> None:
     for warning in result.warnings:
         log.warning("PostHog email warning %s: %s", warning.code, warning.message)
@@ -323,10 +327,20 @@ class _EmailsBase:
         self.max_retries = max_retries
         self.disabled = disabled
         self._parent_disabled: Callable[[], bool] = lambda: False
+        self._admit: Callable[[], Optional[Callable[[], None]]] = lambda: _no_op
         self._host_error: Optional[str] = None
 
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()
+
+    def _start_send(self) -> Callable[[], None]:
+        finish = self._admit()
+        if finish is None:
+            raise _sdk_error(
+                "client_closed",
+                "The PostHog client is shut down, so no email was sent.",
+            )
+        return finish
 
     def _secret_key(self) -> str:
         if self._host_error:
@@ -423,6 +437,13 @@ class Emails(_EmailsBase):
         if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
+        finish = self._start_send()
+        try:
+            return self._deliver(prepared)
+        finally:
+            finish()
+
+    def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
         auth = _BearerAuth(self._secret_key(), prepared.idempotency_key)
         session = self._get_session()
         url = self.host + prepared.path
@@ -539,6 +560,13 @@ class AsyncEmails(_EmailsBase):
         if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
+        finish = self._start_send()
+        try:
+            return await self._deliver(prepared)
+        finally:
+            finish()
+
+    async def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
         headers = _headers(self._secret_key(), prepared.idempotency_key)
         httpx, client = self._get_client()
         url = self.host + prepared.path
@@ -610,6 +638,7 @@ def _client_emails(
     secret_key: Optional[str],
     client_host: Optional[str],
     is_disabled: Callable[[], bool],
+    admit: Callable[[], Optional[Callable[[], None]]],
 ) -> _EmailsT:
     app_host = determine_app_host(client_host)
     is_cloud = app_host in (US_APP_ENDPOINT, EU_APP_ENDPOINT)
@@ -621,4 +650,5 @@ def _client_emails(
             "Create posthog.emails.Emails(secret_key, host=<your PostHog app host>) instead."
         )
     emails._parent_disabled = is_disabled
+    emails._admit = admit
     return emails
