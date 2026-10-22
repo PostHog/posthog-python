@@ -1036,8 +1036,12 @@ def _get_http_status(error: BaseException) -> int:
     # OpenAI: https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py
     # Anthropic: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_exceptions.py
     # Google: https://github.com/googleapis/python-api-core/blob/main/google/api_core/exceptions.py
-    status_code = getattr(error, "status_code", getattr(error, "code", 0))
-    return status_code
+    # `code` is a string on some errors (OpenAI's "rate_limit_exceeded"), so only ints count
+    for attribute in ("status_code", "code"):
+        value = getattr(error, attribute, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
 
 
 def _get_langchain_run_name(
