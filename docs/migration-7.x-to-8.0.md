@@ -26,6 +26,7 @@ You need to change code if your app does any of these:
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
+- runs the Django, Flask or ASGI integration on 7.68 to 7.70 without tracing headers turned on (they are now read by default)
 
 ## Endpoints
 
@@ -140,6 +141,15 @@ The SDK moves them out of `properties` for you.
 - `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
 - `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
+
+## Tracing headers
+
+The Django, Flask and ASGI integrations read the `X-PostHog-Distinct-Id` and `X-PostHog-Session-Id` headers by default, as in 7.71 and later.
+The headers only fill a missing distinct ID or session ID, and any client can set them, so never use them for authentication.
+
+- To turn this off, set `POSTHOG_MW_CAPTURE_TRACING_HEADERS = False` in Django, or pass `capture_tracing_headers=False` to the Flask or ASGI integration.
+- The 7.68 `trust_tracing_headers` and `POSTHOG_MW_TRUST_TRACING_HEADERS` names still work, but are deprecated.
+- If you upgrade from 7.68, 7.69 or 7.70 and never turned these headers on, they are now read.
 
 ## Exceptions
 
