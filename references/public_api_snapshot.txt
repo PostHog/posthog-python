@@ -1827,6 +1827,7 @@ method posthog.metrics_capture.PostHogMetrics.reset() -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
 method posthog.request.DatetimeSerializer.default(obj: Any)
+method posthog.request.DatetimeSerializer.encode(o: Any) -> str
 method posthog.request.HTTPAdapterWithSocketOptions.init_poolmanager(*args, **kwargs)
 method posthog.tracing.span.Span.add_event(name: str, attributes: Optional[Mapping[str, Any]] = None, timestamp: Union[datetime, float, None] = None) -> Span
 method posthog.tracing.span.Span.end(end_time: Union[datetime, float, None] = None) -> None
