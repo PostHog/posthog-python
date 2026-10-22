@@ -449,3 +449,116 @@ async def test_async_shutdown_waits_for_a_send_in_flight_and_then_refuses_sends(
     with pytest.raises(EmailError) as raised:
         await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
     assert raised.value.code == "client_closed"
+
+
+CODE_SEND_URL = "https://us.posthog.com/api/projects/@current/messaging/send/email/"
+HTML = "<p>Reset it here.</p>"
+
+
+def send_code(emails: Emails, **overrides: Any):
+    return emails.send(
+        **{
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            **overrides,
+        }
+    )
+
+
+@parameterized.expand(
+    [
+        ("html_only", {"html": HTML}, {"html": HTML}),
+        ("text_only", {"text": "Reset it here."}, {"text": "Reset it here."}),
+        (
+            "every_field",
+            {
+                "html": HTML,
+                "text": "Reset it here.",
+                "from_": "Acme <security@example.com>",
+                "reply_to": "help@example.com",
+                "capture_engagement": False,
+                "distinct_id": "user_123",
+            },
+            {
+                "html": HTML,
+                "text": "Reset it here.",
+                "from": "Acme <security@example.com>",
+                "reply_to": ["help@example.com"],
+                "capture_engagement": False,
+                "identifiers": {"distinct_id": "user_123"},
+            },
+        ),
+        (
+            "several_reply_to",
+            {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
+            {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
+        ),
+    ]
+)
+def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
+    emails, adapter = emails_with([accepted("msg_1")])
+
+    result = send_code(emails, idempotency_key="reset:user_123", **overrides)
+
+    assert result.id == "msg_1"
+    [request] = adapter.requests
+    assert (request.method, request.url) == ("POST", CODE_SEND_URL)
+    assert request.headers["Idempotency-Key"] == "reset:user_123"
+    assert json.loads(request.body) == {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        **extra_body,
+    }
+
+
+WELCOME = {
+    "template_key": "welcome",
+    "subject": "Welcome, {{ variables.first_name }}",
+    "html": "<p>Hi {{ variables.first_name }}</p>",
+}
+# The server's content_hash v1 test vectors, shared with posthog-node.
+WELCOME_HASH = "v1:f74cd913f3aa2e5667a588f2865634e56693df77793ca594d18e9b5f89e3d2e6"
+WELCOME_CRLF_TEXT_HASH = (
+    "v1:8112876ee1b2dd7327f571b04b546ed057bfff5a904d9f0ae507b6a449ab6453"
+)
+UPLOAD_URL = (
+    "https://us.posthog.com/api/projects/@current/messaging_templates/by_key/welcome/"
+)
+
+
+def send_local_template(emails: Emails, **overrides: Any):
+    return emails.send(
+        **{
+            "to": "user@example.com",
+            **WELCOME,
+            "template_data": {"first_name": "Jane"},
+            **overrides,
+        }
+    )
+
+
+@parameterized.expand(
+    [
+        ("html_only", {}, WELCOME_HASH),
+        ("crlf_text", {"text": "\r\n\r"}, WELCOME_CRLF_TEXT_HASH),
+    ]
+)
+def test_a_local_template_is_sent_by_key_and_content_hash(_name, overrides, hash):
+    emails, adapter = emails_with([accepted("msg_1")])
+
+    result = send_local_template(
+        emails, from_="Acme <hello@example.com>", distinct_id="user_123", **overrides
+    )
+
+    assert result.id == "msg_1"
+    [request] = adapter.requests
+    assert (request.method, request.url) == ("POST", CODE_SEND_URL)
+    assert json.loads(request.body) == {
+        "to": "user@example.com",
+        "template": {"key": "welcome", "hash": hash},
+        "message_data": {"first_name": "Jane"},
+        "from": "Acme <hello@example.com>",
+        "identifiers": {"distinct_id": "user_123"},
+    }

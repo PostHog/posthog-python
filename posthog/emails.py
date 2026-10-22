@@ -67,6 +67,7 @@ works too. A disabled client returns a result with ``id=None`` and sends nothing
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import importlib
 import json
 import logging
@@ -77,10 +78,21 @@ import threading
 import time
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Callable, Mapping, Optional, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Mapping,
+    Optional,
+    Sequence,
+    TypedDict,
+    TypeVar,
+    Union,
+    overload,
+)
 from uuid import UUID, uuid4
 
 import requests
+from typing_extensions import NotRequired, Unpack
 
 from .capture_v1 import _parse_retry_after
 from .request import (
@@ -92,11 +104,23 @@ from .request import (
 from .utils import clean
 from .version import VERSION
 
-__all__ = ["AsyncEmails", "EmailError", "EmailWarning", "Emails", "SendEmailResult"]
+__all__ = [
+    "AsyncEmails",
+    "CodeEmailArgs",
+    "EmailError",
+    "EmailWarning",
+    "Emails",
+    "SendEmailResult",
+    "TemplateEmailArgs",
+]
 
 log = logging.getLogger("posthog")
 
 _SEND_PATH = "/api/projects/@current/messaging_templates/{template_id}/send/"
+_CODE_SEND_PATH = "/api/projects/@current/messaging/send/email/"
+_UPLOAD_PATH = "/api/projects/@current/messaging_templates/by_key/{template_key}/"
+_TEMPLATE_KEY = re.compile(r"^[a-zA-Z0-9_-]{1,400}$")
+_CONTENT_HASH_HEADER = b"posthog-email-template-v1\n"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
@@ -152,11 +176,201 @@ class SendEmailResult:
     warnings: tuple[EmailWarning, ...] = ()
 
 
+class _RecipientArgs(TypedDict):
+    to: str
+    distinct_id: NotRequired[Optional[str]]
+    idempotency_key: NotRequired[Optional[str]]
+
+
+class TemplateEmailArgs(_RecipientArgs):
+    """A send of an email template made in PostHog, named by its ID.
+
+    Args:
+        to: One recipient email address.
+        template_id: The UUID of a template made transactional in PostHog.
+        template_data: Values for the template's ``{{ variables.* }}``
+            placeholders.
+        distinct_id: The recipient's distinct ID in your product.
+        idempotency_key: 1 to 255 visible ASCII characters.
+    """
+
+    template_id: Union[str, UUID]
+    template_data: NotRequired[Optional[Mapping[str, Any]]]
+
+
+class CodeEmailArgs(_RecipientArgs):
+    """A send of email content that lives in your code, named by a key.
+
+    Without ``template_data``, the content is rendered for this one recipient
+    and sent as is. With it, the content is a template: PostHog fills in its
+    ``{{ variables.* }}`` placeholders, and the client uploads the template
+    whenever PostHog doesn't hold its content yet.
+
+    Args:
+        to: One recipient email address.
+        template_key: Names the email, so its metrics, logs and status group
+            under it. Letters, digits, ``-`` and ``_``, at most 400.
+        subject: The subject line.
+        html: The HTML body. Give ``html``, ``text`` or both.
+        text: The plain-text body. Without it, PostHog derives it from ``html``.
+        from_: A verified sender, such as ``"Acme <hello@acme.com>"``.
+        reply_to: One address or a list of addresses.
+        capture_engagement: Capture opens and clicks. Without it, PostHog's
+            default applies, which is on.
+        template_data: Values for the ``{{ variables.* }}`` placeholders.
+        distinct_id: The recipient's distinct ID in your product.
+        idempotency_key: 1 to 255 visible ASCII characters.
+    """
+
+    template_key: str
+    subject: str
+    html: NotRequired[str]
+    text: NotRequired[str]
+    from_: NotRequired[str]
+    reply_to: NotRequired[Union[str, Sequence[str]]]
+    capture_engagement: NotRequired[bool]
+    template_data: NotRequired[Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class _PreparedUpload:
+    path: str
+    body: bytes
+
+
 @dataclass(frozen=True)
 class _PreparedSend:
     path: str
     body: bytes
     idempotency_key: str
+    upload: Optional[_PreparedUpload] = None
+
+
+def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
+    is_template_form = "template_id" in args
+    if is_template_form == ("template_key" in args):
+        raise TypeError("Pass either template_id or template_key.")
+    form = TemplateEmailArgs if is_template_form else CodeEmailArgs
+    unexpected = sorted(set(args) - set(form.__annotations__))
+    if unexpected:
+        raise TypeError(
+            f"send() got arguments that the {'template' if is_template_form else 'code'} "
+            f"form doesn't take: {', '.join(unexpected)}."
+        )
+    if "to" not in args:
+        raise TypeError("send() is missing the argument to.")
+    if is_template_form:
+        return _prepare_send(
+            args["to"],
+            args["template_id"],
+            args.get("template_data"),
+            args.get("distinct_id"),
+            args.get("idempotency_key"),
+        )
+    return _prepare_code_send(args)
+
+
+def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
+    if "subject" not in args:
+        raise TypeError("send() is missing the argument subject.")
+    to, distinct_id, idempotency_key = _recipient(
+        args["to"], args.get("distinct_id"), args.get("idempotency_key")
+    )
+    template_key = args["template_key"]
+    if not isinstance(template_key, str) or not _TEMPLATE_KEY.match(template_key):
+        raise ValueError(
+            "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
+        )
+    content = {
+        "subject": _nonempty_text(args, "subject"),
+        "html": _optional_text(args, "html"),
+        "text": _optional_text(args, "text"),
+    }
+    if content["html"] is None and content["text"] is None:
+        raise TypeError("send() needs html, text or both.")
+
+    present = {field: value for field, value in content.items() if value is not None}
+    payload: dict[str, Any] = {"to": to}
+    upload = None
+    if "template_data" in args:
+        template_data = args["template_data"]
+        if not isinstance(template_data, Mapping):
+            raise TypeError("template_data must be a mapping.")
+        payload["template"] = {"key": template_key, "hash": _content_hash(content)}
+        payload["message_data"] = clean(dict(template_data))
+        upload = _PreparedUpload(
+            path=_UPLOAD_PATH.format(template_key=template_key),
+            body=_encode(
+                {
+                    "name": template_key,
+                    **present,
+                    "if_not_superseded": True,
+                    "if_code_managed": True,
+                }
+            ),
+        )
+    else:
+        payload.update({"template_key": template_key, **present})
+    payload.update(_sender(args))
+    if distinct_id is not None:
+        payload["identifiers"] = {"distinct_id": distinct_id}
+    return _PreparedSend(
+        path=_CODE_SEND_PATH,
+        body=_encode(payload),
+        idempotency_key=idempotency_key,
+        upload=upload,
+    )
+
+
+def _content_hash(content: Mapping[str, Optional[str]]) -> str:
+    """PostHog's content hash v1 of a template, so a send can say which content it holds."""
+    encoded = bytearray(_CONTENT_HASH_HEADER)
+    for field in ("subject", "preheader", "html", "text"):
+        value = (content.get(field) or "").replace("\r\n", "\n").replace("\r", "\n")
+        data = value.encode("utf-8")
+        encoded += f"{len(data)}:".encode() + data + b"\n"
+    return "v1:" + hashlib.sha256(encoded).hexdigest()
+
+
+def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
+    sender: dict[str, Any] = {}
+    if "from_" in args:
+        sender["from"] = _nonempty_text(args, "from_")
+    if "reply_to" in args:
+        sender["reply_to"] = _addresses(args["reply_to"])
+    if "capture_engagement" in args:
+        if not isinstance(args["capture_engagement"], bool):
+            raise TypeError("capture_engagement must be True or False.")
+        sender["capture_engagement"] = args["capture_engagement"]
+    return sender
+
+
+def _addresses(reply_to: Any) -> list[str]:
+    addresses = [reply_to] if isinstance(reply_to, str) else reply_to
+    if (
+        not isinstance(addresses, Sequence)
+        or not addresses
+        or not all(isinstance(address, str) and address.strip() for address in addresses)
+    ):
+        raise ValueError("reply_to must be one address or a list of addresses.")
+    return list(addresses)
+
+
+def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
+    value = args[name]
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"{name} must be a nonempty string.")
+    return value
+
+
+def _optional_text(args: Mapping[str, Any], name: str) -> Optional[str]:
+    return _nonempty_text(args, name) if name in args else None
+
+
+def _encode(payload: Mapping[str, Any]) -> bytes:
+    return json.dumps(
+        payload, cls=DatetimeSerializer, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
 
 
 def _prepare_send(
@@ -166,10 +380,7 @@ def _prepare_send(
     distinct_id: Optional[str],
     idempotency_key: Optional[str],
 ) -> _PreparedSend:
-    if not isinstance(to, str):
-        raise TypeError("to must be one email address as a string.")
-    if not to.strip():
-        raise ValueError("to must not be empty.")
+    to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     try:
         template_uuid = (
             template_id if isinstance(template_id, UUID) else UUID(template_id)
@@ -178,18 +389,6 @@ def _prepare_send(
         raise ValueError("template_id must be the template's UUID.") from None
     if template_data is not None and not isinstance(template_data, Mapping):
         raise TypeError("template_data must be a mapping.")
-    if distinct_id is not None and (
-        not isinstance(distinct_id, str) or not distinct_id
-    ):
-        raise ValueError("distinct_id must be a nonempty string.")
-    if idempotency_key is None:
-        idempotency_key = str(uuid4())
-    elif not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.match(
-        idempotency_key
-    ):
-        raise ValueError(
-            "idempotency_key must be 1 to 255 visible ASCII characters without spaces."
-        )
 
     payload: dict[str, Any] = {
         "to": to,
@@ -202,6 +401,28 @@ def _prepare_send(
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
     )
+
+
+def _recipient(
+    to: Any, distinct_id: Any, idempotency_key: Any
+) -> tuple[str, Optional[str], str]:
+    if not isinstance(to, str):
+        raise TypeError("to must be one email address as a string.")
+    if not to.strip():
+        raise ValueError("to must not be empty.")
+    if distinct_id is not None and (
+        not isinstance(distinct_id, str) or not distinct_id
+    ):
+        raise ValueError("distinct_id must be a nonempty string.")
+    if idempotency_key is None:
+        idempotency_key = str(uuid4())
+    elif not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.match(
+        idempotency_key
+    ):
+        raise ValueError(
+            "idempotency_key must be 1 to 255 visible ASCII characters without spaces."
+        )
+    return to, distinct_id, idempotency_key
 
 
 def _validate_options(timeout: float, max_retries: int) -> None:
@@ -433,16 +654,19 @@ class Emails(_EmailsBase):
         self._owns_session = session is None
         self._session_lock = threading.Lock()
 
-    def send(
-        self,
-        *,
-        to: str,
-        template_id: Union[str, UUID],
-        template_data: Optional[Mapping[str, Any]] = None,
-        distinct_id: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
-    ) -> SendEmailResult:
-        """Queue one email from a transactional email template.
+    @overload
+    def send(self, **kwargs: Unpack[TemplateEmailArgs]) -> SendEmailResult: ...
+
+    @overload
+    def send(self, **kwargs: Unpack[CodeEmailArgs]) -> SendEmailResult: ...
+
+    def send(self, **kwargs: Any) -> SendEmailResult:
+        """Queue one email, from a template in PostHog or from content in your code.
+
+        Pass exactly one form. The template form names a template made in
+        PostHog with ``template_id``. The code form names the email with
+        ``template_key`` and passes ``subject`` and ``html``, ``text`` or both:
+        see :class:`CodeEmailArgs`.
 
         Args:
             to: One recipient email address.
@@ -478,11 +702,16 @@ class Emails(_EmailsBase):
                 distinct_id="user_123",
                 idempotency_key="welcome:user_123",
             )
+            emails.send(
+                to="user@example.com",
+                template_key="password-reset",
+                subject="Reset your password",
+                html=rendered_html,
+                distinct_id="user_123",
+            )
             ```
         """
-        prepared = _prepare_send(
-            to, template_id, template_data, distinct_id, idempotency_key
-        )
+        prepared = _prepare(kwargs)
         if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
@@ -585,16 +814,14 @@ class AsyncEmails(_EmailsBase):
         self._client: Any = http_client
         self._owns_client = http_client is None
 
-    async def send(
-        self,
-        *,
-        to: str,
-        template_id: Union[str, UUID],
-        template_data: Optional[Mapping[str, Any]] = None,
-        distinct_id: Optional[str] = None,
-        idempotency_key: Optional[str] = None,
-    ) -> SendEmailResult:
-        """Queue one email from a transactional email template.
+    @overload
+    async def send(self, **kwargs: Unpack[TemplateEmailArgs]) -> SendEmailResult: ...
+
+    @overload
+    async def send(self, **kwargs: Unpack[CodeEmailArgs]) -> SendEmailResult: ...
+
+    async def send(self, **kwargs: Any) -> SendEmailResult:
+        """Queue one email, from a template in PostHog or from content in your code.
 
         Takes the same arguments and raises the same errors as
         :meth:`Emails.send`.
@@ -609,9 +836,7 @@ class AsyncEmails(_EmailsBase):
             )
             ```
         """
-        prepared = _prepare_send(
-            to, template_id, template_data, distinct_id, idempotency_key
-        )
+        prepared = _prepare(kwargs)
         if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
