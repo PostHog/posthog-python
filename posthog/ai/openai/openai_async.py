@@ -171,10 +171,14 @@ class WrappedResponses(_OpenAIWrapperResource):
         response = await self._original.create(**kwargs)
 
         async def async_generator():
+            stream_error: Optional[BaseException] = None
             try:
                 async for chunk in response:
                     state.process_chunk(chunk)
                     yield chunk
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 await self._capture_streaming_event(
                     posthog_distinct_id,
@@ -185,6 +189,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     kwargs,
                     state,
                     time.time() - start_time,
+                    error=stream_error,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -199,6 +204,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         kwargs: Dict[str, Any],
         state: _ResponsesStreamState,
         latency: float,
+        error: Optional[BaseException] = None,
     ):
         from posthog.ai.utils import capture_streaming_event
 
@@ -217,6 +223,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             model_from_response=state.model,
             stop_reason=state.stop_reason,
             service_tier=state.service_tier,
+            error=error,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 
@@ -392,10 +399,14 @@ class WrappedCompletions(_OpenAIWrapperResource):
         response = await self._original.create(**kwargs)
 
         async def async_generator():
+            stream_error: Optional[BaseException] = None
             try:
                 async for chunk in response:
                     state.process_chunk(chunk)
                     yield chunk
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 await self._capture_streaming_event(
                     posthog_distinct_id,
@@ -406,6 +417,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     kwargs,
                     state,
                     time.time() - start_time,
+                    error=stream_error,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -420,6 +432,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         kwargs: Dict[str, Any],
         state: _ChatCompletionsStreamState,
         latency: float,
+        error: Optional[BaseException] = None,
     ):
         from posthog.ai.utils import capture_streaming_event
 
@@ -440,6 +453,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             model_from_response=state.model,
             stop_reason=state.stop_reason,
             service_tier=state.service_tier,
+            error=error,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 

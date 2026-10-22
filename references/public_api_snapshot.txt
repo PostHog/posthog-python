@@ -666,6 +666,7 @@ attribute posthog.ai.types.StreamingContentBlock.thinking: Optional[str]
 attribute posthog.ai.types.StreamingContentBlock.type: str
 attribute posthog.ai.types.StreamingEventData.base_url: str
 attribute posthog.ai.types.StreamingEventData.distinct_id: Optional[str]
+attribute posthog.ai.types.StreamingEventData.error: NotRequired[Optional[BaseException]]
 attribute posthog.ai.types.StreamingEventData.formatted_input: Any
 attribute posthog.ai.types.StreamingEventData.formatted_output: Any
 attribute posthog.ai.types.StreamingEventData.groups: Optional[Dict[str, Any]]
