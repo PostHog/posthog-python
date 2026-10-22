@@ -1,1 +1,3 @@
 exclude-newer = "7 days"
+# certifi 2026.10.19 and uv 0.13.4 drop the compromised eMudhra root and are newer than the 7-day cooldown.
+exclude-newer-package = { certifi = "1 day", uv = "1 day" }
