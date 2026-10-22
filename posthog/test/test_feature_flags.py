@@ -5654,6 +5654,41 @@ class TestMatchProperties(unittest.TestCase):
         prop = self.property("key", value, operator)
         self.assertTrue(match_property(prop, {"key": property_value}))
 
+    @parameterized.expand(
+        [
+            ("icontains", "nul", True),
+            ("icontains", "x", False),
+            ("not_icontains", "x", True),
+            ("not_icontains", "nul", False),
+            ("starts_with", "NU", True),
+            ("starts_with", "x", False),
+            ("not_starts_with", "x", True),
+            ("not_starts_with", "nu", False),
+            ("ends_with", "LL", True),
+            ("ends_with", "x", False),
+            ("not_ends_with", "x", True),
+            ("not_ends_with", "ll", False),
+            ("regex", "^nu", True),
+            ("regex", "Nu", False),
+            ("regex", "^None$", False),
+            ("regex", "x", False),
+            ("not_regex", "x", True),
+            ("not_regex", "^nu", False),
+            ("not_regex", "^None$", True),
+            ("regex", "[", False),
+            ("not_regex", "[", False),
+        ]
+    )
+    def test_string_operators_match_explicit_null(self, operator, value, expected):
+        prop = self.property("key", value, operator)
+        self.assertEqual(expected, match_property(prop, {"key": None}))
+
+    def test_string_operators_with_omitted_key_are_inconclusive(self):
+        for operator in posthog.feature_flags.STRING_OPERATORS:
+            with self.subTest(operator=operator):
+                with self.assertRaises(InconclusiveMatchError):
+                    match_property(self.property("key", "x", operator), {})
+
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
         self.assertTrue(match_property(property_a, {"key": "value.com"}))
