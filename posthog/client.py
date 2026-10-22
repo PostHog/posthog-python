@@ -52,7 +52,7 @@ from posthog.contexts import (
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
-from posthog.emails import Emails, _client_emails, _no_op
+from posthog.emails import Emails, _client_emails, _no_op, _validate_options
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -722,6 +722,9 @@ class Client(object):
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
+        app_host: Optional[str] = None,
+        email_request_timeout_seconds: float = 15,
+        email_request_max_retries: int = 2,
     ):
         """
         Initialize a new PostHog client instance.
@@ -773,6 +776,15 @@ class Client(object):
             feature_flags_request_max_retries: Number of retries for feature flag
                 requests after network, transport, or timeout failures. Defaults
                 to 1. Set to 0 to disable retries.
+            app_host: Your PostHog app host, such as ``https://posthog.example.com``.
+                ``emails`` sends there. Needed only when ``host`` is not PostHog
+                Cloud, for example a reverse proxy, which must not receive the
+                secret key.
+            email_request_timeout_seconds: Timeout in seconds for each email send
+                request. Defaults to 15.
+            email_request_max_retries: Number of retries for an email send after a
+                network error, a rate limit, or an unavailable service. Defaults to 2.
+                Set to 0 when a job runner already retries the send.
             super_properties: Properties merged into every captured event.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
@@ -1037,6 +1049,10 @@ class Client(object):
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
+        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        self.app_host = app_host
+        self.email_request_timeout_seconds = email_request_timeout_seconds
+        self.email_request_max_retries = email_request_max_retries
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -1139,9 +1155,10 @@ class Client(object):
         Send transactional email from PostHog email templates.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
-        scope. Sends go to the PostHog Cloud app host of ``host``. For any other
-        host, or to send email without capturing events, create
-        ``posthog.emails.Emails`` with the app host. A disabled client sends nothing.
+        scope. Sends go to ``app_host``, or to the PostHog Cloud app host of
+        ``host``. ``email_request_timeout_seconds`` and ``email_request_max_retries``
+        configure each send. A disabled or shut-down client sends nothing. See
+        ``posthog.emails`` for setup.
 
         Examples:
             ```python
@@ -1160,6 +1177,9 @@ class Client(object):
                 self.host,
                 lambda: self.disabled,
                 lambda: None if self._shutdown_requested else _no_op,
+                app_host=self.app_host,
+                timeout=self.email_request_timeout_seconds,
+                max_retries=self.email_request_max_retries,
             )
         return self._emails
 

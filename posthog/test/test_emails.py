@@ -62,10 +62,17 @@ class FakeAdapter(requests.adapters.BaseAdapter):
 
 
 def emails_with(replies: list[Reply], **options: Any) -> tuple[Emails, FakeAdapter]:
-    emails = Emails(SECRET_KEY, **options)
     adapter = FakeAdapter(replies)
-    emails._get_session().mount("https://", adapter)
-    return emails, adapter
+    session = requests.Session()
+    session.mount("https://", adapter)
+    return Emails(SECRET_KEY, session=session, **options), adapter
+
+
+def response(status: int, body: dict[str, Any]) -> requests.Response:
+    reply = requests.Response()
+    reply.status_code = status
+    reply._content = json.dumps(body).encode()
+    return reply
 
 
 def send(emails: Emails, **overrides: Any):
@@ -146,14 +153,36 @@ def test_a_client_with_a_custom_host_never_sends_it_the_secret_key():
     client = Posthog(
         "phc_test", host="https://ph.example.com", secret_key=SECRET_KEY, sync_mode=True
     )
-    adapter = FakeAdapter([])
-    client.emails._get_session().mount("https://", adapter)
 
-    with pytest.raises(EmailError) as raised:
-        send(client.emails)
+    with mock.patch.object(requests.Session, "request") as request:
+        with pytest.raises(EmailError) as raised:
+            send(client.emails)
 
     assert raised.value.code == "app_host_required"
-    assert adapter.requests == []
+    request.assert_not_called()
+
+
+def test_client_email_options_set_the_host_timeout_and_retries():
+    client = Posthog(
+        "phc_test",
+        host="https://ph.example.com",
+        secret_key=SECRET_KEY,
+        sync_mode=True,
+        app_host="https://posthog.example.com/",
+        email_request_timeout_seconds=3,
+        email_request_max_retries=0,
+    )
+    unavailable = response(503, {"code": "delivery_unavailable"})
+
+    with mock.patch.object(
+        requests.Session, "request", return_value=unavailable
+    ) as request:
+        with pytest.raises(EmailError):
+            send(client.emails)
+
+    request.assert_called_once()
+    assert request.call_args.args[1].startswith("https://posthog.example.com/api/")
+    assert request.call_args.kwargs["timeout"] == 3
 
 
 @parameterized.expand(
@@ -283,27 +312,27 @@ def test_replays_and_warnings_reach_the_caller(caplog):
 def test_missing_secret_key_fails_before_sending():
     emails = Emails(None)
 
-    with pytest.raises(EmailError) as raised:
-        send(emails)
+    with mock.patch.object(requests.Session, "request") as request:
+        with pytest.raises(EmailError) as raised:
+            send(emails)
 
     assert (raised.value.code, raised.value.name) == (
         "missing_secret_key",
         "missing_api_key",
     )
-    assert emails._session is None
+    request.assert_not_called()
 
 
 def test_a_disabled_client_sends_nothing():
     client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
     emails = client.emails
-    adapter = FakeAdapter([])
-    emails._get_session().mount("https://", adapter)
 
     client.disabled = True
-    result = send(emails)
+    with mock.patch.object(requests.Session, "request") as request:
+        result = send(emails)
 
     assert result.id is None
-    assert adapter.requests == []
+    request.assert_not_called()
 
 
 def test_a_shut_down_client_sends_no_email():
@@ -352,8 +381,10 @@ async def test_async_send_retries_with_the_same_key():
         seen.append(request)
         return replies.pop(0)
 
-    emails = AsyncPosthog("phc_test", secret_key=SECRET_KEY).emails
-    emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
 
     with mock.patch("posthog.emails.asyncio.sleep") as sleep:
         result = await emails.send(
@@ -366,17 +397,21 @@ async def test_async_send_retries_with_the_same_key():
     assert seen[0].headers["Idempotency-Key"] == seen[1].headers["Idempotency-Key"]
     assert seen[0].headers["Authorization"] == f"Bearer {SECRET_KEY}"
     assert json.loads(seen[0].content)["identifiers"] == {"distinct_id": "user_123"}
-    await emails.aclose()
 
 
 @pytest.mark.asyncio
 async def test_async_disabled_client_sends_nothing():
-    emails = AsyncEmails(SECRET_KEY, disabled=True)
+    handler = mock.Mock(side_effect=AssertionError("a disabled client sent a request"))
+    emails = AsyncEmails(
+        SECRET_KEY,
+        disabled=True,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
 
     result = await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
 
     assert result.id is None
-    assert emails._client is None
+    handler.assert_not_called()
 
 
 @pytest.mark.asyncio
