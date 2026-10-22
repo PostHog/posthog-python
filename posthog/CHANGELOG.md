@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.1 — 2026-10-22
+
+### Patch changes
+
+- [e9056e3](https://github.com/posthog/posthog-python/commit/e9056e3051911b72aa1c8f9d39eb08fa4b0b65c4) Fix local feature flag string and regex operators to match an explicit null property as "null", like the flags service. This can change flag values or selected variants for explicitly null person or group properties. Missing properties still allow remote evaluation fallback. — Thanks @marandaneto!
+
 ## 7.75.0 — 2026-10-21
 
 ### Minor changes
