@@ -962,7 +962,9 @@ def test_streaming_multiple_message_deltas_do_not_stack_output_tokens(mock_clien
 
 
 @pytest.mark.asyncio
-async def test_streaming_multiple_message_deltas_do_not_stack_output_tokens_async(mock_client):
+async def test_streaming_multiple_message_deltas_do_not_stack_output_tokens_async(
+    mock_client,
+):
     async def mock_async_stream():
         for event in anthropic_stream_with_two_cumulative_deltas():
             yield event
