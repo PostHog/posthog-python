@@ -80,7 +80,7 @@ async def async_flags(
     api_key: str,
     host: Optional[str],
     *,
-    timeout: int,
+    timeout: float,
     max_retries: int,
     client: Optional[Any] = None,
     **request_data: Any,
@@ -123,7 +123,7 @@ async def async_remote_config(
     host: Optional[str],
     key: str,
     *,
-    timeout: int,
+    timeout: float,
     client: Optional[Any] = None,
 ) -> Any:
     """Fetch and decrypt one remote-config payload."""

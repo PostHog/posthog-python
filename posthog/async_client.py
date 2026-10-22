@@ -139,7 +139,7 @@ class AsyncClient:
         flush_at: int = 100,
         flush_interval: float = 5.0,
         max_retries: int = 3,
-        timeout: int = 15,
+        timeout: float = 15,
         thread: int = 1,
         disabled: bool = False,
         disable_geoip: bool = True,
@@ -166,7 +166,7 @@ class AsyncClient:
         capture_trace_context: bool = False,
         secret_key: Optional[str] = None,
         personal_api_key: Optional[str] = None,
-        feature_flags_request_timeout_seconds: int = 3,
+        feature_flags_request_timeout_seconds: float = 3,
         feature_flags_request_max_retries: int = 1,
     ) -> None:
         if flush_at <= 0:

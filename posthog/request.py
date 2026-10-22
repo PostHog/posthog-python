@@ -215,7 +215,7 @@ def post(
     host: Optional[str] = None,
     path: Optional[str] = None,
     *,
-    timeout: int = 15,
+    timeout: float = 15,
     session: Optional[requests.Session] = None,
     **kwargs,
 ) -> requests.Response:
@@ -301,7 +301,7 @@ def flags(
     api_key: str,
     host: Optional[str] = None,
     *,
-    timeout: int = 15,
+    timeout: float = 15,
     max_retries: int = 1,
     **kwargs,
 ) -> Any:
@@ -340,7 +340,7 @@ def remote_config(
     project_api_key: str,
     host: Optional[str] = None,
     key: str = "",
-    timeout: int = 15,
+    timeout: float = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
     response = get(
@@ -356,7 +356,7 @@ def get(
     api_key: str,
     url: str,
     host: Optional[str] = None,
-    timeout: Optional[int] = None,
+    timeout: Optional[float] = None,
     etag: Optional[str] = None,
 ) -> GetResponse:
     """
