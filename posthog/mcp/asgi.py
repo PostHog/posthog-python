@@ -144,7 +144,11 @@ class PostHogMcpStatelessSessionMiddleware:
 
         # Only POSTs carry JSON-RPC. Mint only when the client replayed no session
         # id at all -- if one is present (ours or a stateful transport's), leave it.
-        if scope.get("method") != "POST" or incoming_header is not None:
+        # A client can also send initialize with a session id it already holds, so
+        # a middleware that captures handshakes reads those bodies too.
+        if scope.get("method") != "POST" or (
+            incoming_header is not None and observer is None
+        ):
             await self.app(scope, receive, send)
             return
 
@@ -155,7 +159,8 @@ class PostHogMcpStatelessSessionMiddleware:
         try:
             body, receive = await _buffer_body(receive)
             initialize = _parse_initialize(body)
-            token = _mint_token(initialize) if initialize is not None else None
+            if initialize is not None and incoming_header is None:
+                token = _mint_token(initialize)
         except Exception as error:  # noqa: BLE001
             log(f"PostHog MCP session middleware: mint failed - {error}")
 
@@ -175,7 +180,9 @@ class PostHogMcpStatelessSessionMiddleware:
         await self.app(scope, receive, send)
         if observer is not None and recorder is not None:
             fire_and_forget(
-                _record_initialize(observer, initialize, recorder, scope, started),
+                _record_initialize(
+                    observer, initialize, recorder, incoming_header, scope, started
+                ),
                 observer,
             )
 
@@ -251,7 +258,8 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
 def _parse_initialize(body: bytes) -> Optional[Dict[str, Any]]:
     """The JSON-RPC message in ``body`` if it is an ``initialize`` request, else
     ``None`` (never raises)."""
-    if not body:
+    # Cheap first: with a bound middleware this runs on every tool call too.
+    if not body or b'"initialize"' not in body:
         return None
     try:
         # RecursionError (deeply-nested JSON) is a RuntimeError, not a
@@ -324,20 +332,21 @@ async def _record_initialize(
     data: MCPAnalyticsData,
     message: Dict[str, Any],
     response: _InitializeResponse,
+    incoming_header: Optional[str],
     scope: Any,
     started: datetime,
 ) -> None:
     """Emit ``$mcp_initialize`` for a handshake the app answered, in the session the
     client's later requests resolve to: the ``Mcp-Session-Id`` they send back (a
-    stateful transport's id or our token), or this process's own session when the
-    response carried none. The body is not read, so the event carries the protocol
-    version the client asked for."""
+    stateful transport's id, our token, or the one the client already sent), or
+    this process's own session when there is none. The body is not read, so the
+    event carries the protocol version the client asked for."""
     try:
         if response.status is None or not 200 <= response.status < 300:
             return
         from starlette.requests import Request
 
-        header = response.session_header
+        header = response.session_header or incoming_header
         await record_initialize(
             data,
             session_id=await handshake_session_id(

@@ -825,7 +825,6 @@ async def test_flush_waits_for_the_handshake_capture(kind):
         assert len(_events(client, "$mcp_initialize")) == 1
 
 
-@pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 1.x: see the next fix")
 @pytest.mark.parametrize("kind", KINDS)
 async def test_an_initialize_with_a_session_header_keeps_that_session(kind):
     # A stateless client that sends initialize with an existing Mcp-Session-Id
