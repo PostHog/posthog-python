@@ -791,3 +791,35 @@ async def test_a_server_that_cannot_be_bound_does_not_break_requests():
                 headers=BASE_HEADERS,
             )
         assert response.status_code == 200
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_flush_waits_for_the_handshake_capture(kind):
+    # The hooks record the handshake in a background task. flush() must also wait
+    # for the capture that task starts, or shutdown drops $mcp_initialize when
+    # before_send is slow.
+    from posthog.mcp import McpAnalytics
+    from posthog.mcp._internal import tracking_key
+
+    async def slow_identify(request, extra):
+        await asyncio.sleep(0.05)  # holds the recorder open past flush()'s snapshot
+        return UserIdentity(distinct_id="user_slow")
+
+    async def slow_before_send(event):
+        await asyncio.sleep(0.05)
+        return event
+
+    client = FakeClient()
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=False,
+        identify=slow_identify,
+        before_send=slow_before_send,
+    )
+    app, lifespan, server = make_pod(client, kind=kind, options=options)
+    async with lifespan:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        ) as http:
+            await handshake(RoundRobin([http]), send_initialized=False)
+        await McpAnalytics(tracking_key(server)).flush()
+        assert len(_events(client, "$mcp_initialize")) == 1

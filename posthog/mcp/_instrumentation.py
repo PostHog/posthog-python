@@ -280,7 +280,11 @@ async def record_initialize(
     }
     await _apply_event_properties(data, event, request, extra)
     stamp_transport_identity(event, extra)
-    fire_and_forget(capture_event(data, event), data)
+    # Both seams already run this in a tracked background task. Await the capture
+    # inside it: a second task would start after flush() took its snapshot.
+    capture = capture_event(data, event)
+    if capture is not None:
+        await capture
 
 
 # ASGI scope key a bound ``PostHogMcpStatelessSessionMiddleware`` sets to the
