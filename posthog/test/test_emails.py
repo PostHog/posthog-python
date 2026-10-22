@@ -685,6 +685,16 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         ("empty_html", {"html": ""}, ValueError),
         ("no_reply_to", {"html": HTML, "reply_to": []}, ValueError),
         ("template_data_list", {"html": HTML, "template_data": [1]}, TypeError),
+        (
+            "cc_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "cc": "a@example.com",
+            },
+            TypeError,
+        ),
     ]
 )
 def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
@@ -701,4 +711,96 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
             **{name: value for name, value in args.items() if value is not None}
         )
 
+    assert adapter.requests == []
+
+
+COPIES_HEADERS_AND_TAGS = {
+    "cc": "manager@example.com",
+    "bcc": ["audit@example.com", "archive@example.com"],
+    "headers": {"X-Entity-Ref-ID": "order-123"},
+    "tags": [{"name": "category", "value": "password_reset"}],
+}
+COPIES_HEADERS_AND_TAGS_BODY = {
+    "cc": ["manager@example.com"],
+    "bcc": ["audit@example.com", "archive@example.com"],
+    "headers": {"X-Entity-Ref-ID": "order-123"},
+    "tags": [{"name": "category", "value": "password_reset"}],
+}
+
+
+def test_rendered_content_carries_copies_headers_and_tags():
+    emails, adapter = emails_with([accepted()])
+
+    send_code(emails, html=HTML, **COPIES_HEADERS_AND_TAGS)
+
+    [request] = adapter.requests
+    assert json.loads(request.body) == {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        "html": HTML,
+        **COPIES_HEADERS_AND_TAGS_BODY,
+    }
+
+
+def test_a_local_template_sends_copies_headers_and_tags_but_never_uploads_them():
+    emails, adapter = emails_with(
+        [rejected(409, "template_outdated"), uploaded(), accepted()]
+    )
+
+    send_local_template(emails, **COPIES_HEADERS_AND_TAGS)
+
+    first_send, upload, _ = adapter.requests
+    sent = json.loads(first_send.body)
+    assert {field: sent[field] for field in COPIES_HEADERS_AND_TAGS_BODY} == (
+        COPIES_HEADERS_AND_TAGS_BODY
+    )
+    assert not set(COPIES_HEADERS_AND_TAGS_BODY) & set(json.loads(upload.body))
+
+
+INVITE = b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
+
+
+def test_attachments_are_sent_base64_encoded_once_across_retries():
+    emails, adapter = emails_with([rejected(503, "delivery_unavailable"), accepted()])
+
+    send_code(
+        emails,
+        html=HTML,
+        attachments=[
+            {
+                "filename": "invite.ics",
+                "content": INVITE,
+                "content_type": "text/calendar; method=REQUEST",
+            },
+            {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+        ],
+    )
+
+    first, retry = adapter.requests
+    assert json.loads(first.body)["attachments"] == [
+        {
+            "filename": "invite.ics",
+            "content": "QkVHSU46VkNBTEVOREFSDQpFTkQ6VkNBTEVOREFSDQo=",
+            "content_type": "text/calendar; method=REQUEST",
+        },
+        {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+    ]
+    assert retry.body == first.body
+
+
+@parameterized.expand(
+    [
+        ("list_of_ints", {"filename": "a.txt", "content": [104, 105]}),
+        ("no_filename", {"content": b"hi"}),
+        ("unknown_field", {"filename": "a.txt", "content": b"hi", "path": "/tmp/a"}),
+    ]
+)
+def test_rejects_an_attachment_that_is_not_a_file(_name, attachment):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(TypeError) as raised:
+        send_code(emails, html=HTML, attachments=[attachment])
+
+    assert "104" not in str(raised.value)
     assert adapter.requests == []

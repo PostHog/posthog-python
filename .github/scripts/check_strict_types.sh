@@ -45,7 +45,8 @@ emails = Emails("phs_example")
 template_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_data={"name": "Ada"})
 rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"])
 local_template_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Hi {{ variables.name }}", text="Hi", template_data={"name": "Ada"})
-_ = (template_send, rendered_send, local_template_send)
+invite_send: SendEmailResult = emails.send(to="user@example.com", template_key="invite", subject="Invite", html="<p>Invite</p>", cc="team@example.com", bcc=["audit@example.com"], headers={"X-Entity-Ref-ID": "order-123"}, tags=[{"name": "category", "value": "invite"}], attachments=[{"filename": "invite.ics", "content": b"BEGIN:VCALENDAR", "content_type": "text/calendar"}, {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"}])
+_ = (template_send, rendered_send, local_template_send, invite_send)
 
 
 async def async_email_types() -> None:
@@ -88,6 +89,8 @@ CategoricalScorerConfig(selection_mode="single")  # expected-type-error
 client.scorers.create(name="Bad config", kind="numeric", config=BooleanScorerConfig(true_is_failure=True))  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_key="welcome", subject="Hi", html="<p>Hi</p>")  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", html="<p>Hi</p>")  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", cc="team@example.com")  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": [104, 105]}])  # expected-type-error
 
 
 async def invalid_async_email() -> None:

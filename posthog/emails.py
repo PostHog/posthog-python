@@ -87,6 +87,7 @@ works too. A disabled client returns a result with ``id=None`` and sends nothing
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import importlib
 import json
@@ -127,7 +128,9 @@ from .version import VERSION
 __all__ = [
     "AsyncEmails",
     "CodeEmailArgs",
+    "EmailAttachment",
     "EmailError",
+    "EmailTag",
     "EmailWarning",
     "Emails",
     "SendEmailResult",
@@ -196,6 +199,30 @@ class SendEmailResult:
     warnings: tuple[EmailWarning, ...] = ()
 
 
+class EmailTag(TypedDict):
+    """A name and value that PostHog adds to the email's engagement events as ``$email_tags``."""
+
+    name: str
+    value: str
+
+
+class EmailAttachment(TypedDict):
+    """A file sent with the email.
+
+    Args:
+        filename: The file name the recipient sees, such as ``invite.ics``.
+        content: The file as bytes, or already Base64 encoded as a string.
+        content_type: The MIME type. Without it, the type follows the file name.
+        content_id: Shows the file inline: reference it in ``html`` as
+            ``<img src="cid:logo">`` with ``content_id`` ``logo``.
+    """
+
+    filename: str
+    content: Union[bytes, str]
+    content_type: NotRequired[str]
+    content_id: NotRequired[str]
+
+
 class _RecipientArgs(TypedDict):
     to: str
     distinct_id: NotRequired[Optional[str]]
@@ -235,6 +262,12 @@ class CodeEmailArgs(_RecipientArgs):
         text: The plain-text body. Without it, PostHog derives it from ``html``.
         from_: A verified sender, such as ``"Acme <hello@acme.com>"``.
         reply_to: One address or a list of addresses.
+        cc: One address or a list of addresses that get a visible copy.
+        bcc: One address or a list of addresses that get a hidden copy.
+        headers: Extra email headers by name, such as ``X-Entity-Ref-ID``.
+        tags: Names and values that PostHog adds to the email's engagement
+            events.
+        attachments: Files sent with the email.
         capture_engagement: Capture opens and clicks. Without it, PostHog's
             default applies, which is on.
         template_data: Values for the ``{{ variables.* }}`` placeholders.
@@ -248,6 +281,11 @@ class CodeEmailArgs(_RecipientArgs):
     text: NotRequired[str]
     from_: NotRequired[str]
     reply_to: NotRequired[Union[str, Sequence[str]]]
+    cc: NotRequired[Union[str, Sequence[str]]]
+    bcc: NotRequired[Union[str, Sequence[str]]]
+    headers: NotRequired[Mapping[str, str]]
+    tags: NotRequired[Sequence[EmailTag]]
+    attachments: NotRequired[Sequence[EmailAttachment]]
     capture_engagement: NotRequired[bool]
     template_data: NotRequired[Mapping[str, Any]]
 
@@ -355,8 +393,15 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     sender: dict[str, Any] = {}
     if "from_" in args:
         sender["from"] = _nonempty_text(args, "from_")
-    if "reply_to" in args:
-        sender["reply_to"] = _addresses(args["reply_to"])
+    for field in ("reply_to", "cc", "bcc"):
+        if field in args:
+            sender[field] = _addresses(field, args[field])
+    if "headers" in args:
+        sender["headers"] = _headers_field(args["headers"])
+    if "tags" in args:
+        sender["tags"] = _tags(args["tags"])
+    if "attachments" in args:
+        sender["attachments"] = _attachments(args["attachments"])
     if "capture_engagement" in args:
         if not isinstance(args["capture_engagement"], bool):
             raise TypeError("capture_engagement must be True or False.")
@@ -364,8 +409,8 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     return sender
 
 
-def _addresses(reply_to: Any) -> list[str]:
-    addresses = [reply_to] if isinstance(reply_to, str) else reply_to
+def _addresses(field: str, value: Any) -> list[str]:
+    addresses = [value] if isinstance(value, str) else value
     if (
         not isinstance(addresses, Sequence)
         or not addresses
@@ -373,8 +418,69 @@ def _addresses(reply_to: Any) -> list[str]:
             isinstance(address, str) and address.strip() for address in addresses
         )
     ):
-        raise ValueError("reply_to must be one address or a list of addresses.")
+        raise ValueError(f"{field} must be one address or a list of addresses.")
     return list(addresses)
+
+
+def _headers_field(headers: Any) -> dict[str, str]:
+    if not isinstance(headers, Mapping) or not all(
+        isinstance(name, str) and isinstance(value, str)
+        for name, value in headers.items()
+    ):
+        raise TypeError("headers must map header names to string values.")
+    return dict(headers)
+
+
+def _tags(tags: Any) -> list[dict[str, str]]:
+    if (
+        isinstance(tags, str)
+        or not isinstance(tags, Sequence)
+        or not all(_is_tag(tag) for tag in tags)
+    ):
+        raise TypeError("tags must be a list of {'name': str, 'value': str}.")
+    return [{"name": tag["name"], "value": tag["value"]} for tag in tags]
+
+
+def _attachments(attachments: Any) -> list[dict[str, str]]:
+    if isinstance(attachments, (str, bytes)) or not isinstance(attachments, Sequence):
+        raise TypeError("attachments must be a list of files.")
+    return [_attachment(index, file) for index, file in enumerate(attachments)]
+
+
+def _attachment(index: int, file: Any) -> dict[str, str]:
+    name = f"attachments[{index}]"
+    if not isinstance(file, Mapping) or not {"filename", "content"} <= set(file):
+        raise TypeError(f"{name} needs a filename and its content.")
+    unexpected = set(file) - set(EmailAttachment.__annotations__)
+    if unexpected:
+        raise TypeError(
+            f"{name} has fields an attachment doesn't take: {', '.join(sorted(unexpected))}."
+        )
+    if not all(isinstance(file[field], str) for field in file if field != "content"):
+        raise TypeError(
+            f"{name} needs its filename, content_type and content_id as strings."
+        )
+    return {**file, "content": _base64_content(name, file["content"])}
+
+
+def _base64_content(name: str, content: Any) -> str:
+    if isinstance(content, bytes):
+        return base64.b64encode(content).decode("ascii")
+    if isinstance(content, str):
+        return content
+    raise TypeError(
+        f"{name}.content must be bytes or a Base64 string. "
+        "Convert a list of byte values with bytes(content)."
+    )
+
+
+def _is_tag(tag: Any) -> bool:
+    return (
+        isinstance(tag, Mapping)
+        and set(tag) == {"name", "value"}
+        and isinstance(tag["name"], str)
+        and isinstance(tag["value"], str)
+    )
 
 
 def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
