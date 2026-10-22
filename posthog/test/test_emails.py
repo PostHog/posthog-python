@@ -494,6 +494,11 @@ def send_code(emails: Emails, **overrides: Any):
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
         ),
+        (
+            "empty_address_lists",
+            {"html": HTML, "reply_to": [], "cc": [], "bcc": []},
+            {"html": HTML, "reply_to": [], "cc": [], "bcc": []},
+        ),
     ]
 )
 def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
@@ -683,7 +688,7 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         ),
         ("key_too_long", {"template_key": "k" * 401, "html": HTML}, ValueError),
         ("empty_html", {"html": ""}, ValueError),
-        ("no_reply_to", {"html": HTML, "reply_to": []}, ValueError),
+        ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
         ("template_data_list", {"html": HTML, "template_data": [1]}, TypeError),
         (
             "cc_on_template_form",

@@ -411,12 +411,8 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
 
 def _addresses(field: str, value: Any) -> list[str]:
     addresses = [value] if isinstance(value, str) else value
-    if (
-        not isinstance(addresses, Sequence)
-        or not addresses
-        or not all(
-            isinstance(address, str) and address.strip() for address in addresses
-        )
+    if not isinstance(addresses, Sequence) or not all(
+        isinstance(address, str) and address.strip() for address in addresses
     ):
         raise ValueError(f"{field} must be one address or a list of addresses.")
     return list(addresses)
