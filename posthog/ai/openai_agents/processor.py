@@ -558,9 +558,19 @@ class PostHogTracingProcessor(TracingProcessor):
         )
         if reasoning_tokens:
             properties["$ai_reasoning_tokens"] = reasoning_tokens
-        cache_read_tokens = usage.get("cache_read_input_tokens") or _usage_detail(
-            usage, ("input_tokens_details", "prompt_tokens_details"), "cached_tokens"
-        )
+        cache_read_tokens = usage.get("cache_read_input_tokens")
+        if not cache_read_tokens:
+            cache_read_tokens = _usage_detail(
+                usage,
+                ("input_tokens_details", "prompt_tokens_details"),
+                "cached_tokens",
+            )
+            if cache_read_tokens:
+                # OpenAI-shaped usage counts cached tokens inside input_tokens.
+                # Say so explicitly: the cost backend otherwise infers exclusive
+                # reporting from Claude model names served through compatible
+                # endpoints. A caller-supplied value still takes precedence.
+                properties["$ai_cache_reporting_exclusive"] = False
         if cache_read_tokens:
             properties["$ai_cache_read_input_tokens"] = cache_read_tokens
         if usage.get("cache_creation_input_tokens"):
@@ -749,6 +759,8 @@ class PostHogTracingProcessor(TracingProcessor):
             )
             if cache_read_tokens:
                 properties["$ai_cache_read_input_tokens"] = cache_read_tokens
+                # Responses input_tokens include cached tokens.
+                properties["$ai_cache_reporting_exclusive"] = False
 
         # Extract output content from response
         if response:
