@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.2 — 2026-10-22
+
+### Patch changes
+
+- [4697e6f](https://github.com/posthog/posthog-python/commit/4697e6fcc837d1de3508a8b53273f609b6d63415) Capture Chat Completions responses that contain custom tool calls instead of raising `AttributeError` from the wrapped `create()` call. — Thanks @mosafariuk!
+
 ## 7.75.1 — 2026-10-22
 
 ### Patch changes
