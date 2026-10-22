@@ -888,3 +888,54 @@ def test_app_built_probe_fires_on_the_installed_sdk_major():
         f"probe blind to a built app on MCP {MCP_MAJOR}.x -- the ordering warning "
         "cannot fire for these servers"
     )
+
+
+async def test_peek_streams_a_large_request_that_is_not_initialize():
+    """With a session header, a tool call is read only until the peek window shows
+    it is not a handshake. The rest streams to the app, byte for byte."""
+    from posthog.mcp import asgi as asgi_mod
+
+    body = b'{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"blob":"'
+    body += b"x" * (16 * asgi_mod._PEEK_BODY) + b'"}}'
+    parts = [body[i : i + 1024] for i in range(0, len(body), 1024)]
+    reads = []
+
+    async def receive():
+        chunk = parts.pop(0)
+        reads.append(chunk)
+        return {"type": "http.request", "body": chunk, "more_body": bool(parts)}
+
+    sniff, replay = await asgi_mod._buffer_body(receive, peek=True)
+
+    assert sniff == b""
+    assert sum(map(len, reads)) == asgi_mod._PEEK_BODY  # stopped at the window
+    replayed = b""
+    while True:
+        message = await replay()
+        replayed += message["body"]
+        if not message["more_body"]:
+            break
+    assert replayed == body
+
+
+async def test_peek_still_reads_an_initialize_split_into_small_chunks():
+    from posthog.mcp import asgi as asgi_mod
+
+    body = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {"protocolVersion": "2025-06-18", "capabilities": {}},
+        }
+    ).encode()
+    parts = [body[i : i + 7] for i in range(0, len(body), 7)]
+
+    async def receive():
+        chunk = parts.pop(0)
+        return {"type": "http.request", "body": chunk, "more_body": bool(parts)}
+
+    sniff, _ = await asgi_mod._buffer_body(receive, peek=True)
+
+    assert sniff == body
+    assert asgi_mod._parse_initialize(sniff)["method"] == "initialize"

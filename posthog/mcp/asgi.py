@@ -71,6 +71,11 @@ _SCOPE_KEY = "posthog_mcp_session"
 # the same app can't be read into memory in full before minting.
 _MAX_SNIFF_BODY = 256 * 1024
 
+# A request that already carries a session id is almost always a tool call, which
+# can be large. JSON-RPC clients put "method" before "params", so once this much
+# of the body arrived with no "initialize" in it, stop buffering and stream it.
+_PEEK_BODY = 4 * 1024
+
 
 def get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]:
     """Return the ``SessionTokenPayload`` the middleware recovered for this request,
@@ -157,7 +162,9 @@ class PostHogMcpStatelessSessionMiddleware:
         token = None
         initialize = None
         try:
-            body, receive = await _buffer_body(receive)
+            body, receive = await _buffer_body(
+                receive, peek=incoming_header is not None
+            )
             initialize = _parse_initialize(body)
             if initialize is not None and incoming_header is None:
                 token = _mint_token(initialize)
@@ -211,9 +218,12 @@ def _decode_headers(raw: Any) -> dict[str, str]:
     return result
 
 
-async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
+async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]:
     """Read up to ``_MAX_SNIFF_BODY`` of the request body for sniffing, then return
     that prefix plus a ``receive`` that replays it and streams the rest.
+
+    With ``peek``, also stop once ``_PEEK_BODY`` bytes arrived and none of them is
+    ``"initialize"``: the request is not a handshake, so it is not held in memory.
 
     Memory is bounded to the cap: an `initialize` handshake is tiny, so once we
     exceed the cap the request cannot be one and we stop buffering — the prefix is
@@ -224,6 +234,7 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
     total = 0
     complete = False
     overflow = False
+    peeked = not peek
     # A non-body message (e.g. http.disconnect) ends the read early. It is kept
     # and handed to the app after the prefix, so the app sees the disconnect.
     held: Optional[dict[str, Any]] = None
@@ -240,6 +251,11 @@ async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
         if total > _MAX_SNIFF_BODY:
             overflow = True  # too big to be initialize — stop buffering
             break
+        if not peeked and total >= _PEEK_BODY:
+            peeked = True
+            if b'"initialize"' not in b"".join(chunks):
+                overflow = True  # not a handshake — stop buffering
+                break
 
     buffered = b"".join(chunks)
     replayed = False
