@@ -188,10 +188,14 @@ class WrappedMessages(Messages):
         accumulator = _AnthropicStreamAccumulator()
 
         def generator():
+            stream_error: Optional[BaseException] = None
             try:
                 for event in response:
                     accumulator.consume(event)
                     yield event
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
@@ -208,6 +212,7 @@ class WrappedMessages(Messages):
                     accumulator.content_blocks,
                     accumulator.accumulated_content,
                     stop_reason=accumulator.stop_reason,
+                    error=stream_error,
                 )
 
         return _StreamWrapper(generator(), stream=response)
@@ -225,6 +230,7 @@ class WrappedMessages(Messages):
         content_blocks: List[StreamingContentBlock],
         accumulated_content: str,
         stop_reason: Optional[str] = None,
+        error: Optional[BaseException] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.anthropic.anthropic_converter import (
@@ -252,6 +258,7 @@ class WrappedMessages(Messages):
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             stop_reason=stop_reason,
+            error=error,
         )
 
         # Use the common capture function

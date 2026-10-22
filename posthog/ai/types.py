@@ -143,3 +143,4 @@ class StreamingEventData(TypedDict):
     groups: Optional[Dict[str, Any]]
     stop_reason: Optional[str]
     service_tier: NotRequired[Optional[str]]
+    error: NotRequired[Optional[BaseException]]  # raised mid-stream, if any

@@ -266,6 +266,7 @@ class Models(_GeminiModelsPolicy):
             nonlocal usage_stats
             nonlocal accumulated_content
             nonlocal stop_reason
+            stream_error: Optional[BaseException] = None
             try:
                 for chunk in response:
                     # Extract usage stats from chunk
@@ -288,6 +289,9 @@ class Models(_GeminiModelsPolicy):
 
                     yield chunk
 
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
@@ -305,6 +309,7 @@ class Models(_GeminiModelsPolicy):
                     latency,
                     accumulated_content,
                     stop_reason=stop_reason,
+                    error=stream_error,
                 )
 
         return generator()
