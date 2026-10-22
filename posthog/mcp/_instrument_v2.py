@@ -79,11 +79,7 @@ from .asgi import get_mcp_session
 from .logger import log
 from .request_headers import get_request_headers
 from .session import handshake_session_id
-from .session_token import (
-    SessionTokenPayload,
-    decode_session_id,
-    read_mcp_session_header,
-)
+from .session_token import SessionTokenPayload, read_mcp_session_header
 from .tools import (
     get_more_tools_result_text,
 )
@@ -183,9 +179,10 @@ def _initialize_session(
     A stateful transport has already assigned the id it returns in the
     ``Mcp-Session-Id`` header; ``ServerSession`` keeps it on its connection and
     exposes no public accessor. A stateless one has none: the session comes from
-    the ``Mcp-Session-Id`` the client sent, which it keeps sending, or else from
-    the token our ASGI middleware minted for this response. stdio has neither and
-    resolves to this process's own session, as its later requests do."""
+    the ``Mcp-Session-Id`` the client sent, which it keeps sending, read the way
+    :func:`_resolve_ctx` reads it for every later request, or else from the token
+    our ASGI middleware minted for this response. stdio has neither and resolves
+    to this process's own session, as its later requests do."""
     if _is_sse_request({"ctx": ctx}):
         # The SSE transport keys its session on a query parameter that later
         # requests do not resolve from: they land in this process's own session.
@@ -194,9 +191,9 @@ def _initialize_session(
     transport_session_id = getattr(connection, "session_id", None)
     if isinstance(transport_session_id, str) and transport_session_id:
         return transport_session_id, None
-    incoming = _ctx_mcp_session_id(ctx)
+    token, _, _, _, incoming = _resolve_ctx(ctx)
     if incoming:
-        return incoming, decode_session_id(incoming)
+        return incoming, token
     request = getattr(ctx, "request", None)
     return None, get_mcp_session(request) if request is not None else None
 
