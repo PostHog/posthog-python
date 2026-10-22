@@ -218,7 +218,7 @@ def post(
     host: Optional[str] = None,
     path: Optional[str] = None,
     gzip: bool = False,
-    timeout: int = 15,
+    timeout: float = 15,
     session: Optional[requests.Session] = None,
     **kwargs,
 ) -> requests.Response:
@@ -316,7 +316,7 @@ def flags(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
-    timeout: int = 15,
+    timeout: float = 15,
     max_retries: int = 1,
     **kwargs,
 ) -> Any:
@@ -358,7 +358,7 @@ def remote_config(
     project_api_key: str,
     host: Optional[str] = None,
     key: str = "",
-    timeout: int = 15,
+    timeout: float = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
     return _remote_config(personal_api_key, project_api_key, host, key, timeout)
@@ -369,7 +369,7 @@ def _remote_config(
     project_api_key: str,
     host: Optional[str] = None,
     key: str = "",
-    timeout: int = 15,
+    timeout: float = 15,
     *,
     _user_agent: str = USER_AGENT,
 ) -> Any:
@@ -391,7 +391,7 @@ def batch_post(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
-    timeout: int = 15,
+    timeout: float = 15,
     path: str = EVENTS_ENDPOINT,
     **kwargs,
 ) -> requests.Response:
@@ -406,7 +406,7 @@ def get(
     api_key: str,
     url: str,
     host: Optional[str] = None,
-    timeout: Optional[int] = None,
+    timeout: Optional[float] = None,
     etag: Optional[str] = None,
 ) -> GetResponse:
     """
@@ -423,7 +423,7 @@ def _get(
     api_key: str,
     url: str,
     host: Optional[str] = None,
-    timeout: Optional[int] = None,
+    timeout: Optional[float] = None,
     etag: Optional[str] = None,
     *,
     _user_agent: str = USER_AGENT,
