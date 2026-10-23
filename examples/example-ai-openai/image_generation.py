@@ -31,7 +31,7 @@ import openai  # noqa: E402
 client = openai.OpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 response = client.images.generate(
-    model="gpt-image-1",
+    model="gpt-image-2.5-flare",
     prompt="A hedgehog wearing a PostHog t-shirt, pixel art style",
     size="1024x1024",
 )
