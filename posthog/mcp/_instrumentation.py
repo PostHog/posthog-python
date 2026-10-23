@@ -240,17 +240,89 @@ def _wrap_response(result: Any) -> Any:
     return serialized
 
 
+async def record_initialize(
+    data: MCPAnalyticsData,
+    *,
+    session_id: str,
+    params: Dict[str, Any],
+    result: Any,
+    extra: Optional[Dict[str, Any]],
+    timestamp: datetime,
+) -> None:
+    """Emit ``$mcp_initialize`` for an ``initialize`` the client sent.
+
+    The Python MCP SDK answers ``initialize`` itself (mcp 1.x inside
+    ``ServerSession``; mcp 2.x refuses a handler for it), so the seams that observe
+    it — ``Server.middleware`` on 2.x, the ASGI middleware on 1.x over HTTP — call
+    this inline in the handshake request once it has succeeded. ``result`` is the
+    server's reply where the seam can read it, else ``None``. Identify runs first
+    so the event is attributed on the pod that served the handshake, which on a
+    stateless fleet may never see this client again. The capture itself runs after,
+    in the background, as for every other event."""
+
+    def text(value: Any) -> Optional[str]:
+        return value if isinstance(value, str) and value else None
+
+    client_info = params.get("clientInfo")
+    client_info = client_info if isinstance(client_info, dict) else {}
+    agreed = result.get("protocolVersion") if isinstance(result, dict) else None
+    request = {"method": "initialize", "params": params}
+    await handle_identify(data, session_id, request, extra)
+    data.mark_session_initialized(session_id)
+    event: Dict[str, Any] = {
+        "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
+        "session_id": session_id,
+        "client_name": text(client_info.get("name")),
+        "client_version": text(client_info.get("version")),
+        "protocol_version": text(agreed) or text(params.get("protocolVersion")),
+        "parameters": request,
+        "response": result,
+        "timestamp": timestamp,
+    }
+    await _apply_event_properties(data, event, request, extra)
+    stamp_transport_identity(event, extra)
+    fire_and_forget(capture_event(data, event), data)
+
+
+# ASGI scope key a bound ``PostHogMcpStatelessSessionMiddleware`` sets to the
+# tracking state whose handshakes it captures, on each request it passes on.
+HANDSHAKE_OBSERVER_KEY = "posthog_mcp_handshake_observer"
+
+
+def _first_request_stands_in_for_initialize(
+    data: MCPAnalyticsData, session_source: str, extra: Optional[Dict[str, Any]]
+) -> bool:
+    """Whether this request has to stand in for an ``initialize`` nothing observed.
+
+    Only where no seam sees the real handshake: mcp 1.x over stdio (one client per
+    process, so its first request is as good as the handshake), and an mcp 1.x HTTP
+    request that did not pass a middleware bound to this server. Never for a
+    conversation-anchored session: it belongs to a chat, not to a handshake, and
+    synthesizing one there is how a single connection used to report two. So a
+    client whose first request already echoes a conversation reports no initialize
+    here."""
+    if data.handshake_observed_in_process:
+        return False
+    if session_source == "conversation":
+        return False
+    scope = getattr(get_request(extra), "scope", None)
+    return not (isinstance(scope, dict) and scope.get(HANDSHAKE_OBSERVER_KEY) is data)
+
+
 async def _maybe_emit_initialize(
     data: MCPAnalyticsData,
     session_id: str,
+    session_source: str,
     client_name: Optional[str],
     client_version: Optional[str],
     extra: Optional[Dict[str, Any]],
     protocol_version: Optional[str] = None,
 ) -> None:
-    """Lazily emit ``$mcp_initialize`` once per session. The Python MCP SDK handles
-    ``InitializeRequest`` inside the session layer (not ``request_handlers``), so we
-    synthesize the event from the first instrumented request that carries client info."""
+    """Emit ``$mcp_initialize`` once per session from its first request, where no
+    seam observes the real ``initialize`` (see
+    :func:`_first_request_stands_in_for_initialize`)."""
+    if not _first_request_stands_in_for_initialize(data, session_source, extra):
+        return
     if session_id in data.initialized_sessions:
         return
     data.mark_session_initialized(session_id)
@@ -373,8 +445,9 @@ async def prepare_request(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
 ) -> str:
-    """Resolve the session id, run identify, then lazily emit initialize. Returns
-    the session id to stamp on the event for this request.
+    """Resolve the session id, run identify, then emit initialize if this request
+    has to stand in for an unobserved handshake. Returns the session id to stamp on
+    the event for this request.
 
     ``conversation_id`` is the agent's handle for this request, and when present
     it anchors the session (ADR-0004) so every event of the request — initialize
@@ -397,8 +470,8 @@ async def prepare_request(
     Identify runs *before* initialize so the resolved identity is already in the cache
     when ``capture_event`` builds the initialize event — otherwise the first
     ``$mcp_initialize`` is anonymous even when identify resolves on the same request.
-    (Still not byte-parity with the TS SDK, which wraps the real initialize handler;
-    the Python SDK handles initialize in the session layer, not ``request_handlers``.)
+    Where a seam observes the real handshake (:func:`record_initialize`), nothing
+    is synthesized here.
 
     A request that reached us over HTTP yet still resolved to this process's memory
     has nothing correlating it across pods, which on a stateless server means the
@@ -414,7 +487,13 @@ async def prepare_request(
         _warn_stateless_session_not_wired(data)
     await handle_identify(data, session_id, request, extra)
     await _maybe_emit_initialize(
-        data, session_id, client_name, client_version, extra, protocol_version
+        data,
+        session_id,
+        session_source,
+        client_name,
+        client_version,
+        extra,
+        protocol_version,
     )
     return session_id
 

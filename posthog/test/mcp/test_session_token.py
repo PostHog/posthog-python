@@ -418,6 +418,36 @@ async def test_middleware_replays_body_split_across_chunks_and_over_sniff_cap():
     assert MCP_SESSION_HEADER not in sent["headers"]  # too big to sniff -> no mint
 
 
+async def test_middleware_passes_a_disconnect_mid_body_to_the_app():
+    """A client that disconnects while it sends the body must reach the app as a
+    disconnect, not as a complete request made of the part that arrived."""
+    messages = [
+        {"type": "http.request", "body": b'{"jsonrpc":"2.0","met', "more_body": True},
+        {"type": "http.disconnect"},
+    ]
+    seen = []
+
+    async def app(scope, receive, send):
+        while True:
+            message = await receive()
+            seen.append(message)
+            if message["type"] != "http.request" or not message.get("more_body"):
+                return
+
+    async def receive():
+        return messages.pop(0) if messages else {"type": "http.disconnect"}
+
+    async def send(message):
+        pass
+
+    await PostHogMcpStatelessSessionMiddleware(app)(_scope(), receive, send)
+
+    assert seen == [
+        {"type": "http.request", "body": b'{"jsonrpc":"2.0","met', "more_body": True},
+        {"type": "http.disconnect"},
+    ]
+
+
 # --- end-to-end against a real stateless FastMCP transport -------------------
 
 
