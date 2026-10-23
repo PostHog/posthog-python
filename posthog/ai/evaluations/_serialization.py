@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime, timezone
-from typing import Any, Iterable, Union, cast
+from typing import Any, Callable, Iterable, TypeVar, Union, cast
+from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
+
+from ._errors import EvaluationAPIError
 
 JSONValue = Union[
     None, bool, int, float, str, list["JSONValue"], dict[str, "JSONValue"]
@@ -22,6 +25,46 @@ _MAX_RESULTS = 1000
 _MAX_REQUEST_BYTES = 5 * 1024 * 1024
 _MAX_ITEM_BYTES = 1024 * 1024
 _MAX_RESULT_BYTES = 256 * 1024
+_ResponseT = TypeVar("_ResponseT")
+
+
+def _parse_response(
+    parser: Callable[[dict[str, Any]], _ResponseT],
+    data: dict[str, Any],
+    *,
+    detail: str,
+) -> _ResponseT:
+    try:
+        return parser(data)
+    except (KeyError, TypeError, ValueError, OverflowError):
+        raise EvaluationAPIError(
+            code="invalid_response",
+            detail=detail,
+            response=data,
+            persistence="unknown",
+        ) from None
+
+
+def _integer(value: Any, *, minimum: int = 1) -> int:
+    if type(value) is not int or value < minimum:
+        raise ValueError(f"Expected an integer greater than or equal to {minimum}.")
+    return value
+
+
+def _text(value: Any) -> str:
+    if not isinstance(value, str):
+        raise ValueError("Expected a string.")
+    return value
+
+
+def _next_offset(value: Any, *, minimum: int = 0) -> int | None:
+    if value is None:
+        return None
+    # Extract only the continuation. Never send credentials to a response URL.
+    offsets = parse_qs(urlsplit(_text(value)).query).get("offset")
+    if offsets is None or len(offsets) != 1:
+        raise ValueError("Missing page offset.")
+    return _integer(int(offsets[0]), minimum=minimum)
 
 
 def _uuid(value: object) -> str:
@@ -51,14 +94,14 @@ def _identifier(value: object, field: str, limit: int = 255) -> str | None:
     return value
 
 
-def _encode(value: object) -> bytes:
+def _encode(value: object, *, sort_keys: bool = True) -> bytes:
     try:
         return json.dumps(
             value,
             ensure_ascii=False,
             allow_nan=False,
             separators=(",", ":"),
-            sort_keys=True,
+            sort_keys=sort_keys,
         ).encode("utf-8")
     except (TypeError, ValueError, UnicodeError) as exc:
         raise ValueError(

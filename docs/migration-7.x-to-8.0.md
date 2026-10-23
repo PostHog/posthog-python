@@ -115,8 +115,9 @@ Capture rejects a whole batch when one event cannot be parsed.
 - An event whose name is missing, `None`, empty or not a string is dropped. The SDK logs one warning per reason per process. 7.x sent it.
 - An event whose `before_send` hook sets `distinct_id` to `None` or a non-string is dropped, with one warning per reason per process. The SDK does not convert the hook's value or make up an ID. 7.x sent it, and capture would reject the whole batch.
 - PostHog drops an event whose name is over 200 UTF-8 bytes (`event_name_too_long`), and `on_error` reports it. 7.x sent events to legacy capture, which had no event name limit.
-- An event that cannot be serialized to JSON is dropped and logged, for example one with `NaN` or `Infinity` in its properties. 7.x sent `NaN` as invalid JSON.
-- A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key drops the event, as a `NaN` value does.
+- A `NaN` or infinite `float` value is sent as `null`, as in 7.75 and later, and the event is kept. Earlier 7.x versions sent invalid JSON, which made capture reject the whole batch.
+- An event that cannot be serialized to JSON, for example one with a circular reference, is dropped and logged.
+- A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key still drops the event.
 
 ## Event uuids
 

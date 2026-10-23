@@ -1,5 +1,126 @@
 # posthog
 
+## 7.75.6 — 2026-10-22
+
+### Patch changes
+
+- [a95331f](https://github.com/posthog/posthog-python/commit/a95331f171a33ca0674833a5aada371cc6446bc9) Retain the minimal-event gate and experiment metadata from the local definitions used by `evaluate_flags()`, including first-use loading and definition refreshes during evaluation. — Thanks @dustinbyrne!
+
+## 7.75.5 — 2026-10-22
+
+### Patch changes
+
+- [b3fcec6](https://github.com/posthog/posthog-python/commit/b3fcec639aa9c49514344ba97b24492f03e87b86) Annotate `timeout` and `feature_flags_request_timeout_seconds` as `float` on `Client`, `AsyncClient`, `Consumer` and the request helpers, so type checkers accept fractional timeouts such as `timeout=2.5`. The values were already passed straight to `requests` and `httpx`, which take floats, so runtime behaviour is unchanged. — Thanks @turnipdabeets!
+
+## 7.75.4 — 2026-10-22
+
+### Patch changes
+
+- [34ec4f8](https://github.com/posthog/posthog-python/commit/34ec4f828a45728c91e452e960aa0119a3052812) Streamed Anthropic generations no longer stack output tokens when a stream emits more than one `message_delta` (server tools can send several). Each delta's usage is cumulative, so the accumulator now keeps the latest total instead of adding every delta together. — Thanks @Harsh23Kashyap!
+
+## 7.75.3 — 2026-10-22
+
+### Patch changes
+
+- [a6ddc2e](https://github.com/posthog/posthog-python/commit/a6ddc2ed3227a1f8efa170f3eb7fce5b9aef36db) The LangChain callback handler now records `$ai_http_status` as an integer for failed generations. An error that carries a string `code` and no status code (such as OpenAI's `rate_limit_exceeded`) gave a string status; it now gives `0`, as an error without a status already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [42c8b7b](https://github.com/posthog/posthog-python/commit/42c8b7bc1ba1b1acca1b931830ded4818b26df33) A non-streamed OpenAI chat completion that the model refused is no longer captured with an empty `$ai_output_choices`: the refusal text is recorded as a `refusal` content block, as it already is for streamed responses. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [dc2a2b4](https://github.com/posthog/posthog-python/commit/dc2a2b4e33659e7909786fa48c625d37dc4da94d) Streamed OpenAI, Anthropic and Gemini generations that raise mid-stream are now captured with `$ai_is_error` and `$ai_error` (and the error's status code as `$ai_http_status`) instead of being recorded as a successful 200. The error is still re-raised to the caller, matching what non-streaming calls already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+
+## 7.75.2 — 2026-10-22
+
+### Patch changes
+
+- [4697e6f](https://github.com/posthog/posthog-python/commit/4697e6fcc837d1de3508a8b53273f609b6d63415) Capture Chat Completions responses that contain custom tool calls instead of raising `AttributeError` from the wrapped `create()` call. — Thanks @mosafariuk!
+
+## 7.75.1 — 2026-10-22
+
+### Patch changes
+
+- [e9056e3](https://github.com/posthog/posthog-python/commit/e9056e3051911b72aa1c8f9d39eb08fa4b0b65c4) Fix local feature flag string and regex operators to match an explicit null property as "null", like the flags service. This can change flag values or selected variants for explicitly null person or group properties. Missing properties still allow remote evaluation fallback. — Thanks @marandaneto!
+
+## 7.75.0 — 2026-10-21
+
+### Minor changes
+
+- [5f01fe9](https://github.com/posthog/posthog-python/commit/5f01fe93b893944f9b04c9e0f0536df46810143f) Add an optional OpenTelemetry span processor for PostHog request IDs and enrich active Django request spans after request context is available. — Thanks @pauldambra!
+
+### Patch changes
+
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add available PostHog request IDs to active Flask OpenTelemetry request spans. — Thanks @pauldambra!
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add propagated task context to active Celery OpenTelemetry spans. — Thanks @pauldambra!
+- [5ddb446](https://github.com/posthog/posthog-python/commit/5ddb4464a634a1dddf9b585cb9cf804c671a2edf) Add active PostHog request IDs to existing OpenTelemetry spans in ASGI middleware. — Thanks @pauldambra!
+
+## 7.74.0 — 2026-10-21
+
+### Minor changes
+
+- [b8879a7](https://github.com/posthog/posthog-python/commit/b8879a7550e1bc2728bb5d23d8ddb215ba3602a7) Manage AI observability datasets and items through `OfflineEvaluations.datasets` and `AsyncOfflineEvaluations.datasets`, including history, tags, and archive/restore operations. Pin a dataset snapshot for lazy, consistent reads and use `EvaluationItem.from_dataset_item()` to preserve case provenance across offline experiments and scorers. Item creates with a caller-supplied `client_item_id` support safe retries; updates use explicit version checks. — Thanks @Radu-Raicea!
+
+## 7.73.3 — 2026-10-21
+
+### Patch changes
+
+- [57d1607](https://github.com/posthog/posthog-python/commit/57d160712e8d01750031c953bea093065d217128) Streamed Anthropic generations now take the input and cache token counts from the final `message_delta` usage, which is cumulative. With server tools such as web search, those counts grow past the `message_start` values, so streamed calls under-reported input tokens and cache writes. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [f70b3cc](https://github.com/posthog/posthog-python/commit/f70b3cc3f0c5054f35ffc974b50005431aea511d) Keep the `openai.Stream` API on sync OpenAI chat completions and Responses streams, so `with`, `close()` and attributes such as `.response` work as they do without PostHog. — Thanks @mosafariuk for your first contribution 🎉!
+
+## 7.73.2 — 2026-10-20
+
+### Patch changes
+
+- [63b5dcc](https://github.com/posthog/posthog-python/commit/63b5dcca4ebaf3d42fee4cf6c9639e516dc2df4a) Fix local feature flag `gt`, `gte`, `lt`, and `lte` comparisons to compare numeric strings numerically rather than lexicographically. This can change which users match flags targeting numeric-string properties. Only complete, unpadded decimal strings and finite numbers are accepted: invalid properties no longer compare lexicographically, and invalid filter values allow remote evaluation fallback. — Thanks @dustinbyrne!
+
+## 7.73.1 — 2026-10-20
+
+### Patch changes
+
+- [20dabaa](https://github.com/posthog/posthog-python/commit/20dabaa258b810bae3696bcb67b9679c18ef8f25) Accept rediss:// URLs in flag_fallback_cache_url so the flag fallback cache can use Redis over TLS. — Thanks @auraseb for your first contribution 🎉!
+
+## 7.73.0 — 2026-10-19
+
+### Minor changes
+
+- [b086f65](https://github.com/posthog/posthog-python/commit/b086f65437c4904310279646da76321a80294056) Support tags in synchronous and asynchronous AI observability scorer creation, metadata updates, responses, and list filters. Add `get_tags()` and `set_tags()` to offline experiment handles for reading, replacing, and clearing experiment tags independently of uploads and completion. — Thanks @Radu-Raicea!
+
+## 7.72.0 — 2026-10-19
+
+### Minor changes
+
+- [facd617](https://github.com/posthog/posthog-python/commit/facd617491a74d8c3c751f0a628661b3817b250d) MCP analytics no longer sends standalone `$identify` events, so insights, funnels, or cohorts built on MCP `$identify` stop receiving new data. The `identify` callback still sets `distinct_id`, `$set` and `$groups` on every event. — Thanks @gesh!
+
+## 7.71.0 — 2026-10-16
+
+### Minor changes
+
+- [780cba9](https://github.com/posthog/posthog-python/commit/780cba9aeea0d990a65fafe88860905bb4941d81) Align ASGI, Flask, and Django tracing-header capture with peer SDKs. Add capture_tracing_headers and POSTHOG_MW_CAPTURE_TRACING_HEADERS, enabled by default once an integration is installed. Keep the trust-named options as deprecated aliases, honor explicit opt-outs, and prefer the capture-named option when both are configured. Share header sanitization and request-context attribution across integrations; explicit capture identity and session properties retain precedence. — Thanks @dustinbyrne!
+
+### Patch changes
+
+- [d0b6f71](https://github.com/posthog/posthog-python/commit/d0b6f7127f6d60a17d1c67724ad5eb50d12a7dd6) Clarify when to flush reusable clients versus shut down disposable clients, including timeout and delivery limitations. — Thanks @marandaneto!
+
+## 7.70.2 — 2026-10-15
+
+### Patch changes
+
+- [fec41f2](https://github.com/posthog/posthog-python/commit/fec41f24cb497d37a8cd0dd53490b74c98554dfa) Mark cancelled async LLM calls as errors while preserving cancellation. — Thanks @marandaneto!
+
+## 7.70.1 — 2026-10-15
+
+### Patch changes
+
+- [10d094e](https://github.com/posthog/posthog-python/commit/10d094e384efce1422ae1853951b7d2eaa0885ef) `Prompts.get()` now makes one request when several threads ask for the same prompt at once, instead of one request per thread. The other threads wait for that result. With `capture_errors=True`, a shared failure is reported once instead of once per thread. — Thanks @jurajmajerik!
+
+## 7.70.0 — 2026-10-14
+
+### Minor changes
+
+- [6916499](https://github.com/posthog/posthog-python/commit/69164994c920bbaf445c3a2c20b9f558f6a5a473) `PostHogSpanProcessor` now adds the active PostHog context to the AI spans it exports: the distinct ID from `identify_context`, the session ID from `set_context_session` (sent as `$session_id`), and context tags as properties. Spans started inside `posthog.new_context()` reach PostHog under the right person, so one process can trace many users. Tags set by the request middleware (for example `email`, `$ip`, `$user_agent` and `$current_url`) now appear on AI events too. Attributes already on a span are kept, and other processors on the provider never see the context. Apps already using PostHog contexts (for example the Django, Flask or ASGI request middleware) will see their AI events attributed to the context's person after upgrading. — Thanks @carlos-marchal-ph!
+
+## 7.69.0 — 2026-10-13
+
+### Minor changes
+
+- [3cc2d64](https://github.com/posthog/posthog-python/commit/3cc2d6468d22306897db285bf5fa291a94287e71) `client.metrics` now attaches a trace exemplar to each series it flushes. A sample recorded inside a sampled span (a PostHog `start_span` span, or the current OpenTelemetry span) stamps its data point with that span's trace ID, span ID, and value, so metric charts can link to a representative trace. One exemplar per series per flush window; the last sample wins. — Thanks @DanielVisca!
+
 ## 7.68.0 — 2026-10-12
 
 ### Minor changes

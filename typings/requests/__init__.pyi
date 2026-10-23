@@ -43,5 +43,5 @@ class Session:
         url: str,
         *,
         headers: dict[str, str],
-        timeout: int | None = ...,
+        timeout: float | None = ...,
     ) -> Response: ...

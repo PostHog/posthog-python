@@ -32,7 +32,9 @@ class _StreamWrapper(Generic[T]):
         try:
             self._generator.close()
         finally:
-            self._stream.close()
+            close = getattr(self._stream, "close", None)
+            if close is not None:
+                close()
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):

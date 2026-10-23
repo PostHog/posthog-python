@@ -378,9 +378,13 @@ attribute posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock.message
 attribute posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex.messages = AsyncWrappedMessages(self)
 attribute posthog.ai.claude_agent_sdk.client.log = logging.getLogger('posthog')
 attribute posthog.ai.claude_agent_sdk.processor.log = logging.getLogger('posthog')
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.dataset: Dataset
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.revision: int
+attribute posthog.ai.evaluations.AsyncDatasetSnapshot.revision_id: str
 attribute posthog.ai.evaluations.AsyncExperiment.id: str
 attribute posthog.ai.evaluations.AsyncExperiment.receipt = receipt
 attribute posthog.ai.evaluations.AsyncExperiment.submission: dict[str, Any] | None
+attribute posthog.ai.evaluations.AsyncOfflineEvaluations.datasets = AsyncDatasets(self._transport, project_id)
 attribute posthog.ai.evaluations.AsyncOfflineEvaluations.scorers = AsyncScorers(self._transport, project_id)
 attribute posthog.ai.evaluations.BooleanScorerConfig.false_label: str
 attribute posthog.ai.evaluations.BooleanScorerConfig.true_is_failure: bool | None
@@ -398,6 +402,58 @@ attribute posthog.ai.evaluations.CategoricalScorerConfig.passing_rule: Categoric
 attribute posthog.ai.evaluations.CategoricalScorerConfig.selection_mode: Literal['single', 'multiple']
 attribute posthog.ai.evaluations.CategoricalScorerOption.key: str
 attribute posthog.ai.evaluations.CategoricalScorerOption.label: str
+attribute posthog.ai.evaluations.Dataset.archived: bool
+attribute posthog.ai.evaluations.Dataset.created_at: datetime
+attribute posthog.ai.evaluations.Dataset.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.Dataset.current_revision: int | None
+attribute posthog.ai.evaluations.Dataset.current_revision_id: str | None
+attribute posthog.ai.evaluations.Dataset.description: str
+attribute posthog.ai.evaluations.Dataset.id: str
+attribute posthog.ai.evaluations.Dataset.metadata: dict[str, JSONValue] = field(repr=False)
+attribute posthog.ai.evaluations.Dataset.name: str
+attribute posthog.ai.evaluations.Dataset.tags: tuple[str, ...]
+attribute posthog.ai.evaluations.Dataset.team_id: int
+attribute posthog.ai.evaluations.Dataset.updated_at: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.archived: bool
+attribute posthog.ai.evaluations.DatasetItem.client_item_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.created_at: datetime
+attribute posthog.ai.evaluations.DatasetItem.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetItem.dataset_id: str
+attribute posthog.ai.evaluations.DatasetItem.dataset_revision: int
+attribute posthog.ai.evaluations.DatasetItem.dataset_revision_id: str
+attribute posthog.ai.evaluations.DatasetItem.expected_output: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.id: str
+attribute posthog.ai.evaluations.DatasetItem.input: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.metadata: dict[str, JSONValue] = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.source_event_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.source_output: JSONValue = field(repr=False)
+attribute posthog.ai.evaluations.DatasetItem.source_timestamp: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.source_trace_id: str | None
+attribute posthog.ai.evaluations.DatasetItem.team_id: int
+attribute posthog.ai.evaluations.DatasetItem.updated_at: datetime | None
+attribute posthog.ai.evaluations.DatasetItem.version: int
+attribute posthog.ai.evaluations.DatasetItem.version_created_at: datetime
+attribute posthog.ai.evaluations.DatasetItem.version_created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetItem.version_id: str
+attribute posthog.ai.evaluations.DatasetItemPage.count: int
+attribute posthog.ai.evaluations.DatasetItemPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetItemPage.results: tuple[DatasetItem, ...]
+attribute posthog.ai.evaluations.DatasetOrder = Literal['created_at', '-created_at', 'updated_at', '-updated_at']
+attribute posthog.ai.evaluations.DatasetPage.count: int
+attribute posthog.ai.evaluations.DatasetPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetPage.results: tuple[Dataset, ...]
+attribute posthog.ai.evaluations.DatasetRevision.created_at: datetime
+attribute posthog.ai.evaluations.DatasetRevision.created_by: dict[str, Any] | None
+attribute posthog.ai.evaluations.DatasetRevision.dataset_id: str
+attribute posthog.ai.evaluations.DatasetRevision.id: str
+attribute posthog.ai.evaluations.DatasetRevision.revision: int
+attribute posthog.ai.evaluations.DatasetRevision.team_id: int
+attribute posthog.ai.evaluations.DatasetRevisionPage.count: int
+attribute posthog.ai.evaluations.DatasetRevisionPage.next_offset: int | None
+attribute posthog.ai.evaluations.DatasetRevisionPage.results: tuple[DatasetRevision, ...]
+attribute posthog.ai.evaluations.DatasetSnapshot.dataset: Dataset
+attribute posthog.ai.evaluations.DatasetSnapshot.revision: int
+attribute posthog.ai.evaluations.DatasetSnapshot.revision_id: str
 attribute posthog.ai.evaluations.EvaluationAPIError.attr = attr
 attribute posthog.ai.evaluations.EvaluationAPIError.code = code
 attribute posthog.ai.evaluations.EvaluationAPIError.detail = deepcopy(detail)
@@ -447,6 +503,7 @@ attribute posthog.ai.evaluations.NumericScorerConfig.max: float | None
 attribute posthog.ai.evaluations.NumericScorerConfig.min: float | None
 attribute posthog.ai.evaluations.NumericScorerConfig.passing_rule: NumericPassingRule | None
 attribute posthog.ai.evaluations.NumericScorerConfig.step: float | None
+attribute posthog.ai.evaluations.OfflineEvaluations.datasets = Datasets(self._transport, project_id)
 attribute posthog.ai.evaluations.OfflineEvaluations.scorers = Scorers(self._transport, project_id)
 attribute posthog.ai.evaluations.ResultOptions.error_code: str | None
 attribute posthog.ai.evaluations.ResultOptions.error_message: str | None
@@ -472,6 +529,7 @@ attribute posthog.ai.evaluations.Scorer.description: str
 attribute posthog.ai.evaluations.Scorer.id: str
 attribute posthog.ai.evaluations.Scorer.kind: ScorerKind
 attribute posthog.ai.evaluations.Scorer.name: str
+attribute posthog.ai.evaluations.Scorer.tags: tuple[str, ...] = ()
 attribute posthog.ai.evaluations.Scorer.team: int
 attribute posthog.ai.evaluations.Scorer.updated_at: datetime
 attribute posthog.ai.evaluations.ScorerConfig = BooleanScorerConfig | NumericScorerConfig | CategoricalScorerConfig
@@ -554,6 +612,7 @@ attribute posthog.ai.openai.openai_providers.AzureOpenAI.embeddings: WrappedEmbe
 attribute posthog.ai.openai.openai_providers.AzureOpenAI.responses: WrappedResponses
 attribute posthog.ai.openai.wrapper_utils.log = logging.getLogger('posthog')
 attribute posthog.ai.openai_agents.processor.log = logging.getLogger('posthog')
+attribute posthog.ai.otel.processor.log = logging.getLogger('posthog')
 attribute posthog.ai.otel.spans.AI_SPAN_PREFIXES = ('gen_ai.', 'llm.', 'ai.', 'traceloop.')
 attribute posthog.ai.otel.spans.DEFAULT_HOST = 'https://us.i.posthog.com'
 attribute posthog.ai.prompts.APP_ENDPOINT = 'https://us.posthog.com'
@@ -607,6 +666,7 @@ attribute posthog.ai.types.StreamingContentBlock.thinking: Optional[str]
 attribute posthog.ai.types.StreamingContentBlock.type: str
 attribute posthog.ai.types.StreamingEventData.base_url: str
 attribute posthog.ai.types.StreamingEventData.distinct_id: Optional[str]
+attribute posthog.ai.types.StreamingEventData.error: NotRequired[Optional[BaseException]]
 attribute posthog.ai.types.StreamingEventData.formatted_input: Any
 attribute posthog.ai.types.StreamingEventData.formatted_output: Any
 attribute posthog.ai.types.StreamingEventData.groups: Optional[Dict[str, Any]]
@@ -1118,6 +1178,8 @@ class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock(posthog_cli
 class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient(options: Optional[ClaudeAgentOptions] = None, transport: Any = None, *, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
 class posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
+class posthog.ai.evaluations.AsyncDatasetSnapshot(dataset: Dataset, revision: int, revision_id: str, _datasets: AsyncDatasets)
+class posthog.ai.evaluations.AsyncDatasets(transport: AsyncTransport, project_id: int)
 class posthog.ai.evaluations.AsyncExperiment(transport: AsyncTransport, project_id: int, id: str, *, receipt: ExperimentReceipt | None = None, submission: bytes | None = None)
 class posthog.ai.evaluations.AsyncOfflineEvaluations(*, project_id: int, secret_key: str, host: str | None = None, timeout: float = 15, max_retries: int = 3)
 class posthog.ai.evaluations.AsyncScorers(transport: AsyncTransport, project_id: int)
@@ -1127,6 +1189,14 @@ class posthog.ai.evaluations.BulkUploadReceipt(chunks: tuple[UploadReceipt, ...]
 class posthog.ai.evaluations.CategoricalPassingRule
 class posthog.ai.evaluations.CategoricalScorerConfig
 class posthog.ai.evaluations.CategoricalScorerOption
+class posthog.ai.evaluations.Dataset(id: str, name: str, description: str, metadata: dict[str, JSONValue], tags: tuple[str, ...], archived: bool, current_revision: int | None, current_revision_id: str | None, created_at: datetime, updated_at: datetime | None, created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetItem(id: str, dataset_id: str, client_item_id: str | None, version: int, version_id: str, dataset_revision: int, dataset_revision_id: str, archived: bool, input: JSONValue, expected_output: JSONValue, source_output: JSONValue, metadata: dict[str, JSONValue], source_trace_id: str | None, source_event_id: str | None, source_timestamp: datetime | None, created_at: datetime, updated_at: datetime | None, created_by: dict[str, Any] | None, version_created_at: datetime, version_created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetItemPage(count: int, results: tuple[DatasetItem, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetPage(count: int, results: tuple[Dataset, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetRevision(id: str, dataset_id: str, revision: int, created_at: datetime, created_by: dict[str, Any] | None, team_id: int)
+class posthog.ai.evaluations.DatasetRevisionPage(count: int, results: tuple[DatasetRevision, ...], next_offset: int | None)
+class posthog.ai.evaluations.DatasetSnapshot(dataset: Dataset, revision: int, revision_id: str, _datasets: Datasets)
+class posthog.ai.evaluations.Datasets(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.EvaluationAPIError(*, status: int | None = None, code: str | None = None, detail: Any = None, attr: str | None = None, errors: Any = None, response: dict[str, Any] | None = None, retry_after: float | None = None, persistence: Literal['rejected', 'unknown', 'not_sent'] = 'unknown', submission: dict[str, Any] | None = None)
 class posthog.ai.evaluations.EvaluationItem(*, id: str | UUID | None = None, input: JSONValue | _Unset = _UNSET, output: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, case_key: str | None = None, trial: str | None = None, dataset_item_identifier: str | None = None, dataset_item_version_identifier: str | None = None, dataset_item_version_id: str | UUID | None = None, application_trace_id: str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
 class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
@@ -1139,7 +1209,7 @@ class posthog.ai.evaluations.NumericScorerConfig
 class posthog.ai.evaluations.OfflineEvaluations(*, project_id: int, secret_key: str, host: str | None = None, timeout: float = 15, max_retries: int = 3)
 class posthog.ai.evaluations.ResultOptions
 class posthog.ai.evaluations.ResultReceipt(id: str, created: bool, accepted_at: datetime, item_id: str, scorer_version_id: str)
-class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int)
+class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int, tags: tuple[str, ...] = ())
 class posthog.ai.evaluations.ScorerPage(count: int, results: tuple[Scorer[ScorerConfig], ...], next: str | None, previous: str | None, next_offset: int | None)
 class posthog.ai.evaluations.ScorerVersion(id: str, definition_id: str, version: int, kind: ScorerKind, config: _ConfigT, created_at: datetime, created_by: dict[str, Any] | None)
 class posthog.ai.evaluations.ScorerVersionPage(count: int, results: tuple[ScorerVersion[ScorerConfig], ...], next_cursor: str | None)
@@ -1193,14 +1263,14 @@ class posthog.ai.types.TokenUsage
 class posthog.ai.types.ToolInProgress 
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
-class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: int = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: int = 3, feature_flags_request_max_retries: int = 1)
+class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1)
 class posthog.async_client.AsyncPosthog 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.capture_compression.CaptureCompression 
 class posthog.capture_send.CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
 class posthog.capture_send.CaptureEventResult(result: Optional[str], details: Optional[str] = None)
-class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout=15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds=3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout=15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
+class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout: float = 15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
@@ -1215,6 +1285,7 @@ class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Opt
 class posthog.integrations.celery.PosthogCeleryIntegration(client: Optional[Client] = None, capture_exceptions: bool = True, capture_task_lifecycle_events: bool = True, propagate_context: bool = True, task_filter: Optional[Callable[[Optional[str], dict[str, Any]], bool]] = None)
 class posthog.integrations.django.PosthogContextMiddleware(get_response)
 class posthog.integrations.flask.PosthogFlaskIntegration(app: Optional[Flask] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[Callable[[Request], bool]] = None, extra_properties: Optional[Callable[[Request], Mapping[str, Any]]] = None, trust_tracing_headers: Optional[bool] = None, capture_tracing_headers: Optional[bool] = None)
+class posthog.integrations.otel.PostHogContextSpanProcessor 
 class posthog.mcp.McpAnalytics(key: Any)
 class posthog.mcp.asgi.PostHogMcpStatelessSessionMiddleware(app: Any)
 class posthog.mcp.constants.PostHogMCPAnalyticsEvent 
@@ -1424,6 +1495,7 @@ function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.integrations.drf.create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
 function posthog.integrations.drf.exception_handler(exc: Exception, context: Mapping[str, Any]) -> Any
+function posthog.integrations.otel.enrich_current_span() -> None
 function posthog.join() -> None
 function posthog.load_feature_flags()
 function posthog.mcp.asgi.autowire_stateless_mint(server: Any) -> None
@@ -1443,11 +1515,11 @@ function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[b
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
-function posthog.request.flags(api_key: str, host: Optional[str] = None, *, timeout: int = 15, max_retries: int = 1, **kwargs) -> Any
-function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[int] = None, etag: Optional[str] = None) -> GetResponse
+function posthog.request.flags(api_key: str, host: Optional[str] = None, *, timeout: float = 15, max_retries: int = 1, **kwargs) -> Any
+function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[float] = None, etag: Optional[str] = None) -> GetResponse
 function posthog.request.normalize_host(host: Optional[str]) -> str
-function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, *, timeout: int = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
-function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: int = 15) -> Any
+function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, *, timeout: float = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
+function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: float = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None
 function posthog.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
@@ -1494,38 +1566,75 @@ method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.receive_respons
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_model(model: Optional[str] = None) -> None
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_permission_mode(mode: str) -> None
 method posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None)
+method posthog.ai.evaluations.AsyncDatasetSnapshot.iter_items(*, page_size: int = 25)
+method posthog.ai.evaluations.AsyncDatasets.archive(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.archive_item(item_id: str | UUID, *, base_version: int)
+method posthog.ai.evaluations.AsyncDatasets.create(*, name: str, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.AsyncDatasets.create_item(dataset_id: str | UUID, *, input: JSONValue, expected_output: JSONValue | _Unset = _UNSET, source_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, client_item_id: str | None = None, source_trace_id: str | None = None, source_event_id: str | None = None, source_timestamp: datetime | str | None = None)
+method posthog.ai.evaluations.AsyncDatasets.get(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.get_item(item_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.list(*, limit: int = 50, offset: int = 0, search: str | None = None, archived: bool = False, order_by: DatasetOrder = '-created_at', tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.AsyncDatasets.list_item_versions(item_id: str | UUID, *, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.list_items(dataset_id: str | UUID, *, revision: int | None = None, archived: bool = False, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.list_revisions(dataset_id: str | UUID, *, limit: int = 50, offset: int = 0)
+method posthog.ai.evaluations.AsyncDatasets.restore(dataset_id: str | UUID)
+method posthog.ai.evaluations.AsyncDatasets.restore_item(item_id: str | UUID, *, base_version: int, source_version: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.snapshot(dataset_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.AsyncDatasets.update(dataset_id: str | UUID, *, name: str | _Unset = _UNSET, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.AsyncDatasets.update_item(item_id: str | UUID, *, base_version: int, input: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET)
 method posthog.ai.evaluations.AsyncExperiment.complete()
 method posthog.ai.evaluations.AsyncExperiment.fail()
+method posthog.ai.evaluations.AsyncExperiment.get_tags()
+method posthog.ai.evaluations.AsyncExperiment.set_tags(tags: Sequence[str])
 method posthog.ai.evaluations.AsyncExperiment.upload_result(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, **options: Unpack[ResultOptions])
 method posthog.ai.evaluations.AsyncExperiment.upload_results(results: Sequence[EvaluationResult])
 method posthog.ai.evaluations.AsyncOfflineEvaluations.aclose()
 method posthog.ai.evaluations.AsyncOfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.AsyncOfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
 method posthog.ai.evaluations.AsyncScorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
 method posthog.ai.evaluations.AsyncScorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.AsyncScorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None)
+method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
 method posthog.ai.evaluations.AsyncScorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
-method posthog.ai.evaluations.AsyncScorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
+method posthog.ai.evaluations.DatasetSnapshot.iter_items(*, page_size: int = 25)
+method posthog.ai.evaluations.Datasets.archive(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.archive_item(item_id: str | UUID, *, base_version: int)
+method posthog.ai.evaluations.Datasets.create(*, name: str, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.Datasets.create_item(dataset_id: str | UUID, *, input: JSONValue, expected_output: JSONValue | _Unset = _UNSET, source_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, client_item_id: str | None = None, source_trace_id: str | None = None, source_event_id: str | None = None, source_timestamp: datetime | str | None = None)
+method posthog.ai.evaluations.Datasets.get(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.get_item(item_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.Datasets.list(*, limit: int = 50, offset: int = 0, search: str | None = None, archived: bool = False, order_by: DatasetOrder = '-created_at', tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.Datasets.list_item_versions(item_id: str | UUID, *, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.Datasets.list_items(dataset_id: str | UUID, *, revision: int | None = None, archived: bool = False, limit: int = 25, offset: int = 0)
+method posthog.ai.evaluations.Datasets.list_revisions(dataset_id: str | UUID, *, limit: int = 50, offset: int = 0)
+method posthog.ai.evaluations.Datasets.restore(dataset_id: str | UUID)
+method posthog.ai.evaluations.Datasets.restore_item(item_id: str | UUID, *, base_version: int, source_version: int | None = None)
+method posthog.ai.evaluations.Datasets.snapshot(dataset_id: str | UUID, *, revision: int | None = None)
+method posthog.ai.evaluations.Datasets.update(dataset_id: str | UUID, *, name: str | _Unset = _UNSET, description: str | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET, tags: Sequence[str] | _Unset = _UNSET)
+method posthog.ai.evaluations.Datasets.update_item(item_id: str | UUID, *, base_version: int, input: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | _Unset = _UNSET)
+method posthog.ai.evaluations.EvaluationItem.from_dataset_item(item: DatasetItem, *, output: JSONValue | _Unset = _UNSET, id: str | UUID | None = None, case_key: str | None = None, trial: str | None = None, application_trace_id: str | None = None)
 method posthog.ai.evaluations.EvaluationItem.from_dict(data: Mapping[str, Any])
 method posthog.ai.evaluations.EvaluationItem.to_dict()
 method posthog.ai.evaluations.EvaluationResult.from_dict(data: Mapping[str, Any], *, item: EvaluationItem | None = None)
 method posthog.ai.evaluations.EvaluationResult.to_dict()
 method posthog.ai.evaluations.Experiment.complete()
 method posthog.ai.evaluations.Experiment.fail()
+method posthog.ai.evaluations.Experiment.get_tags()
+method posthog.ai.evaluations.Experiment.set_tags(tags: Sequence[str])
 method posthog.ai.evaluations.Experiment.upload_result(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, **options: Unpack[ResultOptions])
 method posthog.ai.evaluations.Experiment.upload_results(results: Sequence[EvaluationResult])
 method posthog.ai.evaluations.OfflineEvaluations.close()
 method posthog.ai.evaluations.OfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.OfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
 method posthog.ai.evaluations.Scorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
 method posthog.ai.evaluations.Scorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.Scorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None)
+method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
 method posthog.ai.evaluations.Scorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
-method posthog.ai.evaluations.Scorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED)
+method posthog.ai.evaluations.Scorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
 method posthog.ai.gemini.gemini.Models.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.gemini.gemini.Models.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.gemini.gemini.Models.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
@@ -1698,6 +1807,7 @@ method posthog.integrations.django.PosthogContextMiddleware.extract_request_user
 method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request)
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
 method posthog.integrations.flask.PosthogFlaskIntegration.init_app(app: Flask) -> None
+method posthog.integrations.otel.PostHogContextSpanProcessor.on_start(span: Span, parent_context: Optional[Context] = None) -> None
 method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
 method posthog.mcp.McpAnalytics.flush() -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
@@ -1719,6 +1829,7 @@ method posthog.metrics_capture.PostHogMetrics.reset() -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
 method posthog.request.DatetimeSerializer.default(obj: Any)
+method posthog.request.DatetimeSerializer.encode(o: Any) -> str
 method posthog.request.HTTPAdapterWithSocketOptions.init_poolmanager(*args, **kwargs)
 method posthog.tracing.span.Span.add_event(name: str, attributes: Optional[Mapping[str, Any]] = None, timestamp: Union[datetime, float, None] = None) -> Span
 method posthog.tracing.span.Span.end(end_time: Union[datetime, float, None] = None) -> None
@@ -1810,6 +1921,7 @@ module posthog.integrations.celery
 module posthog.integrations.django
 module posthog.integrations.drf
 module posthog.integrations.flask
+module posthog.integrations.otel
 module posthog.mcp
 module posthog.mcp.asgi
 module posthog.mcp.constants

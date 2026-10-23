@@ -643,6 +643,23 @@ def _is_truthy_property_value(value) -> bool:
     return False
 
 
+_NUMERIC_STRING_PATTERN = re.compile(
+    r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+)
+
+
+def _parse_numeric_value(value) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int, float, Decimal)):
+        return None
+    if isinstance(value, str) and not _NUMERIC_STRING_PATTERN.fullmatch(value):
+        return None
+    try:
+        parsed = float(value)
+    except (ValueError, OverflowError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def match_property(
     property, property_values, property_matching_version: int = 1
 ) -> bool:
@@ -664,8 +681,24 @@ def match_property(
 
     override_value = property_values[key]
 
+    if operator in NUMERIC_OPERATORS:
+        parsed_value = _parse_numeric_value(value)
+        if parsed_value is None:
+            raise InconclusiveMatchError("The numeric condition is not a finite number")
+        parsed_override = _parse_numeric_value(override_value)
+        if parsed_override is None:
+            return False
+        if operator == "gt":
+            return parsed_override > parsed_value
+        if operator == "gte":
+            return parsed_override >= parsed_value
+        if operator == "lt":
+            return parsed_override < parsed_value
+        return parsed_override <= parsed_value
+
     if (
         operator not in NONE_VALUES_ALLOWED_OPERATORS
+        and operator not in STRING_OPERATORS
         and operator != "exact"
         and override_value is None
     ):
@@ -718,46 +751,12 @@ def match_property(
             return not matched
         return matched
 
-    if operator == "regex":
-        return (
-            is_valid_regex(str(value))
-            and re.compile(str(value)).search(str(override_value)) is not None
-        )
-
-    if operator == "not_regex":
-        return (
-            is_valid_regex(str(value))
-            and re.compile(str(value)).search(str(override_value)) is None
-        )
-
-    if operator in ("gt", "gte", "lt", "lte"):
-        # :TRICKY: We adjust comparison based on the override value passed in,
-        # to make sure we handle both numeric and string comparisons appropriately.
-        def compare(lhs, rhs, operator):
-            if operator == "gt":
-                return lhs > rhs
-            elif operator == "gte":
-                return lhs >= rhs
-            elif operator == "lt":
-                return lhs < rhs
-            elif operator == "lte":
-                return lhs <= rhs
-            else:
-                raise ValueError(f"Invalid operator: {operator}")
-
-        parsed_value = None
-        try:
-            parsed_value = float(value)
-        except Exception:
-            pass
-
-        if parsed_value is not None and override_value is not None:
-            if isinstance(override_value, str):
-                return compare(override_value, str(value), operator)
-            else:
-                return compare(override_value, parsed_value, operator)
-        else:
-            return compare(str(override_value), str(value), operator)
+    if operator in ("regex", "not_regex"):
+        if not is_valid_regex(str(value)):
+            return False
+        property_string = "null" if override_value is None else str(override_value)
+        matched = re.compile(str(value)).search(property_string) is not None
+        return not matched if operator == "not_regex" else matched
 
     if operator in ["is_date_before", "is_date_after"]:
         try:

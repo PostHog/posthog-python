@@ -117,7 +117,7 @@ class Consumer(Thread):
         on_error=None,
         flush_interval=5.0,
         retries=3,
-        timeout=15,
+        timeout: float = 15,
         historical_migration=False,
         endpoint=_CAPTURE_V1_PATH,
         max_msg_size=MAX_MSG_SIZE,

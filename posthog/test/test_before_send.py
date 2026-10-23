@@ -254,8 +254,6 @@ class TestClient(unittest.TestCase):
                 "private-value",
                 ["malformed", "valid"],
             ),
-            # A value json cannot write costs only that event, never the batch.
-            ("non_finite_value", "private-key", float("nan"), ["valid"]),
         ]
     )
     def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(

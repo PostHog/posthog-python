@@ -7,10 +7,13 @@ Fetch and compile LLM prompts from PostHog with caching and fallback support.
 import copy
 import logging
 import math
+import os
 import re
+import threading
 import time
 import urllib.parse
 import warnings
+import weakref
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union, overload
 
@@ -35,6 +38,33 @@ PromptVariables = Dict[str, Union[str, int, float, bool]]
 PromptCacheKey = tuple[str, Optional[int], Optional[str]]
 
 PromptSource = Literal["api", "cache", "stale_cache", "code_fallback"]
+
+
+class _InFlightFetch:
+    """One network request that several callers wait on."""
+
+    def __init__(self) -> None:
+        self.done = threading.Event()
+        self.result: Optional[CachedPrompt] = None
+        self.error: Optional[BaseException] = None
+
+
+# Every live Prompts instance, so one fork hook can reset them all. Registered
+# once here, because os.register_at_fork keeps each callback for the process
+# lifetime and an app that builds many instances would accumulate them.
+_instances: "weakref.WeakSet[Prompts]" = weakref.WeakSet()
+
+
+def _reset_in_flight_after_fork() -> None:
+    # The child has no copy of the thread that was fetching, so an inherited
+    # in-flight entry would hold every later caller for that key.
+    for prompts in list(_instances):
+        prompts._in_flight = {}
+        prompts._in_flight_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_in_flight_after_fork)
 
 
 @dataclass(frozen=True)
@@ -270,6 +300,12 @@ class Prompts:
             else DEFAULT_CACHE_TTL_SECONDS
         )
         self._cache: Dict[PromptCacheKey, CachedPrompt] = {}
+        # One request per cache key at a time. Threads that arrive while it is in
+        # flight wait for that result, so a worker with many concurrent callers does
+        # not turn every cache miss or expiry into one request per caller.
+        self._in_flight: Dict[PromptCacheKey, _InFlightFetch] = {}
+        self._in_flight_lock = threading.Lock()
+        _instances.add(self)
         self._has_warned_deprecation = False
         self._client = posthog
         self._capture_errors = capture_errors
@@ -568,44 +604,18 @@ class Prompts:
 
         # Try to fetch from API
         try:
-            data = self._fetch_prompt_from_api(name, version, label)
-
-            # An older PostHog server ignores the label param and returns the latest
-            # version with no label field — surface that instead of failing silently.
-            if label is not None and data.get("label") != label:
-                log.warning(
-                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
-                    "resolved %r. It may not support prompt labels yet and returned the "
-                    "latest version instead.",
-                    label,
-                    name,
-                    data.get("label"),
-                )
-
-            config = _extract_config(data)
-
-            # Update cache
-            self._cache[cache_key] = CachedPrompt(
-                prompt=data["prompt"],
-                fetched_at=time.time(),
-                name=data["name"],
-                version=data["version"],
-                label=data.get("label"),
-                config=config,
-            )
+            fetched = self._fetch_prompt_once(name, version, label, ttl=ttl)
 
             return PromptResult(
                 source="api",
-                prompt=data["prompt"],
-                name=data["name"],
-                version=data["version"],
-                label=data.get("label"),
-                config=copy.deepcopy(config),
+                prompt=fetched.prompt,
+                name=fetched.name,
+                version=fetched.version,
+                label=fetched.label,
+                config=copy.deepcopy(fetched.config),
             )
 
         except Exception as error:
-            self._maybe_capture_error(error, name=name, version=version, label=label)
-
             prompt_reference = _prompt_reference(name, version, label)
             # Return stale cache (with warning)
             if cached is not None:
@@ -633,6 +643,79 @@ class Prompts:
                 )
 
             raise
+
+    def _fetch_prompt_once(
+        self,
+        name: str,
+        version: Optional[int],
+        label: Optional[str],
+        *,
+        ttl: float,
+    ) -> CachedPrompt:
+        """Fetch a prompt, sharing the request with other threads that want the same key."""
+        cache_key = _cache_key(name, version, label)
+        with self._in_flight_lock:
+            # Another thread may have finished a fetch between the caller's cache
+            # check and this lock. Its entry is fresh, so serve it instead of
+            # starting another request. A zero TTL is never fresh and still fetches.
+            cached = self._cache.get(cache_key)
+            if cached is not None and (time.time() - cached.fetched_at) < ttl:
+                return cached
+
+            pending = self._in_flight.get(cache_key)
+            is_leader = pending is None
+            if pending is None:
+                pending = _InFlightFetch()
+                self._in_flight[cache_key] = pending
+
+        if not is_leader:
+            pending.done.wait()
+            if pending.error is not None:
+                raise pending.error
+            assert pending.result is not None
+            return pending.result
+
+        try:
+            data = self._fetch_prompt_from_api(name, version, label)
+
+            # An older PostHog server ignores the label param and returns the latest
+            # version with no label field — surface that instead of failing silently.
+            if label is not None and data.get("label") != label:
+                log.warning(
+                    "[PostHog Prompts] Requested label %r for prompt %r but the server "
+                    "resolved %r. It may not support prompt labels yet and returned the "
+                    "latest version instead.",
+                    label,
+                    name,
+                    data.get("label"),
+                )
+
+            fetched = CachedPrompt(
+                prompt=data["prompt"],
+                fetched_at=time.time(),
+                name=data["name"],
+                version=data["version"],
+                label=data.get("label"),
+                config=_extract_config(data),
+            )
+            # Cached before the in-flight entry is released, so a caller that
+            # arrives in between finds the entry instead of starting a request.
+            self._cache[cache_key] = fetched
+            pending.result = fetched
+            return fetched
+        except BaseException as error:
+            pending.error = error
+            raise
+        finally:
+            with self._in_flight_lock:
+                self._in_flight.pop(cache_key, None)
+            pending.done.set()
+            # Reported after the waiters are released, so an error-tracking callback
+            # that fetches the same prompt cannot wait on this very request.
+            if isinstance(pending.error, Exception):
+                self._maybe_capture_error(
+                    pending.error, name=name, version=version, label=label
+                )
 
     def compile(self, prompt: str, variables: PromptVariables) -> str:
         """

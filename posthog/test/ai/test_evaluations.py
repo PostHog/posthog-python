@@ -114,6 +114,101 @@ def result(item=None, **kwargs):
     )
 
 
+def test_experiment_tags_are_separate_from_creation_and_lifecycle_receipts(client):
+    evaluations, transport = client
+    experiment = invoke(evaluations.create_experiment, name="Tagged run")
+    invoke(experiment.complete)
+    submission, receipt = experiment.submission, experiment.receipt
+    transport.request.reset_mock()
+    transport.request.side_effect = None
+    response = {
+        "id": experiment.id,
+        "status": "completed",
+        "tags": ["production", "quality"],
+    }
+    transport.request.return_value = response
+    tags = invoke(experiment.set_tags, [" Quality ", "production", "Quality"])
+    assert tags == ("production", "quality")
+    transport.request.assert_called_once_with(
+        "PATCH",
+        BASE + experiment.id + "/",
+        body=b'{"tags":[" Quality ","production","Quality"]}',
+        retry_safe=False,
+    )
+    response["tags"].append("later")
+    assert tags == ("production", "quality")
+    assert experiment.receipt is receipt
+    assert experiment.submission == submission
+    assert "tags" not in experiment.submission
+
+    response["tags"] = []
+    assert invoke(experiment.set_tags, ()) == ()
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {"tags": []}
+    assert invoke(experiment.get_tags) == ()
+    transport.request.assert_called_with("GET", BASE + experiment.id + "/")
+
+
+def test_resumed_experiment_can_fetch_tags(client):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    transport.request.assert_not_called()
+    transport.request.side_effect = None
+    transport.request.return_value = {"id": EXPERIMENT_ID, "tags": ["quality"]}
+    assert invoke(experiment.get_tags) == ("quality",)
+    assert experiment.receipt is None
+    assert experiment.submission is None
+
+
+@pytest.mark.parametrize(
+    "tags", [None, "quality", {"quality"}, [1], [""], [" "], ["x" * 256], ["q"] * 101]
+)
+def test_invalid_experiment_tags_are_rejected_before_io(client, tags):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    with pytest.raises(ValueError):
+        invoke(experiment.set_tags, tags)
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize("operation", ["get_tags", "set_tags"])
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"id": EXPERIMENT_ID},
+        {"id": EXPERIMENT_ID, "tags": None},
+        {"id": EXPERIMENT_ID, "tags": "quality"},
+        {"id": EXPERIMENT_ID, "tags": [1]},
+        {"tags": []},
+        {"id": VERSION_ID, "tags": []},
+    ],
+)
+def test_malformed_experiment_tag_responses_are_not_acknowledged(
+    client, operation, response
+):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    transport.request.side_effect = None
+    transport.request.return_value = response
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(
+            getattr(experiment, operation), *([[]] if operation == "set_tags" else [])
+        )
+    assert caught.value.code == "invalid_response"
+    assert caught.value.persistence == "unknown"
+    assert caught.value.response == response
+
+
+def test_experiment_tag_permission_error_is_preserved(client):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    error = EvaluationAPIError(status=403, persistence="rejected")
+    transport.request.side_effect = error
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(experiment.set_tags, ["quality"])
+    assert caught.value is error
+    transport.request.assert_called_once()
+
+
 def test_create_upload_and_explicit_completion(client):
     evaluations, transport = client
     experiment = invoke(

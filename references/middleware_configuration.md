@@ -90,3 +90,108 @@ request scope it is restored. Background threads do not automatically inherit
 request context; async tasks follow Python's context-variable propagation rules.
 Flask isolates identity and request properties while retaining effective enclosing
 exception code-variable privacy controls.
+
+## OpenTelemetry spans
+
+Native PostHog spans read the active request IDs when `start_span` runs.
+For application-owned OpenTelemetry spans, install `opentelemetry-sdk` and add
+`PostHogContextSpanProcessor` to the application's existing `TracerProvider`:
+
+```python
+from posthog.integrations.otel import PostHogContextSpanProcessor
+
+provider.add_span_processor(PostHogContextSpanProcessor())
+```
+
+Register the processor before requests start. Keep the existing provider,
+exporters, and sampler. The processor adds `sessionId` and `posthogDistinctId`
+from the active PostHog context when each recording span starts. These values
+stay on the span after the request ends. Explicit span attributes take precedence.
+The bridge skips enrichment when there is not enough attribute capacity or the
+SDK does not expose its limit. OpenTelemetry SDK 1.20.0 or later is supported.
+An existing application identity, such as `user.id`, prevents fallback identity
+from being added. Absent IDs are omitted. OpenTelemetry remains optional for
+applications that do not use this integration.
+
+Django's `PosthogContextMiddleware` also adds IDs to the active OpenTelemetry SDK
+request span after it reads the request context. This covers a request span that
+starts before the PostHog middleware. Put the OpenTelemetry request middleware
+outside the PostHog middleware. Put Django's authentication middleware before
+PostHog if you want authenticated user identity. Both sync and async Django
+request handlers use the same bridge. Tracing headers are captured by default.
+Set `POSTHOG_MW_CAPTURE_TRACING_HEADERS = False` to disable extraction. These
+headers remain untrusted analytics context.
+
+Flask's `PosthogFlaskIntegration` adds IDs to the active OpenTelemetry SDK
+request span after its request hook sets the context. Keep OpenTelemetry's WSGI
+middleware outside the Flask app so that its request span is active before
+Flask runs `before_request` hooks. Browser session and person headers are captured
+by default. Set `capture_tracing_headers=False` to disable extraction. Register the shared processor above for
+child spans; the request hook alone does not enrich later OpenTelemetry spans.
+The application must set authenticated identity on the request span before the
+PostHog hook if that identity must take precedence over a browser header.
+Requests excluded by `request_filter` receive no enrichment. Flask request
+context closes in `teardown_request`, including when the view raises an error.
+
+ASGI's `PosthogASGIMiddleware` also adds IDs after it reads the headers. This
+covers an active recording request span started by outer tracing middleware.
+FastAPI applications use the same ASGI middleware:
+
+```python
+from posthog.integrations.asgi import PosthogASGIMiddleware
+
+app.add_middleware(PosthogASGIMiddleware)
+```
+
+Keep OpenTelemetry request tracing outside this middleware and register
+`PostHogContextSpanProcessor` for child spans. Both async handlers and FastAPI's
+sync handlers run within the request context. HTTP and WebSocket scopes are
+supported; WebSocket tracing requires the application to supply a recording span.
+Lifespan scopes and requests rejected by `request_filter` pass through without
+span enrichment. The middleware does not create request spans. Spans started by
+outer error-response handlers after the PostHog scope exits omit request IDs.
+
+For a custom request integration, call `enrich_current_span()` from
+`posthog.integrations.otel` once after setting the request IDs. This call handles
+an already active recording SDK span. The processor handles spans started later
+in the request. A context lookup failure does not interrupt the request.
+No provider, exporter, trace, session ID, or recording is created by this bridge.
+
+The bridge does not propagate context into a separate process or a new thread.
+Only spans started during the supported request lifetime inherit request IDs.
+Spans started by an inherited async task after the request ends omit request IDs.
+A background task can set its own IDs in a new `new_context()` scope.
+Only IDs from active scopes are used. Set `fresh=True` to prevent inheritance
+from any parent scope.
+The AI OpenTelemetry processor is a separate integration with different attributes.
+
+## Celery task spans
+
+`PosthogCeleryIntegration` carries context through its existing task message
+headers when `propagate_context=True` (the default). Instrument the producer and
+each worker process. A worker starts a fresh PostHog context before each task and
+restores the prior context after success, failure, or retry. A task without
+PostHog headers does not inherit identity or session IDs from an enclosing scope.
+
+Add `PostHogContextSpanProcessor` to the application's existing provider for
+child spans. The Celery integration also enriches an active task span after it
+reads the message headers, but only when its public `celery.task_id` attribute
+exactly matches the current task ID. Other active spans remain unchanged.
+It does not create task spans. To create task spans,
+install and configure `opentelemetry-instrumentation-celery` separately.
+
+Call `PosthogCeleryIntegration.instrument()` before
+`CeleryInstrumentor().instrument(tracer_provider=provider)`. This order ensures
+that PostHog restores the job context before OpenTelemetry starts the task span.
+This also matters for eager and nested tasks: with the reverse order, the span
+processor can read the enclosing context before the task context is available.
+Existing span attributes are preserved, so the later task hook cannot replace
+those values. Official Celery instrumentation does not expose a matching
+`celery.task_id` at this hook. The later task hook therefore cannot repair task
+spans created in the reverse order.
+
+Celery's eager execution does not emit task publish signals. To carry context
+into an eager task, pass the task's PostHog headers explicitly with
+`task.apply(headers=...)` or `task.apply_async(headers=...)`. Do not use these
+analytics headers for authentication or authorization. Task context propagation
+does not grant a background task access to an ended request scope.

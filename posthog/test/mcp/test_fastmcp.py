@@ -256,8 +256,7 @@ async def test_identify_sets_distinct_id_and_groups():
     assert calls[0]["distinct_id"] == "user_42"
     assert calls[0]["properties"]["$groups"] == {"organization": "org_7"}
     assert calls[0]["options"] == {}
-    # an $identify event was emitted
-    assert _events(client, "$identify")
+    assert not _events(client, "$identify")
 
 
 async def test_instrument_is_idempotent():

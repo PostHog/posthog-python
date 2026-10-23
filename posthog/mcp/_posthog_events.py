@@ -22,7 +22,6 @@ from .types import Event, PostHogCaptureEvent
 
 _BUILT_IN_EVENT_NAME_BY_TYPE = {
     MCPAnalyticsEventType.CUSTOM: PostHogMCPAnalyticsEvent.CUSTOM,
-    MCPAnalyticsEventType.IDENTIFY: PostHogMCPAnalyticsEvent.IDENTIFY,
     MCPAnalyticsEventType.MCP_FEEDBACK: PostHogMCPAnalyticsEvent.FEEDBACK,
     MCPAnalyticsEventType.MCP_MISSING_CAPABILITY: PostHogMCPAnalyticsEvent.MISSING_CAPABILITY,
     MCPAnalyticsEventType.MCP_INITIALIZE: PostHogMCPAnalyticsEvent.INITIALIZE,

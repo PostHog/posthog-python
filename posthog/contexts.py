@@ -21,6 +21,7 @@ class ContextScope:
     ):
         self.client: Optional[Client] = client
         self._generation = _context_generation
+        self._span_context_active = True
         self.parent = parent
         self.fresh = fresh
         self.capture_exceptions = capture_exceptions
@@ -167,6 +168,20 @@ def _get_current_context() -> Optional[ContextScope]:
     return current_context
 
 
+def _get_active_span_context() -> Dict[str, Optional[str]]:
+    values: Dict[str, Optional[str]] = {"distinct_id": None, "session_id": None}
+    scope = _get_current_context()
+    while scope is not None and scope._span_context_active:
+        if values["distinct_id"] is None:
+            values["distinct_id"] = scope.distinct_id
+        if values["session_id"] is None:
+            values["session_id"] = scope.session_id
+        if scope.fresh:
+            break
+        scope = scope.parent
+    return values
+
+
 def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
     if client is not None:
         return client.enable_exception_autocapture
@@ -203,8 +218,9 @@ def new_context(
         client: Optional client instance to use for capturing exceptions (default: None).
                 If provided, the client will be used to capture exceptions within the context.
                 If not provided, the default (global) client will be used. Note that the passed
-                client is only used to capture exceptions within the context - other events captured
-                within the context via `Client.capture` or `posthog.capture` will still carry the context
+                client controls exception capture and OpenTelemetry ID enrichment within the context.
+                Nested span enrichment keeps the nearest supplied client, including in fresh scopes.
+                Other events captured via `Client.capture` or `posthog.capture` still carry the context
                 state (tags, identity, session id), but will be captured by the client directly used (or
                 the global one, in the case of `posthog.capture`)
 
@@ -256,6 +272,7 @@ def new_context(
                 capture_exception(e)
         raise
     finally:
+        new_context._span_context_active = False
         if context_generation == _context_generation:
             _context_stack.set(new_context.get_parent())
 

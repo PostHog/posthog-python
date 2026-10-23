@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import time
 import uuid
@@ -681,6 +682,13 @@ async def call_llm_and_track_usage_async(
 
         try:
             response = await call_async_method(**kwargs)
+        except asyncio.CancelledError:
+            http_status = 0
+            error_params = {
+                "$ai_is_error": True,
+                "$ai_error": "cancelled",
+            }
+            raise
         except Exception as exc:
             error = exc
             http_status = getattr(
@@ -860,6 +868,7 @@ def capture_streaming_event(
         event_data: Standardized streaming event data containing all necessary information
     """
     trace_id = event_data.get("trace_id") or str(uuid.uuid4())
+    error = event_data.get("error")
 
     # Omitted when the provider never reported a count: absent means unknown,
     # 0 is a report of nothing. An interrupted stream often reports neither.
@@ -888,13 +897,18 @@ def capture_streaming_event(
             event_data["privacy_mode"],
             finalize_ai_content(event_data["formatted_output"], ph_client),
         ),
-        "$ai_http_status": 200,
+        "$ai_http_status": (
+            getattr(error, "status_code", 0) if error is not None else 200
+        ),
         **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
         **({"$ai_output_tokens": output_tokens} if output_tokens is not None else {}),
         "$ai_latency": event_data["latency"],
         "$ai_trace_id": trace_id,
         "$ai_base_url": str(event_data["base_url"]),
         **(event_data.get("properties") or {}),
+        **(
+            {"$ai_is_error": True, "$ai_error": str(error)} if error is not None else {}
+        ),
     }
 
     warn_if_posthog_ai_gateway(event_data["base_url"])
