@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.8 — 2026-10-23
+
+### Patch changes
+
+- [d58380e](https://github.com/posthog/posthog-python/commit/d58380e87f38b725ded6d38b870b734056a526e7) Defer feature flag regex patterns with unsupported syntax or incompatible matching semantics to server evaluation instead of returning incorrect local results. Preserve portable Unicode matching and make end-of-input anchors strict, matching the flags service. — Thanks @marandaneto!
+
 ## 7.75.7 — 2026-10-23
 
 ### Patch changes
