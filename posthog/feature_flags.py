@@ -670,6 +670,8 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
     translated = []
     class_start = None
     previous = ""
+    group_has_quantifier = []
+    closed_group_has_quantifier = False
     uses_word_class = False
     uses_space_class = False
     index = 0
@@ -681,6 +683,21 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
         character = pattern[index]
         if 0xD800 <= ord(character) <= 0xDFFF:
             defer()
+        if class_start is None:
+            if character == "(":
+                group_has_quantifier.append(False)
+            elif character == ")":
+                closed_group_has_quantifier = (
+                    group_has_quantifier.pop() if group_has_quantifier else False
+                )
+                if group_has_quantifier:
+                    group_has_quantifier[-1] |= closed_group_has_quantifier
+            elif character in "*+?{":
+                # Strict anchors can turn nested repetition into expensive backtracking.
+                if previous == ")" and closed_group_has_quantifier:
+                    defer()
+                if group_has_quantifier:
+                    group_has_quantifier[-1] = True
         if character == "\\":
             index += 1
             if index == len(pattern):
@@ -801,13 +818,14 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
 
     # Unicode letters/decimal digits agree, but Rust's word class also includes marks and
     # joiners, while Python includes other numbers. Python's whitespace adds U+001C..U+001F.
-    if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
-        defer()
-    if uses_word_class and any(
-        not c.isascii() and not (c.isalpha() or c.isdecimal()) for c in value
-    ):
-        defer()
-    if uses_space_class and any(c in "\x1c\x1d\x1e\x1f" for c in value):
+    if not value.isascii():
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+            defer()
+        if uses_word_class and any(
+            not c.isascii() and not (c.isalpha() or c.isdecimal()) for c in value
+        ):
+            defer()
+    if uses_space_class and any(c in value for c in "\x1c\x1d\x1e\x1f"):
         defer()
     try:
         return regex.search(value) is not None

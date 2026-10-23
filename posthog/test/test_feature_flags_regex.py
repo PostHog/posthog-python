@@ -69,6 +69,22 @@ DEFERRED = [
     (r"^\S$", "\x1f"),
     ("^.$", "\ud800"),
     ("\ud800", "x"),
+    (r"^(a+)+$", "aa\n"),
+    (r"^(a+)+$", "aa"),
+    (r"^(?:ab*)+$", "ab"),
+    (r"^(a{1,2}){2}$", "aa"),
+    (r"^(a?b)*$", "ab"),
+    (r"^(a+|b)+$", "a"),
+    (r"^((a+))+$", "aa"),
+    (r"^((a+)b)+$", "ab"),
+    (r"^((a+)*b)+$", "aab"),
+    (r"^(a+)+?$", "aa"),
+    (r"(a+)+", "aa"),
+    (r"^\s$", "\x1d"),
+    (r"^\S$", "\x1e"),
+    (r"^\s+$", "\u2003\x1c"),
+    (r"^\w+$", "a\u0301"),
+    ("^a.$", "a\ud800"),
 ]
 
 LOCAL = [
@@ -113,6 +129,18 @@ LOCAL = [
     ("^foo$", "foo\n", False),
     ("^foo$", "foo\nbar", False),
     ("foo$", "foo\r\n", False),
+    (r"^([+*?])+$", "+*?", True),
+    (r"^(\++)$", "++", True),
+    (r"^(\+)+$", "++", True),
+    (r"^\(+a+\)+$", "(aa)", True),
+    (r"^(a+)(b+)$", "aabb", True),
+    (r"^((ab)){2}$", "abab", True),
+    (r"^([()]+)$", "()", True),
+    (r"^(a)+(b)+$", "aabb", True),
+    (r"^((a)+b)$", "aab", True),
+    (r"^(a+)(?:b)+$", "aabb", True),
+    ("", "\u0301", True),
+    ("^$", "", True),
 ]
 
 
@@ -156,15 +184,19 @@ def test_match_property_regex_compile_resource_failure_is_inconclusive(operator)
 
 @pytest.mark.parametrize("operator", ["regex", "not_regex"])
 @pytest.mark.parametrize("negation", [False, True])
-def test_match_property_regex_cohort_does_not_negate_inconclusive(operator, negation):
-    prop = {**property_filter(r"\p{L}+", operator), "negation": negation}
+@pytest.mark.parametrize("pattern", [r"\p{L}+", r"(é+)+"])
+def test_match_property_regex_cohort_does_not_negate_inconclusive(
+    operator, negation, pattern
+):
+    prop = {**property_filter(pattern, operator), "negation": negation}
     with pytest.raises(InconclusiveMatchError):
         match_property_group({"type": "AND", "values": [prop]}, {"value": "é"}, {})
 
 
 @pytest.mark.parametrize("operator", ["regex", "not_regex"])
 @pytest.mark.parametrize(
-    "pattern,value", [(r"\p{L}+", "é"), (r".*\bbot\b.*", "a" * 140)]
+    "pattern,value",
+    [(r"\p{L}+", "é"), (r".*\bbot\b.*", "a" * 140), (r"^(a+)+$", "aa\n")],
 )
 def test_match_cohort_regex_not_in_does_not_negate_inconclusive(
     operator, pattern, value
