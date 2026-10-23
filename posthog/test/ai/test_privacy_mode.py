@@ -485,10 +485,12 @@ _KEPT_OTEL_ATTRIBUTES: Dict[str, Any] = {
     "llm.request.functions.0.name": "lookup",
     "ai.prompt.tools": ('{"name": "lookup"}',),
     "ai.prompt.toolChoice": '{"type": "auto"}',
+    "gen_ai.prompt.name": "support-reply",
+    "gen_ai.prompt.version": "3",
 }
 
 
-def _emit_canary_span(provider: Any) -> None:
+def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
     from opentelemetry.trace import Status, StatusCode
 
     tracer = provider.get_tracer("test")
@@ -529,12 +531,58 @@ def _emit_canary_span(provider: Any) -> None:
         "llm.prompt_template.template": CANARY,
         "llm.prompt_template.variables": CANARY,
         "embedding.embeddings.0.embedding.text": CANARY,
+        "ai.request.text": CANARY,
+        "ai.documents": CANARY,
+        "ai.response.reasoningDetails": CANARY,
+        "ai.response.files": CANARY,
+        "ai.decision.state": CANARY,
+        "ai.decision.questions": CANARY,
+        "ai.decision.answers": CANARY,
+        "ai.embedding": CANARY,
+        "ai.embeddings": CANARY,
+        "gen_ai.prompt.variable.customer": CANARY,
+        "gen_ai.retrieval.documents": CANARY,
+        "gen_ai.retrieval.query.text": CANARY,
+        "gen_ai.memory.query.text": CANARY,
+        "gen_ai.memory.records": CANARY,
+        "gen_ai.evaluation.explanation": CANARY,
+        "gen_ai.task.input": CANARY,
+        "gen_ai.task.output": CANARY,
+        "gen_ai.guardrail.input": CANARY,
+        "gen_ai.guardrail.output": CANARY,
+        "gen_ai.guardrail.error.message": CANARY,
+        "gen_ai.response.revised_prompt": CANARY,
+        "mcp.response.value": CANARY,
+        "traceloop.prompt.template": CANARY,
+        "traceloop.prompt.template_variables.customer": CANARY,
+        "db.marqo.search.query": CANARY,
+        "db.chroma.query.where_document": CANARY,
+        "llm.completions.0.content": CANARY,
+        "retrieval.documents.0.document.content": CANARY,
+        "retrieval.documents.0.document.metadata": CANARY,
+        "reranker.query": CANARY,
+        "reranker.input_documents.0.document.content": CANARY,
+        "reranker.output_documents.0.document.content": CANARY,
+        "input.images.0.image.url": CANARY,
+        "output.images.0.image.url": CANARY,
+        "model_request_parameters": CANARY,
+        "inputs": CANARY,
+        "prompt": CANARY,
+        "langfuse.trace.input": CANARY,
+        "langfuse.trace.output": CANARY,
+        "langfuse.observation.input": CANARY,
+        "langfuse.observation.output": CANARY,
+        "langfuse.observation.status_message": CANARY,
+        "langfuse.experiment.item.expected_output": CANARY,
+        "mastra.agent_run.input": CANARY,
+        "mastra.agent_run.output": CANARY,
     }
     with tracer.start_as_current_span(
         "gen_ai.chat",
         attributes={
             **_KEPT_OTEL_ATTRIBUTES,
             **content_attributes,
+            "ai.response.providerMetadata": provider_metadata,
         },
     ) as span:
         span.add_event("gen_ai.content.prompt", {"gen_ai.prompt": CANARY})
@@ -542,10 +590,31 @@ def _emit_canary_span(provider: Any) -> None:
         span.set_status(Status(StatusCode.ERROR, CANARY))
 
 
+@pytest.mark.parametrize(
+    "provider_metadata, kept_provider_metadata",
+    [
+        (
+            json.dumps(
+                {
+                    "gateway": {"cost": 0.0012, "routing": CANARY},
+                    "google": {"groundingMetadata": CANARY},
+                }
+            ),
+            {"ai.response.providerMetadata": '{"gateway":{"cost":0.0012}}'},
+        ),
+        (json.dumps({"google": {"groundingMetadata": CANARY}}), {}),
+        (f"not json {CANARY}", {}),
+    ],
+    ids=["gateway_cost", "no_gateway_cost", "unparseable"],
+)
 @pytest.mark.parametrize("integration", ["processor", "exporter"])
 @pytest.mark.parametrize("privacy_source", ["option", "client", "module"])
 def test_otel_privacy_mode_sends_no_content(
-    integration: str, privacy_source: str, monkeypatch: pytest.MonkeyPatch
+    integration: str,
+    privacy_source: str,
+    provider_metadata: str,
+    kept_provider_metadata: Dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
     import posthog
@@ -581,11 +650,14 @@ def test_otel_privacy_mode_sends_no_content(
             provider.add_span_processor(
                 SimpleSpanProcessor(PostHogTraceExporter(api_key="phc_test", **options))
             )
-        _emit_canary_span(provider)
+        _emit_canary_span(provider, provider_metadata)
 
     [span] = exported
     assert CANARY.encode() not in encode_spans([span]).SerializeToString()
-    assert dict(span.attributes or {}) == _KEPT_OTEL_ATTRIBUTES
+    assert dict(span.attributes or {}) == {
+        **_KEPT_OTEL_ATTRIBUTES,
+        **kept_provider_metadata,
+    }
     [exception_event] = span.events
     assert exception_event.name == "exception"
     exception_attributes = dict(exception_event.attributes or {})

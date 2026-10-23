@@ -1,6 +1,8 @@
 """Privacy mode for OpenTelemetry spans exported to PostHog."""
 
-from typing import TYPE_CHECKING, Optional
+import json
+import re
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk.trace import Event, ReadableSpan
@@ -11,70 +13,131 @@ from opentelemetry.util.types import Attributes
 if TYPE_CHECKING:
     from ...client import Client
 
-# Attributes PostHog ingestion maps into $ai_input, $ai_output_choices, $ai_input_state,
-# $ai_output_state or $ai_error, plus the raw payloads it strips. Tool definitions
-# ($ai_tools) are not content and stay, as in the SDK wrappers.
+# Attributes that carry prompts, outputs, tool calls, retrieved documents or error text.
+# Ingestion keeps unmapped attributes as event properties, so this also covers attributes
+# it does not map. Tool definitions ($ai_tools) are not content and stay, as in the SDK
+# wrappers.
 _CONTENT_ATTRIBUTES = frozenset(
     {
-        "gen_ai.input.messages",
-        "gen_ai.output.messages",
-        "gen_ai.system_instructions",
-        "gen_ai.tool.call.arguments",
-        "gen_ai.tool.call.result",
-        "anthropic.tool_result.content",
-        "events",
-        "pydantic_ai.all_messages",
-        "final_result",
-        "tool_arguments",
-        "tool_response",
-        "traceloop.entity.input",
-        "traceloop.entity.output",
+        # Vercel AI SDK
         "ai.prompt",
         "ai.prompt.messages",
+        "ai.request.text",
+        "ai.documents",
         "ai.response.text",
         "ai.response.object",
         "ai.response.toolCalls",
         "ai.response.reasoning",
+        "ai.response.reasoningDetails",
+        "ai.response.files",
         "ai.toolCall.args",
         "ai.toolCall.result",
+        "ai.decision.state",
+        "ai.decision.questions",
+        "ai.decision.answers",
         "ai.value",
         "ai.values",
+        "ai.embedding",
+        "ai.embeddings",
+        # OpenTelemetry GenAI semantic conventions
+        "gen_ai.input.messages",
+        "gen_ai.output.messages",
+        "gen_ai.system_instructions",
+        "gen_ai.prompt",
+        "gen_ai.completion",
+        "gen_ai.tool.call.arguments",
+        "gen_ai.tool.call.result",
+        "gen_ai.retrieval.documents",
+        "gen_ai.retrieval.query.text",
+        "gen_ai.memory.query.text",
+        "gen_ai.memory.records",
+        "gen_ai.evaluation.explanation",
+        # Traceloop / OpenLLMetry
+        "traceloop.entity.input",
+        "traceloop.entity.output",
+        "traceloop.prompt.template",
+        "gen_ai.task.input",
+        "gen_ai.task.output",
+        "gen_ai.guardrail.input",
+        "gen_ai.guardrail.output",
+        "gen_ai.guardrail.error.message",
+        "gen_ai.response.revised_prompt",
+        "mcp.response.value",
+        "db.marqo.search.query",
+        # Anthropic
+        "anthropic.tool_result.content",
+        # Pydantic AI / Logfire
+        "pydantic_ai.all_messages",
+        "model_request_parameters",
+        "final_result",
+        "tool_arguments",
+        "tool_response",
+        "inputs",
+        "prompt",
+        "events",
+        # OpenInference
         "input.value",
         "output.value",
         "llm.function_call",
+        "llm.prompt_template.template",
+        "llm.prompt_template.variables",
+        # Holds request parameters such as Responses `instructions`.
         "llm.invocation_parameters",
+        "reranker.query",
+        # Langfuse
+        "langfuse.trace.input",
+        "langfuse.trace.output",
+        "langfuse.observation.input",
+        "langfuse.observation.output",
+        "langfuse.observation.status_message",
+        "langfuse.experiment.item.expected_output",
+        # Errors
         "exception.message",
         "exception.stacktrace",
         "error.message",
     }
 )
 
-# Matched as the attribute itself or as a dotted prefix, e.g. `gen_ai.prompt.0.content`.
-_CONTENT_ATTRIBUTE_ROOTS = (
-    "gen_ai.prompt",
-    "gen_ai.completion",
-    "llm.prompts",
-    "llm.input_messages",
-    "llm.output_messages",
-    "llm.choices",
-    "llm.prompt_template.template",
-    "llm.prompt_template.variables",
+_CONTENT_ATTRIBUTE_PREFIXES = (
+    "gen_ai.prompt.",
+    "gen_ai.completion.",
+    "llm.prompts.",
+    "llm.completions.",
+    "llm.input_messages.",
+    "llm.output_messages.",
+    "llm.choices.",
+    "traceloop.prompt.template_variables.",
 )
+
+_CONTENT_ATTRIBUTE_PATTERN = re.compile(
+    "|".join(
+        (
+            r"embedding\.embeddings\.\d+\.embedding\.text",
+            r"retrieval\.documents\.\d+\.document\.(content|metadata)",
+            r"reranker\.(input|output)_documents\.\d+\.document\.content",
+            r"(input|output)\.images\.\d+\.image\.url",
+            r"db\.chroma\.(query|get|delete)\.where_document",
+            r"mastra\.[a-z_]+\.(input|output)",
+        )
+    )
+)
+
+# GenAI semantic convention prompt metadata, not content, under the `gen_ai.prompt.` prefix.
+_NON_CONTENT_ATTRIBUTES = frozenset({"gen_ai.prompt.name", "gen_ai.prompt.version"})
+
+_PROVIDER_METADATA_ATTRIBUTE = "ai.response.providerMetadata"
 
 _EXCEPTION_EVENT_NAME = "exception"
 
 
-def _is_embedding_text(key: str) -> bool:
-    """OpenInference stores embedding inputs as `embedding.embeddings.<i>.embedding.text`."""
-    return key.startswith("embedding.embeddings.") and key.endswith(".embedding.text")
-
-
 def _is_content_attribute(key: str) -> bool:
     """Whether a span or event attribute can carry prompts, completions, tool data or error text."""
-    if key in _CONTENT_ATTRIBUTES or _is_embedding_text(key):
-        return True
-    return any(
-        key == root or key.startswith(f"{root}.") for root in _CONTENT_ATTRIBUTE_ROOTS
+    if key in _NON_CONTENT_ATTRIBUTES:
+        return False
+    return (
+        key in _CONTENT_ATTRIBUTES
+        or key.startswith(_CONTENT_ATTRIBUTE_PREFIXES)
+        or _CONTENT_ATTRIBUTE_PATTERN.fullmatch(key) is not None
     )
 
 
@@ -92,14 +155,36 @@ def _otel_privacy_mode_enabled(privacy_mode: bool, client: Optional["Client"]) -
     )
 
 
+def _gateway_cost_only(value: Any) -> Optional[str]:
+    """
+    Provider metadata can carry content, such as Google grounding search queries.
+    Ingestion only reads the Vercel AI Gateway cost from it.
+    """
+    if not isinstance(value, str):
+        return None
+    try:
+        metadata = json.loads(value)
+    except ValueError:
+        return None
+    gateway = metadata.get("gateway") if isinstance(metadata, dict) else None
+    cost = gateway.get("cost") if isinstance(gateway, dict) else None
+    if isinstance(cost, bool) or not isinstance(cost, (int, float, str)):
+        return None
+    return json.dumps({"gateway": {"cost": cost}}, separators=(",", ":"))
+
+
 def _without_content(attributes: Attributes) -> BoundedAttributes:
-    return BoundedAttributes(
-        attributes={
-            key: value
-            for key, value in (attributes or {}).items()
-            if not _is_content_attribute(key)
-        }
-    )
+    kept: Dict[str, Any] = {}
+    for key, value in (attributes or {}).items():
+        if _is_content_attribute(key):
+            continue
+        if key == _PROVIDER_METADATA_ATTRIBUTE:
+            metadata = _gateway_cost_only(value)
+            if metadata is not None:
+                kept[key] = metadata
+            continue
+        kept[key] = value
+    return BoundedAttributes(attributes=kept)
 
 
 def _redact_span(span: ReadableSpan) -> ReadableSpan:
