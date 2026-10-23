@@ -98,6 +98,9 @@ while the option is off.
 instrument(server, posthog, MCPAnalyticsOptions(send_initialize_event=False))
 ```
 
+Set `send_tools_list_event=False` to stop sending `$mcp_tools_list`. Nothing else changes: tools
+keep their injected arguments, and the virtual tools stay listed.
+
 `identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the
 SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
 `get_request_headers(extra)` works the same as for any other request.
