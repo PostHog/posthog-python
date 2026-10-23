@@ -546,6 +546,7 @@ class AsyncClient:
         property_allowlist=None,
         disable_geoip: Optional[bool] = None,
         system_properties: Optional[dict[str, Any]] = None,
+        flag_properties: Optional[dict[str, Any]] = None,
     ) -> _EventDefaults:
         return _build_event_defaults(
             super_properties=self.super_properties,
@@ -559,6 +560,7 @@ class AsyncClient:
             disable_geoip=self.disable_geoip,
             call_disable_geoip=disable_geoip,
             system_properties=system_properties,
+            flag_properties=flag_properties,
         )
 
     def _build_capture_event(
@@ -576,8 +578,9 @@ class AsyncClient:
 
         flags_snapshot = kwargs.get("flags")
         send_feature_flags = kwargs.get("send_feature_flags")
+        flag_properties = None
         if flags_snapshot is not None:
-            properties = {**flags_snapshot._get_event_properties(), **properties}
+            flag_properties = flags_snapshot._get_event_properties()
         elif send_feature_flags:
             warnings.warn(
                 "AsyncClient does not support deprecated send_feature_flags. Pass a "
@@ -603,6 +606,7 @@ class AsyncClient:
                 property_allowlist=kwargs.get("_property_allowlist"),
                 disable_geoip=kwargs.get("disable_geoip"),
                 system_properties=system_context(),
+                flag_properties=flag_properties,
             ),
         )
 

@@ -629,7 +629,7 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(page_viewed)
-        properties = page_viewed[0][0]["properties"]
+        properties = page_viewed.kwargs["flag_properties"]
         self.assertEqual(properties["$feature/variant-flag"], "variant-value")
         self.assertEqual(properties["$feature/boolean-flag"], True)
         self.assertEqual(properties["$feature/disabled-flag"], False)
@@ -659,7 +659,7 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
             ),
             None,
         )
-        properties = page_viewed[0][0]["properties"]
+        properties = page_viewed.kwargs["flag_properties"]
         self.assertEqual(properties["$feature/boolean-flag"], True)
         self.assertNotIn("$feature/variant-flag", properties)
         self.assertNotIn("$feature/disabled-flag", properties)

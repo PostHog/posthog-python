@@ -1912,10 +1912,6 @@ class Client(object):
             if active_feature_flags:
                 extra_properties["$active_feature_flags"] = active_feature_flags
 
-        if extra_properties:
-            properties = {**extra_properties, **properties}
-            msg["properties"] = properties
-
         return self._enqueue(
             msg,
             disable_geoip,
@@ -1925,6 +1921,7 @@ class Client(object):
             context_options=_context_get_context_options(),
             derived_options=_personless_options(personless),
             system_properties=system_context(),
+            flag_properties=extra_properties,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2539,6 +2536,7 @@ class Client(object):
         context_options=None,
         derived_options=None,
         system_properties=None,
+        flag_properties=None,
     ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -2586,6 +2584,7 @@ class Client(object):
                 disable_geoip=self.disable_geoip,
                 call_disable_geoip=disable_geoip,
                 system_properties=system_properties,
+                flag_properties=flag_properties,
             ),
         )
 
