@@ -1,6 +1,6 @@
 """Failed provider calls are recorded with the HTTP status of the SDK error."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
