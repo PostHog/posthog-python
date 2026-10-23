@@ -1369,7 +1369,7 @@ function posthog.ai.media.bytes_to_base64(data: bytes) -> str
 function posthog.ai.media.ensure_serializable(obj: Any) -> Any
 function posthog.ai.media.normalize_part_keys(d: dict) -> dict
 function posthog.ai.media.to_plain(obj: Any) -> Any
-function posthog.ai.openai.openai_converter.accumulate_openai_tool_calls(accumulated_tool_calls: Dict[int, Dict[str, Any]], chunk_tool_calls: List[Dict[str, Any]]) -> None
+function posthog.ai.openai.openai_converter.accumulate_openai_tool_calls(accumulated_tool_calls: Dict[Union[int, str], Dict[str, Any]], chunk_tool_calls: List[Dict[str, Any]]) -> None
 function posthog.ai.openai.openai_converter.extract_openai_content_from_chunk(chunk: Any, provider_type: str = 'chat') -> Optional[Any]
 function posthog.ai.openai.openai_converter.extract_openai_stop_reason(response: Any) -> Optional[str]
 function posthog.ai.openai.openai_converter.extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, Any]]]
