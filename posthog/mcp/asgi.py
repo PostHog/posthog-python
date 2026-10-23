@@ -68,8 +68,9 @@ _SCOPE_KEY = "posthog_mcp_session"
 _MAX_SNIFF_BODY = 256 * 1024
 
 # A request that already carries a session id is almost always a tool call, which
-# can be large. JSON-RPC clients put "method" before "params", so once this much
-# of the body arrived with no "initialize" in it, stop buffering and stream it.
+# can be large. Once this much of the body arrived and shows a "method" that is not
+# "initialize", stop buffering and stream it. Key order is not assumed: without a
+# "method" yet, keep reading up to the full cap.
 _PEEK_BODY = 4 * 1024
 
 
@@ -219,8 +220,9 @@ async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]
     """Read up to ``_MAX_SNIFF_BODY`` of the request body for sniffing, then return
     that prefix plus a ``receive`` that replays it and streams the rest.
 
-    With ``peek``, also stop once ``_PEEK_BODY`` bytes arrived and none of them is
-    ``"initialize"``: the request is not a handshake, so it is not held in memory.
+    With ``peek``, also stop once ``_PEEK_BODY`` bytes arrived with a ``"method"``
+    but no ``"initialize"`` in them: the request is not a handshake, so it is not
+    held in memory.
 
     Memory is bounded to the cap: an `initialize` handshake is tiny, so once we
     exceed the cap the request cannot be one and we stop buffering — the prefix is
@@ -250,7 +252,8 @@ async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]
             break
         if not peeked and total >= _PEEK_BODY:
             peeked = True
-            if b'"initialize"' not in b"".join(chunks):
+            prefix = b"".join(chunks)
+            if b'"method"' in prefix and b'"initialize"' not in prefix:
                 overflow = True  # not a handshake — stop buffering
                 break
 

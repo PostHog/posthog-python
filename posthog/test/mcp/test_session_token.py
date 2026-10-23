@@ -939,3 +939,23 @@ async def test_peek_still_reads_an_initialize_split_into_small_chunks():
 
     assert sniff == body
     assert asgi_mod._parse_initialize(sniff)["method"] == "initialize"
+
+
+async def test_peek_reads_an_initialize_whose_params_come_first():
+    """JSON key order is arbitrary. An initialize with large params before its
+    "method" must still be read whole and recognised."""
+    from posthog.mcp import asgi as asgi_mod
+
+    params = {"capabilities": {"x": "y" * (2 * asgi_mod._PEEK_BODY)}}
+    body = json.dumps(
+        {"params": params, "jsonrpc": "2.0", "id": 1, "method": "initialize"}
+    ).encode()
+    parts = [body[i : i + 1024] for i in range(0, len(body), 1024)]
+
+    async def receive():
+        chunk = parts.pop(0)
+        return {"type": "http.request", "body": chunk, "more_body": bool(parts)}
+
+    sniff, _ = await asgi_mod._buffer_body(receive, peek=True)
+
+    assert asgi_mod._parse_initialize(sniff)["method"] == "initialize"
