@@ -2,8 +2,11 @@
 
 from typing import TYPE_CHECKING, Optional
 
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk.trace import Event, ReadableSpan
+from opentelemetry.sdk.util import BoundedList
 from opentelemetry.trace.status import Status
+from opentelemetry.util.types import Attributes
 
 if TYPE_CHECKING:
     from ...client import Client
@@ -38,6 +41,8 @@ _CONTENT_ATTRIBUTES = frozenset(
         "ai.values",
         "input.value",
         "output.value",
+        "llm.function_call",
+        "llm.invocation_parameters",
         "exception.message",
         "exception.stacktrace",
         "error.message",
@@ -51,14 +56,22 @@ _CONTENT_ATTRIBUTE_ROOTS = (
     "llm.prompts",
     "llm.input_messages",
     "llm.output_messages",
+    "llm.choices",
+    "llm.prompt_template.template",
+    "llm.prompt_template.variables",
 )
 
 _EXCEPTION_EVENT_NAME = "exception"
 
 
+def _is_embedding_text(key: str) -> bool:
+    """OpenInference stores embedding inputs as `embedding.embeddings.<i>.embedding.text`."""
+    return key.startswith("embedding.embeddings.") and key.endswith(".embedding.text")
+
+
 def _is_content_attribute(key: str) -> bool:
     """Whether a span or event attribute can carry prompts, completions, tool data or error text."""
-    if key in _CONTENT_ATTRIBUTES:
+    if key in _CONTENT_ATTRIBUTES or _is_embedding_text(key):
         return True
     return any(
         key == root or key.startswith(f"{root}.") for root in _CONTENT_ATTRIBUTE_ROOTS
@@ -79,39 +92,45 @@ def _otel_privacy_mode_enabled(privacy_mode: bool, client: Optional["Client"]) -
     )
 
 
+def _without_content(attributes: Attributes) -> BoundedAttributes:
+    return BoundedAttributes(
+        attributes={
+            key: value
+            for key, value in (attributes or {}).items()
+            if not _is_content_attribute(key)
+        }
+    )
+
+
 def _redact_span(span: ReadableSpan) -> ReadableSpan:
     """
     Return a copy of ``span`` without content attributes, non-exception events,
     exception messages and stack traces, or the status description.
     """
-    attributes = {
-        key: value
-        for key, value in (span.attributes or {}).items()
-        if not _is_content_attribute(key)
-    }
-    # Other span events (older GenAI semconv messages, framework logs) carry
-    # content and PostHog ingestion only reads exception events.
-    events = [
-        Event(
-            name=event.name,
-            attributes={
-                key: value
-                for key, value in (event.attributes or {}).items()
-                if not _is_content_attribute(key)
-            },
-            timestamp=event.timestamp,
-        )
-        for event in span.events
-        if event.name == _EXCEPTION_EVENT_NAME
-    ]
+    # Older OTLP encoders read `.dropped` from these collections, so plain dicts and
+    # lists break export.
+    events = BoundedList.from_seq(
+        None,
+        [
+            Event(
+                name=event.name,
+                attributes=_without_content(event.attributes),
+                timestamp=event.timestamp,
+            )
+            # Other span events (older GenAI semconv messages, framework logs) carry
+            # content and PostHog ingestion only reads exception events.
+            for event in span.events
+            if event.name == _EXCEPTION_EVENT_NAME
+        ],
+    )
     return ReadableSpan(
         name=span.name,
         context=span.get_span_context(),
         parent=span.parent,
         resource=span.resource,
-        attributes=attributes,
+        attributes=_without_content(span.attributes),
         events=events,
-        links=span.links,
+        links=BoundedList.from_seq(None, span.links),
         kind=span.kind,
         status=Status(span.status.status_code),
         start_time=span.start_time,

@@ -519,6 +519,16 @@ def _emit_canary_span(provider: Any) -> None:
         "anthropic.tool_result.content": CANARY,
         "events": CANARY,
         "error.message": CANARY,
+        "input.value": CANARY,
+        "output.value": CANARY,
+        "llm.input_messages.0.message.content": CANARY,
+        "llm.output_messages.0.message.content": CANARY,
+        "llm.choices.0.completion.text": CANARY,
+        "llm.function_call": CANARY,
+        "llm.invocation_parameters": json.dumps({"instructions": CANARY}),
+        "llm.prompt_template.template": CANARY,
+        "llm.prompt_template.variables": CANARY,
+        "embedding.embeddings.0.embedding.text": CANARY,
     }
     with tracer.start_as_current_span(
         "gen_ai.chat",
@@ -539,6 +549,7 @@ def test_otel_privacy_mode_sends_no_content(
 ) -> None:
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
     import posthog
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
     from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
@@ -573,7 +584,7 @@ def test_otel_privacy_mode_sends_no_content(
         _emit_canary_span(provider)
 
     [span] = exported
-    assert CANARY not in span.to_json()
+    assert CANARY.encode() not in encode_spans([span]).SerializeToString()
     assert dict(span.attributes or {}) == _KEPT_OTEL_ATTRIBUTES
     [exception_event] = span.events
     assert exception_event.name == "exception"
