@@ -2,13 +2,15 @@
 
 import json
 import re
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk.trace import Event, ReadableSpan
 from opentelemetry.sdk.util import BoundedList
 from opentelemetry.trace.status import Status
-from opentelemetry.util.types import Attributes
+from opentelemetry.util.types import Attributes, AttributeValue
+
+from ..utils import _redact_mcp_tool, _redact_mcp_tool_credentials
 
 if TYPE_CHECKING:
     from ...client import Client
@@ -127,6 +129,11 @@ _NON_CONTENT_ATTRIBUTES = frozenset({"gen_ai.prompt.name", "gen_ai.prompt.versio
 
 _PROVIDER_METADATA_ATTRIBUTE = "ai.response.providerMetadata"
 
+# Tool definitions stay under privacy, but instrumentations serialize remote MCP tools
+# with their credentials into them.
+_TOOL_DEFINITION_ATTRIBUTES = frozenset({"gen_ai.tool.definitions", "ai.prompt.tools"})
+_TOOL_DEFINITION_PATTERN = re.compile(r"llm\.tools\.\d+\.tool\.json_schema")
+
 _EXCEPTION_EVENT_NAME = "exception"
 
 
@@ -173,10 +180,47 @@ def _gateway_cost_only(value: Any) -> Optional[str]:
     return json.dumps({"gateway": {"cost": cost}}, separators=(",", ":"))
 
 
+def _redact_tool_definition_json(value: str) -> Optional[str]:
+    """A value that cannot be parsed could still hold credentials, so it is dropped."""
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        return None
+    if isinstance(parsed, list):
+        redacted = _redact_mcp_tool_credentials(parsed)
+    elif isinstance(parsed, dict):
+        redacted = _redact_mcp_tool(parsed)
+    else:
+        return None
+    return value if redacted is parsed else json.dumps(redacted)
+
+
+def _redact_tool_definitions(value: Any) -> Optional[AttributeValue]:
+    if isinstance(value, str):
+        return _redact_tool_definition_json(value)
+    if isinstance(value, (list, tuple)):
+        redacted: List[str] = []
+        for item in value:
+            definition = (
+                _redact_tool_definition_json(item) if isinstance(item, str) else None
+            )
+            if definition is not None:
+                redacted.append(definition)
+        return redacted
+    return None
+
+
 def _without_content(attributes: Attributes) -> BoundedAttributes:
     kept: Dict[str, Any] = {}
     for key, value in (attributes or {}).items():
         if _is_content_attribute(key):
+            continue
+        if key in _TOOL_DEFINITION_ATTRIBUTES or _TOOL_DEFINITION_PATTERN.fullmatch(
+            key
+        ):
+            definitions = _redact_tool_definitions(value)
+            if definitions is not None:
+                kept[key] = definitions
             continue
         if key == _PROVIDER_METADATA_ATTRIBUTE:
             metadata = _gateway_cost_only(value)

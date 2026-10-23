@@ -490,6 +490,33 @@ _KEPT_OTEL_ATTRIBUTES: Dict[str, Any] = {
 }
 
 
+_MCP_OTEL_TOOL = {
+    "type": "mcp",
+    "server_label": "docs",
+    "headers": {"Authorization": CANARY},
+    "authorization": CANARY,
+}
+
+_MCP_OTEL_TOOL_ATTRIBUTES: Dict[str, Any] = {
+    "ai.prompt.tools": ('{"name": "lookup"}', json.dumps(_MCP_OTEL_TOOL)),
+    "llm.tools.0.tool.json_schema": json.dumps(_MCP_OTEL_TOOL),
+    "llm.tools.1.tool.json_schema": f"not json {CANARY}",
+}
+
+_REDACTED_MCP_OTEL_TOOL = json.dumps(
+    {
+        **_MCP_OTEL_TOOL,
+        "headers": _REDACTED_MCP_CREDENTIAL,
+        "authorization": _REDACTED_MCP_CREDENTIAL,
+    }
+)
+
+_REDACTED_MCP_OTEL_TOOL_ATTRIBUTES: Dict[str, Any] = {
+    "ai.prompt.tools": ('{"name": "lookup"}', _REDACTED_MCP_OTEL_TOOL),
+    "llm.tools.0.tool.json_schema": _REDACTED_MCP_OTEL_TOOL,
+}
+
+
 def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
     from opentelemetry.trace import Status, StatusCode
 
@@ -581,6 +608,7 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         "gen_ai.chat",
         attributes={
             **_KEPT_OTEL_ATTRIBUTES,
+            **_MCP_OTEL_TOOL_ATTRIBUTES,
             **content_attributes,
             "ai.response.providerMetadata": provider_metadata,
         },
@@ -656,6 +684,7 @@ def test_otel_privacy_mode_sends_no_content(
     assert CANARY.encode() not in encode_spans([span]).SerializeToString()
     assert dict(span.attributes or {}) == {
         **_KEPT_OTEL_ATTRIBUTES,
+        **_REDACTED_MCP_OTEL_TOOL_ATTRIBUTES,
         **kept_provider_metadata,
     }
     [exception_event] = span.events
