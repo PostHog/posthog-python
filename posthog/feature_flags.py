@@ -8,7 +8,8 @@ import re
 import warnings
 from decimal import Decimal
 from enum import Enum
-from typing import NoReturn, Optional
+from functools import lru_cache as _lru_cache
+from typing import NamedTuple, NoReturn, Optional
 
 from posthog import utils as utils
 from posthog.types import FlagValue
@@ -661,11 +662,17 @@ def _parse_numeric_value(value) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _match_regex(pattern: str, value: str) -> Optional[bool]:
-    """Return None for invalid shared syntax; raise inconclusive for unsupported cases."""
-    if pattern == "":
-        return True
+class _RegexMetadata(NamedTuple):
+    regex: re.Pattern[str]
+    uses_word_class: bool
+    uses_space_class: bool
+    uses_end_anchor: bool
+    uses_quantifier_or_alternation: bool
 
+
+@_lru_cache(maxsize=256)
+def _compile_regex(pattern: str) -> Optional[_RegexMetadata]:
+    """Cache only pattern metadata; exceptions are not retained by lru_cache."""
     # Successful re compilation alone does not establish Rust/fancy-regex compatibility.
     translated = []
     class_start = None
@@ -819,6 +826,33 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
         raise InconclusiveMatchError(
             "Regex compilation requires server evaluation"
         ) from error
+
+    return _RegexMetadata(
+        regex,
+        uses_word_class,
+        uses_space_class,
+        uses_end_anchor,
+        uses_quantifier_or_alternation,
+    )
+
+
+def _match_regex(pattern: str, value: str) -> Optional[bool]:
+    """Return None for invalid shared syntax; raise inconclusive for unsupported cases."""
+    if pattern == "":
+        return True
+    metadata = _compile_regex(pattern)
+    if metadata is None:
+        return None
+    (
+        regex,
+        uses_word_class,
+        uses_space_class,
+        uses_end_anchor,
+        uses_quantifier_or_alternation,
+    ) = metadata
+
+    def defer() -> NoReturn:
+        raise InconclusiveMatchError("Regex requires server evaluation")
 
     # Tightening $ can expose backtracking on a final LF, including repeated alternatives.
     if uses_end_anchor and uses_quantifier_or_alternation and value.endswith("\n"):

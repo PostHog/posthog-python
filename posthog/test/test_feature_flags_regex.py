@@ -234,6 +234,117 @@ def test_match_cohort_regex_not_in_does_not_negate_inconclusive(
         )
 
 
+@pytest.mark.parametrize("operator", ["regex", "not_regex"])
+@pytest.mark.parametrize(
+    "pattern,cases",
+    [
+        (r"^\w+$", [("abc", True), ("a\u0301", "defer"), ("!", False), ("é١", True)]),
+        (
+            r"^\s+$",
+            [
+                (" ", True),
+                ("\x1c", "defer"),
+                ("\u2003", True),
+                ("\u2003\x1c", "defer"),
+                ("\ufeff", False),
+            ],
+        ),
+        (r"^a+$", [("aa", True), ("aa\n", "defer"), ("b", False)]),
+        (r"^.$", [("😀", True), ("\ud800", "defer"), ("\n", False), ("\r", True)]),
+        (r"^é+$", [("é", True), ("é\n", "defer"), ("foo", False)]),
+        ("[", [("value", "invalid"), ("value\n", "invalid"), ("\ud800", "invalid")]),
+        (r"\p{L}", [("abc", "defer"), ("é", "defer"), ("\n", "defer")]),
+    ],
+)
+def test_match_property_regex_same_pattern_different_values(pattern, cases, operator):
+    for sequence in (cases, list(reversed(cases))):
+        for value, expected in sequence:
+            prop = property_filter(pattern, operator)
+            if expected == "defer":
+                with pytest.raises(InconclusiveMatchError):
+                    match_property(prop, {"value": value})
+            elif expected == "invalid":
+                assert match_property(prop, {"value": value}) is False
+            else:
+                assert match_property(prop, {"value": value}) is (
+                    expected if operator == "regex" else not expected
+                )
+
+
+@pytest.fixture
+def regex_pattern_cache():
+    from posthog.feature_flags import _compile_regex
+
+    _compile_regex.cache_clear()
+    yield _compile_regex
+    _compile_regex.cache_clear()
+
+
+def test_regex_pattern_cache_reuses_metadata_not_match_results(regex_pattern_cache):
+    prop = property_filter("^cached$", "regex")
+    assert match_property(prop, {"value": "cached"}) is True
+    assert match_property(prop, {"value": "other"}) is False
+    assert (
+        match_property(property_filter("^cached$", "not_regex"), {"value": "other"})
+        is True
+    )
+    info = regex_pattern_cache.cache_info()
+    assert (info.misses, info.hits, info.currsize) == (1, 2, 1)
+    metadata = regex_pattern_cache("^cached$")
+    assert regex_pattern_cache("^cached$") is metadata
+    with pytest.raises(AttributeError):
+        metadata.uses_word_class = True
+
+
+def test_regex_pattern_cache_is_bounded_and_evicts_least_recently_used(
+    regex_pattern_cache,
+):
+    first = regex_pattern_cache("^cache-first$")
+    second = regex_pattern_cache("^cache-second$")
+    limit = regex_pattern_cache.cache_info().maxsize
+    assert limit == 256
+    for index in range(limit - 2):
+        regex_pattern_cache(f"^cache-{index}$")
+    assert regex_pattern_cache("^cache-first$") is first
+    regex_pattern_cache("^cache-overflow$")
+    info = regex_pattern_cache.cache_info()
+    assert info.currsize == limit
+    assert regex_pattern_cache("^cache-first$") is first
+    assert regex_pattern_cache.cache_info().misses == info.misses
+    assert regex_pattern_cache("^cache-second$") is not second
+    assert regex_pattern_cache.cache_info().misses == info.misses + 1
+    assert regex_pattern_cache.cache_info().currsize == limit
+
+
+def test_regex_pattern_cache_reuses_invalid_classification(regex_pattern_cache):
+    assert regex_pattern_cache("[") is None
+    for operator in ("regex", "not_regex"):
+        assert match_property(property_filter("[", operator), {"value": "x\n"}) is False
+    info = regex_pattern_cache.cache_info()
+    assert (info.misses, info.hits, info.currsize) == (1, 2, 1)
+
+
+def test_regex_pattern_cache_does_not_retain_exceptions(regex_pattern_cache):
+    errors = []
+    for _ in range(2):
+        with pytest.raises(InconclusiveMatchError) as raised:
+            regex_pattern_cache(r"\p{L}")
+        errors.append(raised.value)
+    assert errors[0] is not errors[1]
+    info = regex_pattern_cache.cache_info()
+    assert (info.misses, info.hits, info.currsize) == (2, 0, 0)
+
+
+def test_regex_empty_pattern_bypasses_pattern_cache(regex_pattern_cache):
+    for operator in ("regex", "not_regex"):
+        for value in ("", "é", "\n"):
+            assert match_property(property_filter("", operator), {"value": value}) is (
+                operator == "regex"
+            )
+    info = regex_pattern_cache.cache_info()
+    assert (info.misses, info.hits, info.currsize) == (0, 0, 0)
+
+
 @pytest.fixture
 def client():
     instance = Client(FAKE_TEST_API_KEY, send=False)
