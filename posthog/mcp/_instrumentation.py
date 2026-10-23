@@ -260,6 +260,9 @@ async def record_initialize(
     stateless fleet may never see this client again. The capture itself runs after,
     in the background, as for every other event."""
 
+    if not data.options.capture_initialize:
+        return
+
     def text(value: Any) -> Optional[str]:
         return value if isinstance(value, str) and value else None
 
@@ -321,6 +324,8 @@ async def _maybe_emit_initialize(
     """Emit ``$mcp_initialize`` once per session from its first request, where no
     seam observes the real ``initialize`` (see
     :func:`_first_request_stands_in_for_initialize`)."""
+    if not data.options.capture_initialize:
+        return
     if not _first_request_stands_in_for_initialize(data, session_source, extra):
         return
     if session_id in data.initialized_sessions:
