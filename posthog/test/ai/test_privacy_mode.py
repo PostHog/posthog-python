@@ -645,9 +645,9 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         span.set_status(Status(StatusCode.ERROR, CANARY))
 
 
-def _export_one_span(
+def _export_spans(
     integration: str, options: Dict[str, Any], emit: Callable[[Any], None]
-) -> Any:
+) -> List[Any]:
     from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 
@@ -671,8 +671,7 @@ def _export_one_span(
                 SimpleSpanProcessor(PostHogTraceExporter(api_key="phc_test", **options))
             )
         emit(provider)
-    [span] = exported
-    return span
+    return exported
 
 
 @pytest.mark.parametrize(
@@ -714,7 +713,7 @@ def test_otel_privacy_mode_sends_no_content(
             else None
         ),
     }
-    span = _export_one_span(
+    [span] = _export_spans(
         integration,
         options,
         lambda provider: _emit_canary_span(provider, provider_metadata),
@@ -756,7 +755,7 @@ def test_otel_masks_mcp_credentials_without_privacy_mode(
         ):
             pass
 
-    span = _export_one_span(integration, {"privacy_mode": False}, emit)
+    [span] = _export_spans(integration, {"privacy_mode": False}, emit)
 
     encode_spans([span])
     assert dict(span.attributes or {}) == {
@@ -764,3 +763,37 @@ def test_otel_masks_mcp_credentials_without_privacy_mode(
         **_REDACTED_MCP_OTEL_TOOL_ATTRIBUTES,
         "llm.tools.1.tool.json_schema": f"not json {CANARY}",
     }
+
+
+@pytest.mark.parametrize("privacy_mode", [True, False])
+def test_otel_exporter_drops_only_the_span_that_fails_redaction(
+    privacy_mode: bool,
+) -> None:
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
+    from opentelemetry.sdk.trace import TracerProvider
+
+    from posthog.ai.otel import PostHogTraceExporter
+
+    tracer = TracerProvider().get_tracer("test")
+    broken = tracer.start_span(
+        "gen_ai.chat", attributes={"ai.prompt.tools": json.dumps(_MCP_OTEL_TOOL)}
+    )
+    healthy = tracer.start_span(
+        "gen_ai.chat", attributes={"gen_ai.request.model": "gpt-4o"}
+    )
+    broken.end()
+    healthy.end()
+
+    with (
+        patch("posthog.ai.otel.exporter.OTLPSpanExporter") as otlp,
+        # Deeply nested JSON raises RecursionError while parsing on some Python versions.
+        patch("posthog.ai.otel._privacy._redact_mcp_tool", side_effect=RecursionError),
+    ):
+        PostHogTraceExporter(api_key="phc_test", privacy_mode=privacy_mode).export(
+            [broken, healthy]
+        )
+
+    [spans] = otlp.return_value.export.call_args.args
+    assert [dict(span.attributes or {}) for span in spans] == [
+        {"gen_ai.request.model": "gpt-4o"}
+    ]

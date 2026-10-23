@@ -12,7 +12,7 @@ from opentelemetry.sdk.trace.export import SpanExporter, SpanExportResult
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 
 from ..gateway import warn_if_posthog_ai_gateway_otel_attributes
-from ._privacy import _otel_privacy_mode_enabled, _redact_span
+from ._privacy import _otel_privacy_mode_enabled, _redacted_spans
 from .spans import DEFAULT_HOST, is_ai_span
 
 if TYPE_CHECKING:
@@ -84,7 +84,7 @@ class PostHogTraceExporter(SpanExporter):
         for span in ai_spans:
             warn_if_posthog_ai_gateway_otel_attributes(span.attributes)
         privacy_mode = _otel_privacy_mode_enabled(self._privacy_mode, self._client)
-        ai_spans = [_redact_span(span, privacy_mode) for span in ai_spans]
+        ai_spans = _redacted_spans(ai_spans, privacy_mode)
         return self._exporter.export(ai_spans)
 
     def shutdown(self) -> None:

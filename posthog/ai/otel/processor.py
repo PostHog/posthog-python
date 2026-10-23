@@ -22,7 +22,7 @@ from ._request_context import (
     capture_request_context,
     with_request_context,
 )
-from ._privacy import _otel_privacy_mode_enabled, _redact_span
+from ._privacy import _otel_privacy_mode_enabled, _redacted_spans
 from .spans import DEFAULT_HOST, is_ai_span
 
 if TYPE_CHECKING:
@@ -177,12 +177,8 @@ class PostHogSpanProcessor(SpanProcessor):
             except Exception:
                 log.debug("Failed to add PostHog context to span", exc_info=True)
         privacy_mode = _otel_privacy_mode_enabled(self._privacy_mode, self._client)
-        try:
-            span = _redact_span(span, privacy_mode)
-        except Exception:
-            log.debug("Failed to redact span, dropping it", exc_info=True)
-            return
-        self._processor.on_end(span)
+        for redacted in _redacted_spans([span], privacy_mode):
+            self._processor.on_end(redacted)
 
     def shutdown(self) -> None:
         """Shut down the underlying batch span processor."""

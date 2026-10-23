@@ -1,8 +1,9 @@
 """Privacy mode for OpenTelemetry spans exported to PostHog."""
 
 import json
+import logging
 import re
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Sequence
 
 from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk.trace import Event, ReadableSpan
@@ -14,6 +15,8 @@ from ..utils import _redact_mcp_tool, _redact_mcp_tool_credentials
 
 if TYPE_CHECKING:
     from ...client import Client
+
+log = logging.getLogger("posthog")
 
 # Attributes that carry prompts, outputs, tool calls, retrieved documents or error text.
 # Ingestion keeps unmapped attributes as event properties, so this also covers attributes
@@ -325,3 +328,16 @@ def _redact_span(span: ReadableSpan, privacy_mode: bool) -> ReadableSpan:
     if privacy_mode:
         return _without_content_span(span)
     return _without_mcp_credentials_span(span)
+
+
+def _redacted_spans(
+    spans: Sequence[ReadableSpan], privacy_mode: bool
+) -> List[ReadableSpan]:
+    """Redact each span, dropping only a span whose redaction fails rather than leaking it."""
+    redacted = []
+    for span in spans:
+        try:
+            redacted.append(_redact_span(span, privacy_mode))
+        except Exception:
+            log.debug("Failed to redact span, dropping it", exc_info=True)
+    return redacted
