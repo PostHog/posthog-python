@@ -352,7 +352,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         )
     content = {"subject": _nonempty_text(args, "subject")}
     content.update(
-        {field: _body(args, field) for field in ("html", "text") if field in args}
+        {field: _string(args, field) for field in ("html", "text") if field in args}
     )
     if "html" not in content and "text" not in content:
         raise TypeError("send() needs html, text or both.")
@@ -475,7 +475,7 @@ def _attachment(index: int, file: Any) -> dict[str, str]:
 
 def _base64_content(name: str, content: Any) -> str:
     if isinstance(content, (bytes, bytearray, memoryview)):
-        return base64.b64encode(content).decode("ascii")
+        return base64.b64encode(bytes(content)).decode("ascii")
     if isinstance(content, str):
         return content
     raise TypeError(
@@ -493,7 +493,7 @@ def _is_tag(tag: Any) -> bool:
     )
 
 
-def _body(args: Mapping[str, Any], name: str) -> str:
+def _string(args: Mapping[str, Any], name: str) -> str:
     value = args[name]
     if not isinstance(value, str):
         raise TypeError(f"{name} must be a string.")
@@ -501,9 +501,9 @@ def _body(args: Mapping[str, Any], name: str) -> str:
 
 
 def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
-    value = args[name]
-    if not isinstance(value, str) or not value:
-        raise ValueError(f"{name} must be a nonempty string.")
+    value = _string(args, name)
+    if not value:
+        raise ValueError(f"{name} must not be empty.")
     return value
 
 

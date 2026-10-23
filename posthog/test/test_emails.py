@@ -678,6 +678,8 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         ("no_form", {"template_key": None}, TypeError),
         ("no_content", {}, TypeError),
         ("no_subject", {"subject": None, "html": HTML}, TypeError),
+        ("subject_not_text", {"subject": 1, "html": HTML}, TypeError),
+        ("from_not_text", {"html": HTML, "from_": 1}, TypeError),
         ("from_keyword", {"html": HTML, "from": "a@example.com"}, TypeError),
         (
             "key_with_space",
@@ -824,6 +826,10 @@ def test_attachments_are_sent_base64_encoded_once_across_retries():
     [
         ("bytearray", bytearray(INVITE)),
         ("memoryview", memoryview(INVITE)),
+        (
+            "strided_memoryview",
+            memoryview(bytes(b for byte in INVITE for b in (byte, 0)))[::2],
+        ),
     ]
 )
 def test_attachment_content_from_any_bytes_buffer_is_base64_encoded(_name, content):
