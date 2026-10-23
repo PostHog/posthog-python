@@ -9,8 +9,12 @@ try:
 except ImportError:
     OPENAI_AVAILABLE = False
 
-from posthog.ai.openai._streaming import _ResponsesStreamState
+from posthog.ai.openai._streaming import (
+    _ChatCompletionsStreamState,
+    _ResponsesStreamState,
+)
 from posthog.ai.openai.openai_converter import (
+    accumulate_openai_tool_calls,
     extract_openai_stop_reason,
     format_openai_input,
 )
@@ -288,3 +292,131 @@ def test_responses_stream_records_every_terminal_stop_reason(
     )
 
     assert state.stop_reason == expected
+
+
+def _tool_call_chunk(*tool_calls):
+    return types.SimpleNamespace(
+        choices=[
+            types.SimpleNamespace(
+                delta=types.SimpleNamespace(content=None, tool_calls=list(tool_calls)),
+                finish_reason=None,
+            )
+        ],
+        usage=None,
+    )
+
+
+def _tool_call_delta(index=None, id=None, name=None, arguments=None):
+    return types.SimpleNamespace(
+        index=index,
+        id=id,
+        type="function" if id else None,
+        function=types.SimpleNamespace(name=name, arguments=arguments),
+    )
+
+
+def test_stream_tool_calls_without_index_are_kept():
+    # Some OpenAI-compatible providers send each call whole, with no index.
+    state = _ChatCompletionsStreamState()
+    state.process_chunk(
+        _tool_call_chunk(_tool_call_delta(id="call_1", name="a", arguments="{}"))
+    )
+    state.process_chunk(
+        _tool_call_chunk(_tool_call_delta(id="call_2", name="b", arguments='{"x": 1}'))
+    )
+
+    assert [(tc["id"], tc["function"]["name"]) for tc in state.tool_calls] == [
+        ("call_1", "a"),
+        ("call_2", "b"),
+    ]
+    assert state.tool_calls[1]["function"]["arguments"] == '{"x": 1}'
+
+
+def test_stream_tool_calls_without_index_join_argument_fragments():
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls, [{"id": "call_1", "function": {"name": "a", "arguments": '{"q":'}}]
+    )
+    accumulate_openai_tool_calls(tool_calls, [{"function": {"arguments": ' "hi"}'}}])
+    accumulate_openai_tool_calls(
+        tool_calls, [{"id": "call_1", "function": {"arguments": ""}}]
+    )
+
+    assert list(tool_calls.values()) == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "a", "arguments": '{"q": "hi"}'},
+        }
+    ]
+
+
+def test_stream_tool_calls_with_index_are_unchanged():
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls,
+        [
+            {"index": 0, "id": "call_1", "function": {"name": "a", "arguments": "{"}},
+            {"index": 1, "id": "call_2", "function": {"name": "b", "arguments": "{}"}},
+        ],
+    )
+    accumulate_openai_tool_calls(
+        tool_calls, [{"index": 0, "function": {"arguments": "}"}}]
+    )
+
+    assert tool_calls[0]["function"]["arguments"] == "{}"
+    assert tool_calls[1]["function"]["name"] == "b"
+
+
+def test_stream_tool_calls_without_index_or_id_start_a_call_per_name():
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls, [{"function": {"name": "a", "arguments": '{"x": 1}'}}]
+    )
+    accumulate_openai_tool_calls(
+        tool_calls, [{"function": {"name": "b", "arguments": '{"y": 2}'}}]
+    )
+
+    assert [
+        (tc["function"]["name"], tc["function"]["arguments"])
+        for tc in tool_calls.values()
+    ] == [("a", '{"x": 1}'), ("b", '{"y": 2}')]
+
+
+def test_indexless_call_does_not_corrupt_later_indexed_call():
+    # A call without an index must not take a key that a later real index reuses.
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls, [{"id": "call_b", "function": {"name": "b", "arguments": "{}"}}]
+    )
+    accumulate_openai_tool_calls(
+        tool_calls,
+        [{"index": 0, "id": "call_a", "function": {"name": "a", "arguments": "{}"}}],
+    )
+
+    assert [(tc["id"], tc["function"]["arguments"]) for tc in tool_calls.values()] == [
+        ("call_b", "{}"),
+        ("call_a", "{}"),
+    ]
+
+
+def test_indexless_calls_keep_their_order_around_indexed_ones():
+    tool_calls = {}
+    accumulate_openai_tool_calls(
+        tool_calls,
+        [
+            {"index": 0, "id": "call_a", "function": {"name": "a", "arguments": "{"}},
+            {"id": "call_b", "function": {"name": "b", "arguments": "{}"}},
+            {"index": 0, "function": {"arguments": "}"}},
+            {"id": "call_c", "function": {"name": "c", "arguments": "{}"}},
+        ],
+    )
+
+    assert [
+        (tc["id"], tc["function"]["name"], tc["function"]["arguments"])
+        for tc in tool_calls.values()
+    ] == [
+        ("call_a", "a", "{}"),
+        ("call_b", "b", "{}"),
+        ("call_c", "c", "{}"),
+    ]
