@@ -8,11 +8,13 @@ import re
 import warnings
 from decimal import Decimal
 from enum import Enum
-from typing import Optional
+from functools import lru_cache as _lru_cache
+from typing import NamedTuple, NoReturn, Optional
 
 from posthog import utils as utils
 from posthog.types import FlagValue
-from posthog.utils import convert_to_datetime_aware, is_valid_regex
+from posthog.utils import convert_to_datetime_aware
+from posthog.utils import is_valid_regex as is_valid_regex
 
 __LONG_SCALE__ = float(0xFFFFFFFFFFFFFFF)
 
@@ -660,6 +662,221 @@ def _parse_numeric_value(value) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+class _RegexMetadata(NamedTuple):
+    regex: re.Pattern[str]
+    uses_word_class: bool
+    uses_space_class: bool
+    uses_end_anchor: bool
+    uses_quantifier_or_alternation: bool
+
+
+@_lru_cache(maxsize=256)
+def _compile_regex(pattern: str) -> Optional[_RegexMetadata]:
+    """Cache only pattern metadata; exceptions are not retained by lru_cache."""
+    # Successful re compilation alone does not establish Rust/fancy-regex compatibility.
+    translated = []
+    class_start = None
+    previous = ""
+    group_has_quantifier = []
+    closed_group_has_quantifier = False
+    uses_word_class = False
+    uses_space_class = False
+    uses_end_anchor = False
+    uses_quantifier_or_alternation = False
+    index = 0
+
+    def defer() -> NoReturn:
+        raise InconclusiveMatchError("Regex requires server evaluation")
+
+    while index < len(pattern):
+        character = pattern[index]
+        if 0xD800 <= ord(character) <= 0xDFFF:
+            defer()
+        if class_start is None:
+            uses_end_anchor |= character == "$"
+            uses_quantifier_or_alternation |= character in "*+?{|"
+            if character == "(":
+                group_has_quantifier.append(False)
+            elif character == ")":
+                closed_group_has_quantifier = (
+                    group_has_quantifier.pop() if group_has_quantifier else False
+                )
+                if group_has_quantifier:
+                    group_has_quantifier[-1] |= closed_group_has_quantifier
+            elif character in "*+?{":
+                # Strict anchors can turn nested repetition into expensive backtracking.
+                if previous == ")" and closed_group_has_quantifier:
+                    defer()
+                if group_has_quantifier:
+                    group_has_quantifier[-1] = True
+        if character == "\\":
+            index += 1
+            if index == len(pattern):
+                translated.append("\\")
+                break
+            escaped = pattern[index]
+            if escaped == "x":
+                digits = pattern[index + 1 : index + 3]
+                if len(digits) != 2 or any(
+                    c not in "0123456789abcdefABCDEF" for c in digits
+                ):
+                    defer()
+                translated.append("\\x" + digits)
+                index += 3
+                previous = "literal"
+                continue
+            if escaped in "bB<>" and class_start is None:
+                # Even short ASCII word-boundary searches can exceed the service's step limit.
+                defer()
+            if escaped not in "dDsSwWbfnrt":
+                if not (0x20 <= ord(escaped) <= 0x7E and not escaped.isalnum()):
+                    defer()
+                if class_start is not None and escaped not in r"\-[]^.$*+?(){}|":
+                    defer()
+            uses_word_class |= escaped in "wW"
+            uses_space_class |= escaped in "sS"
+            translated.append("\\" + escaped)
+            previous = "literal"
+        elif character == "[":
+            if class_start is not None:
+                defer()
+            class_start = index
+            translated.append(character)
+        elif character == "]" and class_start is not None:
+            content_start = class_start + (
+                2 if pattern[class_start + 1 : class_start + 2] == "^" else 1
+            )
+            if index == content_start:
+                defer()
+            class_start = None
+            previous = "literal"
+            translated.append(character)
+        elif class_start is not None:
+            if pattern[index : index + 2] in ("&&", "--", "~~"):
+                defer()
+            # Rust and Python disagree on shorthand endpoints in ranges.
+            if (
+                character == "-"
+                and index + 1 < len(pattern)
+                and pattern[index + 1] != "]"
+            ):
+                if pattern[index + 1 : index + 3] in (
+                    r"\d",
+                    r"\D",
+                    r"\s",
+                    r"\S",
+                    r"\w",
+                    r"\W",
+                ) or (
+                    index >= 2
+                    and pattern[index - 2] == "\\"
+                    and pattern[index - 1] in "dDsSwW"
+                ):
+                    defer()
+            translated.append(character)
+        elif character == "(" and pattern[index + 1 : index + 2] == "?":
+            if pattern[index + 2 : index + 3] != ":":
+                defer()
+            translated.append("(?:")
+            index += 2
+            previous = "("
+        elif character == "{":
+            repetition = re.match(r"\{([0-9]+)(?:,([0-9]*))?\}", pattern[index:])
+            if repetition is None or previous in (
+                "",
+                "|",
+                "(",
+                "^",
+                "$",
+                "empty group",
+                "quantifier",
+            ):
+                defer()
+            if any(
+                len(n) > 10 or int(n) > 0xFFFFFFFF for n in repetition.groups() if n
+            ):
+                defer()
+            translated.append(repetition.group())
+            index += len(repetition.group()) - 1
+            if pattern[index + 1 : index + 2] in ("+", "{"):
+                defer()
+            previous = "quantifier"
+        else:
+            if character in "*+?":
+                if previous in ("^", "$", "empty group") or pattern[
+                    index + 1 : index + 2
+                ] in ("+", "{"):
+                    defer()
+                previous = "quantifier"
+            else:
+                previous = (
+                    "empty group"
+                    if character == ")" and previous in ("(", "empty group")
+                    else character
+                )
+            # Python's $ also matches before a final newline; Rust's default $ is strict.
+            translated.append(r"\Z" if character == "$" else character)
+        index += 1
+
+    try:
+        regex = re.compile("".join(translated))
+    except re.error:
+        return None
+    except Exception as error:
+        raise InconclusiveMatchError(
+            "Regex compilation requires server evaluation"
+        ) from error
+
+    return _RegexMetadata(
+        regex,
+        uses_word_class,
+        uses_space_class,
+        uses_end_anchor,
+        uses_quantifier_or_alternation,
+    )
+
+
+def _match_regex(pattern: str, value: str) -> Optional[bool]:
+    """Return None for invalid shared syntax; raise inconclusive for unsupported cases."""
+    if pattern == "":
+        return True
+    metadata = _compile_regex(pattern)
+    if metadata is None:
+        return None
+    (
+        regex,
+        uses_word_class,
+        uses_space_class,
+        uses_end_anchor,
+        uses_quantifier_or_alternation,
+    ) = metadata
+
+    def defer() -> NoReturn:
+        raise InconclusiveMatchError("Regex requires server evaluation")
+
+    # Tightening $ can expose backtracking on a final LF, including repeated alternatives.
+    if uses_end_anchor and uses_quantifier_or_alternation and value.endswith("\n"):
+        defer()
+
+    # Unicode letters/decimal digits agree, but Rust's word class also includes marks and
+    # joiners, while Python includes other numbers. Python's whitespace adds U+001C..U+001F.
+    if not value.isascii():
+        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+            defer()
+        if uses_word_class and any(
+            not c.isascii() and not (c.isalpha() or c.isdecimal()) for c in value
+        ):
+            defer()
+    if uses_space_class and any(c in value for c in "\x1c\x1d\x1e\x1f"):
+        defer()
+    try:
+        return regex.search(value) is not None
+    except Exception as error:
+        raise InconclusiveMatchError(
+            "Regex execution requires server evaluation"
+        ) from error
+
+
 def match_property(
     property, property_values, property_matching_version: int = 1
 ) -> bool:
@@ -752,11 +969,11 @@ def match_property(
         return matched
 
     if operator in ("regex", "not_regex"):
-        if not is_valid_regex(str(value)):
-            return False
         property_string = "null" if override_value is None else str(override_value)
-        matched = re.compile(str(value)).search(property_string) is not None
-        return not matched if operator == "not_regex" else matched
+        regex_match = _match_regex(str(value), property_string)
+        if regex_match is None:
+            return False
+        return not regex_match if operator == "not_regex" else regex_match
 
     if operator in ["is_date_before", "is_date_after"]:
         try:
