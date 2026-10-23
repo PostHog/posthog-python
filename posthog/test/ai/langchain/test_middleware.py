@@ -641,7 +641,7 @@ async def test_returned_tool_error_respects_privacy_mode(
     assert actual is response
     span = _event(client, "$ai_span")["properties"]
     assert span["$ai_is_error"] is True
-    assert secret not in str(span.get("$ai_error", ""))
+    assert span["$ai_error"] == "RuntimeError: Tool returned an error"
 
 
 @pytest.mark.parametrize("asynchronous", [False, True])

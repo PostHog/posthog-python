@@ -2716,16 +2716,26 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     assert span_props["$ai_error"] == "ValueError: test error"
 
 
-def test_exception_autocapture_disabled_does_not_capture():
-    """Test that capture_exception is NOT called when autocapture is disabled."""
+@pytest.mark.parametrize(
+    "autocapture, client_privacy_mode, handler_privacy_mode, expected_error",
+    [
+        (False, False, False, "ValueError: test error"),
+        (True, True, False, "ValueError"),
+        (True, False, True, "ValueError"),
+    ],
+)
+def test_exception_autocapture_disabled_does_not_capture(
+    autocapture, client_privacy_mode, handler_privacy_mode, expected_error
+):
+    """capture_exception is skipped when autocapture is off or privacy mode is on."""
     mock_client = MagicMock()
-    mock_client.privacy_mode = False
-    mock_client.enable_exception_autocapture = False
+    mock_client.privacy_mode = client_privacy_mode
+    mock_client.enable_exception_autocapture = autocapture
 
     def failing_span(_):
         raise ValueError("test error")
 
-    callbacks = [CallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client, privacy_mode=handler_privacy_mode)]
     chain = RunnableLambda(failing_span)
 
     try:
@@ -2746,7 +2756,7 @@ def test_exception_autocapture_disabled_does_not_capture():
 
     span_props = span_calls[0][1]["properties"]
     assert "$exception_event_id" not in span_props
-    assert span_props["$ai_error"] == "ValueError: test error"
+    assert span_props["$ai_error"] == expected_error
 
 
 def test_exception_autocapture_on_llm_generation_error(mock_client):

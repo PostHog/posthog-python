@@ -21,6 +21,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.errors import GraphBubbleUp
 from langgraph.types import Command
 from ...client import Client
+from ..utils import _with_privacy_safe_message
 from .callbacks import (
     CallbackHandler,
     GenerationMetadata,
@@ -329,13 +330,10 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
             or getattr(self._callback._ph_client, "privacy_mode", False)
         )
 
-    def _returned_tool_error(self, response: ToolMessage) -> RuntimeError:
-        message = (
-            "Tool returned an error"
-            if self._privacy_mode_enabled()
-            else str(response.content)
-        )
-        return RuntimeError(message)
+    def _returned_tool_error(self, response: ToolMessage) -> BaseException:
+        if self._privacy_mode_enabled():
+            return _with_privacy_safe_message(RuntimeError("Tool returned an error"))
+        return RuntimeError(str(response.content))
 
     @staticmethod
     def _normalize_tool(tool: Any) -> dict[str, Any]:

@@ -17,7 +17,11 @@ from posthog.ai.types import (
     FormattedTextContent,
     TokenUsage,
 )
-from posthog.ai.utils import _responses_stop_reason, serialize_raw_usage
+from posthog.ai.utils import (
+    _responses_stop_reason,
+    _redact_mcp_tool_credentials,
+    serialize_raw_usage,
+)
 
 
 def _item_attr(item: Any, name: str, default: Any = None) -> Any:
@@ -299,7 +303,7 @@ def extract_openai_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
 
     # Check for tools parameter (newer API)
     if "tools" in kwargs:
-        return kwargs["tools"]
+        return _redact_mcp_tool_credentials(kwargs["tools"])
 
     # Check for functions parameter (older API)
     if "functions" in kwargs:

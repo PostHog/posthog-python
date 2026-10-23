@@ -13,7 +13,7 @@ from posthog.ai.types import (
     FormattedMessage,
     TokenUsage,
 )
-from posthog.ai.utils import serialize_raw_usage
+from posthog.ai.utils import _redact_mcp_tool_credentials, serialize_raw_usage
 
 _MEDIA_KINDS = {"image": "image", "video": "video", "audio": "audio"}
 _BARE_PART_KEYS = {
@@ -364,7 +364,7 @@ def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
     """
 
     if "config" in kwargs and hasattr(kwargs["config"], "tools"):
-        return kwargs["config"].tools
+        return _redact_mcp_tool_credentials(kwargs["config"].tools)
 
     return None
 
