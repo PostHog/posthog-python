@@ -748,6 +748,27 @@ def test_rendered_content_carries_copies_headers_and_tags():
     }
 
 
+def test_a_server_that_does_not_take_a_field_refuses_the_send_and_names_it():
+    refused = {
+        "type": "invalid_request",
+        "code": "invalid_request",
+        "detail": "cc: PostHog doesn't take this field on this route.",
+        "attr": "cc",
+    }
+    emails, adapter = emails_with([(400, refused, {}), accepted()])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html=HTML, cc="manager@example.com")
+
+    error = raised.value
+    assert (error.name, error.code, error.field) == (
+        "validation_error",
+        "invalid_request",
+        "cc",
+    )
+    assert len(adapter.requests) == 1
+
+
 def test_a_local_template_sends_copies_headers_and_tags_but_never_uploads_them():
     emails, adapter = emails_with(
         [rejected(409, "template_outdated"), uploaded(), accepted()]

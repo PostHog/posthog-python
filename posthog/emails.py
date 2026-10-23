@@ -253,14 +253,20 @@ class CodeEmailArgs(_RecipientArgs):
     ``{{ variables.* }}`` placeholders, and the client uploads the template
     whenever PostHog doesn't hold its content yet.
 
+    A PostHog version that doesn't take a field yet, such as ``cc``, refuses
+    the send with ``invalid_request`` and names the field in
+    ``EmailError.field``. It never drops the field and sends the rest.
+
     Args:
         to: One recipient email address.
         template_key: Names the email, so its metrics, logs and status group
             under it. Letters, digits, ``-`` and ``_``, at most 400.
         subject: The subject line.
         html: The HTML body. Give ``html``, ``text`` or both.
-        text: The plain-text body. Without it, PostHog derives it from ``html``.
-        from_: A verified sender, such as ``"Acme <hello@acme.com>"``.
+        text: The plain-text body. Without it, PostHog derives it from
+            ``html``. HTML with no text in it, such as a single image, goes out
+            without a plain-text part.
+        from_: A verified sender, such as ``"Acme <hello@example.com>"``.
         reply_to: One address or a list of addresses.
         cc: One address or a list of addresses that get a visible copy.
         bcc: One address or a list of addresses that get a hidden copy.
@@ -272,7 +278,11 @@ class CodeEmailArgs(_RecipientArgs):
             default applies, which is on.
         template_data: Values for the ``{{ variables.* }}`` placeholders.
         distinct_id: The recipient's distinct ID in your product.
-        idempotency_key: 1 to 255 visible ASCII characters.
+        idempotency_key: 1 to 255 visible ASCII characters. Template sends
+            and code sends share one set of keys: a key already used for
+            another email, or for a ``template_id`` send, raises
+            ``idempotency_key_reused``. A retry with the same key returns the
+            first send's result, also when its workflow was paused since.
     """
 
     template_key: str
