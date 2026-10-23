@@ -338,6 +338,10 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$os_distro",
         "$python_runtime",
         "$python_version",
+        # Deploy-time runtime identity, stamped from POSTHOG_RELEASE_ID. Static and
+        # low-cardinality like the platform keys above, and the capture contract
+        # requires a minimized event to retain it when the SDK stamped it.
+        "$release_id",
     }
 )
 

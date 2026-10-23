@@ -8,12 +8,14 @@ allowlist applied to the fully-enriched properties dict; any missing signal fail
 to the full legacy shape.
 """
 
+import os
 import unittest
 from unittest import mock
 
 from parameterized import parameterized
 
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
+from posthog.release_id import RELEASE_ID_ENV_VAR
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.utils import system_context
@@ -68,20 +70,28 @@ class _CapturedEventsMixin:
     ``before_send``, so tests assert the exact wire shape after every enrichment
     step (system context, super properties, $lib, ...)."""
 
-    def _make_client(self, **kwargs):
+    def _make_client(self, release_id=None, **kwargs):
         captured = []
 
         def before_send(msg):
             captured.append(msg)
             return msg
 
-        client = Client(
-            FAKE_TEST_API_KEY,
-            send=False,
-            before_send=before_send,
-            super_properties={"app_version": "1.2.3"},
-            **kwargs,
+        # The release id is read once at construction, so pin the environment here
+        # rather than inheriting whatever the test runner happens to export.
+        env = (
+            {RELEASE_ID_ENV_VAR: release_id}
+            if release_id is not None
+            else {RELEASE_ID_ENV_VAR: ""}
         )
+        with mock.patch.dict(os.environ, env, clear=False):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                send=False,
+                before_send=before_send,
+                super_properties={"app_version": "1.2.3"},
+                **kwargs,
+            )
         return client, captured
 
     def _flag_called_properties(self, captured, index=0):
@@ -134,6 +144,19 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
         self.assertEqual(properties["$feature_flag_reason"], "Matched condition set 1")
         self.assertEqual(properties["$feature_flag_request_id"], "req-1")
         self.assertEqual(properties["$feature_flag_evaluated_at"], 1640995200000)
+        self.assertNotIn("$release_id", properties)
+
+    @mock.patch("posthog.client.flags")
+    def test_gated_non_experiment_flag_keeps_the_release_id(self, patch_flags):
+        patch_flags.return_value = _flags_response(has_experiment=False, gate=True)
+        client, captured = self._make_client(release_id="rel-abc123")
+
+        client.get_feature_flag_result("person-flag", "some-distinct-id")
+
+        properties = self._flag_called_properties(captured)
+        self.assertEqual(properties["$release_id"], "rel-abc123")
+        self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self.assertNotIn("app_version", properties)
 
     @mock.patch("posthog.client.flags")
     def test_gated_non_experiment_flag_with_groups_keeps_group_context(
