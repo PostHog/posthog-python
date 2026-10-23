@@ -73,6 +73,8 @@ _CONTENT_ATTRIBUTES = frozenset(
         "anthropic.tool_result.content",
         # Pydantic AI / Logfire
         "pydantic_ai.all_messages",
+        "request_data",
+        "response_data",
         "model_request_parameters",
         "final_result",
         "tool_arguments",

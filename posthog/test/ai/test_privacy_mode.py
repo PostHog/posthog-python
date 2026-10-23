@@ -568,6 +568,8 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         "final_result": CANARY,
         "tool_arguments": CANARY,
         "tool_response": CANARY,
+        "request_data": CANARY,
+        "response_data": CANARY,
         "anthropic.tool_result.content": CANARY,
         "events": CANARY,
         "error.message": CANARY,
