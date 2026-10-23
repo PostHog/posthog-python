@@ -1,5 +1,18 @@
 # posthog
 
+## 7.75.9 — 2026-10-23
+
+### Patch changes
+
+- [8cd8eb5](https://github.com/posthog/posthog-python/commit/8cd8eb5b6fdcdb19db4c4d07fe911c6eb3976d5a) MCP analytics now sends one `$mcp_initialize` for each `initialize` request that a client sends.
+  
+  Before, the SDK sent the event on the first request of each session, once per process. A stateless fleet sent one event for each pod that a session reached. A conversation-anchored session sent another event. A client that connected and sent no other request sent no event.
+  
+  On MCP SDK 2.x, the event comes from `Server.middleware` on every transport. Requests on the 2026-07-28 spec, which has no `initialize`, no longer send one. On MCP SDK 1.x over HTTP, the event comes from `PostHogMcpStatelessSessionMiddleware`. The apps that `instrument()` autowires get this with no change. If you mount the middleware by hand, pass the server as `server=`. MCP SDK 1.x over stdio keeps the first request as the trigger.
+  
+  The event now also has the handshake request as `$mcp_parameters`. On MCP SDK 2.x, it also has the server reply as `$mcp_response`. — Thanks @gesh!
+- [48889b6](https://github.com/posthog/posthog-python/commit/48889b6cc8d0a9eec579684640cb74b393cdd56c) The Claude Agent SDK integration now takes the cumulative input and cache token counts from the final `message_delta` usage, which grow past the `message_start` values when server tools such as web search run, and sets `$ai_web_search_count` from `server_tool_use.web_search_requests`. Streamed generations used to under-report input tokens and cache writes and never recorded the web search count. — Thanks @pcbeingused333!
+
 ## 7.75.8 — 2026-10-23
 
 ### Patch changes
