@@ -674,6 +674,8 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
     closed_group_has_quantifier = False
     uses_word_class = False
     uses_space_class = False
+    uses_end_anchor = False
+    uses_quantifier_or_alternation = False
     index = 0
 
     def defer() -> NoReturn:
@@ -684,6 +686,8 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
         if 0xD800 <= ord(character) <= 0xDFFF:
             defer()
         if class_start is None:
+            uses_end_anchor |= character == "$"
+            uses_quantifier_or_alternation |= character in "*+?{|"
             if character == "(":
                 group_has_quantifier.append(False)
             elif character == ")":
@@ -815,6 +819,10 @@ def _match_regex(pattern: str, value: str) -> Optional[bool]:
         raise InconclusiveMatchError(
             "Regex compilation requires server evaluation"
         ) from error
+
+    # Tightening $ can expose backtracking on a final LF, including repeated alternatives.
+    if uses_end_anchor and uses_quantifier_or_alternation and value.endswith("\n"):
+        defer()
 
     # Unicode letters/decimal digits agree, but Rust's word class also includes marks and
     # joiners, while Python includes other numbers. Python's whitespace adds U+001C..U+001F.

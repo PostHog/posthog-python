@@ -85,6 +85,14 @@ DEFERRED = [
     (r"^\s+$", "\u2003\x1c"),
     (r"^\w+$", "a\u0301"),
     ("^a.$", "a\ud800"),
+    (r"^(a|aa)+$", "aa\n"),
+    (r"^a+$", "aa\n"),
+    (r"^a*$", "a\n"),
+    (r"^a?$", "a\n"),
+    (r"^a{2}$", "aa\n"),
+    (r"^(?:ab|cd){2,3}$", "abcd\n"),
+    (r"^(?:foo|bar)$", "foo\n"),
+    (r"foo|bar$", "foo\n"),
 ]
 
 LOCAL = [
@@ -141,6 +149,14 @@ LOCAL = [
     (r"^(a+)(?:b)+$", "aabb", True),
     ("", "\u0301", True),
     ("^$", "", True),
+    (r"^[+*?{}|]$", "+\n", False),
+    (r"^\+$", "+\n", False),
+    (r"^\|$", "|\n", False),
+    (r"^a\{$", "a{\n", False),
+    (r"^a+\$", "aa$\n", True),
+    (r"^foo\$$", "foo$\n", False),
+    (r"^a+", "aa\n", True),
+    (r"^(?:a|aa)+$", "aa", True),
 ]
 
 
@@ -172,6 +188,14 @@ def test_match_property_regex_invalid_is_false_for_both_operators(
     pattern, value, operator
 ):
     assert match_property(property_filter(pattern, operator), {"value": value}) is False
+
+
+@pytest.mark.parametrize("operator", ["regex", "not_regex"])
+@pytest.mark.parametrize("pattern", [r"*foo$", r"(a|b$"])
+def test_match_property_regex_invalid_precedes_final_newline_policy(pattern, operator):
+    assert (
+        match_property(property_filter(pattern, operator), {"value": "foo\n"}) is False
+    )
 
 
 @pytest.mark.parametrize("operator", ["regex", "not_regex"])
@@ -225,7 +249,12 @@ def test_regex_public_fallback_boundaries(client, api, operator):
         (p, {"value": v}, expected if operator == "regex" else not expected)
         for p, v, expected in LOCAL
     ]
-    cases += [("[", {"value": "x"}, False), ("safe", {}, None)]
+    cases += [
+        ("[", {"value": "x"}, False),
+        (r"*foo$", {"value": "foo\n"}, False),
+        (r"(a|b$", {"value": "foo\n"}, False),
+        ("safe", {}, None),
+    ]
     with (
         mock.patch("posthog.client.flags") as remote,
         mock.patch.object(Client, "capture"),
