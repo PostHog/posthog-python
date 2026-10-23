@@ -1,5 +1,11 @@
 # posthog
 
+## 7.75.7 — 2026-10-23
+
+### Patch changes
+
+- [ffde3c5](https://github.com/posthog/posthog-python/commit/ffde3c57f26b9daf92f12fbb21edd4f359e4388b) Streamed OpenAI-compatible chat completions whose tool call deltas carry no `index` are no longer dropped from `$ai_output`. A delta with a new id starts a call, and one without an id continues the latest call. — Thanks @pcbeingused333!
+
 ## 7.75.6 — 2026-10-22
 
 ### Patch changes
