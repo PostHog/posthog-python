@@ -260,7 +260,7 @@ class AsyncClient:
     @property
     def emails(self) -> AsyncEmails:
         """
-        Send transactional email from PostHog email templates.
+        Send transactional email from PostHog email templates or from content in your code.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
         scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
