@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.75.4",
+    "version": "7.75.10",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -437,7 +437,7 @@
               "name": "timeout",
               "description": "HTTP request timeout in seconds for event uploads.",
               "isOptional": false,
-              "type": "int"
+              "type": "float"
             },
             {
               "name": "thread",
@@ -485,7 +485,7 @@
               "name": "feature_flags_request_timeout_seconds",
               "description": "Timeout in seconds for feature         flag and remote config requests.",
               "isOptional": false,
-              "type": "int"
+              "type": "float"
             },
             {
               "name": "feature_flags_request_max_retries",

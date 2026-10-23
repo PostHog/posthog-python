@@ -455,6 +455,21 @@ def merge_system_prompt(
     return []
 
 
+def _get_http_status(exc: BaseException) -> int:
+    """HTTP status of an SDK exception, 0 when it has none.
+
+    OpenAI and Anthropic errors carry `status_code`; google-genai's `APIError`
+    carries the status as `code`.
+    """
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int):
+        return status
+    code = getattr(exc, "code", None)
+    if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:
+        return code
+    return 0
+
+
 def call_llm_and_track_usage(
     posthog_distinct_id: Optional[str],
     ph_client: PostHogClient,
@@ -486,9 +501,7 @@ def call_llm_and_track_usage(
             response = call_method(**kwargs)
         except Exception as exc:
             error = exc
-            http_status = getattr(
-                exc, "status_code", 0
-            )  # default to 0 becuase its likely an SDK error
+            http_status = _get_http_status(exc)  # 0 because its likely an SDK error
             error_params = {
                 "$ai_is_error": True,
                 "$ai_error": _format_ai_error(ph_client, posthog_privacy_mode, exc),
@@ -660,9 +673,7 @@ async def call_llm_and_track_usage_async(
             raise
         except Exception as exc:
             error = exc
-            http_status = getattr(
-                exc, "status_code", 0
-            )  # default to 0 because its likely an SDK error
+            http_status = _get_http_status(exc)  # 0 because its likely an SDK error
             error_params = {
                 "$ai_is_error": True,
                 "$ai_error": _format_ai_error(ph_client, posthog_privacy_mode, exc),

@@ -1,5 +1,48 @@
 # posthog
 
+## 7.75.10 — 2026-10-23
+
+### Patch changes
+
+- [25d2767](https://github.com/posthog/posthog-python/commit/25d2767a70378da02c321879f0fa3a2e52d071b7) Failed Gemini calls are now captured with the HTTP status of the error as `$ai_http_status` (for example 429 or 503) instead of 0. google-genai errors carry the status as `code` rather than `status_code`, which the OpenAI and Anthropic wrappers already read. — Thanks @pcbeingused333!
+
+## 7.75.9 — 2026-10-23
+
+### Patch changes
+
+- [8cd8eb5](https://github.com/posthog/posthog-python/commit/8cd8eb5b6fdcdb19db4c4d07fe911c6eb3976d5a) MCP analytics now sends one `$mcp_initialize` for each `initialize` request that a client sends.
+  
+  Before, the SDK sent the event on the first request of each session, once per process. A stateless fleet sent one event for each pod that a session reached. A conversation-anchored session sent another event. A client that connected and sent no other request sent no event.
+  
+  On MCP SDK 2.x, the event comes from `Server.middleware` on every transport. Requests on the 2026-07-28 spec, which has no `initialize`, no longer send one. On MCP SDK 1.x over HTTP, the event comes from `PostHogMcpStatelessSessionMiddleware`. The apps that `instrument()` autowires get this with no change. If you mount the middleware by hand, pass the server as `server=`. MCP SDK 1.x over stdio keeps the first request as the trigger.
+  
+  The event now also has the handshake request as `$mcp_parameters`. On MCP SDK 2.x, it also has the server reply as `$mcp_response`. — Thanks @gesh!
+- [48889b6](https://github.com/posthog/posthog-python/commit/48889b6cc8d0a9eec579684640cb74b393cdd56c) The Claude Agent SDK integration now takes the cumulative input and cache token counts from the final `message_delta` usage, which grow past the `message_start` values when server tools such as web search run, and sets `$ai_web_search_count` from `server_tool_use.web_search_requests`. Streamed generations used to under-report input tokens and cache writes and never recorded the web search count. — Thanks @pcbeingused333!
+
+## 7.75.8 — 2026-10-23
+
+### Patch changes
+
+- [d58380e](https://github.com/posthog/posthog-python/commit/d58380e87f38b725ded6d38b870b734056a526e7) Defer feature flag regex patterns with unsupported syntax or incompatible matching semantics to server evaluation instead of returning incorrect local results. Preserve portable Unicode matching and make end-of-input anchors strict, matching the flags service. — Thanks @marandaneto!
+
+## 7.75.7 — 2026-10-23
+
+### Patch changes
+
+- [ffde3c5](https://github.com/posthog/posthog-python/commit/ffde3c57f26b9daf92f12fbb21edd4f359e4388b) Streamed OpenAI-compatible chat completions whose tool call deltas carry no `index` are no longer dropped from `$ai_output`. A delta with a new id starts a call, and one without an id continues the latest call. — Thanks @pcbeingused333!
+
+## 7.75.6 — 2026-10-22
+
+### Patch changes
+
+- [a95331f](https://github.com/posthog/posthog-python/commit/a95331f171a33ca0674833a5aada371cc6446bc9) Retain the minimal-event gate and experiment metadata from the local definitions used by `evaluate_flags()`, including first-use loading and definition refreshes during evaluation. — Thanks @dustinbyrne!
+
+## 7.75.5 — 2026-10-22
+
+### Patch changes
+
+- [b3fcec6](https://github.com/posthog/posthog-python/commit/b3fcec639aa9c49514344ba97b24492f03e87b86) Annotate `timeout` and `feature_flags_request_timeout_seconds` as `float` on `Client`, `AsyncClient`, `Consumer` and the request helpers, so type checkers accept fractional timeouts such as `timeout=2.5`. The values were already passed straight to `requests` and `httpx`, which take floats, so runtime behaviour is unchanged. — Thanks @turnipdabeets!
+
 ## 7.75.4 — 2026-10-22
 
 ### Patch changes

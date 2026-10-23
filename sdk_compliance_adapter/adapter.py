@@ -204,7 +204,7 @@ def patched_batch_post(
     api_key: str,
     host: Optional[str] = None,
     gzip: bool = False,
-    timeout: int = 15,
+    timeout: float = 15,
     path: str = EVENTS_ENDPOINT,
     **kwargs,
 ):
@@ -236,7 +236,7 @@ def patched_post_v1(
     attempt: int,
     request_id: str,
     compression: CaptureCompression = CaptureCompression.NONE,
-    timeout: int = 15,
+    timeout: float = 15,
     sdk_info: str = USER_AGENT,
     session: Any = None,
 ):

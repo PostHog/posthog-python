@@ -34,7 +34,7 @@ class Session:
         *,
         data: str | bytes,
         headers: dict[str, str],
-        timeout: int,
+        timeout: float,
         stream: bool = ...,
     ) -> Response: ...
     def get(
@@ -42,5 +42,5 @@ class Session:
         url: str,
         *,
         headers: dict[str, str],
-        timeout: int | None = ...,
+        timeout: float | None = ...,
     ) -> Response: ...

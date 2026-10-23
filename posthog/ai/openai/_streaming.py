@@ -1,7 +1,7 @@
 """Sync-neutral state accumulation for OpenAI streaming endpoints."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ..types import StreamingEventData, TokenUsage
 from ..utils import merge_usage_stats, _responses_stop_reason
@@ -52,7 +52,7 @@ class _ChatCompletionsStreamState:
 
     usage_stats: TokenUsage = field(default_factory=lambda: TokenUsage())
     output: List[Any] = field(default_factory=list)
-    _tool_calls: Dict[int, Dict[str, Any]] = field(default_factory=dict)
+    _tool_calls: Dict[Union[int, str], Dict[str, Any]] = field(default_factory=dict)
     model: Optional[str] = None
     stop_reason: Optional[str] = None
     service_tier: Optional[str] = None

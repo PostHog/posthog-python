@@ -111,7 +111,7 @@ class Consumer(Thread):
         flush_interval=5.0,
         gzip=False,
         retries=10,
-        timeout=15,
+        timeout: float = 15,
         historical_migration=False,
         endpoint=EVENTS_ENDPOINT,
         max_msg_size=MAX_MSG_SIZE,

@@ -222,6 +222,81 @@ class TestGenerationEmission:
         assert props["$ai_cache_read_input_tokens"] == 20
 
     @pytest.mark.asyncio
+    async def test_message_delta_usage_is_cumulative_with_server_tools(
+        self, processor, mock_client
+    ):
+        # With server tools the final message_delta carries the cumulative input
+        # and cache counts and the number of web searches.
+        message_delta = _make_stream_event(
+            "message_delta",
+            {
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {
+                    "input_tokens": 5120,
+                    "output_tokens": 300,
+                    "cache_read_input_tokens": 64,
+                    "cache_creation_input_tokens": 32,
+                    "server_tool_use": {"web_search_requests": 2},
+                },
+            },
+        )
+        messages = [
+            _make_message_start(input_tokens=120, cache_read=0, cache_creation=0),
+            message_delta,
+            _make_message_stop(),
+            _make_assistant_message(),
+            _make_result_message(),
+        ]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
+                pass
+
+        gen_call = next(
+            c
+            for c in mock_client.capture.call_args_list
+            if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
+        )
+        props = gen_call.kwargs.get("properties") or gen_call[1].get("properties")
+        assert props["$ai_input_tokens"] == 5120
+        assert props["$ai_output_tokens"] == 300
+        assert props["$ai_cache_read_input_tokens"] == 64
+        assert props["$ai_cache_creation_input_tokens"] == 32
+        assert props["$ai_web_search_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_message_delta_without_input_counts_keeps_message_start(
+        self, processor, mock_client
+    ):
+        messages = [
+            _make_message_start(input_tokens=100, cache_read=20),
+            _make_message_delta(output_tokens=50),
+            _make_message_stop(),
+            _make_assistant_message(),
+            _make_result_message(),
+        ]
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in processor.query(prompt="Hi", options=ClaudeAgentOptions()):
+                pass
+
+        gen_call = next(
+            c
+            for c in mock_client.capture.call_args_list
+            if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
+        )
+        props = gen_call.kwargs.get("properties") or gen_call[1].get("properties")
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_cache_read_input_tokens"] == 20
+        assert "$ai_web_search_count" not in props
+
+    @pytest.mark.asyncio
     async def test_emits_cache_creation_ttl_breakdown_from_stream_events(
         self, processor, mock_client
     ):
