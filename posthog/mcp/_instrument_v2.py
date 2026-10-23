@@ -52,7 +52,6 @@ from ._instrumentation import (
     _is_sse_request,
     _to_jsonable,
     copy_tools_list_result,
-    fire_and_forget,
     is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
@@ -145,9 +144,11 @@ def _observe_initialize(server: Any, data: MCPAnalyticsData) -> None:
 
     mcp 2.x refuses a request handler for ``initialize`` and points at
     ``Server.middleware`` instead, which wraps every inbound request on every
-    transport, ``initialize`` included. The event is scheduled rather than awaited:
-    the runner parks the connection's read loop until the ``initialize`` chain
-    returns, so a slow ``identify`` callback must not hold up the handshake."""
+    transport, ``initialize`` included. The host callbacks run inline, as they do
+    for a tool call: a hung ``identify`` hangs this handshake, where the client
+    sees it, and leaves no task behind. The runner parks the connection's read
+    loop until the chain returns, but a client sends nothing else before the
+    ``initialize`` reply."""
     middleware = getattr(server, "middleware", None)
     if not isinstance(middleware, list):
         log(
@@ -162,7 +163,7 @@ def _observe_initialize(server: Any, data: MCPAnalyticsData) -> None:
                 return await call_next(ctx)
             started = datetime.now(timezone.utc)
             result = await call_next(ctx)
-            fire_and_forget(_record_v2_initialize(data, ctx, result, started), data)
+            await _record_v2_initialize(data, ctx, result, started)
             return result
 
         setattr(observe_initialize, _WRAPPED_FLAG, True)

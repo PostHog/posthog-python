@@ -48,11 +48,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs
 
-from ._instrumentation import (
-    HANDSHAKE_OBSERVER_KEY,
-    fire_and_forget,
-    record_initialize,
-)
+from ._instrumentation import HANDSHAKE_OBSERVER_KEY, record_initialize
 from ._internal import MCPAnalyticsData, get_server_tracking_data, tracking_key
 from .logger import log, warn
 from .session import handshake_session_id, new_session_id
@@ -186,11 +182,10 @@ class PostHogMcpStatelessSessionMiddleware:
         started = datetime.now(timezone.utc)
         await self.app(scope, receive, send)
         if observer is not None and recorder is not None:
-            fire_and_forget(
-                _record_initialize(
-                    observer, initialize, recorder, incoming_header, scope, started
-                ),
-                observer,
+            # Inline, as on a tool call: the response is already out, and a hung
+            # identify holds this request rather than a task nobody tracks.
+            await _record_initialize(
+                observer, initialize, recorder, incoming_header, scope, started
             )
 
 

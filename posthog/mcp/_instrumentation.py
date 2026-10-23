@@ -254,10 +254,11 @@ async def record_initialize(
     The Python MCP SDK answers ``initialize`` itself (mcp 1.x inside
     ``ServerSession``; mcp 2.x refuses a handler for it), so the seams that observe
     it — ``Server.middleware`` on 2.x, the ASGI middleware on 1.x over HTTP — call
-    this once the handshake has succeeded. ``result`` is the server's reply where
-    the seam can read it, else ``None``. Identify runs first so the event is
-    attributed on the pod that served the handshake, which on a stateless fleet
-    may never see this client again."""
+    this inline in the handshake request once it has succeeded. ``result`` is the
+    server's reply where the seam can read it, else ``None``. Identify runs first
+    so the event is attributed on the pod that served the handshake, which on a
+    stateless fleet may never see this client again. The capture itself runs after,
+    in the background, as for every other event."""
 
     def text(value: Any) -> Optional[str]:
         return value if isinstance(value, str) and value else None
@@ -280,11 +281,7 @@ async def record_initialize(
     }
     await _apply_event_properties(data, event, request, extra)
     stamp_transport_identity(event, extra)
-    # Both seams already run this in a tracked background task. Await the capture
-    # inside it: a second task would start after flush() took its snapshot.
-    capture = capture_event(data, event)
-    if capture is not None:
-        await capture
+    fire_and_forget(capture_event(data, event), data)
 
 
 # ASGI scope key a bound ``PostHogMcpStatelessSessionMiddleware`` sets to the

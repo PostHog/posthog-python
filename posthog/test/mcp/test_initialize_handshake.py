@@ -795,14 +795,13 @@ async def test_a_server_that_cannot_be_bound_does_not_break_requests():
 
 @pytest.mark.parametrize("kind", KINDS)
 async def test_flush_waits_for_the_handshake_capture(kind):
-    # The hooks record the handshake in a background task. flush() must also wait
-    # for the capture that task starts, or shutdown drops $mcp_initialize when
-    # before_send is slow.
+    # The handshake capture starts during the request. flush() must wait for it,
+    # or shutdown drops $mcp_initialize when identify or before_send is slow.
     from posthog.mcp import McpAnalytics
     from posthog.mcp._internal import tracking_key
 
     async def slow_identify(request, extra):
-        await asyncio.sleep(0.05)  # holds the recorder open past flush()'s snapshot
+        await asyncio.sleep(0.05)
         return UserIdentity(distinct_id="user_slow")
 
     async def slow_before_send(event):
@@ -844,3 +843,51 @@ async def test_an_initialize_with_a_session_header_keeps_that_session(kind):
     assert {c["properties"]["$session_id"] for c in calls} == {
         init["properties"]["$session_id"]
     }
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_hung_identify_leaves_no_task_behind(kind):
+    # identify runs inline in the handshake, as it does on a tool call. A callback
+    # that never returns holds those requests, and leaves no analytics task behind
+    # for each connection. Once the callback recovers, recording resumes.
+    import contextlib
+
+    import posthog.mcp._instrumentation as instr
+    from posthog.mcp import McpAnalytics
+    from posthog.mcp._internal import get_server_tracking_data, tracking_key
+
+    recovered = asyncio.Event()
+
+    async def identify(request, extra):
+        await recovered.wait()
+        return UserIdentity(distinct_id="user_1")
+
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=False, identify=identify)
+    app, lifespan, server = make_pod(client, kind=kind, options=options)
+    data = get_server_tracking_data(tracking_key(server))
+
+    def pending():
+        with instr._tasks_lock:
+            tasks = list(instr._BACKGROUND_TASKS.items())
+        return [task for task, owner in tasks if owner is data and not task.done()]
+
+    async with lifespan:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        ) as http:
+            lb = RoundRobin([http])
+            for _ in range(5):  # each client gives up, as a timeout would
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(handshake(lb, send_initialized=False), 0.2)
+            assert pending() == []
+            await asyncio.wait_for(McpAnalytics(tracking_key(server)).flush(), 1)
+
+            recovered.set()
+            await handshake(lb, client_name="after-recovery", send_initialized=False)
+    await _flush()
+
+    names = [
+        e["properties"]["$mcp_client_name"] for e in _events(client, "$mcp_initialize")
+    ]
+    assert "after-recovery" in names
