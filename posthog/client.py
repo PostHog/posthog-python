@@ -804,6 +804,19 @@ class Client(object):
                 ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
+            metrics: Config dict for ``client.metrics``. Set
+                ``capture_runtime_metrics=True`` to collect process CPU usage,
+                user/system CPU time, current RSS memory and its fraction of total
+                physical RAM, native thread count, CPython GC statistics, and
+                total context switches on macOS without additional dependencies.
+                Separately, ``capture_host_metrics=True`` collects host CPU,
+                estimated available memory, native memory pressure, swap usage,
+                and swap transfers. Enable host collection in only one client
+                per host; inherited clients do not restart it after fork.
+                Sampling uses ``flush_interval`` (10 s by default), including
+                with ``sync_mode=True``. Disabled by default; unsupported
+                platforms warn and do not collect. Call ``shutdown()`` to
+                collect a final sample, flush, and stop the timer.
             traces: Config dict for distributed tracing: ``service_name``,
                 ``service_version``, ``environment``, ``resource_attributes``,
                 ``flush_interval`` (5 s), ``max_queue_size`` (2048),
@@ -1117,6 +1130,18 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+        self._start_runtime_metrics()
+
+    def _start_runtime_metrics(self) -> None:
+        if (
+            isinstance(self._metrics_config, dict)
+            and (
+                self._metrics_config.get("capture_runtime_metrics") is True
+                or self._metrics_config.get("capture_host_metrics") is True
+            )
+            and not self._shutdown_requested
+        ):
+            _ = self.metrics
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -2580,6 +2605,7 @@ class Client(object):
                     # the first chained metrics.count() call (raise only in debug mode).
                     try:
                         self._metrics = PostHogMetrics(self, self._metrics_config)
+                        self._metrics._start_runtime_metrics()
                     except Exception as e:
                         if self.debug:
                             raise e
@@ -2984,6 +3010,11 @@ class Client(object):
             self._flush_or_discard_queues(errors)
 
         if self._metrics is not None:
+            self._run_lifecycle_cleanup(
+                "Failed to stop runtime metrics on shutdown",
+                self._metrics._stop_runtime_metrics,
+                errors,
+            )
             self._run_lifecycle_cleanup(
                 "Failed to flush metrics on shutdown", self._metrics.flush, errors
             )

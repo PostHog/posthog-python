@@ -11,6 +11,9 @@
 # 2. Run this script and choose from the interactive menu
 
 import os
+import sys
+from datetime import datetime, timezone
+from uuid import uuid4
 
 import posthog
 
@@ -71,8 +74,9 @@ print("3. Feature flag payload examples")
 print(f"4. Flag dependencies examples{local_eval_note}")
 print("5. Context management and tagging examples")
 print("6. Run all examples")
-print("7. Exit")
-choice = input("\nEnter your choice (1-7): ").strip()
+print("7. Process, host, and GC metrics (30-minute workload, macOS)")
+print("8. Exit")
+choice = input("\nEnter your choice (1-8): ").strip()
 
 if choice == "1":
     print("\n" + "=" * 60)
@@ -487,13 +491,67 @@ elif choice == "6":
         posthog.capture("demo_completed")
         print("✅ Demo completed with context tags")
 
+elif choice == "7" and sys.platform == "darwin":
+    from _example_runtime_metrics import run_workload
+
+    run_id = uuid4().hex
+
+    def print_runtime_sample(sample):
+        labels = ", ".join(
+            f"{key}={value}"
+            for key, value in sample["attributes"].items()
+            if key
+            in (
+                "cpu.mode",
+                "cpu.logical_number",
+                "cpython.gc.generation",
+                "system.paging.direction",
+                "system.paging.state",
+                "system.memory.state",
+                "process.context_switch.type",
+            )
+        )
+        name = sample["name"] + (f"{{{labels}}}" if labels else "")
+        print(
+            f"{datetime.now(timezone.utc).isoformat()} "
+            f"{name} = {sample['value']:.2f} {sample['unit']}",
+            flush=True,
+        )
+        return sample
+
+    posthog.metrics = {
+        "capture_runtime_metrics": True,
+        "capture_host_metrics": True,
+        "service_name": "python-runtime-metrics-demo",
+        "flush_interval": 5,
+        "resource_attributes": {"demo.run_id": run_id},
+        "before_send": print_runtime_sample,
+    }
+    posthog.setup()
+    print(f"Service: python-runtime-metrics-demo; demo.run_id: {run_id}", flush=True)
+    print(
+        "Running for 30 minutes with 30-second phases. Press Ctrl+C to stop.",
+        flush=True,
+    )
+    try:
+        run_workload()
+    except KeyboardInterrupt:
+        print("\nMetrics workload stopped.", flush=True)
+    finally:
+        posthog.shutdown()
+
 elif choice == "7":
+    print("Automatic runtime metrics are currently supported only on macOS.")
+    posthog.shutdown()
+    exit(1)
+
+elif choice == "8":
     print("👋 Goodbye!")
     posthog.shutdown()
     exit()
 
 else:
-    print("❌ Invalid choice. Please run again and select 1-7.")
+    print("❌ Invalid choice. Please run again and select 1-8.")
     posthog.shutdown()
     exit()
 

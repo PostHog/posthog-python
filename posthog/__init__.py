@@ -339,9 +339,13 @@ Attributes:
         Set to 0 to disable retries.
     super_properties: Properties merged into every captured event.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
-        ``service_version``, ``environment``, ``flush_interval``, ...). Applied
-        when ``setup()`` builds the global client, or on a later ``setup()``
-        call if the metrics API hasn't been used yet.
+        ``service_version``, ``environment``, ``flush_interval``, ...).
+        ``capture_runtime_metrics=True`` automatically collects process CPU,
+        RSS memory and its fraction of total physical RAM, native thread count,
+        CPython GC statistics, and total context switches on macOS; disabled by
+        default. Applied when
+        ``setup()`` builds the global client, or on a later ``setup()`` call
+        if the metrics API hasn't been used yet.
     traces: Config dict for distributed tracing: ``service_name``,
         ``service_version``, ``environment``, ``resource_attributes``,
         ``flush_interval`` (5 s), ``max_queue_size`` (2048),
@@ -1477,6 +1481,7 @@ def setup() -> Client:
     # already forced setup()) still applies until the metrics API is first used.
     if default_client._metrics is None:
         default_client._metrics_config = metrics
+        default_client._start_runtime_metrics()
     # traces=None means off, so the module option applies only where the client
     # has none; False is the latch of an init that failed and stays off.
     if traces is not None and default_client._traces_config is None:
