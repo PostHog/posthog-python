@@ -83,6 +83,8 @@ The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
   yourself, pass the server: `app.add_middleware(PostHogMcpStatelessSessionMiddleware, server=mcp)`.
   Without it, each pod reports the session's first request as its initialize.
   The deprecated SSE transport also uses the session's first request.
+  The middleware reads only requests that carry no `Mcp-Session-Id`, so an
+  `initialize` that reuses an existing session id reports none.
 - **MCP SDK 1.x over stdio**: from the session's first request. A stdio server
   serves one client, so this misses only a client that never sends a request.
 

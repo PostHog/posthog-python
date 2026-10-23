@@ -824,6 +824,10 @@ async def test_flush_waits_for_the_handshake_capture(kind):
         assert len(_events(client, "$mcp_initialize")) == 1
 
 
+@pytest.mark.skipif(
+    MCP_MAJOR < 2,
+    reason="mcp 1.x does not read a request that carries a session id (README)",
+)
 @pytest.mark.parametrize("kind", KINDS)
 async def test_an_initialize_with_a_session_header_keeps_that_session(kind):
     # A stateless client that sends initialize with an existing Mcp-Session-Id
@@ -940,3 +944,47 @@ async def test_identify_sees_the_auth_context_of_the_handshake():
 
     (init,) = _events(client, "$mcp_initialize")
     assert init["distinct_id"] == "alice"
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_an_escaped_initialize_still_mints_a_session(kind):
+    # "\u0069nitialize" is valid JSON for "initialize". The middleware parses the
+    # body as JSON, so it mints the token and captures the handshake.
+    raw = (
+        b'{"jsonrpc":"2.0","id":1,"method":"\\u0069nitialize","params":'
+        + json.dumps(initialize_params("escaped-client")).encode()
+        + b"}"
+    )
+    client = FakeClient()
+    async with fleet(client, kind=kind) as lb:
+        response = await lb.pods[0].post("/mcp", content=raw, headers=BASE_HEADERS)
+    await _flush()
+
+    assert response.status_code == 200, response.text
+    assert decode_session_id(response.headers.get("mcp-session-id")) is not None
+    (init,) = _events(client, "$mcp_initialize")
+    assert init["properties"]["$mcp_client_name"] == "escaped-client"
+
+
+@pytest.mark.skipif(
+    MCP_MAJOR < 2,
+    reason="mcp 1.x does not read a request that carries a session id (README)",
+)
+@pytest.mark.parametrize("kind", KINDS)
+async def test_a_nested_method_before_the_top_level_initialize_is_counted(kind):
+    # JSON key order is arbitrary: params can come first, and can hold their own
+    # "method" key. Only the top-level method says whether this is a handshake.
+    params = initialize_params("nested-client")
+    params["capabilities"] = {
+        "experimental": {"vendor": {"method": "custom", "padding": "x" * 8192}}
+    }
+    body = {"params": params, "jsonrpc": "2.0", "id": 1, "method": "initialize"}
+    headers = {**BASE_HEADERS, "mcp-session-id": "an-existing-session"}
+    client = FakeClient()
+    async with fleet(client, kind=kind) as lb:
+        response = await lb.post(body, headers)
+    await _flush()
+
+    assert response.status_code == 200, response.text
+    (init,) = _events(client, "$mcp_initialize")
+    assert init["properties"]["$mcp_client_name"] == "nested-client"

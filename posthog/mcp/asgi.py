@@ -67,12 +67,6 @@ _SCOPE_KEY = "posthog_mcp_session"
 # the same app can't be read into memory in full before minting.
 _MAX_SNIFF_BODY = 256 * 1024
 
-# A request that already carries a session id is almost always a tool call, which
-# can be large. Once this much of the body arrived and shows a "method" that is not
-# "initialize", stop buffering and stream it. Key order is not assumed: without a
-# "method" yet, keep reading up to the full cap.
-_PEEK_BODY = 4 * 1024
-
 
 def get_mcp_session(request_or_scope: Any) -> Optional[SessionTokenPayload]:
     """Return the ``SessionTokenPayload`` the middleware recovered for this request,
@@ -146,11 +140,9 @@ class PostHogMcpStatelessSessionMiddleware:
 
         # Only POSTs carry JSON-RPC. Mint only when the client replayed no session
         # id at all -- if one is present (ours or a stateful transport's), leave it.
-        # A client can also send initialize with a session id it already holds, so
-        # a middleware that captures handshakes reads those bodies too.
-        if scope.get("method") != "POST" or (
-            incoming_header is not None and observer is None
-        ):
+        # Such a request is not read, so an initialize that reuses a session id is
+        # not captured here. Tool calls, which all carry one, stay unread.
+        if scope.get("method") != "POST" or incoming_header is not None:
             await self.app(scope, receive, send)
             return
 
@@ -159,11 +151,9 @@ class PostHogMcpStatelessSessionMiddleware:
         token = None
         initialize = None
         try:
-            body, receive = await _buffer_body(
-                receive, peek=incoming_header is not None
-            )
+            body, receive = await _buffer_body(receive)
             initialize = _parse_initialize(body)
-            if initialize is not None and incoming_header is None:
+            if initialize is not None:
                 token = _mint_token(initialize)
         except Exception as error:  # noqa: BLE001
             log(f"PostHog MCP session middleware: mint failed - {error}")
@@ -177,12 +167,7 @@ class PostHogMcpStatelessSessionMiddleware:
             send = _InitializeResponse(
                 send,
                 functools.partial(
-                    _record_initialize,
-                    observer,
-                    initialize,
-                    incoming_header,
-                    scope,
-                    started,
+                    _record_initialize, observer, initialize, scope, started
                 ),
             )
         if token is not None:
@@ -216,13 +201,9 @@ def _decode_headers(raw: Any) -> dict[str, str]:
     return result
 
 
-async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]:
+async def _buffer_body(receive: Any) -> tuple[bytes, Any]:
     """Read up to ``_MAX_SNIFF_BODY`` of the request body for sniffing, then return
     that prefix plus a ``receive`` that replays it and streams the rest.
-
-    With ``peek``, also stop once ``_PEEK_BODY`` bytes arrived with a ``"method"``
-    but no ``"initialize"`` in them: the request is not a handshake, so it is not
-    held in memory.
 
     Memory is bounded to the cap: an `initialize` handshake is tiny, so once we
     exceed the cap the request cannot be one and we stop buffering — the prefix is
@@ -233,7 +214,6 @@ async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]
     total = 0
     complete = False
     overflow = False
-    peeked = not peek
     # A non-body message (e.g. http.disconnect) ends the read early. It is kept
     # and handed to the app after the prefix, so the app sees the disconnect.
     held: Optional[dict[str, Any]] = None
@@ -250,12 +230,6 @@ async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]
         if total > _MAX_SNIFF_BODY:
             overflow = True  # too big to be initialize — stop buffering
             break
-        if not peeked and total >= _PEEK_BODY:
-            peeked = True
-            prefix = b"".join(chunks)
-            if b'"method"' in prefix and b'"initialize"' not in prefix:
-                overflow = True  # not a handshake — stop buffering
-                break
 
     buffered = b"".join(chunks)
     replayed = False
@@ -280,8 +254,7 @@ async def _buffer_body(receive: Any, *, peek: bool = False) -> tuple[bytes, Any]
 def _parse_initialize(body: bytes) -> Optional[Dict[str, Any]]:
     """The JSON-RPC message in ``body`` if it is an ``initialize`` request, else
     ``None`` (never raises)."""
-    # Cheap first: with a bound middleware this runs on every tool call too.
-    if not body or b'"initialize"' not in body:
+    if not body:
         return None
     try:
         # RecursionError (deeply-nested JSON) is a RuntimeError, not a
@@ -356,7 +329,6 @@ class _InitializeContext:
 async def _record_initialize(
     data: MCPAnalyticsData,
     message: Dict[str, Any],
-    incoming_header: Optional[str],
     scope: Any,
     started: datetime,
     status: Optional[int],
@@ -364,15 +336,15 @@ async def _record_initialize(
 ) -> None:
     """Emit ``$mcp_initialize`` for a handshake the app answered, in the session the
     client's later requests resolve to: the ``Mcp-Session-Id`` they send back (a
-    stateful transport's id, our token, or the one the client already sent), or
-    this process's own session when there is none. The body is not read, so the
+    stateful transport's id or our token), or this process's own session when the
+    response carried none. The body is not read, so the
     event carries the protocol version the client asked for."""
     try:
         if status is None or not 200 <= status < 300:
             return
         from starlette.requests import Request
 
-        header = session_header or incoming_header
+        header = session_header
         await record_initialize(
             data,
             session_id=await handshake_session_id(
