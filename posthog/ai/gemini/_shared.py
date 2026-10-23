@@ -16,6 +16,7 @@ from ..utils import (
     _capture_ai_event,
     capture_streaming_event,
     finalize_ai_content,
+    _format_ai_error,
     _get_http_status,
     merge_system_prompt,
     with_privacy_mode,
@@ -176,11 +177,8 @@ class _GeminiModelsPolicy:
             if call_distinct_id is not None
             else self._default_distinct_id
         )
-        privacy_mode = (
-            call_privacy_mode
-            if call_privacy_mode is not None
-            else self._default_privacy_mode
-        )
+        # A call can add redaction but never lift the client default.
+        privacy_mode = self._default_privacy_mode or call_privacy_mode is True
         groups = call_groups if call_groups is not None else self._default_groups
 
         properties = dict(self._default_properties)
@@ -265,7 +263,9 @@ class _GeminiModelsPolicy:
 
         if error:
             event_properties["$ai_is_error"] = True
-            event_properties["$ai_error"] = str(error)
+            event_properties["$ai_error"] = _format_ai_error(
+                self._ph_client, privacy_mode, error
+            )
 
         if distinct_id is None:
             event_properties["$process_person_profile"] = False

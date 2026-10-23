@@ -1,5 +1,7 @@
 import asyncio
+import copy
 import logging
+import re
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
@@ -502,7 +504,7 @@ def call_llm_and_track_usage(
             http_status = _get_http_status(exc)  # 0 because its likely an SDK error
             error_params = {
                 "$ai_is_error": True,
-                "$ai_error": exc.__str__(),
+                "$ai_error": _format_ai_error(ph_client, posthog_privacy_mode, exc),
             }
             # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
             # enable_exception_autocapture is True, similar to LangChain callbacks.
@@ -674,7 +676,7 @@ async def call_llm_and_track_usage_async(
             http_status = _get_http_status(exc)  # 0 because its likely an SDK error
             error_params = {
                 "$ai_is_error": True,
-                "$ai_error": exc.__str__(),
+                "$ai_error": _format_ai_error(ph_client, posthog_privacy_mode, exc),
             }
             # TODO: Add exception capture for OpenAI/Anthropic/Gemini wrappers when
             # enable_exception_autocapture is True, similar to LangChain callbacks.
@@ -819,10 +821,227 @@ def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
     return redact_media(value, ph_client=ph_client)
 
 
+def _privacy_mode_enabled(ph_client: Any, privacy_mode: Optional[bool]) -> bool:
+    return bool(getattr(ph_client, "privacy_mode", False) or privacy_mode)
+
+
 def with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any):
-    if getattr(ph_client, "privacy_mode", False) or privacy_mode:
+    if _privacy_mode_enabled(ph_client, privacy_mode):
         return None
     return value
+
+
+_ERROR_CLASS_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{0,127}$")
+_ERROR_PROVIDER_CODE_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+_ERROR_PARAM_RE = re.compile(r"^[A-Za-z0-9_.\[\]-]{1,128}$")
+_ERROR_REQUEST_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+_ERROR_CODE_FIELDS = ("code", "type", "status")
+_ERROR_STATUS_FIELDS = ("status_code", "status", "code")
+_MAX_ERROR_CAUSES = 3
+_FALLBACK_ERROR_CLASS_NAME = "Exception"
+
+
+def _read_error_field(source: Any, key: str) -> Any:
+    if source is None:
+        return None
+    try:
+        if isinstance(source, dict):
+            return source.get(key)
+        return getattr(source, key, None)
+    except Exception:
+        return None
+
+
+def _matching(value: object, grammar: "re.Pattern[str]") -> Optional[str]:
+    if isinstance(value, str) and grammar.fullmatch(value):
+        return value
+    return None
+
+
+def _first_matching(values: List[Any], grammar: "re.Pattern[str]") -> Optional[str]:
+    for value in values:
+        match = _matching(value, grammar)
+        if match is not None:
+            return match
+    return None
+
+
+def _error_class_name(name: object) -> str:
+    return _matching(name, _ERROR_CLASS_NAME_RE) or _FALLBACK_ERROR_CLASS_NAME
+
+
+def _error_http_status(exc: BaseException) -> Optional[int]:
+    for key in _ERROR_STATUS_FIELDS:
+        value = _read_error_field(exc, key)
+        if (
+            isinstance(value, int)
+            and not isinstance(value, bool)
+            and 100 <= value <= 599
+        ):
+            return value
+    return None
+
+
+def _error_body(exc: BaseException) -> Any:
+    # Anthropic nests the detail as `{"type": "error", "error": {"type": ...}}`.
+    body = _read_error_field(exc, "body")
+    inner = _read_error_field(body, "error")
+    return inner if isinstance(inner, dict) else body
+
+
+def _error_cause_names(exc: BaseException) -> List[str]:
+    names: List[str] = []
+    cause = exc.__cause__ or exc.__context__
+    while cause is not None and len(names) < _MAX_ERROR_CAUSES:
+        names.append(_error_class_name(type(cause).__name__))
+        cause = cause.__cause__ or cause.__context__
+    return names
+
+
+def _format_error_summary(
+    name: object,
+    *,
+    status: Optional[int] = None,
+    codes: Optional[List[str]] = None,
+    param: Optional[str] = None,
+    request_id: Optional[str] = None,
+    causes: Optional[List[str]] = None,
+) -> str:
+    """Render the privacy-safe `$ai_error` format shared with the JS SDK."""
+    summary = _error_class_name(name)
+    if status is not None:
+        summary += f": {status}"
+    for code in dict.fromkeys(codes or []):
+        summary += f" {code}"
+    if param is not None:
+        summary += f" param={param}"
+    if request_id is not None:
+        summary += f" request_id={request_id}"
+    if causes:
+        summary += f" (caused by {', '.join(causes)})"
+    return summary
+
+
+def _summarize_error_for_privacy(exc: BaseException) -> str:
+    """
+    Describe an exception for `$ai_error` without its message, traceback or
+    arbitrary attributes, which routinely echo prompts and model output.
+    Only structured fields that pass a strict grammar are kept.
+    """
+    try:
+        sources = [exc, _error_body(exc)]
+        codes = [
+            code
+            for source in sources
+            for key in _ERROR_CODE_FIELDS
+            if (
+                code := _matching(
+                    _read_error_field(source, key), _ERROR_PROVIDER_CODE_RE
+                )
+            )
+            is not None
+        ]
+        return _format_error_summary(
+            type(exc).__name__,
+            status=_error_http_status(exc),
+            codes=codes,
+            param=_first_matching(
+                [_read_error_field(source, "param") for source in sources],
+                _ERROR_PARAM_RE,
+            ),
+            request_id=_matching(
+                _read_error_field(exc, "request_id"), _ERROR_REQUEST_ID_RE
+            ),
+            causes=_error_cause_names(exc),
+        )
+    except Exception:
+        return _FALLBACK_ERROR_CLASS_NAME
+
+
+_PRIVACY_SAFE_MESSAGE_ATTR = "_posthog_privacy_safe_message"
+
+
+def _with_privacy_safe_message(exc: BaseException) -> BaseException:
+    """Mark an SDK-built exception whose message is fixed text, so privacy mode keeps it."""
+    setattr(exc, _PRIVACY_SAFE_MESSAGE_ATTR, True)
+    return exc
+
+
+def _format_ai_error(
+    ph_client: Any,
+    privacy_mode: Optional[bool],
+    exc: BaseException,
+    describe: Callable[[BaseException], str] = str,
+) -> str:
+    """The `$ai_error` value for `exc`, summarized when privacy mode is on."""
+    if _privacy_mode_enabled(ph_client, privacy_mode) and (
+        getattr(exc, _PRIVACY_SAFE_MESSAGE_ATTR, False) is not True
+    ):
+        return _summarize_error_for_privacy(exc)
+    return describe(exc)
+
+
+_MCP_TOOL_CREDENTIAL_FIELDS = ("headers", "authorization")
+_REDACTED_MCP_CREDENTIAL = "[REDACTED]"
+
+# Vercel AI SDK provider tools that configure a remote MCP server, keyed by their `id`.
+# They reach this SDK through OpenTelemetry tool definition attributes.
+_MCP_PROVIDER_TOOL_IDS = frozenset({"openai.mcp", "xai.mcp", "google.mcp_server"})
+
+
+def _without_mcp_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: (
+            _REDACTED_MCP_CREDENTIAL
+            if key in _MCP_TOOL_CREDENTIAL_FIELDS and value is not None
+            else value
+        )
+        for key, value in config.items()
+    }
+
+
+def _is_mcp_provider_tool(tool: Dict[str, Any]) -> bool:
+    return (
+        tool.get("type") in ("provider", "provider-defined")
+        and tool.get("id") in _MCP_PROVIDER_TOOL_IDS
+        and isinstance(tool.get("args"), dict)
+    )
+
+
+def _redact_mcp_tool(tool: Any) -> Any:
+    if not isinstance(tool, dict):
+        if getattr(tool, "type", None) != "mcp":
+            return tool
+        model_dump = getattr(tool, "model_dump", None)
+        if callable(model_dump):
+            return _redact_mcp_tool(model_dump())
+        try:
+            redacted = copy.copy(tool)
+            for field in _MCP_TOOL_CREDENTIAL_FIELDS:
+                if getattr(tool, field, None) is not None:
+                    setattr(redacted, field, _REDACTED_MCP_CREDENTIAL)
+            return redacted
+        except Exception:
+            return {"type": "mcp"}
+    if tool.get("type") == "mcp":
+        return _without_mcp_credentials(tool)
+    if _is_mcp_provider_tool(tool):
+        return {**tool, "args": _without_mcp_credentials(tool["args"])}
+    return tool
+
+
+def _redact_mcp_tool_credentials(tools: Any) -> Any:
+    """
+    Mask the `headers` and `authorization` of MCP tool definitions, which carry
+    credentials for the remote server. Returns copies; the caller's tools are
+    left untouched.
+    """
+    if not isinstance(tools, (list, tuple)):
+        return tools
+    redacted = [_redact_mcp_tool(tool) for tool in tools]
+    if all(new is old for new, old in zip(redacted, tools)):
+        return tools
+    return redacted
 
 
 def capture_streaming_event(
@@ -887,7 +1106,14 @@ def capture_streaming_event(
         "$ai_base_url": str(event_data["base_url"]),
         **(event_data.get("properties") or {}),
         **(
-            {"$ai_is_error": True, "$ai_error": str(error)} if error is not None else {}
+            {
+                "$ai_is_error": True,
+                "$ai_error": _format_ai_error(
+                    ph_client, event_data["privacy_mode"], error
+                ),
+            }
+            if error is not None
+            else {}
         ),
     }
 

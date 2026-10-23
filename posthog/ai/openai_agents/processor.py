@@ -25,11 +25,15 @@ from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
 from posthog.ai.utils import (
     _capture_processor_event,
     finalize_ai_content,
+    _format_error_summary,
+    _privacy_mode_enabled,
     with_privacy_mode as _with_privacy_mode,
 )
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
+
+_AUDIO_MODEL_CONFIG_CONTENT_KEYS = frozenset({"prompt", "instructions"})
 
 
 def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
@@ -124,6 +128,15 @@ class PostHogTracingProcessor(TracingProcessor):
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
         return _with_privacy_mode(self._client, self._privacy_mode, value)
+
+    def _privacy_enabled(self) -> bool:
+        return _privacy_mode_enabled(self._client, self._privacy_mode)
+
+    @staticmethod
+    def _summarize_span_error(error_info: Any) -> str:
+        # Agents SDK span errors are plain dicts, not exceptions: only a type name is structured.
+        error_type = error_info.get("type") if isinstance(error_info, dict) else None
+        return _format_error_summary(error_type)
 
     def _evict_stale_entries(self) -> None:
         """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""
@@ -226,7 +239,9 @@ class PostHogTracingProcessor(TracingProcessor):
 
             # Include trace metadata if present
             if metadata:
-                properties["$ai_trace_metadata"] = _ensure_serializable(metadata)
+                properties["$ai_trace_metadata"] = self._with_privacy_mode(
+                    _ensure_serializable(metadata)
+                )
 
             if distinct_id is None:
                 properties["$process_person_profile"] = False
@@ -313,7 +328,11 @@ class PostHogTracingProcessor(TracingProcessor):
 
                 error_properties = {
                     "$ai_is_error": True,
-                    "$ai_error": error_message,
+                    "$ai_error": (
+                        self._summarize_span_error(error_info)
+                        if self._privacy_enabled()
+                        else error_message
+                    ),
                     "$ai_error_type": error_type,
                 }
 
@@ -778,7 +797,9 @@ class PostHogTracingProcessor(TracingProcessor):
 
         # Add model config if available (pass-through property)
         if hasattr(span_data, "model_config") and span_data.model_config:
-            properties["model_config"] = _ensure_serializable(span_data.model_config)
+            properties["model_config"] = self._redact_audio_model_config(
+                _ensure_serializable(span_data.model_config)
+            )
 
         # Add time to first audio byte for speech spans (pass-through property)
         if hasattr(span_data, "first_content_at") and span_data.first_content_at:
@@ -824,6 +845,15 @@ class PostHogTracingProcessor(TracingProcessor):
             )
 
         self._capture_event("$ai_span", properties, distinct_id)
+
+    def _redact_audio_model_config(self, model_config: Any) -> Any:
+        # The STT prompt and TTS instructions are user-authored text.
+        if not isinstance(model_config, dict) or not self._privacy_enabled():
+            return model_config
+        return {
+            key: (None if key in _AUDIO_MODEL_CONFIG_CONTENT_KEYS else value)
+            for key, value in model_config.items()
+        }
 
     def _handle_mcp_span(
         self,

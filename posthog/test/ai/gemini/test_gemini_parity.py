@@ -36,7 +36,19 @@ def test_sync_and_async_clients_preserve_explicit_empty_api_key(
 
 
 @pytest.mark.parametrize("client_class", [Client, AsyncClient])
-def test_sync_and_async_clients_merge_posthog_defaults_without_mutation(client_class):
+@pytest.mark.parametrize(
+    "default_privacy_mode, call_privacy_mode, expected_privacy_mode",
+    [
+        (True, False, True),
+        (True, None, True),
+        (False, True, True),
+        (False, None, False),
+        (False, False, False),
+    ],
+)
+def test_sync_and_async_clients_merge_posthog_defaults_without_mutation(
+    client_class, default_privacy_mode, call_privacy_mode, expected_privacy_mode
+):
     default_properties = {"shared": "default", "default-only": True}
 
     with patch.object(google_genai, "Client"):
@@ -45,7 +57,7 @@ def test_sync_and_async_clients_merge_posthog_defaults_without_mutation(client_c
             posthog_client=MagicMock(),
             posthog_distinct_id="default-id",
             posthog_properties=default_properties,
-            posthog_privacy_mode=True,
+            posthog_privacy_mode=default_privacy_mode,
             posthog_groups={"organization": "default-org"},
         )
 
@@ -53,7 +65,7 @@ def test_sync_and_async_clients_merge_posthog_defaults_without_mutation(client_c
         None,
         "",
         {"shared": "call", "call-only": True},
-        False,
+        call_privacy_mode,
         None,
     )
 
@@ -61,7 +73,7 @@ def test_sync_and_async_clients_merge_posthog_defaults_without_mutation(client_c
         "default-id",
         "",
         {"shared": "call", "default-only": True, "call-only": True},
-        False,
+        expected_privacy_mode,
         {"organization": "default-org"},
     )
     assert default_properties == {"shared": "default", "default-only": True}

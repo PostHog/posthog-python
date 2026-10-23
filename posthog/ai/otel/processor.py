@@ -9,7 +9,7 @@ import logging
 import os
 import threading
 import weakref
-from typing import Dict, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Optional, Tuple
 
 from opentelemetry.context import Context
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor
@@ -22,8 +22,11 @@ from ._request_context import (
     capture_request_context,
     with_request_context,
 )
+from ._privacy import _otel_privacy_mode_enabled, _redacted_spans
 from .spans import DEFAULT_HOST, is_ai_span
 
+if TYPE_CHECKING:
+    from ...client import Client
 
 log = logging.getLogger("posthog")
 
@@ -89,14 +92,23 @@ class PostHogSpanProcessor(SpanProcessor):
         self,
         api_key: str,
         host: str = DEFAULT_HOST,
+        *,
+        privacy_mode: bool = False,
+        client: Optional["Client"] = None,
     ):
         """
         Args:
             api_key: PostHog project API key.
             host: PostHog host URL. Defaults to US cloud.
+            privacy_mode: Drop prompts, completions, tool arguments and results,
+                and error messages from exported spans.
+            client: PostHog client whose ``privacy_mode`` also applies. Without
+                one, the module-level ``posthog.privacy_mode`` setting applies.
         """
         self._api_key = api_key
         self._host = host.rstrip("/")
+        self._privacy_mode = privacy_mode
+        self._client = client
 
         exporter = OTLPSpanExporter(
             endpoint=f"{self._host}/i/v0/ai/otel",
@@ -164,7 +176,9 @@ class PostHogSpanProcessor(SpanProcessor):
                 span = with_request_context(span, captured)
             except Exception:
                 log.debug("Failed to add PostHog context to span", exc_info=True)
-        self._processor.on_end(span)
+        privacy_mode = _otel_privacy_mode_enabled(self._privacy_mode, self._client)
+        for redacted in _redacted_spans([span], privacy_mode):
+            self._processor.on_end(redacted)
 
     def shutdown(self) -> None:
         """Shut down the underlying batch span processor."""
