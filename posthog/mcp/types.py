@@ -246,6 +246,9 @@ class MCPAnalyticsOptions:
     # its input schema to remove only PostHog-owned arguments on a fresh server
     # instance that did not serve tools/list.
     resolve_original_tool: Optional[Callable[[str], Any]] = None
+    # Send `$mcp_initialize` for each `initialize` handshake. On by default.
+    # False sends no `$mcp_initialize`. Nothing else changes.
+    capture_initialize: bool = True
 
 
 @dataclass
