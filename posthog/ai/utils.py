@@ -973,6 +973,29 @@ def _format_ai_error(
 _MCP_TOOL_CREDENTIAL_FIELDS = ("headers", "authorization")
 _REDACTED_MCP_CREDENTIAL = "[REDACTED]"
 
+# Vercel AI SDK provider tools that configure a remote MCP server, keyed by their `id`.
+# They reach this SDK through OpenTelemetry tool definition attributes.
+_MCP_PROVIDER_TOOL_IDS = frozenset({"openai.mcp", "xai.mcp", "google.mcp_server"})
+
+
+def _without_mcp_credentials(config: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        key: (
+            _REDACTED_MCP_CREDENTIAL
+            if key in _MCP_TOOL_CREDENTIAL_FIELDS and value is not None
+            else value
+        )
+        for key, value in config.items()
+    }
+
+
+def _is_mcp_provider_tool(tool: Dict[str, Any]) -> bool:
+    return (
+        tool.get("type") in ("provider", "provider-defined")
+        and tool.get("id") in _MCP_PROVIDER_TOOL_IDS
+        and isinstance(tool.get("args"), dict)
+    )
+
 
 def _redact_mcp_tool(tool: Any) -> Any:
     if not isinstance(tool, dict):
@@ -989,16 +1012,11 @@ def _redact_mcp_tool(tool: Any) -> Any:
             return redacted
         except Exception:
             return {"type": "mcp"}
-    if tool.get("type") != "mcp":
-        return tool
-    return {
-        key: (
-            _REDACTED_MCP_CREDENTIAL
-            if key in _MCP_TOOL_CREDENTIAL_FIELDS and value is not None
-            else value
-        )
-        for key, value in tool.items()
-    }
+    if tool.get("type") == "mcp":
+        return _without_mcp_credentials(tool)
+    if _is_mcp_provider_tool(tool):
+        return {**tool, "args": _without_mcp_credentials(tool["args"])}
+    return tool
 
 
 def _redact_mcp_tool_credentials(tools: Any) -> Any:

@@ -497,8 +497,19 @@ _MCP_OTEL_TOOL = {
     "authorization": CANARY,
 }
 
+_VERCEL_MCP_OTEL_TOOL = {
+    "type": "provider",
+    "id": "openai.mcp",
+    "name": "docs",
+    "args": {"serverUrl": "https://mcp.example.com", "authorization": CANARY},
+}
+
 _MCP_OTEL_TOOL_ATTRIBUTES: Dict[str, Any] = {
-    "ai.prompt.tools": ('{"name": "lookup"}', json.dumps(_MCP_OTEL_TOOL)),
+    "ai.prompt.tools": (
+        '{"name": "lookup"}',
+        json.dumps(_MCP_OTEL_TOOL),
+        json.dumps(_VERCEL_MCP_OTEL_TOOL),
+    ),
     "llm.tools.0.tool.json_schema": json.dumps(_MCP_OTEL_TOOL),
     "llm.tools.1.tool.json_schema": f"not json {CANARY}",
 }
@@ -512,7 +523,19 @@ _REDACTED_MCP_OTEL_TOOL = json.dumps(
 )
 
 _REDACTED_MCP_OTEL_TOOL_ATTRIBUTES: Dict[str, Any] = {
-    "ai.prompt.tools": ('{"name": "lookup"}', _REDACTED_MCP_OTEL_TOOL),
+    "ai.prompt.tools": (
+        '{"name": "lookup"}',
+        _REDACTED_MCP_OTEL_TOOL,
+        json.dumps(
+            {
+                **_VERCEL_MCP_OTEL_TOOL,
+                "args": {
+                    "serverUrl": "https://mcp.example.com",
+                    "authorization": _REDACTED_MCP_CREDENTIAL,
+                },
+            }
+        ),
+    ),
     "llm.tools.0.tool.json_schema": _REDACTED_MCP_OTEL_TOOL,
 }
 
@@ -558,6 +581,9 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         "llm.prompt_template.template": CANARY,
         "llm.prompt_template.variables": CANARY,
         "embedding.embeddings.0.embedding.text": CANARY,
+        "llm.prompts": CANARY,
+        "llm.input_messages": CANARY,
+        "ai.ranking": CANARY,
         "ai.request.text": CANARY,
         "ai.documents": CANARY,
         "ai.response.reasoningDetails": CANARY,

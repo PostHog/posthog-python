@@ -26,6 +26,7 @@ _CONTENT_ATTRIBUTES = frozenset(
         "ai.prompt.messages",
         "ai.request.text",
         "ai.documents",
+        "ai.ranking",
         "ai.response.text",
         "ai.response.object",
         "ai.response.toolCalls",
@@ -144,6 +145,7 @@ def _is_content_attribute(key: str) -> bool:
     return (
         key in _CONTENT_ATTRIBUTES
         or key.startswith(_CONTENT_ATTRIBUTE_PREFIXES)
+        or f"{key}." in _CONTENT_ATTRIBUTE_PREFIXES
         or _CONTENT_ATTRIBUTE_PATTERN.fullmatch(key) is not None
     )
 
