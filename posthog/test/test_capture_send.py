@@ -111,6 +111,9 @@ class _PostV1Stub:
         return outcome
 
 
+_DUP_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
 def _msg(uuid, event="e", **overrides):
     msg = {
         "event": event,
@@ -124,16 +127,18 @@ def _msg(uuid, event="e", **overrides):
     return msg
 
 
-def _results_response(directives, headers=None):
+def _results_response(directives, headers=None, duplicates_dropped=None):
     """200 response whose ``results`` map tags each uuid.
 
     ``directives`` maps uuid -> ``"ok"`` (or any result string) or a
-    ``(result, details)`` tuple.
+    ``(result, details)`` tuple. ``duplicates_dropped`` maps uuid -> count.
     """
     results = {}
     for uid, spec in directives.items():
         result, details = spec if isinstance(spec, tuple) else (spec, None)
         results[uid] = {"result": result, "details": details}
+    for uid, count in (duplicates_dropped or {}).items():
+        results[uid]["duplicates_dropped"] = count
     return _FakeResponse(200, json_body={"results": results}, headers=headers)
 
 
@@ -330,6 +335,31 @@ class TestParseV1Response(unittest.TestCase):
         self.assertTrue(parsed.is_success)
         self.assertEqual(parsed.results["u-1"].result, "drop")
         self.assertEqual(parsed.results["u-1"].details, "spam")
+
+    def test_success_parses_duplicates_dropped(self) -> None:
+        res = _results_response(
+            {"u-1": "ok", "u-2": "ok"}, duplicates_dropped={"u-1": 2}
+        )
+        parsed = _parse_v1_response(res)
+        self.assertEqual(parsed.duplicates_dropped, {"u-1": 2})
+        self.assertEqual(parsed.results["u-1"], CaptureEventResult("ok"))
+
+    @parameterized.expand(
+        [
+            ("string", "2"),
+            ("bool", True),
+            ("negative", -1),
+            ("zero", 0),
+            ("float", 2.0),
+            ("null", None),
+        ]
+    )
+    def test_invalid_duplicates_dropped_ignored(self, _name, value) -> None:
+        res = _results_response({"u-1": "ok"}, duplicates_dropped={"u-1": value})
+        parsed = _parse_v1_response(res)
+        self.assertFalse(parsed.malformed)
+        self.assertEqual(parsed.duplicates_dropped, {})
+        self.assertEqual(parsed.results["u-1"], CaptureEventResult("ok"))
 
     @parameterized.expand(
         [
@@ -550,6 +580,71 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(len(stub.calls), 2)
         self.assertEqual(exc.drops, [(canonical, "llm_events_over_quota")])
 
+    @parameterized.expand(
+        [
+            ("kept_ok", "ok", 2, [], [], [], CaptureEventResult("ok"), ""),
+            (
+                "kept_warning",
+                "warning",
+                2,
+                [],
+                [],
+                [],
+                CaptureEventResult("warning"),
+                "",
+            ),
+            (
+                "kept_drop",
+                ("drop", "invalid_options"),
+                2,
+                [],
+                [],
+                [(_DUP_A, "invalid_options")],
+                CaptureEventResult("drop", "invalid_options"),
+                ", drop/invalid_options=1",
+            ),
+            (
+                "kept_retry_then_ok",
+                "retry",
+                2,
+                [_results_response({_DUP_A: "ok"})],
+                [[_DUP_A]],
+                [],
+                CaptureEventResult("ok"),
+                "",
+            ),
+            (
+                "copy_past_count_keeps_kept_verdict",
+                "retry",
+                1,
+                [_results_response({_DUP_A: "ok"}, duplicates_dropped={_DUP_A: 1})],
+                [[_DUP_A, _DUP_A]],
+                [],
+                CaptureEventResult("ok"),
+                "",
+            ),
+        ]
+    )
+    def test_duplicates_dropped_reported_as_drops(
+        self, _name, kept, count, later, resent, kept_drops, kept_result, summary_rest
+    ) -> None:
+        batch = [_msg(_DUP_A), _msg("u-b"), _msg(_DUP_A.upper()), _msg(_DUP_A)]
+        first = _results_response(
+            {_DUP_A: kept, "u-b": "ok"}, duplicates_dropped={_DUP_A: count}
+        )
+        stub, exc = self._run_expecting_error(batch, [first, *later])
+
+        self.assertEqual([c["uuids"] for c in stub.calls[1:]], resent)
+        duplicate = (_DUP_A, "duplicate_event_uuid")
+        self.assertEqual(exc.drops, kept_drops + [duplicate, duplicate])
+        self.assertEqual(
+            exc.event_results,
+            {_DUP_A: kept_result, "u-b": CaptureEventResult("ok")},
+        )
+        self.assertEqual(
+            exc.verdict_summary(), "drop/duplicate_event_uuid=2" + summary_rest
+        )
+
     def test_malformed_2xx_is_terminal(self) -> None:
         stub, exc = self._run_expecting_error(
             [_msg("u-1")], [_FakeResponse(200, raise_json=True)]
@@ -666,6 +761,25 @@ class TestCaptureLossMessage(unittest.TestCase):
                 3,
                 "2 event(s) not persisted by /i/v1/analytics/events: 1 dropped, "
                 "1 out of retries (drop/llm_events_over_quota=1, retry/not_persisted=1)",
+            ),
+            (
+                "duplicate_drop_counts_its_own_reason",
+                CaptureError(
+                    200,
+                    "2 event(s) dropped by the server",
+                    endpoint=_CAPTURE_V1_PATH,
+                    drops=[
+                        ("u-a", "duplicate_event_uuid"),
+                        ("u-drop", "llm_events_over_quota"),
+                    ],
+                    event_results={
+                        "u-a": CaptureEventResult("ok"),
+                        "u-drop": CaptureEventResult("drop", "llm_events_over_quota"),
+                    },
+                ),
+                3,
+                "2 event(s) not persisted by /i/v1/analytics/events: 2 dropped, "
+                "0 out of retries (drop/duplicate_event_uuid=1, drop/llm_events_over_quota=1)",
             ),
             (
                 "request_failure_after_partial_success",

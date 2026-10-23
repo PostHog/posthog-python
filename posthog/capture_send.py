@@ -13,7 +13,9 @@ across attempts while incrementing ``PostHog-Attempt``. ``ok``/``warning``/absen
 events succeed; ``drop`` and retry-exhaustion are carried on the
 :class:`CaptureError` raised on batch-level/terminal failure, so the consumer's
 existing ``on_error(exc, batch)`` path surfaces them unchanged (no per-event
-logging of its own).
+logging of its own). Capture keeps the first event for each uuid in a request;
+a result's ``duplicates_dropped`` count reports the later copies as drops with
+reason ``duplicate_event_uuid``.
 
 Request bodies are optionally compressed per :class:`~posthog.capture_compression.CaptureCompression`
 (``gzip`` or zlib-wrapped ``deflate``), advertised via ``Content-Encoding``.
@@ -24,7 +26,7 @@ import logging
 import random
 import time
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from gzip import GzipFile
@@ -74,6 +76,9 @@ _RESULT_WARNING = "warning"
 _RESULT_DROP = "drop"
 _RESULT_RETRY = "retry"
 
+# Drop reason for a later copy of a uuid that capture discarded in favor of the first.
+_DUPLICATE_EVENT_UUID = "duplicate_event_uuid"
+
 # HTTP status classification. 429 is terminal in v1 (unlike v0, where it is
 # retried) — the backend signals overload via retryable 5xx + Retry-After.
 _RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
@@ -118,12 +123,15 @@ class _V1ParsedResponse:
     per-uuid directives (``None``/``malformed=True`` when the body could not be
     parsed — treated as terminal so a bad success never loops forever). On a
     non-2xx, ``error_message`` is the best-effort human-readable detail.
+    ``duplicates_dropped`` maps a uuid to the number of its later copies
+    capture dropped; it is empty when no result carries the field.
     """
 
     status_code: int
     is_success: bool
     retry_after: Optional[float] = None
     results: Optional[dict[str, CaptureEventResult]] = None
+    duplicates_dropped: dict[str, int] = field(default_factory=dict)
     malformed: bool = False
     error_message: str = ""
 
@@ -177,15 +185,19 @@ class CaptureError(APIError):
         Empty when no event is counted.
         """
         counts: dict[str, int] = {}
-        failed = [uid for uid, _ in self.drops] + self.retry_exhausted
-        for uid in failed:
-            verdict = self.event_results.get(uid)
-            if verdict is None or not verdict.result:
-                continue
-            tag = verdict.result
-            if verdict.details:
-                tag = f"{tag}/{verdict.details}"
+
+        def count(result: str, details: Optional[str]) -> None:
+            tag = f"{result}/{details}" if details else result
             counts[tag] = counts.get(tag, 0) + 1
+
+        # A dropped duplicate shares its uuid with the kept copy, so each drop
+        # counts its own reason rather than the uuid's verdict.
+        for _, details in self.drops:
+            count(_RESULT_DROP, details)
+        for uid in self.retry_exhausted:
+            verdict = self.event_results.get(uid)
+            if verdict is not None and verdict.result:
+                count(verdict.result, verdict.details)
         return ", ".join(f"{tag}={n}" for tag, n in sorted(counts.items()))
 
 
@@ -393,15 +405,23 @@ def _parse_v1_response(res: "requests.Response") -> _V1ParsedResponse:
     if _is_success_status(status):
         try:
             payload = res.json()
-            raw_results = payload["results"]
-            results = {
-                uid: CaptureEventResult(
-                    result=(r or {}).get("result"),
-                    details=(r or {}).get("details"),
+            results: dict[str, CaptureEventResult] = {}
+            duplicates_dropped: dict[str, int] = {}
+            for uid, r in payload["results"].items():
+                r = r or {}
+                results[uid] = CaptureEventResult(
+                    result=r.get("result"), details=r.get("details")
                 )
-                for uid, r in raw_results.items()
-            }
-            return _V1ParsedResponse(status, True, retry_after, results=results)
+                count = r.get("duplicates_dropped")
+                if isinstance(count, int) and not isinstance(count, bool) and count > 0:
+                    duplicates_dropped[uid] = count
+            return _V1ParsedResponse(
+                status,
+                True,
+                retry_after,
+                results=results,
+                duplicates_dropped=duplicates_dropped,
+            )
         except (ValueError, KeyError, AttributeError, TypeError):
             # 2xx with a body we can't read as a results map: terminal, so we
             # don't loop forever re-sending against a broken success.
@@ -498,7 +518,10 @@ def _send_v1_batch(
     when the request itself was a 2xx (a success status is not full delivery)
     and even when a later attempt clears the outstanding retries — matching
     posthog-go (per-event failure callback) and posthog-rs (``on_error`` on a
-    2xx with undelivered verdicts). Raises :class:`CaptureError` on any drop,
+    2xx with undelivered verdicts). When a result carries
+    ``duplicates_dropped: n``, the first event with that uuid takes the verdict
+    and the next ``n`` copies become drops with reason ``duplicate_event_uuid``,
+    never resent. Raises :class:`CaptureError` on any drop,
     batch-level terminal failure, retry exhaustion, or transport failure
     (``status`` 0, chained to the transport error), carrying the endpoint, the
     accumulated ``drops``, any exhausted uuids, and every verdict seen so far,
@@ -584,6 +607,8 @@ def _send_v1_batch(
 
             retry_events: list[dict] = []
             retry_uuids: list[str] = []
+            duplicates_left = dict(parsed.duplicates_dropped)
+            seen_duplicated: set[str] = set()
             for event, uid in zip(pending_events, pending_uuids):
                 directive = results.get(uid)
                 if directive is None:
@@ -591,6 +616,12 @@ def _send_v1_batch(
                     # posthog-go and posthog-rs). Capture answers every event
                     # of a 2xx, so this only happens if it breaks that contract.
                     continue
+                if uid in duplicates_left:
+                    if uid in seen_duplicated and duplicates_left[uid] > 0:
+                        duplicates_left[uid] -= 1
+                        all_drops.append((uid, _DUPLICATE_EVENT_UUID))
+                        continue
+                    seen_duplicated.add(uid)
                 event_results[uid] = directive
                 if directive.result == _RESULT_RETRY:
                     retry_events.append(event)
