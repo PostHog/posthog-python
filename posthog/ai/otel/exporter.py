@@ -83,8 +83,8 @@ class PostHogTraceExporter(SpanExporter):
             return SpanExportResult.SUCCESS
         for span in ai_spans:
             warn_if_posthog_ai_gateway_otel_attributes(span.attributes)
-        if _otel_privacy_mode_enabled(self._privacy_mode, self._client):
-            ai_spans = [_redact_span(span) for span in ai_spans]
+        privacy_mode = _otel_privacy_mode_enabled(self._privacy_mode, self._client)
+        ai_spans = [_redact_span(span, privacy_mode) for span in ai_spans]
         return self._exporter.export(ai_spans)
 
     def shutdown(self) -> None:

@@ -182,34 +182,52 @@ def _gateway_cost_only(value: Any) -> Optional[str]:
     return json.dumps({"gateway": {"cost": cost}}, separators=(",", ":"))
 
 
-def _redact_tool_definition_json(value: str) -> Optional[str]:
-    """A value that cannot be parsed could still hold credentials, so it is dropped."""
+def _redact_tool_definition_json(value: str, drop_unparseable: bool) -> Optional[str]:
     try:
         parsed = json.loads(value)
     except ValueError:
-        return None
+        parsed = None
     if isinstance(parsed, list):
         redacted = _redact_mcp_tool_credentials(parsed)
     elif isinstance(parsed, dict):
         redacted = _redact_mcp_tool(parsed)
     else:
-        return None
+        return None if drop_unparseable else value
     return value if redacted is parsed else json.dumps(redacted)
 
 
-def _redact_tool_definitions(value: Any) -> Optional[AttributeValue]:
+def _redact_tool_definitions(
+    value: Any, drop_unparseable: bool
+) -> Optional[AttributeValue]:
+    """
+    Mask remote MCP credentials in a tool definition attribute. Under privacy mode a
+    value that cannot be parsed is dropped, because it could still hold credentials.
+    """
     if isinstance(value, str):
-        return _redact_tool_definition_json(value)
-    if isinstance(value, (list, tuple)):
-        redacted: List[str] = []
-        for item in value:
-            definition = (
-                _redact_tool_definition_json(item) if isinstance(item, str) else None
-            )
-            if definition is not None:
-                redacted.append(definition)
-        return redacted
-    return None
+        return _redact_tool_definition_json(value, drop_unparseable)
+    if not isinstance(value, (list, tuple)):
+        return None if drop_unparseable else value
+    redacted: List[Any] = []
+    for item in value:
+        definition = (
+            _redact_tool_definition_json(item, drop_unparseable)
+            if isinstance(item, str)
+            else None
+            if drop_unparseable
+            else item
+        )
+        if definition is not None:
+            redacted.append(definition)
+    if len(redacted) == len(value) and all(a is b for a, b in zip(redacted, value)):
+        return value
+    return redacted
+
+
+def _is_tool_definition_attribute(key: str) -> bool:
+    return (
+        key in _TOOL_DEFINITION_ATTRIBUTES
+        or _TOOL_DEFINITION_PATTERN.fullmatch(key) is not None
+    )
 
 
 def _without_content(attributes: Attributes) -> BoundedAttributes:
@@ -217,10 +235,8 @@ def _without_content(attributes: Attributes) -> BoundedAttributes:
     for key, value in (attributes or {}).items():
         if _is_content_attribute(key):
             continue
-        if key in _TOOL_DEFINITION_ATTRIBUTES or _TOOL_DEFINITION_PATTERN.fullmatch(
-            key
-        ):
-            definitions = _redact_tool_definitions(value)
+        if _is_tool_definition_attribute(key):
+            definitions = _redact_tool_definitions(value, drop_unparseable=True)
             if definitions is not None:
                 kept[key] = definitions
             continue
@@ -233,7 +249,7 @@ def _without_content(attributes: Attributes) -> BoundedAttributes:
     return BoundedAttributes(attributes=kept)
 
 
-def _redact_span(span: ReadableSpan) -> ReadableSpan:
+def _without_content_span(span: ReadableSpan) -> ReadableSpan:
     """
     Return a copy of ``span`` without content attributes, non-exception events,
     exception messages and stack traces, or the status description.
@@ -268,3 +284,44 @@ def _redact_span(span: ReadableSpan) -> ReadableSpan:
         end_time=span.end_time,
         instrumentation_scope=span.instrumentation_scope,
     )
+
+
+def _without_mcp_credentials_span(span: ReadableSpan) -> ReadableSpan:
+    """Return ``span`` with remote MCP credentials masked in its tool definitions."""
+    attributes = dict(span.attributes or {})
+    redacted: Dict[str, Any] = {}
+    for key, value in attributes.items():
+        if not _is_tool_definition_attribute(key):
+            redacted[key] = value
+            continue
+        definitions = _redact_tool_definitions(value, drop_unparseable=False)
+        if definitions is not None:
+            redacted[key] = definitions
+    if redacted.keys() == attributes.keys() and all(
+        redacted[key] is attributes[key] for key in attributes
+    ):
+        return span
+    return ReadableSpan(
+        name=span.name,
+        context=span.get_span_context(),
+        parent=span.parent,
+        resource=span.resource,
+        attributes=BoundedAttributes(attributes=redacted),
+        events=BoundedList.from_seq(None, span.events),
+        links=BoundedList.from_seq(None, span.links),
+        kind=span.kind,
+        status=span.status,
+        start_time=span.start_time,
+        end_time=span.end_time,
+        instrumentation_scope=span.instrumentation_scope,
+    )
+
+
+def _redact_span(span: ReadableSpan, privacy_mode: bool) -> ReadableSpan:
+    """
+    Mask remote MCP credentials in tool definitions on every export, as for
+    ``$ai_tools``. Privacy mode also removes all content.
+    """
+    if privacy_mode:
+        return _without_content_span(span)
+    return _without_mcp_credentials_span(span)

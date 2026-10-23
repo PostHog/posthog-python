@@ -176,12 +176,12 @@ class PostHogSpanProcessor(SpanProcessor):
                 span = with_request_context(span, captured)
             except Exception:
                 log.debug("Failed to add PostHog context to span", exc_info=True)
-        if _otel_privacy_mode_enabled(self._privacy_mode, self._client):
-            try:
-                span = _redact_span(span)
-            except Exception:
-                log.debug("Failed to redact span, dropping it", exc_info=True)
-                return
+        privacy_mode = _otel_privacy_mode_enabled(self._privacy_mode, self._client)
+        try:
+            span = _redact_span(span, privacy_mode)
+        except Exception:
+            log.debug("Failed to redact span, dropping it", exc_info=True)
+            return
         self._processor.on_end(span)
 
     def shutdown(self) -> None:

@@ -644,6 +644,36 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         span.set_status(Status(StatusCode.ERROR, CANARY))
 
 
+def _export_one_span(
+    integration: str, options: Dict[str, Any], emit: Callable[[Any], None]
+) -> Any:
+    from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+
+    from posthog.ai.otel import PostHogSpanProcessor, PostHogTraceExporter
+
+    exported: List[ReadableSpan] = []
+    provider = TracerProvider()
+    with (
+        patch("posthog.ai.otel.processor.OTLPSpanExporter"),
+        patch("posthog.ai.otel.processor.BatchSpanProcessor") as batch,
+        patch("posthog.ai.otel.exporter.OTLPSpanExporter") as otlp,
+    ):
+        batch.return_value.on_end.side_effect = exported.append
+        otlp.return_value.export.side_effect = exported.extend
+        if integration == "processor":
+            provider.add_span_processor(
+                PostHogSpanProcessor(api_key="phc_test", **options)
+            )
+        else:
+            provider.add_span_processor(
+                SimpleSpanProcessor(PostHogTraceExporter(api_key="phc_test", **options))
+            )
+        emit(provider)
+    [span] = exported
+    return span
+
+
 @pytest.mark.parametrize(
     "provider_metadata, kept_provider_metadata",
     [
@@ -673,10 +703,6 @@ def test_otel_privacy_mode_sends_no_content(
     pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
     import posthog
     from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
-    from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-
-    from posthog.ai.otel import PostHogSpanProcessor, PostHogTraceExporter
 
     monkeypatch.setattr(posthog, "privacy_mode", privacy_source == "module")
     options: Dict[str, Any] = {
@@ -687,26 +713,12 @@ def test_otel_privacy_mode_sends_no_content(
             else None
         ),
     }
-    exported: List[ReadableSpan] = []
-    provider = TracerProvider()
-    with (
-        patch("posthog.ai.otel.processor.OTLPSpanExporter"),
-        patch("posthog.ai.otel.processor.BatchSpanProcessor") as batch,
-        patch("posthog.ai.otel.exporter.OTLPSpanExporter") as otlp,
-    ):
-        batch.return_value.on_end.side_effect = exported.append
-        otlp.return_value.export.side_effect = exported.extend
-        if integration == "processor":
-            provider.add_span_processor(
-                PostHogSpanProcessor(api_key="phc_test", **options)
-            )
-        else:
-            provider.add_span_processor(
-                SimpleSpanProcessor(PostHogTraceExporter(api_key="phc_test", **options))
-            )
-        _emit_canary_span(provider, provider_metadata)
+    span = _export_one_span(
+        integration,
+        options,
+        lambda provider: _emit_canary_span(provider, provider_metadata),
+    )
 
-    [span] = exported
     assert CANARY.encode() not in encode_spans([span]).SerializeToString()
     assert dict(span.attributes or {}) == {
         **_KEPT_OTEL_ATTRIBUTES,
@@ -720,3 +732,34 @@ def test_otel_privacy_mode_sends_no_content(
     assert set(exception_attributes) <= {"exception.type", "exception.escaped"}
     assert span.status.is_ok is False
     assert span.status.description is None
+
+
+@pytest.mark.parametrize("integration", ["processor", "exporter"])
+def test_otel_masks_mcp_credentials_without_privacy_mode(
+    integration: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
+    import posthog
+    from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+
+    monkeypatch.setattr(posthog, "privacy_mode", False)
+    attributes = {
+        **_KEPT_OTEL_ATTRIBUTES,
+        **_MCP_OTEL_TOOL_ATTRIBUTES,
+        "gen_ai.input.messages": "user prompt",
+    }
+
+    def emit(provider: Any) -> None:
+        with provider.get_tracer("test").start_as_current_span(
+            "gen_ai.chat", attributes=attributes
+        ):
+            pass
+
+    span = _export_one_span(integration, {"privacy_mode": False}, emit)
+
+    encode_spans([span])
+    assert dict(span.attributes or {}) == {
+        **attributes,
+        **_REDACTED_MCP_OTEL_TOOL_ATTRIBUTES,
+        "llm.tools.1.tool.json_schema": f"not json {CANARY}",
+    }
