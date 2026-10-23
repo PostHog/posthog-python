@@ -253,6 +253,7 @@ class AsyncModels(_GeminiModelsPolicy):
             nonlocal accumulated_content
             nonlocal stop_reason
 
+            stream_error: Optional[BaseException] = None
             try:
                 async for chunk in response:
                     # Extract usage stats from chunk
@@ -275,6 +276,9 @@ class AsyncModels(_GeminiModelsPolicy):
 
                     yield chunk
 
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
@@ -292,6 +296,7 @@ class AsyncModels(_GeminiModelsPolicy):
                     latency,
                     accumulated_content,
                     stop_reason=stop_reason,
+                    error=stream_error,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)

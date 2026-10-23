@@ -1,5 +1,43 @@
 # posthog
 
+## 7.75.6 — 2026-10-22
+
+### Patch changes
+
+- [a95331f](https://github.com/posthog/posthog-python/commit/a95331f171a33ca0674833a5aada371cc6446bc9) Retain the minimal-event gate and experiment metadata from the local definitions used by `evaluate_flags()`, including first-use loading and definition refreshes during evaluation. — Thanks @dustinbyrne!
+
+## 7.75.5 — 2026-10-22
+
+### Patch changes
+
+- [b3fcec6](https://github.com/posthog/posthog-python/commit/b3fcec639aa9c49514344ba97b24492f03e87b86) Annotate `timeout` and `feature_flags_request_timeout_seconds` as `float` on `Client`, `AsyncClient`, `Consumer` and the request helpers, so type checkers accept fractional timeouts such as `timeout=2.5`. The values were already passed straight to `requests` and `httpx`, which take floats, so runtime behaviour is unchanged. — Thanks @turnipdabeets!
+
+## 7.75.4 — 2026-10-22
+
+### Patch changes
+
+- [34ec4f8](https://github.com/posthog/posthog-python/commit/34ec4f828a45728c91e452e960aa0119a3052812) Streamed Anthropic generations no longer stack output tokens when a stream emits more than one `message_delta` (server tools can send several). Each delta's usage is cumulative, so the accumulator now keeps the latest total instead of adding every delta together. — Thanks @Harsh23Kashyap!
+
+## 7.75.3 — 2026-10-22
+
+### Patch changes
+
+- [a6ddc2e](https://github.com/posthog/posthog-python/commit/a6ddc2ed3227a1f8efa170f3eb7fce5b9aef36db) The LangChain callback handler now records `$ai_http_status` as an integer for failed generations. An error that carries a string `code` and no status code (such as OpenAI's `rate_limit_exceeded`) gave a string status; it now gives `0`, as an error without a status already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [42c8b7b](https://github.com/posthog/posthog-python/commit/42c8b7bc1ba1b1acca1b931830ded4818b26df33) A non-streamed OpenAI chat completion that the model refused is no longer captured with an empty `$ai_output_choices`: the refusal text is recorded as a `refusal` content block, as it already is for streamed responses. — Thanks @pcbeingused333 for your first contribution 🎉!
+- [dc2a2b4](https://github.com/posthog/posthog-python/commit/dc2a2b4e33659e7909786fa48c625d37dc4da94d) Streamed OpenAI, Anthropic and Gemini generations that raise mid-stream are now captured with `$ai_is_error` and `$ai_error` (and the error's status code as `$ai_http_status`) instead of being recorded as a successful 200. The error is still re-raised to the caller, matching what non-streaming calls already did. — Thanks @pcbeingused333 for your first contribution 🎉!
+
+## 7.75.2 — 2026-10-22
+
+### Patch changes
+
+- [4697e6f](https://github.com/posthog/posthog-python/commit/4697e6fcc837d1de3508a8b53273f609b6d63415) Capture Chat Completions responses that contain custom tool calls instead of raising `AttributeError` from the wrapped `create()` call. — Thanks @mosafariuk!
+
+## 7.75.1 — 2026-10-22
+
+### Patch changes
+
+- [e9056e3](https://github.com/posthog/posthog-python/commit/e9056e3051911b72aa1c8f9d39eb08fa4b0b65c4) Fix local feature flag string and regex operators to match an explicit null property as "null", like the flags service. This can change flag values or selected variants for explicitly null person or group properties. Missing properties still allow remote evaluation fallback. — Thanks @marandaneto!
+
 ## 7.75.0 — 2026-10-21
 
 ### Minor changes
