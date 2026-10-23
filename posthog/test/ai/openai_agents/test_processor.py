@@ -288,6 +288,163 @@ class TestPostHogTracingProcessor:
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$ai_reasoning_tokens"] == 400
 
+    def test_generation_span_reads_nested_cache_and_reasoning_tokens(
+        self, processor, mock_client, mock_span
+    ):
+        """The Agents SDK nests cached and reasoning tokens under the usage
+        details fields of generation span usage."""
+        from agents.usage import Usage, model_usage_to_span_usage
+        from openai.types.responses.response_usage import (
+            InputTokensDetails,
+            OutputTokensDetails,
+        )
+
+        usage = Usage(
+            requests=1,
+            input_tokens=100,
+            output_tokens=50,
+            total_tokens=150,
+            input_tokens_details=InputTokensDetails(
+                cached_tokens=60, cache_write_tokens=0
+            ),
+            output_tokens_details=OutputTokensDetails(reasoning_tokens=40),
+        )
+        mock_span.span_data = GenerationSpanData(
+            model="gpt-5-mini", usage=model_usage_to_span_usage(usage)
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_output_tokens"] == 50
+        assert props["$ai_reasoning_tokens"] == 40
+        assert props["$ai_cache_reporting_exclusive"] is False
+
+    def test_response_span_reads_cache_and_reasoning_tokens(
+        self, processor, mock_client, mock_span
+    ):
+        """Response spans carry the OpenAI Responses usage object, with cached
+        and reasoning tokens in its details fields."""
+        from openai.types.responses import Response
+
+        response = Response.model_validate(
+            {
+                "id": "resp_123",
+                "object": "response",
+                "created_at": 0,
+                "model": "gpt-5-mini",
+                "status": "completed",
+                "parallel_tool_calls": True,
+                "tool_choice": "auto",
+                "tools": [],
+                "output": [],
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "total_tokens": 150,
+                    "input_tokens_details": {
+                        "cached_tokens": 60,
+                        "cache_write_tokens": 0,
+                    },
+                    "output_tokens_details": {"reasoning_tokens": 40},
+                },
+            }
+        )
+        mock_span.span_data = ResponseSpanData(response=response, input="Hi")
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_input_tokens"] == 100
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_output_tokens"] == 50
+        assert props["$ai_reasoning_tokens"] == 40
+        assert props["$ai_cache_reporting_exclusive"] is False
+
+    def test_cached_compatible_claude_usage_is_declared_inclusive(self):
+        """A Claude model behind an OpenAI-compatible endpoint reports inclusive
+        cached tokens. Without an explicit convention, the cost backend infers
+        exclusive reporting from the model name and overcounts input cost."""
+        from agents import set_trace_processors
+        from agents.tracing import generation_span, trace
+
+        client = MagicMock(privacy_mode=False, enable_full_ai_capture=False)
+        set_trace_processors([])
+        processor = instrument(client, distinct_id="review-user")
+        try:
+            with trace("compatible-model"):
+                with generation_span(
+                    model="anthropic/claude-sonnet-4.6",
+                    usage={
+                        "input_tokens": 10339,
+                        "output_tokens": 60,
+                        "input_tokens_details": {"cached_tokens": 10318},
+                    },
+                ):
+                    pass
+            properties = next(
+                call.kwargs["properties"]
+                for call in client.capture.call_args_list
+                if call.kwargs["event"] == "$ai_generation"
+            )
+            assert properties["$ai_cache_read_input_tokens"] == 10318
+            assert properties.get("$ai_cache_reporting_exclusive") is False
+        finally:
+            set_trace_processors([])
+            processor.shutdown()
+
+    def test_flat_cache_keys_keep_their_own_convention(
+        self, processor, mock_client, mock_span
+    ):
+        """Flat cache keys come from custom models with their own convention, so
+        no inclusive/exclusive flag is declared for them."""
+        mock_span.span_data = GenerationSpanData(
+            model="custom-model",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "cache_read_input_tokens": 60,
+            },
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert "$ai_cache_reporting_exclusive" not in props
+
+    def test_caller_cache_reporting_convention_takes_precedence(
+        self, mock_client, mock_span
+    ):
+        """A processor-wide $ai_cache_reporting_exclusive overrides the default
+        declared for nested OpenAI-shaped usage."""
+        processor = PostHogTracingProcessor(
+            client=mock_client,
+            distinct_id="test-user",
+            privacy_mode=False,
+            properties={"$ai_cache_reporting_exclusive": True},
+        )
+        mock_span.span_data = GenerationSpanData(
+            model="gpt-5-mini",
+            usage={
+                "input_tokens": 100,
+                "output_tokens": 50,
+                "input_tokens_details": {"cached_tokens": 60},
+            },
+        )
+
+        processor.on_span_start(mock_span)
+        processor.on_span_end(mock_span)
+
+        props = mock_client.capture.call_args[1]["properties"]
+        assert props["$ai_cache_read_input_tokens"] == 60
+        assert props["$ai_cache_reporting_exclusive"] is True
+
     def test_function_span_mapping(self, processor, mock_client, mock_span):
         """Test FunctionSpanData maps to $ai_span event with type=tool."""
         span_data = FunctionSpanData(
