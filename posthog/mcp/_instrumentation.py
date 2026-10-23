@@ -260,6 +260,10 @@ async def record_initialize(
     stateless fleet may never see this client again. The capture itself runs after,
     in the background, as for every other event."""
 
+    request = {"method": "initialize", "params": params}
+    await handle_identify(data, session_id, request, extra)
+    # The option stops only the event. Identify still runs, so later events of
+    # the session keep an identity that only the handshake can resolve.
     if not data.options.capture_initialize:
         return
 
@@ -269,8 +273,6 @@ async def record_initialize(
     client_info = params.get("clientInfo")
     client_info = client_info if isinstance(client_info, dict) else {}
     agreed = result.get("protocolVersion") if isinstance(result, dict) else None
-    request = {"method": "initialize", "params": params}
-    await handle_identify(data, session_id, request, extra)
     data.mark_session_initialized(session_id)
     event: Dict[str, Any] = {
         "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,

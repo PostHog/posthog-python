@@ -1025,6 +1025,29 @@ async def test_capture_initialize_off_sends_no_initialize_and_keeps_sessions(kin
     assert {c["properties"]["$mcp_client_name"] for c in calls} == {"codex-mcp-client"}
 
 
+@pytest.mark.parametrize("kind", KINDS)
+async def test_capture_initialize_off_keeps_the_handshake_identity(kind):
+    # The option stops only the event. An identify that resolves the user only
+    # from the handshake still attributes the session's later tool calls.
+    def identify(request, extra):
+        if request.get("method") == "initialize":
+            return UserIdentity(distinct_id="user_from_handshake")
+        return None
+
+    client = FakeClient()
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=False, identify=identify, capture_initialize=False
+    )
+    async with fleet(client, kind=kind, options=options) as lb:
+        headers, _ = await handshake(lb)
+        await call_add(lb, headers)
+    await _flush()
+
+    assert _events(client, "$mcp_initialize") == []
+    (call,) = _events(client, "$mcp_tool_call")
+    assert call["distinct_id"] == "user_from_handshake"
+
+
 @pytest.mark.skipif(MCP_MAJOR >= 2, reason="the first-request fallback is mcp 1.x")
 @pytest.mark.parametrize("capture", [True, False])
 async def test_capture_initialize_off_also_gates_the_first_request_fallback(capture):
