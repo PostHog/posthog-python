@@ -584,7 +584,6 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         "embedding.embeddings.0.embedding.vector": (0.12, 0.34),
         "llm.prompts": CANARY,
         "llm.input_messages": CANARY,
-        "ai.ranking": CANARY,
         "ai.request.text": CANARY,
         "ai.documents": CANARY,
         "ai.response.reasoningDetails": CANARY,

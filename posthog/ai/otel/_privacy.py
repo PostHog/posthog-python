@@ -29,7 +29,6 @@ _CONTENT_ATTRIBUTES = frozenset(
         "ai.prompt.messages",
         "ai.request.text",
         "ai.documents",
-        "ai.ranking",
         "ai.response.text",
         "ai.response.object",
         "ai.response.toolCalls",
