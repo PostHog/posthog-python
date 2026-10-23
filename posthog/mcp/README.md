@@ -96,6 +96,9 @@ calls keep their sessions and client names.
 instrument(server, posthog, MCPAnalyticsOptions(capture_initialize=False))
 ```
 
+Set `capture_tools_list=False` to stop sending `$mcp_tools_list`. Nothing else changes: tools keep
+their injected arguments, and the virtual tools stay listed.
+
 `identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the
 SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
 `get_request_headers(extra)` works the same as for any other request.
