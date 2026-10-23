@@ -142,7 +142,7 @@ log = logging.getLogger("posthog")
 _SEND_PATH = "/api/projects/@current/messaging_templates/{template_id}/send/"
 _CODE_SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _UPLOAD_PATH = "/api/projects/@current/messaging_templates/by_key/{template_key}/"
-_TEMPLATE_KEY = re.compile(r"^[a-zA-Z0-9_-]{1,400}$")
+_TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _CONTENT_HASH_HEADER = b"posthog-email-template-v1\n"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -211,14 +211,15 @@ class EmailAttachment(TypedDict):
 
     Args:
         filename: The file name the recipient sees, such as ``invite.ics``.
-        content: The file as bytes, or already Base64 encoded as a string.
+        content: The file as ``bytes``, ``bytearray`` or ``memoryview``, or
+            already Base64 encoded as a string.
         content_type: The MIME type. Without it, the type follows the file name.
         content_id: Shows the file inline: reference it in ``html`` as
             ``<img src="cid:logo">`` with ``content_id`` ``logo``.
     """
 
     filename: str
-    content: Union[bytes, str]
+    content: Union[bytes, bytearray, memoryview, str]
     content_type: NotRequired[str]
     content_id: NotRequired[str]
 
@@ -345,17 +346,18 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         args["to"], args.get("distinct_id"), args.get("idempotency_key")
     )
     template_key = args["template_key"]
-    if not isinstance(template_key, str) or not _TEMPLATE_KEY.match(template_key):
+    if not isinstance(template_key, str) or not _TEMPLATE_KEY.fullmatch(template_key):
         raise ValueError(
             "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
         )
-    content = {
-        field: _nonempty_text(args, field)
-        for field in ("subject", "html", "text")
-        if field in args
-    }
+    content = {"subject": _nonempty_text(args, "subject")}
+    content.update(
+        {field: _body(args, field) for field in ("html", "text") if field in args}
+    )
     if "html" not in content and "text" not in content:
         raise TypeError("send() needs html, text or both.")
+    if not (content.get("html") or content.get("text")):
+        raise ValueError("html or text must be a nonempty string.")
 
     payload: dict[str, Any] = {"to": to}
     upload = None
@@ -422,9 +424,11 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
 def _addresses(field: str, value: Any) -> list[str]:
     addresses = [value] if isinstance(value, str) else value
     if not isinstance(addresses, Sequence) or not all(
-        isinstance(address, str) and address.strip() for address in addresses
+        isinstance(address, str) for address in addresses
     ):
-        raise ValueError(f"{field} must be one address or a list of addresses.")
+        raise TypeError(f"{field} must be one address or a list of addresses.")
+    if not all(address.strip() for address in addresses):
+        raise ValueError(f"{field} must not hold a blank address.")
     return list(addresses)
 
 
@@ -470,7 +474,7 @@ def _attachment(index: int, file: Any) -> dict[str, str]:
 
 
 def _base64_content(name: str, content: Any) -> str:
-    if isinstance(content, bytes):
+    if isinstance(content, (bytes, bytearray, memoryview)):
         return base64.b64encode(content).decode("ascii")
     if isinstance(content, str):
         return content
@@ -487,6 +491,13 @@ def _is_tag(tag: Any) -> bool:
         and isinstance(tag["name"], str)
         and isinstance(tag["value"], str)
     )
+
+
+def _body(args: Mapping[str, Any], name: str) -> str:
+    value = args[name]
+    if not isinstance(value, str):
+        raise TypeError(f"{name} must be a string.")
+    return value
 
 
 def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
@@ -771,7 +782,7 @@ class _EmailsBase:
 
 
 class Emails(_EmailsBase):
-    """Sends transactional email from PostHog email templates.
+    """Sends transactional email from PostHog email templates or from content in your code.
 
     ``host`` is your PostHog app host. PostHog Cloud ingestion hosts map to the
     app host, so ``us.i.posthog.com`` sends to ``us.posthog.com``. Any other

@@ -548,6 +548,7 @@ def send_local_template(emails: Emails, **overrides: Any):
     [
         ("html_only", {}, WELCOME_HASH),
         ("crlf_text", {"text": "\r\n\r"}, WELCOME_CRLF_TEXT_HASH),
+        ("empty_text", {"text": ""}, WELCOME_HASH),
     ]
 )
 def test_a_local_template_is_sent_by_key_and_content_hash(_name, overrides, hash):
@@ -569,8 +570,8 @@ def test_a_local_template_is_sent_by_key_and_content_hash(_name, overrides, hash
     }
 
 
-def uploaded(result: str = "created") -> Reply:
-    return (201, {"id": "tpl_1", "key": "welcome", "result": result}, {})
+def uploaded() -> Reply:
+    return (201, {"id": "tpl_1", "key": "welcome", "result": "created"}, {})
 
 
 def test_an_outdated_local_template_is_uploaded_then_sent_again_with_the_same_key():
@@ -648,12 +649,10 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         seen.append(request)
         return replies.pop(0)
 
-    emails = AsyncEmails(SECRET_KEY)
-    emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-
-    result = await emails.send(
-        to="user@example.com", **WELCOME, template_data={"first_name": "Jane"}
-    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await AsyncEmails(SECRET_KEY, http_client=client).send(
+            to="user@example.com", **WELCOME, template_data={"first_name": "Jane"}
+        )
 
     assert result.id == "msg_1"
     assert [(request.method, str(request.url)) for request in seen] == [
@@ -671,7 +670,6 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
     assert (
         second_send.headers["Idempotency-Key"] == first_send.headers["Idempotency-Key"]
     )
-    await emails.aclose()
 
 
 @parameterized.expand(
@@ -686,9 +684,16 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
             {"template_key": "reset password", "html": HTML},
             ValueError,
         ),
+        (
+            "key_with_trailing_newline",
+            {"template_key": "welcome\n", "html": HTML},
+            ValueError,
+        ),
         ("key_too_long", {"template_key": "k" * 401, "html": HTML}, ValueError),
         ("empty_html", {"html": ""}, ValueError),
+        ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
         ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
+        ("cc_not_text", {"html": HTML, "cc": 123}, TypeError),
         ("template_data_list", {"html": HTML, "template_data": [1]}, TypeError),
         (
             "cc_on_template_form",
@@ -817,9 +822,31 @@ def test_attachments_are_sent_base64_encoded_once_across_retries():
 
 @parameterized.expand(
     [
+        ("bytearray", bytearray(INVITE)),
+        ("memoryview", memoryview(INVITE)),
+    ]
+)
+def test_attachment_content_from_any_bytes_buffer_is_base64_encoded(_name, content):
+    emails, adapter = emails_with([accepted()])
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": content}]
+    )
+
+    [request] = adapter.requests
+    assert json.loads(request.body)["attachments"] == [
+        {
+            "filename": "invite.ics",
+            "content": "QkVHSU46VkNBTEVOREFSDQpFTkQ6VkNBTEVOREFSDQo=",
+        }
+    ]
+
+
+@parameterized.expand(
+    [
         ("list_of_ints", {"filename": "a.txt", "content": [104, 105]}),
-        ("no_filename", {"content": b"hi"}),
-        ("unknown_field", {"filename": "a.txt", "content": b"hi", "path": "/tmp/a"}),
+        ("no_filename", {"content": b"104"}),
+        ("unknown_field", {"filename": "a.txt", "content": b"104", "path": "/tmp/a"}),
     ]
 )
 def test_rejects_an_attachment_that_is_not_a_file(_name, attachment):

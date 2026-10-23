@@ -831,7 +831,7 @@ attribute posthog.emails.CodeEmailArgs.tags: NotRequired[Sequence[EmailTag]]
 attribute posthog.emails.CodeEmailArgs.template_data: NotRequired[Mapping[str, Any]]
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[str]
-attribute posthog.emails.EmailAttachment.content: Union[bytes, str]
+attribute posthog.emails.EmailAttachment.content: Union[bytes, bytearray, memoryview, str]
 attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
 attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
 attribute posthog.emails.EmailAttachment.filename: str
