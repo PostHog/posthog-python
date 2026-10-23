@@ -33,6 +33,7 @@ from __future__ import annotations
 import time
 from collections.abc import Mapping
 from dataclasses import replace
+from datetime import datetime, timezone
 from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
@@ -48,12 +49,15 @@ from ._instrumentation import (
     advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
+    _is_sse_request,
+    _to_jsonable,
     copy_tools_list_result,
     is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
     raw_listing_owns_tool_name,
+    record_initialize,
     record_resource_request,
     resource_listing_response,
     resolve_session_and_client,
@@ -70,9 +74,11 @@ from ._model_parameters import (
 )
 from ._output_instructions import mirror_instructions_into_structured_content
 from ._tool_input import get_registered_tool_input_schema
+from .asgi import get_mcp_session
 from .logger import log
 from .request_headers import get_request_headers
-from .session_token import read_mcp_session_header
+from .session import handshake_session_id
+from .session_token import SessionTokenPayload, read_mcp_session_header
 from .tools import (
     get_more_tools_result_text,
 )
@@ -111,6 +117,7 @@ def instrument_mcpserver_v2(server: Any, data: MCPAnalyticsData) -> None:
     for method, event_type in _RESOURCE_METHODS.items():
         _wrap_v2_resource_request(low_level, data, method, event_type)
     _patch_add_request_handler(low_level, data, wrap_call=False, high_level=server)
+    _observe_initialize(low_level, data)
 
 
 def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
@@ -126,6 +133,87 @@ def instrument_lowlevel_v2(server: Any, data: MCPAnalyticsData) -> None:
     for method, event_type in _RESOURCE_METHODS.items():
         _wrap_v2_resource_request(server, data, method, event_type)
     _patch_add_request_handler(server, data, wrap_call=True)
+    _observe_initialize(server, data)
+
+
+# --- initialize ------------------------------------------------------------------
+
+
+def _observe_initialize(server: Any, data: MCPAnalyticsData) -> None:
+    """Emit ``$mcp_initialize`` from the real handshake via ``Server.middleware``.
+
+    mcp 2.x refuses a request handler for ``initialize`` and points at
+    ``Server.middleware`` instead, which wraps every inbound request on every
+    transport, ``initialize`` included. The host callbacks run inline, as they do
+    for a tool call: a hung ``identify`` hangs this handshake, where the client
+    sees it, and leaves no task behind. The runner parks the connection's read
+    loop until the chain returns, but a client sends nothing else before the
+    ``initialize`` reply."""
+    middleware = getattr(server, "middleware", None)
+    if not isinstance(middleware, list):
+        log(
+            "Warning: this MCP server has no Server.middleware list; "
+            "$mcp_initialize falls back to the first request of each session."
+        )
+        return
+    if not any(getattr(entry, _WRAPPED_FLAG, False) for entry in middleware):
+
+        async def observe_initialize(ctx: Any, call_next: Any) -> Any:
+            if getattr(ctx, "method", None) != "initialize":
+                return await call_next(ctx)
+            started = datetime.now(timezone.utc)
+            result = await call_next(ctx)
+            await _record_v2_initialize(data, ctx, result, started)
+            return result
+
+        setattr(observe_initialize, _WRAPPED_FLAG, True)
+        middleware.append(observe_initialize)
+    data.handshake_observed_in_process = True
+
+
+def _initialize_session(
+    ctx: Any,
+) -> Tuple[Optional[str], Optional[SessionTokenPayload]]:
+    """The ``(mcp_session_id, token)`` every later request of this connection will
+    resolve its session from.
+
+    A stateful transport has already assigned the id it returns in the
+    ``Mcp-Session-Id`` header; ``ServerSession`` keeps it on its connection and
+    exposes no public accessor. A stateless one has none: the session comes from
+    the ``Mcp-Session-Id`` the client sent, which it keeps sending, read the way
+    :func:`_resolve_ctx` reads it for every later request, or else from the token
+    our ASGI middleware minted for this response. stdio has neither and resolves
+    to this process's own session, as its later requests do."""
+    if _is_sse_request({"ctx": ctx}):
+        # The SSE transport keys its session on a query parameter that later
+        # requests do not resolve from: they land in this process's own session.
+        return None, None
+    connection = getattr(getattr(ctx, "session", None), "_connection", None)
+    transport_session_id = getattr(connection, "session_id", None)
+    if isinstance(transport_session_id, str) and transport_session_id:
+        return transport_session_id, None
+    token, _, _, _, incoming = _resolve_ctx(ctx)
+    if incoming:
+        return incoming, token
+    request = getattr(ctx, "request", None)
+    return None, get_mcp_session(request) if request is not None else None
+
+
+async def _record_v2_initialize(
+    data: MCPAnalyticsData, ctx: Any, result: Any, started: datetime
+) -> None:
+    try:
+        mcp_session_id, token = _initialize_session(ctx)
+        await record_initialize(
+            data,
+            session_id=await handshake_session_id(data, mcp_session_id, token),
+            params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
+            result=_to_jsonable(result),
+            extra={"session_id": mcp_session_id, "ctx": ctx},
+            timestamp=started,
+        )
+    except Exception as error:  # noqa: BLE001 - analytics must never break the handshake
+        log(f"Error: failed to capture $mcp_initialize - {error}")
 
 
 # --- registry plumbing ---------------------------------------------------------

@@ -481,7 +481,7 @@ async def test_late_registration_is_wrapped():
     assert reads[0]["properties"]["$mcp_resource_name"] == "file:///late.txt"
 
 
-async def test_initialize_and_session_reuse_across_calls():
+async def test_session_reuse_across_calls_without_a_handshake():
     server = make_server()
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
@@ -490,7 +490,9 @@ async def test_initialize_and_session_reuse_across_calls():
     await _call_tool(server, "add", {"a": 2, "b": 2, "context": "second"})
     await _flush()
 
-    assert len(_events(client, "$mcp_initialize")) == 1
+    # No initialize was sent, so none is reported: Server.middleware sees every
+    # real handshake (test_initialize_handshake.py).
+    assert _events(client, "$mcp_initialize") == []
     calls = _events(client, "$mcp_tool_call")
     session_ids = {c["properties"]["$session_id"] for c in calls}
     assert len(session_ids) == 1

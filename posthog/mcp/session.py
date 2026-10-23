@@ -60,6 +60,25 @@ async def resolve_session_id(
     return session_id
 
 
+async def handshake_session_id(
+    data: MCPAnalyticsData,
+    mcp_session_id: Optional[str],
+    token: Optional[SessionTokenPayload],
+) -> str:
+    """The session an ``initialize`` belongs to: the one the client's later requests
+    resolve to through :func:`resolve_session_id_with_source`.
+
+    A token or a transport session id gives it directly, so this leaves the server's
+    shared session alone. One server serves many clients, and a handshake must not
+    move the session that ``McpAnalytics.capture()`` reads. Without either, the
+    session is this process's own, which only the resolver can hand out."""
+    if token is not None:
+        return token.session_id
+    if mcp_session_id:
+        return derive_session_id_from_mcp_session(mcp_session_id)
+    return await resolve_session_id(data, None)
+
+
 async def resolve_session_id_with_source(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
