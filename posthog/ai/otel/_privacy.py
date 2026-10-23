@@ -115,7 +115,7 @@ _CONTENT_ATTRIBUTE_PREFIXES = (
 _CONTENT_ATTRIBUTE_PATTERN = re.compile(
     "|".join(
         (
-            r"embedding\.embeddings\.\d+\.embedding\.text",
+            r"embedding\.embeddings\.\d+\.embedding\.(text|vector)",
             r"retrieval\.documents\.\d+\.document\.(content|metadata)",
             r"reranker\.(input|output)_documents\.\d+\.document\.content",
             r"(input|output)\.images\.\d+\.image\.url",

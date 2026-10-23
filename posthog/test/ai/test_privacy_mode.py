@@ -581,6 +581,7 @@ def _emit_canary_span(provider: Any, provider_metadata: str) -> None:
         "llm.prompt_template.template": CANARY,
         "llm.prompt_template.variables": CANARY,
         "embedding.embeddings.0.embedding.text": CANARY,
+        "embedding.embeddings.0.embedding.vector": (0.12, 0.34),
         "llm.prompts": CANARY,
         "llm.input_messages": CANARY,
         "ai.ranking": CANARY,
