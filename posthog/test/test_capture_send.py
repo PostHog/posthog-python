@@ -180,6 +180,27 @@ class TestPostV1(unittest.TestCase):
         self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python/9.9.9")
         self.assertEqual(headers["User-Agent"], "posthog-python/9.9.9")
 
+    def test_non_finite_floats_are_sent_as_null(self) -> None:
+        session = _RecordingSession(_results_response({}))
+        event = _msg(
+            "u-1", properties={"score": float("inf"), "nested": [float("nan"), 1.5]}
+        )
+        _post_v1(
+            "phc_key",
+            "https://app.posthog.com/",
+            _build_v1_batch_body([_to_v1_event(event)]),
+            attempt=1,
+            request_id="req-123",
+            session=session,
+        )
+        body = json.loads(
+            session.calls[0]["data"],
+            parse_constant=lambda token: (_ for _ in ()).throw(ValueError(token)),
+        )
+        properties = body["batch"][0]["properties"]
+        self.assertIsNone(properties["score"])
+        self.assertEqual(properties["nested"], [None, 1.5])
+
     def test_no_api_key_in_body(self) -> None:
         # v1 authenticates via the Bearer header; the key must not leak into the body.
         data = self._post(_results_response({}))["data"]
