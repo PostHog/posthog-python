@@ -891,3 +891,52 @@ async def test_a_hung_identify_leaves_no_task_behind(kind):
         e["properties"]["$mcp_client_name"] for e in _events(client, "$mcp_initialize")
     ]
     assert "after-recovery" in names
+
+
+@pytest.mark.skipif(MCP_MAJOR >= 2, reason="the mcp 1.x auth context middleware")
+async def test_identify_sees_the_auth_context_of_the_handshake():
+    # FastMCP's AuthContextMiddleware sets the authenticated user for the length of
+    # the request and resets it on the way out. Our middleware sits outside it, so
+    # the handshake must be recorded while the app still handles the request.
+    from mcp.server.auth.middleware.auth_context import (
+        auth_context_var,
+        get_access_token,
+    )
+    from mcp.server.auth.middleware.bearer_auth import AuthenticatedUser
+    from mcp.server.auth.provider import AccessToken
+
+    from posthog.mcp import PostHogMcpStatelessSessionMiddleware
+
+    def with_user(app):
+        user = AuthenticatedUser(
+            AccessToken(token="t", client_id="alice", scopes=[], expires_at=None)
+        )
+
+        async def authenticated(scope, receive, send):
+            reset = auth_context_var.set(user)
+            try:
+                await app(scope, receive, send)
+            finally:
+                auth_context_var.reset(reset)
+
+        return authenticated
+
+    def identify(request, extra):
+        token = get_access_token()
+        return UserIdentity(distinct_id=token.client_id) if token else None
+
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=False, identify=identify)
+    _, lifespan, server = make_pod(client, options=options)
+    app = PostHogMcpStatelessSessionMiddleware(
+        with_user(server.session_manager.handle_request), server=server
+    )
+    async with lifespan:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1:8000"
+        ) as http:
+            await handshake(RoundRobin([http]), send_initialized=False)
+    await _flush()
+
+    (init,) = _events(client, "$mcp_initialize")
+    assert init["distinct_id"] == "alice"

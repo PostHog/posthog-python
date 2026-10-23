@@ -171,22 +171,24 @@ class PostHogMcpStatelessSessionMiddleware:
             await self.app(scope, receive, send)
             return
 
-        recorder = None
+        started = datetime.now(timezone.utc)
         if observer is not None:
-            recorder = _InitializeResponse(send)
-            send = recorder
+            send = _InitializeResponse(
+                send,
+                functools.partial(
+                    _record_initialize,
+                    observer,
+                    initialize,
+                    incoming_header,
+                    scope,
+                    started,
+                ),
+            )
         if token is not None:
             scope[_SCOPE_KEY] = decode_session_id(token)
             send = _sending_session_header(send, token)
 
-        started = datetime.now(timezone.utc)
         await self.app(scope, receive, send)
-        if observer is not None and recorder is not None:
-            # Inline, as on a tool call: the response is already out, and a hung
-            # identify holds this request rather than a task nobody tracks.
-            await _record_initialize(
-                observer, initialize, recorder, incoming_header, scope, started
-            )
 
 
 def _is_sse(scope: Any) -> bool:
@@ -317,20 +319,23 @@ def _initialize_params(
 
 
 class _InitializeResponse:
-    """A ``send`` that passes the ``initialize`` response through and keeps its
-    status and the ``Mcp-Session-Id`` the client will send back (whichever of the
-    transport or the mint set it). The body is not read."""
+    """A ``send`` that records the handshake when the ``initialize`` response
+    starts, then passes the response on. The app calls it from inside its own
+    request context, so an auth middleware's user is still set for ``identify``.
+    The start carries the status and the ``Mcp-Session-Id`` the client will send
+    back (whichever of the transport or the mint set it). The body is not read."""
 
-    def __init__(self, send: Any) -> None:
+    def __init__(self, send: Any, record: Any) -> None:
         self._send = send
-        self.status: Optional[int] = None
-        self.session_header: Optional[str] = None
+        self._record = record
 
     async def __call__(self, message: Dict[str, Any]) -> None:
-        if message.get("type") == "http.response.start":
-            self.status = message.get("status")
+        if message.get("type") == "http.response.start" and self._record is not None:
+            record, self._record = self._record, None
             headers = _decode_headers(message.get("headers") or [])
-            self.session_header = headers.get(MCP_SESSION_HEADER.lower()) or None
+            await record(
+                message.get("status"), headers.get(MCP_SESSION_HEADER.lower()) or None
+            )
         await self._send(message)
 
 
@@ -348,10 +353,11 @@ class _InitializeContext:
 async def _record_initialize(
     data: MCPAnalyticsData,
     message: Dict[str, Any],
-    response: _InitializeResponse,
     incoming_header: Optional[str],
     scope: Any,
     started: datetime,
+    status: Optional[int],
+    session_header: Optional[str],
 ) -> None:
     """Emit ``$mcp_initialize`` for a handshake the app answered, in the session the
     client's later requests resolve to: the ``Mcp-Session-Id`` they send back (a
@@ -359,11 +365,11 @@ async def _record_initialize(
     this process's own session when there is none. The body is not read, so the
     event carries the protocol version the client asked for."""
     try:
-        if response.status is None or not 200 <= response.status < 300:
+        if status is None or not 200 <= status < 300:
             return
         from starlette.requests import Request
 
-        header = response.session_header or incoming_header
+        header = session_header or incoming_header
         await record_initialize(
             data,
             session_id=await handshake_session_id(
