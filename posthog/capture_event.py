@@ -148,19 +148,23 @@ def _build_event_defaults(
     disable_geoip: bool = False,
     call_disable_geoip: Optional[bool] = None,
     system_properties: Optional[Mapping[str, Any]] = None,
+    flag_properties: Optional[Mapping[str, Any]] = None,
 ) -> _EventDefaults:
     """Order the layers: per-call arguments, context, global, then SDK values.
 
     ``disable_geoip`` is the client setting, an SDK value. ``call_disable_geoip``
     is the argument of one call: it is a value of that event, so only the
-    event's own ``$geoip_disable`` property beats it.
+    event's own ``$geoip_disable`` property beats it. ``flag_properties`` (the
+    ``$feature/*`` and ``$active_feature_flags`` values from ``flags`` or
+    ``send_feature_flags``) are SDK values, so context and super properties
+    beat them.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
     )
     # A value in the event, the context or super properties wins over every
     # value the SDK adds, including `$is_server` and `$geoip_disable`.
-    sdk_properties = dict(system_properties or {})
+    sdk_properties = {**(flag_properties or {}), **(system_properties or {})}
     if release_id is not None:
         sdk_properties["$release_id"] = release_id
     if is_server:

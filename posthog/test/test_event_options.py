@@ -427,6 +427,54 @@ async def test_async_caller_values_beat_sdk_values(source):
     _assert_caller_values(events, CALLER_SDK_VALUES)
 
 
+class _FlagSnapshot:
+    def _get_event_properties(self):
+        return {"$feature/beta": "snapshot", "$active_feature_flags": ["beta"]}
+
+
+def _capture_with_flags_and_caller_value(source):
+    def call(client):
+        with new_context(fresh=True):
+            if source == "context":
+                tag("$feature/beta", "caller")
+            properties = {"$feature/beta": "caller"} if source == "event" else None
+            return client.capture(
+                "e", distinct_id="u", properties=properties, flags=_FlagSnapshot()
+            )
+
+    return call
+
+
+def _flag_layer_config(source):
+    return (
+        {"super_properties": {"$feature/beta": "caller"}} if source == "super" else {}
+    )
+
+
+def _assert_flag_layers(events, source):
+    properties = events[0]["properties"]
+    expected = "snapshot" if source is None else "caller"
+    assert properties["$feature/beta"] == expected
+    assert properties["$active_feature_flags"] == ["beta"]
+
+
+@pytest.mark.parametrize("source", ["event", "context", "super", None])
+def test_sync_caller_layers_beat_flag_properties(source):
+    events = _sync_wire_events(
+        _capture_with_flags_and_caller_value(source), **_flag_layer_config(source)
+    )
+    _assert_flag_layers(events, source)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("source", ["event", "context", "super", None])
+async def test_async_caller_layers_beat_flag_properties(source):
+    events = await _async_wire_events(
+        _capture_with_flags_and_caller_value(source), **_flag_layer_config(source)
+    )
+    _assert_flag_layers(events, source)
+
+
 GEOIP_CALL_CASES = [
     pytest.param(True, "context", False, True, id="call_beats_context"),
     pytest.param(True, "super", False, True, id="call_beats_super"),
