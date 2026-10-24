@@ -14,7 +14,7 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import AsyncEmails, EmailError, Emails
+from posthog.emails import AsyncEmails, EmailError, Emails, EmailValidationError
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
@@ -114,16 +114,43 @@ def test_send_posts_the_template_to_the_app_host(_name, overrides, extra_body):
     )
 
     assert result.id == "msg_1"
-    assert result.replayed is False
     [request] = adapter.requests
     assert (request.method, request.url) == ("POST", SEND_URL)
     assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
     assert request.headers["Idempotency-Key"] == "welcome:user_123"
     assert request.headers["User-Agent"] == f"posthog-python/{VERSION}"
+    assert "X-PostHog-Migrated-From" not in request.headers
     assert json.loads(request.body) == {
         "to": "user@example.com",
         "message_data": {"total": 19.5, "expires_at": "2026-11-20T00:00:00+00:00"},
         **extra_body,
+    }
+
+
+def test_a_template_send_that_sets_capture_engagement_uses_the_email_send_route():
+    emails, adapter = emails_with([accepted("msg_1")])
+
+    result = send(
+        emails,
+        template_data={"name": "Ada"},
+        distinct_id="user_123",
+        idempotency_key="welcome:user_123",
+        capture_engagement=False,
+    )
+
+    assert result.id == "msg_1"
+    [request] = adapter.requests
+    assert (request.method, request.url) == (
+        "POST",
+        "https://us.posthog.com/api/projects/@current/messaging/send/email/",
+    )
+    assert request.headers["Idempotency-Key"] == "welcome:user_123"
+    assert json.loads(request.body) == {
+        "to": "user@example.com",
+        "template": {"id": TEMPLATE_ID},
+        "message_data": {"name": "Ada"},
+        "identifiers": {"distinct_id": "user_123"},
+        "capture_engagement": False,
     }
 
 
@@ -158,7 +185,7 @@ def test_a_client_with_a_custom_host_never_sends_it_the_secret_key():
         with pytest.raises(EmailError) as raised:
             send(client.emails)
 
-    assert raised.value.code == "app_host_required"
+    assert raised.value.code == "missing_app_host"
     request.assert_not_called()
 
 
@@ -171,6 +198,7 @@ def test_client_email_options_set_the_host_timeout_and_retries():
         app_host="https://posthog.example.com/",
         email_request_timeout_seconds=3,
         email_request_max_retries=0,
+        migrated_from="resend",
     )
     unavailable = response(503, {"code": "delivery_unavailable"})
 
@@ -183,6 +211,10 @@ def test_client_email_options_set_the_host_timeout_and_retries():
     request.assert_called_once()
     assert request.call_args.args[1].startswith("https://posthog.example.com/api/")
     assert request.call_args.kwargs["timeout"] == 3
+    sent = request.call_args.kwargs["auth"](
+        requests.Request("POST", "https://x").prepare()
+    )
+    assert sent.headers["X-PostHog-Migrated-From"] == "resend"
 
 
 @parameterized.expand(
@@ -254,20 +286,16 @@ def test_network_failure_after_retries_is_service_unavailable():
     )
 
 
-def test_waits_for_retry_after_and_gives_up_on_a_longer_one(no_sleep):
+@pytest.mark.parametrize(("retry_after", "waited"), [("5", 5.0), ("120", 30.0)])
+def test_waits_for_retry_after_up_to_30_seconds(retry_after, waited, no_sleep):
     emails, adapter = emails_with(
-        [rejected(429, "throttled", **{"Retry-After": "5"}), accepted()]
+        [rejected(429, "throttled", **{"Retry-After": retry_after}), accepted()]
     )
-    send(emails)
-    no_sleep.assert_called_once_with(5.0)
 
-    emails, adapter = emails_with(
-        [rejected(429, "throttled", **{"Retry-After": "120"})]
-    )
-    with pytest.raises(EmailError) as raised:
-        send(emails)
-    assert raised.value.retry_after == 120.0
-    assert len(adapter.requests) == 1
+    assert send(emails).id == "msg_1"
+
+    no_sleep.assert_called_once_with(waited)
+    assert len(adapter.requests) == 2
 
 
 def test_max_retries_zero_leaves_retries_to_the_caller():
@@ -281,6 +309,29 @@ def test_max_retries_zero_leaves_retries_to_the_caller():
     assert len(adapter.requests) == 1
 
 
+@parameterized.expand(
+    [
+        ("turns_retries_off", 2, 0, 1),
+        ("turns_retries_on", 0, 1, 2),
+    ]
+)
+def test_a_send_overrides_the_clients_max_retries(
+    _name, client_max_retries, send_max_retries, requests_made
+):
+    emails, adapter = emails_with(
+        [rejected(503, "delivery_unavailable"), accepted()],
+        max_retries=client_max_retries,
+    )
+
+    try:
+        send(emails, max_retries=send_max_retries)
+    except EmailError:
+        pass
+
+    assert len(adapter.requests) == requests_made
+    assert "max_retries" not in json.loads(adapter.requests[0].body)
+
+
 def test_an_acceptance_without_a_message_id_is_not_retried():
     emails, adapter = emails_with([(202, {}, {}), accepted()])
 
@@ -291,18 +342,17 @@ def test_an_acceptance_without_a_message_id_is_not_retried():
     assert len(adapter.requests) == 1
 
 
-def test_replays_and_warnings_reach_the_caller(caplog):
+def test_warnings_reach_the_caller(caplog):
     warning = {
         "code": "template_superseded",
         "detail": "Newer content.",
         "fix": "Upload.",
     }
-    emails, _ = emails_with([accepted("msg_1", replayed=True, warnings=[warning])])
+    emails, _ = emails_with([accepted("msg_1", warnings=[warning])])
 
     with caplog.at_level(logging.WARNING, logger="posthog"):
         result = send(emails)
 
-    assert result.replayed is True
     assert [(w.code, w.fix) for w in result.warnings] == [
         ("template_superseded", "Upload.")
     ]
@@ -323,15 +373,19 @@ def test_missing_secret_key_fails_before_sending():
     request.assert_not_called()
 
 
-def test_a_disabled_client_sends_nothing():
+def test_a_disabled_client_refuses_the_send():
     client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
     emails = client.emails
 
     client.disabled = True
     with mock.patch.object(requests.Session, "request") as request:
-        result = send(emails)
+        with pytest.raises(EmailError) as raised:
+            send(emails)
 
-    assert result.id is None
+    assert (raised.value.code, raised.value.name) == (
+        "client_disabled",
+        "application_error",
+    )
     request.assert_not_called()
 
 
@@ -352,21 +406,68 @@ def test_a_shut_down_client_sends_no_email():
 
 @parameterized.expand(
     [
-        ("several_recipients", {"to": ["a@example.com", "b@example.com"]}, TypeError),
-        ("empty_recipient", {"to": " "}, ValueError),
-        ("template_name", {"template_id": "welcome"}, ValueError),
-        ("template_data_list", {"template_data": [1, 2]}, TypeError),
-        ("key_with_space", {"idempotency_key": "welcome user"}, ValueError),
-        ("key_too_long", {"idempotency_key": "k" * 256}, ValueError),
+        ("several_recipients", {"to": ["a@example.com"]}, "invalid_form", "to"),
+        ("empty_recipient", {"to": " "}, "invalid_form", "to"),
+        (
+            "template_name",
+            {"template_id": "welcome"},
+            "invalid_template_id",
+            "template_id",
+        ),
+        ("negative_max_retries", {"max_retries": -1}, "invalid_form", "max_retries"),
+        (
+            "capture_engagement_not_bool",
+            {"capture_engagement": "no"},
+            "invalid_form",
+            "capture_engagement",
+        ),
+        ("max_retries_not_int", {"max_retries": True}, "invalid_form", "max_retries"),
+        (
+            "template_data_list",
+            {"template_data": [1, 2]},
+            "invalid_form",
+            "template_data",
+        ),
+        (
+            "key_with_space",
+            {"idempotency_key": "a b"},
+            "invalid_idempotency_key",
+            "idempotency_key",
+        ),
+        (
+            "key_with_trailing_newline",
+            {"idempotency_key": "a\n"},
+            "invalid_idempotency_key",
+            "idempotency_key",
+        ),
+        (
+            "key_too_long",
+            {"idempotency_key": "k" * 256},
+            "invalid_idempotency_key",
+            "idempotency_key",
+        ),
     ]
 )
-def test_rejects_invalid_arguments_before_sending(_name, overrides, error):
+def test_rejects_invalid_arguments_before_sending(_name, overrides, code, field):
     emails, adapter = emails_with([])
 
-    with pytest.raises(error):
+    with pytest.raises(EmailValidationError) as raised:
         send(emails, **overrides)
 
+    assert_validation_error(raised.value, code, field)
     assert adapter.requests == []
+
+
+def assert_validation_error(
+    error: EmailValidationError, code: str, field: Optional[str]
+) -> None:
+    assert isinstance(error, ValueError)
+    assert (error.name, error.code, error.field, error.status_code) == (
+        "validation_error",
+        code,
+        field,
+        None,
+    )
 
 
 @pytest.mark.asyncio
@@ -400,7 +501,7 @@ async def test_async_send_retries_with_the_same_key():
 
 
 @pytest.mark.asyncio
-async def test_async_disabled_client_sends_nothing():
+async def test_async_disabled_client_refuses_the_send():
     handler = mock.Mock(side_effect=AssertionError("a disabled client sent a request"))
     emails = AsyncEmails(
         SECRET_KEY,
@@ -408,9 +509,10 @@ async def test_async_disabled_client_sends_nothing():
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
-    result = await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
+    with pytest.raises(EmailError) as raised:
+        await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
 
-    assert result.id is None
+    assert raised.value.code == "client_disabled"
     handler.assert_not_called()
 
 
@@ -600,6 +702,23 @@ def test_an_outdated_local_template_is_uploaded_then_sent_again_with_the_same_ke
     )
 
 
+def test_every_request_of_a_send_says_where_the_caller_migrated_from():
+    emails, adapter = emails_with(
+        [rejected(409, "template_outdated"), uploaded(), accepted()],
+        migrated_from="resend",
+    )
+
+    send_local_template(emails)
+
+    assert [
+        request.headers["X-PostHog-Migrated-From"] for request in adapter.requests
+    ] == [
+        "resend",
+        "resend",
+        "resend",
+    ]
+
+
 @parameterized.expand(
     [
         ("refused_upload", rejected(409, "template_edited_in_posthog"), 2),
@@ -650,9 +769,9 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         return replies.pop(0)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        result = await AsyncEmails(SECRET_KEY, http_client=client).send(
-            to="user@example.com", **WELCOME, template_data={"first_name": "Jane"}
-        )
+        result = await AsyncEmails(
+            SECRET_KEY, http_client=client, migrated_from="resend"
+        ).send(to="user@example.com", **WELCOME, template_data={"first_name": "Jane"})
 
     assert result.id == "msg_1"
     assert [(request.method, str(request.url)) for request in seen] == [
@@ -661,6 +780,9 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
         ("POST", CODE_SEND_URL),
     ]
     first_send, upload, second_send = seen
+    assert {request.headers["X-PostHog-Migrated-From"] for request in seen} == {
+        "resend"
+    }
     assert json.loads(first_send.content)["template"] == {
         "key": "welcome",
         "hash": WELCOME_HASH,
@@ -674,29 +796,51 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
 
 @parameterized.expand(
     [
-        ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
-        ("no_form", {"template_key": None}, TypeError),
-        ("no_content", {}, TypeError),
-        ("no_subject", {"subject": None, "html": HTML}, TypeError),
-        ("subject_not_text", {"subject": 1, "html": HTML}, TypeError),
-        ("from_not_text", {"html": HTML, "from_": 1}, TypeError),
-        ("from_keyword", {"html": HTML, "from": "a@example.com"}, TypeError),
+        (
+            "both_forms",
+            {"template_id": TEMPLATE_ID, "html": HTML},
+            "invalid_form",
+            None,
+        ),
+        ("no_form", {"template_key": None}, "invalid_form", None),
+        ("no_content", {}, "invalid_form", "html"),
+        ("no_subject", {"subject": None, "html": HTML}, "invalid_form", "subject"),
+        ("subject_not_text", {"subject": 1, "html": HTML}, "invalid_form", "subject"),
+        ("from_not_text", {"html": HTML, "from_": 1}, "invalid_form", "from_"),
+        (
+            "from_keyword",
+            {"html": HTML, "from": "a@example.com"},
+            "invalid_form",
+            "from",
+        ),
         (
             "key_with_space",
-            {"template_key": "reset password", "html": HTML},
-            ValueError,
+            {"template_key": "a b", "html": HTML},
+            "invalid_template_key",
+            "template_key",
         ),
         (
             "key_with_trailing_newline",
-            {"template_key": "welcome\n", "html": HTML},
-            ValueError,
+            {"template_key": "a\n", "html": HTML},
+            "invalid_template_key",
+            "template_key",
         ),
-        ("key_too_long", {"template_key": "k" * 401, "html": HTML}, ValueError),
-        ("empty_html", {"html": ""}, ValueError),
-        ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
-        ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
-        ("cc_not_text", {"html": HTML, "cc": 123}, TypeError),
-        ("template_data_list", {"html": HTML, "template_data": [1]}, TypeError),
+        (
+            "key_too_long",
+            {"template_key": "k" * 401, "html": HTML},
+            "invalid_template_key",
+            "template_key",
+        ),
+        ("empty_html", {"html": ""}, "invalid_form", "html"),
+        ("empty_html_and_text", {"html": "", "text": ""}, "invalid_form", "html"),
+        ("blank_cc", {"html": HTML, "cc": " "}, "invalid_form", "cc"),
+        ("cc_not_text", {"html": HTML, "cc": 123}, "invalid_form", "cc"),
+        (
+            "template_data_list",
+            {"html": HTML, "template_data": [1]},
+            "invalid_form",
+            "template_data",
+        ),
         (
             "cc_on_template_form",
             {
@@ -705,11 +849,12 @@ async def test_async_uploads_an_outdated_local_template_then_sends_again():
                 "subject": None,
                 "cc": "a@example.com",
             },
-            TypeError,
+            "invalid_form",
+            "cc",
         ),
     ]
 )
-def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
+def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, code, field):
     emails, adapter = emails_with([])
     args = {
         "to": "user@example.com",
@@ -718,11 +863,12 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
         **overrides,
     }
 
-    with pytest.raises(error):
+    with pytest.raises(EmailValidationError) as raised:
         emails.send(
             **{name: value for name, value in args.items() if value is not None}
         )
 
+    assert_validation_error(raised.value, code, field)
     assert adapter.requests == []
 
 
@@ -858,8 +1004,9 @@ def test_attachment_content_from_any_bytes_buffer_is_base64_encoded(_name, conte
 def test_rejects_an_attachment_that_is_not_a_file(_name, attachment):
     emails, adapter = emails_with([])
 
-    with pytest.raises(TypeError) as raised:
+    with pytest.raises(EmailValidationError) as raised:
         send_code(emails, html=HTML, attachments=[attachment])
 
+    assert_validation_error(raised.value, "invalid_form", "attachments")
     assert "104" not in str(raised.value)
     assert adapter.requests == []

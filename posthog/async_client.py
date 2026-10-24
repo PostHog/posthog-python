@@ -133,6 +133,7 @@ class AsyncClient:
         app_host: Optional[str] = None,
         email_request_timeout_seconds: float = 15,
         email_request_max_retries: int = 2,
+        migrated_from: Optional[str] = None,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -177,10 +178,13 @@ class AsyncClient:
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
-        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        _validate_options(
+            email_request_timeout_seconds, email_request_max_retries, migrated_from
+        )
         self.app_host = app_host
         self.email_request_timeout_seconds = email_request_timeout_seconds
         self.email_request_max_retries = email_request_max_retries
+        self.migrated_from = migrated_from
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
         )
@@ -266,7 +270,8 @@ class AsyncClient:
         scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
         Cloud app host of ``host``. ``email_request_timeout_seconds`` and
         ``email_request_max_retries`` configure each send. A disabled or shut-down
-        client sends nothing. See ``posthog.emails`` for setup.
+        client sends nothing and raises ``client_disabled`` or ``client_closed``.
+        See ``posthog.emails`` for setup.
 
         Examples:
             ```python
@@ -287,6 +292,7 @@ class AsyncClient:
                 app_host=self.app_host,
                 timeout=self.email_request_timeout_seconds,
                 max_retries=self.email_request_max_retries,
+                migrated_from=self.migrated_from,
             )
         return self._emails
 

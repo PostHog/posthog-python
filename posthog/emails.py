@@ -57,23 +57,33 @@ template's workflow in PostHog shows its sends, deliveries and failures.
 
 Timeouts and retries: each request times out after 15 seconds. A send retries
 network errors, rate limits and an unavailable service twice, waiting about 1
-and then 2 seconds, or the server's ``Retry-After`` if that is longer. A
-``Retry-After`` over 30 seconds raises at once. Every attempt sends the same
-idempotency key, so a retry never sends twice. Set
-``email_request_max_retries=0`` on the client, or ``max_retries=0`` on
+and then 2 seconds, or the server's ``Retry-After`` if that is longer, at most
+30 seconds. Every attempt sends the same idempotency key, so a retry never
+sends twice. Pass ``max_retries=0`` to ``send()``, or set
+``email_request_max_retries=0`` on the client or ``max_retries=0`` on
 :class:`Emails`, when a job runner already retries the send, and pass an
 ``idempotency_key`` that names the email, such as ``welcome:user_123``.
+
+Moving from another email provider: set ``migrated_from``, such as
+``"resend"``, on the client or on :class:`Emails`, so PostHog knows where your
+sends came from.
 
 Errors: a send that is not queued raises :class:`EmailError`. Branch on
 ``code``. The ones a setup usually hits:
 
 - ``missing_secret_key``: the client has no ``secret_key``.
-- ``app_host_required``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
+- ``missing_app_host``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
 - ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
   wrong, or it lacks ``hog_flow:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
   enabled for the project.
+- ``client_disabled``: the client is disabled.
 - ``client_closed``: the client is shut down.
+
+An argument that fails a check raises :class:`EmailValidationError` before any
+request. It is an :class:`EmailError` and a ``ValueError``, its ``code`` is
+``invalid_form``, ``invalid_template_id``, ``invalid_template_key`` or
+``invalid_idempotency_key``, and ``field`` names the argument.
 
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
@@ -81,7 +91,7 @@ standalone :class:`Emails` with ``close()`` or a ``with`` block.
 Testing without network calls: pass your own transport, ``session`` to
 :class:`Emails` or ``http_client`` to :class:`AsyncEmails`, with a fake adapter
 or ``httpx.MockTransport``. Any library that mocks ``requests`` or ``httpx``
-works too. A disabled client returns a result with ``id=None`` and sends nothing.
+works too. A disabled client sends nothing and raises ``client_disabled``.
 """
 
 from __future__ import annotations
@@ -97,7 +107,7 @@ import random
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import TracebackType
 from typing import (
     Any,
@@ -131,6 +141,7 @@ __all__ = [
     "EmailAttachment",
     "EmailError",
     "EmailTag",
+    "EmailValidationError",
     "EmailWarning",
     "Emails",
     "SendEmailResult",
@@ -145,7 +156,7 @@ _UPLOAD_PATH = "/api/projects/@current/messaging_templates/by_key/{template_key}
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _CONTENT_HASH_HEADER = b"posthog-email-template-v1\n"
 _MAX_RETRY_DELAY = 30.0
-_IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
+_IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
 
@@ -183,6 +194,24 @@ class EmailError(Exception):
         self.retry_after = retry_after
 
 
+class EmailValidationError(EmailError, ValueError):
+    """An argument failed a check before any request, so nothing was sent.
+
+    ``name`` is ``validation_error``. ``code`` says which check failed, such as
+    ``invalid_form`` or ``invalid_template_key``, and ``field`` names the
+    argument when there is one.
+    """
+
+    def __init__(self, *, code: str, message: str, field: Optional[str]) -> None:
+        super().__init__(
+            name="validation_error", code=code, message=message, field=field
+        )
+
+
+def _invalid(field: Optional[str], message: str) -> EmailValidationError:
+    return EmailValidationError(code="invalid_form", message=message, field=field)
+
+
 @dataclass(frozen=True)
 class EmailWarning:
     code: str
@@ -192,10 +221,9 @@ class EmailWarning:
 
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is ``None`` when the client is disabled and sent nothing."""
+    """The queued email."""
 
-    id: Optional[str]
-    replayed: bool = False
+    id: str
     warnings: tuple[EmailWarning, ...] = ()
 
 
@@ -228,6 +256,7 @@ class _RecipientArgs(TypedDict):
     to: str
     distinct_id: NotRequired[Optional[str]]
     idempotency_key: NotRequired[Optional[str]]
+    max_retries: NotRequired[int]
 
 
 class TemplateEmailArgs(_RecipientArgs):
@@ -240,10 +269,15 @@ class TemplateEmailArgs(_RecipientArgs):
             placeholders.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters.
+        max_retries: Retries for this send, instead of the client's.
+        capture_engagement: Capture opens and clicks. Without it, the
+            project's setting applies. Setting it needs a PostHog version with
+            the email send route, ``/messaging/send/email/``.
     """
 
     template_id: Union[str, UUID]
     template_data: NotRequired[Optional[Mapping[str, Any]]]
+    capture_engagement: NotRequired[bool]
 
 
 class CodeEmailArgs(_RecipientArgs):
@@ -284,6 +318,7 @@ class CodeEmailArgs(_RecipientArgs):
             another email, or for a ``template_id`` send, raises
             ``idempotency_key_reused``. A retry with the same key returns the
             first send's result, also when its workflow was paused since.
+        max_retries: Retries for this send, instead of the client's.
     """
 
     template_key: str
@@ -313,58 +348,63 @@ class _PreparedSend:
     body: bytes
     idempotency_key: str
     upload: Optional[_PreparedUpload] = None
+    max_retries: Optional[int] = None
 
 
 def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
     is_template_form = "template_id" in args
     if is_template_form == ("template_key" in args):
-        raise TypeError("Pass either template_id or template_key.")
+        raise _invalid(None, "Pass either template_id or template_key.")
     form = TemplateEmailArgs if is_template_form else CodeEmailArgs
     unexpected = sorted(set(args) - set(form.__annotations__))
     if unexpected:
-        raise TypeError(
+        raise _invalid(
+            unexpected[0],
             f"send() got arguments that the {'template' if is_template_form else 'code'} "
-            f"form doesn't take: {', '.join(unexpected)}."
+            f"form doesn't take: {', '.join(unexpected)}.",
         )
     if "to" not in args:
-        raise TypeError("send() is missing the argument to.")
-    if is_template_form:
-        return _prepare_send(
-            args["to"],
-            args["template_id"],
-            args.get("template_data"),
-            args.get("distinct_id"),
-            args.get("idempotency_key"),
-        )
-    return _prepare_code_send(args)
+        raise _invalid("to", "send() is missing the argument to.")
+    prepared = _prepare_send(args) if is_template_form else _prepare_code_send(args)
+    if "max_retries" not in args:
+        return prepared
+    if not _is_retry_count(args["max_retries"]):
+        raise _invalid("max_retries", "max_retries must be a nonnegative integer.")
+    return replace(prepared, max_retries=args["max_retries"])
+
+
+def _is_retry_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
 
 
 def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if "subject" not in args:
-        raise TypeError("send() is missing the argument subject.")
+        raise _invalid("subject", "send() is missing the argument subject.")
     to, distinct_id, idempotency_key = _recipient(
         args["to"], args.get("distinct_id"), args.get("idempotency_key")
     )
     template_key = args["template_key"]
     if not isinstance(template_key, str) or not _TEMPLATE_KEY.fullmatch(template_key):
-        raise ValueError(
-            "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
+        raise EmailValidationError(
+            code="invalid_template_key",
+            message="template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400.",
+            field="template_key",
         )
     content = {"subject": _nonempty_text(args, "subject")}
     content.update(
         {field: _string(args, field) for field in ("html", "text") if field in args}
     )
     if "html" not in content and "text" not in content:
-        raise TypeError("send() needs html, text or both.")
+        raise _invalid("html", "send() needs html, text or both.")
     if not (content.get("html") or content.get("text")):
-        raise ValueError("html or text must be a nonempty string.")
+        raise _invalid("html", "html or text must be a nonempty string.")
 
     payload: dict[str, Any] = {"to": to}
     upload = None
     if "template_data" in args:
         template_data = args["template_data"]
         if not isinstance(template_data, Mapping):
-            raise TypeError("template_data must be a mapping.")
+            raise _invalid("template_data", "template_data must be a mapping.")
         payload["template"] = {"key": template_key, "hash": _content_hash(content)}
         payload["message_data"] = clean(dict(template_data))
         upload = _PreparedUpload(
@@ -414,11 +454,18 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
         sender["tags"] = _tags(args["tags"])
     if "attachments" in args:
         sender["attachments"] = _attachments(args["attachments"])
-    if "capture_engagement" in args:
-        if not isinstance(args["capture_engagement"], bool):
-            raise TypeError("capture_engagement must be True or False.")
-        sender["capture_engagement"] = args["capture_engagement"]
+    sender.update(_capture_engagement(args))
     return sender
+
+
+def _capture_engagement(args: Mapping[str, Any]) -> dict[str, bool]:
+    if "capture_engagement" not in args:
+        return {}
+    if not isinstance(args["capture_engagement"], bool):
+        raise _invalid(
+            "capture_engagement", "capture_engagement must be True or False."
+        )
+    return {"capture_engagement": args["capture_engagement"]}
 
 
 def _addresses(field: str, value: Any) -> list[str]:
@@ -426,9 +473,9 @@ def _addresses(field: str, value: Any) -> list[str]:
     if not isinstance(addresses, Sequence) or not all(
         isinstance(address, str) for address in addresses
     ):
-        raise TypeError(f"{field} must be one address or a list of addresses.")
+        raise _invalid(field, f"{field} must be one address or a list of addresses.")
     if not all(address.strip() for address in addresses):
-        raise ValueError(f"{field} must not hold a blank address.")
+        raise _invalid(field, f"{field} must not hold a blank address.")
     return list(addresses)
 
 
@@ -437,7 +484,7 @@ def _headers_field(headers: Any) -> dict[str, str]:
         isinstance(name, str) and isinstance(value, str)
         for name, value in headers.items()
     ):
-        raise TypeError("headers must map header names to string values.")
+        raise _invalid("headers", "headers must map header names to string values.")
     return dict(headers)
 
 
@@ -447,28 +494,30 @@ def _tags(tags: Any) -> list[dict[str, str]]:
         or not isinstance(tags, Sequence)
         or not all(_is_tag(tag) for tag in tags)
     ):
-        raise TypeError("tags must be a list of {'name': str, 'value': str}.")
+        raise _invalid("tags", "tags must be a list of {'name': str, 'value': str}.")
     return [{"name": tag["name"], "value": tag["value"]} for tag in tags]
 
 
 def _attachments(attachments: Any) -> list[dict[str, str]]:
     if isinstance(attachments, (str, bytes)) or not isinstance(attachments, Sequence):
-        raise TypeError("attachments must be a list of files.")
+        raise _invalid("attachments", "attachments must be a list of files.")
     return [_attachment(index, file) for index, file in enumerate(attachments)]
 
 
 def _attachment(index: int, file: Any) -> dict[str, str]:
     name = f"attachments[{index}]"
     if not isinstance(file, Mapping) or not {"filename", "content"} <= set(file):
-        raise TypeError(f"{name} needs a filename and its content.")
+        raise _invalid("attachments", f"{name} needs a filename and its content.")
     unexpected = set(file) - set(EmailAttachment.__annotations__)
     if unexpected:
-        raise TypeError(
-            f"{name} has fields an attachment doesn't take: {', '.join(sorted(unexpected))}."
+        raise _invalid(
+            "attachments",
+            f"{name} has fields an attachment doesn't take: {', '.join(sorted(unexpected))}.",
         )
     if not all(isinstance(file[field], str) for field in file if field != "content"):
-        raise TypeError(
-            f"{name} needs its filename, content_type and content_id as strings."
+        raise _invalid(
+            "attachments",
+            f"{name} needs its filename, content_type and content_id as strings.",
         )
     return {**file, "content": _base64_content(name, file["content"])}
 
@@ -478,9 +527,10 @@ def _base64_content(name: str, content: Any) -> str:
         return base64.b64encode(bytes(content)).decode("ascii")
     if isinstance(content, str):
         return content
-    raise TypeError(
+    raise _invalid(
+        "attachments",
         f"{name}.content must be bytes or a Base64 string. "
-        "Convert a list of byte values with bytes(content)."
+        "Convert a list of byte values with bytes(content).",
     )
 
 
@@ -496,14 +546,14 @@ def _is_tag(tag: Any) -> bool:
 def _string(args: Mapping[str, Any], name: str) -> str:
     value = args[name]
     if not isinstance(value, str):
-        raise TypeError(f"{name} must be a string.")
+        raise _invalid(name, f"{name} must be a string.")
     return value
 
 
 def _nonempty_text(args: Mapping[str, Any], name: str) -> str:
     value = _string(args, name)
     if not value:
-        raise ValueError(f"{name} must not be empty.")
+        raise _invalid(name, f"{name} must not be empty.")
     return value
 
 
@@ -513,22 +563,24 @@ def _encode(payload: Mapping[str, Any]) -> bytes:
     ).encode("utf-8")
 
 
-def _prepare_send(
-    to: str,
-    template_id: Union[str, UUID],
-    template_data: Optional[Mapping[str, Any]],
-    distinct_id: Optional[str],
-    idempotency_key: Optional[str],
-) -> _PreparedSend:
-    to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
+def _prepare_send(args: Mapping[str, Any]) -> _PreparedSend:
+    to, distinct_id, idempotency_key = _recipient(
+        args["to"], args.get("distinct_id"), args.get("idempotency_key")
+    )
+    template_id = args["template_id"]
+    template_data = args.get("template_data")
     try:
         template_uuid = (
             template_id if isinstance(template_id, UUID) else UUID(template_id)
         )
     except (TypeError, ValueError, AttributeError):
-        raise ValueError("template_id must be the template's UUID.") from None
+        raise EmailValidationError(
+            code="invalid_template_id",
+            message="template_id must be the template's UUID.",
+            field="template_id",
+        ) from None
     if template_data is not None and not isinstance(template_data, Mapping):
-        raise TypeError("template_data must be a mapping.")
+        raise _invalid("template_data", "template_data must be a mapping.")
 
     payload: dict[str, Any] = {
         "to": to,
@@ -536,6 +588,16 @@ def _prepare_send(
     }
     if distinct_id is not None:
         payload["identifiers"] = {"distinct_id": distinct_id}
+    tracking = _capture_engagement(args)
+    if tracking:
+        # The template route drops fields it doesn't know, so only the email send route can take this one.
+        return _PreparedSend(
+            path=_CODE_SEND_PATH,
+            body=_encode(
+                {"template": {"id": str(template_uuid)}, **payload, **tracking}
+            ),
+            idempotency_key=idempotency_key,
+        )
     return _PreparedSend(
         path=_SEND_PATH.format(template_id=template_uuid),
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
@@ -547,25 +609,29 @@ def _recipient(
     to: Any, distinct_id: Any, idempotency_key: Any
 ) -> tuple[str, Optional[str], str]:
     if not isinstance(to, str):
-        raise TypeError("to must be one email address as a string.")
+        raise _invalid("to", "to must be one email address as a string.")
     if not to.strip():
-        raise ValueError("to must not be empty.")
+        raise _invalid("to", "to must not be empty.")
     if distinct_id is not None and (
         not isinstance(distinct_id, str) or not distinct_id
     ):
-        raise ValueError("distinct_id must be a nonempty string.")
+        raise _invalid("distinct_id", "distinct_id must be a nonempty string.")
     if idempotency_key is None:
         idempotency_key = str(uuid4())
-    elif not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.match(
+    elif not isinstance(idempotency_key, str) or not _IDEMPOTENCY_KEY.fullmatch(
         idempotency_key
     ):
-        raise ValueError(
-            "idempotency_key must be 1 to 255 visible ASCII characters without spaces."
+        raise EmailValidationError(
+            code="invalid_idempotency_key",
+            message="idempotency_key must be 1 to 255 visible ASCII characters without spaces.",
+            field="idempotency_key",
         )
     return to, distinct_id, idempotency_key
 
 
-def _validate_options(timeout: float, max_retries: int) -> None:
+def _validate_options(
+    timeout: float, max_retries: int, migrated_from: Optional[str]
+) -> None:
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))
@@ -573,12 +639,12 @@ def _validate_options(timeout: float, max_retries: int) -> None:
         or timeout <= 0
     ):
         raise ValueError("timeout must be a finite positive number of seconds.")
-    if (
-        isinstance(max_retries, bool)
-        or not isinstance(max_retries, int)
-        or max_retries < 0
-    ):
+    if not _is_retry_count(max_retries):
         raise ValueError("max_retries must be a nonnegative integer.")
+    if migrated_from is not None and not (
+        isinstance(migrated_from, str) and migrated_from
+    ):
+        raise ValueError("migrated_from must be a nonempty string, such as 'resend'.")
 
 
 def _text(value: Any) -> Optional[str]:
@@ -639,7 +705,6 @@ def _parse_response(
         warnings = fields.get("warnings")
         return SendEmailResult(
             id=message_id,
-            replayed=fields.get("replayed") is True,
             warnings=tuple(
                 EmailWarning(
                     code=_text(warning.get("code")) or "warning",
@@ -692,11 +757,8 @@ def _is_retryable(error: EmailError) -> bool:
 def _retry_delay(error: EmailError, attempt: int, max_retries: int) -> Optional[float]:
     if attempt >= max_retries or not _is_retryable(error):
         return None
-    # Retrying before a longer Retry-After would break the server's rate limit.
-    if error.retry_after is not None and error.retry_after > _MAX_RETRY_DELAY:
-        return None
-    backoff = min(_MAX_RETRY_DELAY, 2.0**attempt * random.uniform(0.8, 1.2))
-    return max(backoff, error.retry_after or 0.0)
+    backoff = 2.0**attempt * random.uniform(0.8, 1.2)
+    return min(_MAX_RETRY_DELAY, max(backoff, error.retry_after or 0.0))
 
 
 def _no_op() -> None:
@@ -712,7 +774,9 @@ def _log_warnings(result: SendEmailResult) -> None:
         log.warning("PostHog email warning %s: %s", warning.code, warning.message)
 
 
-def _headers(secret_key: str, idempotency_key: Optional[str]) -> dict[str, str]:
+def _headers(
+    secret_key: str, idempotency_key: Optional[str], migrated_from: Optional[str]
+) -> dict[str, str]:
     headers = {
         "Authorization": f"Bearer {secret_key}",
         "Accept": "application/json",
@@ -721,6 +785,8 @@ def _headers(secret_key: str, idempotency_key: Optional[str]) -> dict[str, str]:
     }
     if idempotency_key is not None:
         headers["Idempotency-Key"] = idempotency_key
+    if migrated_from is not None:
+        headers["X-PostHog-Migrated-From"] = migrated_from
     return headers
 
 
@@ -729,8 +795,13 @@ _Parse = Callable[[int, Any, Optional[str]], _ResultT]
 
 
 class _BearerAuth(requests.auth.AuthBase):
-    def __init__(self, secret_key: str, idempotency_key: Optional[str]) -> None:
-        self._headers = _headers(secret_key, idempotency_key)
+    def __init__(
+        self,
+        secret_key: str,
+        idempotency_key: Optional[str],
+        migrated_from: Optional[str],
+    ) -> None:
+        self._headers = _headers(secret_key, idempotency_key, migrated_from)
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         # Setting auth explicitly stops requests from substituting .netrc credentials.
@@ -747,13 +818,15 @@ class _EmailsBase:
         timeout: float,
         max_retries: int,
         disabled: bool,
+        migrated_from: Optional[str],
     ) -> None:
-        _validate_options(timeout, max_retries)
+        _validate_options(timeout, max_retries, migrated_from)
         self.secret_key = secret_key.strip() if isinstance(secret_key, str) else None
         self.host = determine_app_host(host)
         self.timeout = timeout
         self.max_retries = max_retries
         self.disabled = disabled
+        self.migrated_from = migrated_from
         self._parent_disabled: Callable[[], bool] = lambda: False
         self._admit: Callable[[], Optional[Callable[[], None]]] = lambda: _no_op
         self._host_error: Optional[str] = None
@@ -762,6 +835,11 @@ class _EmailsBase:
         return self.disabled or self._parent_disabled()
 
     def _start_send(self) -> Callable[[], None]:
+        if self._is_disabled():
+            raise _sdk_error(
+                "client_disabled",
+                "The PostHog client is disabled, so no email was sent.",
+            )
         finish = self._admit()
         if finish is None:
             raise _sdk_error(
@@ -770,9 +848,14 @@ class _EmailsBase:
             )
         return finish
 
+    def _retries(self, prepared: _PreparedSend) -> int:
+        return (
+            self.max_retries if prepared.max_retries is None else prepared.max_retries
+        )
+
     def _secret_key(self) -> str:
         if self._host_error:
-            raise _sdk_error("app_host_required", self._host_error)
+            raise _sdk_error("missing_app_host", self._host_error)
         if not self.secret_key:
             raise _sdk_error(
                 "missing_secret_key",
@@ -792,7 +875,8 @@ class Emails(_EmailsBase):
     to ``max_retries`` times, with the same idempotency key. Set
     ``max_retries=0`` when a job runner already retries the send. ``timeout``
     is in seconds, per request. Pass ``session`` to send through your own
-    ``requests.Session``, for example a test double.
+    ``requests.Session``, for example a test double. ``migrated_from``, such
+    as ``"resend"``, tells PostHog which provider your sends came from.
     """
 
     def __init__(
@@ -804,6 +888,7 @@ class Emails(_EmailsBase):
         max_retries: int = 2,
         disabled: bool = False,
         session: Optional[requests.Session] = None,
+        migrated_from: Optional[str] = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -811,6 +896,7 @@ class Emails(_EmailsBase):
             timeout=timeout,
             max_retries=max_retries,
             disabled=disabled,
+            migrated_from=migrated_from,
         )
         self._session: Optional[requests.Session] = session
         self._owns_session = session is None
@@ -845,6 +931,10 @@ class Emails(_EmailsBase):
                 that covers its own retries. Pass a key derived from what the
                 email is for, such as ``welcome:user_123``, to cover retries
                 outside this call, too.
+            max_retries: Retries for this send, instead of the client's.
+                ``0`` turns them off.
+            capture_engagement: Capture opens and clicks, instead of the
+                project's setting.
 
         Returns:
             The queued email. A result means PostHog queued the email, not that
@@ -853,7 +943,8 @@ class Emails(_EmailsBase):
         Raises:
             EmailError: PostHog did not queue the email, or the client could
                 not tell whether it did.
-            TypeError, ValueError: An argument has the wrong type or format.
+            EmailValidationError: An argument has the wrong type or format.
+                Nothing was sent.
 
         Examples:
             ```python
@@ -874,9 +965,6 @@ class Emails(_EmailsBase):
             ```
         """
         prepared = _prepare(kwargs)
-        if self._is_disabled():
-            log.debug("PostHog client is disabled, so no email was sent.")
-            return SendEmailResult(id=None)
         finish = self._start_send()
         try:
             return self._deliver(prepared)
@@ -885,10 +973,11 @@ class Emails(_EmailsBase):
 
     def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
         secret_key = self._secret_key()
-        auth = _BearerAuth(secret_key, prepared.idempotency_key)
+        retries = self._retries(prepared)
+        auth = _BearerAuth(secret_key, prepared.idempotency_key, self.migrated_from)
         try:
             result = self._request(
-                "POST", prepared.path, prepared.body, auth, _parse_response
+                "POST", prepared.path, prepared.body, auth, retries, _parse_response
             )
         except EmailError as error:
             if prepared.upload is None or not _is_outdated(error):
@@ -897,11 +986,12 @@ class Emails(_EmailsBase):
                 "PUT",
                 prepared.upload.path,
                 prepared.upload.body,
-                _BearerAuth(secret_key, None),
+                _BearerAuth(secret_key, None, self.migrated_from),
+                retries,
                 _parse_upload,
             )
             result = self._request(
-                "POST", prepared.path, prepared.body, auth, _parse_response
+                "POST", prepared.path, prepared.body, auth, retries, _parse_response
             )
         _log_warnings(result)
         return result
@@ -912,11 +1002,12 @@ class Emails(_EmailsBase):
         path: str,
         body: bytes,
         auth: _BearerAuth,
+        max_retries: int,
         parse: _Parse[_ResultT],
     ) -> _ResultT:
         session = self._get_session()
         url = self.host + path
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(max_retries + 1):
             try:
                 response = session.request(
                     method,
@@ -942,7 +1033,7 @@ class Emails(_EmailsBase):
                 error = _sdk_error("network_error", "The request to PostHog failed.")
             except EmailError as exc:
                 error = exc
-            delay = _retry_delay(error, attempt, self.max_retries)
+            delay = _retry_delay(error, attempt, max_retries)
             if delay is None:
                 raise error from None
             time.sleep(delay)
@@ -992,6 +1083,7 @@ class AsyncEmails(_EmailsBase):
         max_retries: int = 2,
         disabled: bool = False,
         http_client: Any = None,
+        migrated_from: Optional[str] = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -999,6 +1091,7 @@ class AsyncEmails(_EmailsBase):
             timeout=timeout,
             max_retries=max_retries,
             disabled=disabled,
+            migrated_from=migrated_from,
         )
         self._client: Any = http_client
         self._owns_client = http_client is None
@@ -1026,9 +1119,6 @@ class AsyncEmails(_EmailsBase):
             ```
         """
         prepared = _prepare(kwargs)
-        if self._is_disabled():
-            log.debug("PostHog client is disabled, so no email was sent.")
-            return SendEmailResult(id=None)
         finish = self._start_send()
         try:
             return await self._deliver(prepared)
@@ -1037,10 +1127,11 @@ class AsyncEmails(_EmailsBase):
 
     async def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
         secret_key = self._secret_key()
-        headers = _headers(secret_key, prepared.idempotency_key)
+        retries = self._retries(prepared)
+        headers = _headers(secret_key, prepared.idempotency_key, self.migrated_from)
         try:
             result = await self._request(
-                "POST", prepared.path, prepared.body, headers, _parse_response
+                "POST", prepared.path, prepared.body, headers, retries, _parse_response
             )
         except EmailError as error:
             if prepared.upload is None or not _is_outdated(error):
@@ -1049,11 +1140,12 @@ class AsyncEmails(_EmailsBase):
                 "PUT",
                 prepared.upload.path,
                 prepared.upload.body,
-                _headers(secret_key, None),
+                _headers(secret_key, None, self.migrated_from),
+                retries,
                 _parse_upload,
             )
             result = await self._request(
-                "POST", prepared.path, prepared.body, headers, _parse_response
+                "POST", prepared.path, prepared.body, headers, retries, _parse_response
             )
         _log_warnings(result)
         return result
@@ -1064,11 +1156,12 @@ class AsyncEmails(_EmailsBase):
         path: str,
         body: bytes,
         headers: Mapping[str, str],
+        max_retries: int,
         parse: _Parse[_ResultT],
     ) -> _ResultT:
         httpx, client = self._get_client()
         url = self.host + path
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(max_retries + 1):
             try:
                 response = await client.request(
                     method, url, content=body, headers=headers
@@ -1089,7 +1182,7 @@ class AsyncEmails(_EmailsBase):
                 error = _sdk_error("network_error", "The request to PostHog failed.")
             except EmailError as exc:
                 error = exc
-            delay = _retry_delay(error, attempt, self.max_retries)
+            delay = _retry_delay(error, attempt, max_retries)
             if delay is None:
                 raise error from None
             await asyncio.sleep(delay)
@@ -1139,10 +1232,15 @@ def _client_emails(
     app_host: Optional[str],
     timeout: float,
     max_retries: int,
+    migrated_from: Optional[str],
 ) -> _EmailsT:
     if app_host:
         emails = factory(
-            secret_key, host=app_host, timeout=timeout, max_retries=max_retries
+            secret_key,
+            host=app_host,
+            timeout=timeout,
+            max_retries=max_retries,
+            migrated_from=migrated_from,
         )
         emails._parent_disabled = is_disabled
         emails._admit = admit
@@ -1154,6 +1252,7 @@ def _client_emails(
         host=inferred_host if is_cloud else None,
         timeout=timeout,
         max_retries=max_retries,
+        migrated_from=migrated_from,
     )
     if not is_cloud:
         # A custom host is often an ingestion proxy, which must not receive the secret key.
