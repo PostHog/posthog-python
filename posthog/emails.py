@@ -76,8 +76,9 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 - ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
   wrong, or it lacks ``hog_flow:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
-  enabled for the project. A template send with ``capture_engagement`` also
-  gets it from a PostHog version without the email send route.
+  enabled for the project. A template send with ``capture_engagement`` gets
+  ``template_not_found`` for a wrong ID instead, and ``not_found`` from a
+  PostHog version without the email send route.
 - ``client_disabled``: the client is disabled.
 - ``client_closed``: the client is shut down.
 

@@ -725,15 +725,22 @@ def test_an_outdated_local_template_is_uploaded_then_sent_again_with_the_same_ke
 
 def test_a_sends_max_retries_also_covers_its_upload():
     emails, adapter = emails_with(
-        [rejected(409, "template_outdated"), rejected(503, "delivery_unavailable")],
-        max_retries=2,
+        [
+            rejected(409, "template_outdated"),
+            rejected(503, "delivery_unavailable"),
+            uploaded(),
+            accepted(),
+        ],
+        max_retries=0,
     )
 
-    with pytest.raises(EmailError) as raised:
-        send_local_template(emails, max_retries=0)
-
-    assert raised.value.status_code == 503
-    assert [request.method for request in adapter.requests] == ["POST", "PUT"]
+    assert send_local_template(emails, max_retries=1).id == "msg_1"
+    assert [request.method for request in adapter.requests] == [
+        "POST",
+        "PUT",
+        "PUT",
+        "POST",
+    ]
 
 
 def test_every_request_of_a_send_says_where_the_caller_migrated_from():
