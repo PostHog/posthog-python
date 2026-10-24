@@ -68,13 +68,6 @@ def emails_with(replies: list[Reply], **options: Any) -> tuple[Emails, FakeAdapt
     return Emails(SECRET_KEY, session=session, **options), adapter
 
 
-def response(status: int, body: dict[str, Any]) -> requests.Response:
-    reply = requests.Response()
-    reply.status_code = status
-    reply._content = json.dumps(body).encode()
-    return reply
-
-
 def send(emails: Emails, **overrides: Any):
     return emails.send(
         **{"to": "user@example.com", "template_id": TEMPLATE_ID, **overrides}
@@ -200,21 +193,27 @@ def test_client_email_options_set_the_host_timeout_and_retries():
         email_request_max_retries=0,
         migrated_from="resend",
     )
-    unavailable = response(503, {"code": "delivery_unavailable"})
+    adapter = FakeAdapter([rejected(503, "delivery_unavailable")])
 
     with mock.patch.object(
-        requests.Session, "request", return_value=unavailable
-    ) as request:
+        requests.adapters.HTTPAdapter,
+        "send",
+        autospec=True,
+        side_effect=lambda _transport, request, **_: adapter.send(request),
+    ) as transport:
         with pytest.raises(EmailError):
             send(client.emails)
 
-    request.assert_called_once()
-    assert request.call_args.args[1].startswith("https://posthog.example.com/api/")
-    assert request.call_args.kwargs["timeout"] == 3
-    sent = request.call_args.kwargs["auth"](
-        requests.Request("POST", "https://x").prepare()
-    )
-    assert sent.headers["X-PostHog-Migrated-From"] == "resend"
+    [request] = adapter.requests
+    assert (request.url or "").startswith("https://posthog.example.com/api/")
+    assert transport.call_args.kwargs["timeout"] == 3
+    assert request.headers["X-PostHog-Migrated-From"] == "resend"
+
+
+@parameterized.expand([("empty", ""), ("line_break", "resend\n"), ("not_a_string", 1)])
+def test_rejects_a_migrated_from_that_is_not_a_header_value(_name, migrated_from):
+    with pytest.raises(ValueError):
+        Emails(SECRET_KEY, migrated_from=migrated_from)
 
 
 @parameterized.expand(
@@ -311,24 +310,26 @@ def test_max_retries_zero_leaves_retries_to_the_caller():
 
 @parameterized.expand(
     [
-        ("turns_retries_off", 2, 0, 1),
-        ("turns_retries_on", 0, 1, 2),
+        ("turns_retries_off", 2, 0, False),
+        ("turns_retries_on", 0, 1, True),
     ]
 )
 def test_a_send_overrides_the_clients_max_retries(
-    _name, client_max_retries, send_max_retries, requests_made
+    _name, client_max_retries, send_max_retries, retried
 ):
     emails, adapter = emails_with(
         [rejected(503, "delivery_unavailable"), accepted()],
         max_retries=client_max_retries,
     )
 
-    try:
-        send(emails, max_retries=send_max_retries)
-    except EmailError:
-        pass
-
-    assert len(adapter.requests) == requests_made
+    if retried:
+        assert send(emails, max_retries=send_max_retries).id == "msg_1"
+        assert len(adapter.requests) == 2
+    else:
+        with pytest.raises(EmailError) as raised:
+            send(emails, max_retries=send_max_retries)
+        assert raised.value.code == "delivery_unavailable"
+        assert len(adapter.requests) == 1
     assert "max_retries" not in json.loads(adapter.requests[0].body)
 
 
@@ -498,6 +499,26 @@ async def test_async_send_retries_with_the_same_key():
     assert seen[0].headers["Idempotency-Key"] == seen[1].headers["Idempotency-Key"]
     assert seen[0].headers["Authorization"] == f"Bearer {SECRET_KEY}"
     assert json.loads(seen[0].content)["identifiers"] == {"distinct_id": "user_123"}
+
+
+@pytest.mark.asyncio
+async def test_async_send_overrides_the_clients_max_retries():
+    handler = mock.Mock(
+        return_value=httpx.Response(503, json={"code": "delivery_unavailable"})
+    )
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=2,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
+        with pytest.raises(EmailError):
+            await emails.send(
+                to="user@example.com", template_id=TEMPLATE_ID, max_retries=0
+            )
+
+    handler.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -700,6 +721,19 @@ def test_an_outdated_local_template_is_uploaded_then_sent_again_with_the_same_ke
     assert (
         second_send.headers["Idempotency-Key"] == first_send.headers["Idempotency-Key"]
     )
+
+
+def test_a_sends_max_retries_also_covers_its_upload():
+    emails, adapter = emails_with(
+        [rejected(409, "template_outdated"), rejected(503, "delivery_unavailable")],
+        max_retries=2,
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_local_template(emails, max_retries=0)
+
+    assert raised.value.status_code == 503
+    assert [request.method for request in adapter.requests] == ["POST", "PUT"]
 
 
 def test_every_request_of_a_send_says_where_the_caller_migrated_from():

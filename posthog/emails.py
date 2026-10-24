@@ -76,7 +76,8 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 - ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
   wrong, or it lacks ``hog_flow:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
-  enabled for the project.
+  enabled for the project. A template send with ``capture_engagement`` also
+  gets it from a PostHog version without the email send route.
 - ``client_disabled``: the client is disabled.
 - ``client_closed``: the client is shut down.
 
@@ -157,6 +158,7 @@ _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _CONTENT_HASH_HEADER = b"posthog-email-template-v1\n"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"[\x21-\x7e]{1,255}")
+_HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
 
@@ -642,9 +644,11 @@ def _validate_options(
     if not _is_retry_count(max_retries):
         raise ValueError("max_retries must be a nonnegative integer.")
     if migrated_from is not None and not (
-        isinstance(migrated_from, str) and migrated_from
+        isinstance(migrated_from, str) and _HEADER_TOKEN.fullmatch(migrated_from)
     ):
-        raise ValueError("migrated_from must be a nonempty string, such as 'resend'.")
+        raise ValueError(
+            "migrated_from must be visible ASCII characters, such as 'resend'."
+        )
 
 
 def _text(value: Any) -> Optional[str]:
@@ -927,10 +931,11 @@ class Emails(_EmailsBase):
                 person whose distinct ID is the email address.
             idempotency_key: 1 to 255 visible ASCII characters. A send with a
                 key that PostHog has already accepted queues nothing and returns
-                the first send's result. Without it, the client makes a key
-                that covers its own retries. Pass a key derived from what the
-                email is for, such as ``welcome:user_123``, to cover retries
-                outside this call, too.
+                the first send's result, when the other arguments are the same.
+                With other arguments, it raises ``idempotency_key_reused``.
+                Without it, the client makes a key that covers its own retries.
+                Pass a key derived from what the email is for, such as
+                ``welcome:user_123``, to cover retries outside this call, too.
             max_retries: Retries for this send, instead of the client's.
                 ``0`` turns them off.
             capture_engagement: Capture opens and clicks, instead of the
