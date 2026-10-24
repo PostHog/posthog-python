@@ -432,9 +432,11 @@ Attributes:
     capture_trace_context: When OpenTelemetry is installed and a valid span is
         active at capture time, add its trace and span IDs as ``$trace_id`` and
         ``$span_id`` properties to events captured with ``capture()`` and
-        ``capture_ai()``. Explicit ``$trace_id``/``$span_id`` values passed in
-        ``properties`` win. Exception events always attach these IDs regardless
-        of this setting. Defaults to False.
+        ``capture_ai()``. They fill after context tags and ``super_properties``,
+        before ``before_send``. A ``$trace_id`` or ``$span_id`` from the event, a
+        context tag or ``super_properties`` stops the SDK adding either ID.
+        Exception events always attach these IDs regardless of this setting.
+        Defaults to False.
     code_variables_mask_patterns: Variable-name patterns to mask when capturing
         code variables.
     code_variables_ignore_patterns: Variable-name patterns to omit when capturing

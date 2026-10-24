@@ -2,6 +2,7 @@ import inspect
 import logging
 
 import pytest
+from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags, use_span
 
 from posthog import AsyncPosthog, new_context, set_context_option, tag
 from posthog.ai.utils import _capture_ai_event
@@ -473,6 +474,119 @@ async def test_async_caller_layers_beat_flag_properties(source):
         _capture_with_flags_and_caller_value(source), **_flag_layer_config(source)
     )
     _assert_flag_layers(events, source)
+
+
+SPAN_IDS = {
+    "$trace_id": "00000000000000000000000000000123",
+    "$span_id": "0000000000000456",
+}
+
+# Each caller layer sets one key of the pair, so the SDK adds neither span id.
+TRACE_ID_CASES = [
+    pytest.param(None, SPAN_IDS, id="no_layer"),
+    pytest.param("event", {"$trace_id": "caller"}, id="event_trace_id"),
+    pytest.param("context", {"$trace_id": "caller"}, id="context_trace_id"),
+    pytest.param("super", {"$span_id": "caller"}, id="super_span_id"),
+]
+
+TRACE_CALLS = {
+    "capture": lambda c, p: c.capture("e", distinct_id="u", properties=p),
+    "capture_ai": lambda c, p: c.capture_ai(
+        "$ai_generation", distinct_id="u", properties=p
+    ),
+    "capture_exception": lambda c, p: c.capture_exception(
+        ValueError("boom"), distinct_id="u", properties=p
+    ),
+}
+
+
+def _capture_in_span(method, source=None):
+    span = NonRecordingSpan(
+        SpanContext(
+            trace_id=0x123,
+            span_id=0x456,
+            is_remote=False,
+            trace_flags=TraceFlags.SAMPLED,
+        )
+    )
+
+    def call(client):
+        with new_context(fresh=True), use_span(span):
+            if source == "context":
+                tag("$trace_id", "caller")
+            properties = {"$trace_id": "caller"} if source == "event" else None
+            return TRACE_CALLS[method](client, properties)
+
+    return call
+
+
+def _trace_config(source, capture_trace_context=True):
+    config: dict = {"capture_trace_context": capture_trace_context}
+    if source == "super":
+        config["super_properties"] = {"$span_id": "caller"}
+    return config
+
+
+def _span_ids(properties):
+    return {k: properties[k] for k in SPAN_IDS if k in properties}
+
+
+def _sync_trace_context(method):
+    # Sync capture_exception adds the span ids even with capture_trace_context off.
+    return method != "capture_exception"
+
+
+@pytest.mark.parametrize("method", list(TRACE_CALLS))
+@pytest.mark.parametrize("source,expected", TRACE_ID_CASES)
+def test_sync_span_ids_fill_as_a_pair_below_caller_layers(method, source, expected):
+    events = _sync_wire_events(
+        _capture_in_span(method, source),
+        **_trace_config(source, _sync_trace_context(method)),
+    )
+    assert _span_ids(events[0]["properties"]) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", list(TRACE_CALLS))
+@pytest.mark.parametrize("source,expected", TRACE_ID_CASES)
+async def test_async_span_ids_fill_as_a_pair_below_caller_layers(
+    method, source, expected
+):
+    events = await _async_wire_events(
+        _capture_in_span(method, source), **_trace_config(source)
+    )
+    assert _span_ids(events[0]["properties"]) == expected
+
+
+def _span_id_hook(seen):
+    def hook(msg):
+        seen.append(_span_ids(msg["properties"]))
+        return {**msg, "properties": {**msg["properties"], "$span_id": "hook"}}
+
+    return hook
+
+
+@pytest.mark.parametrize("method", list(TRACE_CALLS))
+def test_sync_before_send_sees_and_changes_span_ids(method):
+    seen: list = []
+    events = _sync_wire_events(
+        _capture_in_span(method),
+        before_send=_span_id_hook(seen),
+        **_trace_config(None, _sync_trace_context(method)),
+    )
+    assert seen == [SPAN_IDS]
+    assert _span_ids(events[0]["properties"]) == {**SPAN_IDS, "$span_id": "hook"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", list(TRACE_CALLS))
+async def test_async_before_send_sees_and_changes_span_ids(method):
+    seen: list = []
+    events = await _async_wire_events(
+        _capture_in_span(method), before_send=_span_id_hook(seen), **_trace_config(None)
+    )
+    assert seen == [SPAN_IDS]
+    assert _span_ids(events[0]["properties"]) == {**SPAN_IDS, "$span_id": "hook"}
 
 
 GEOIP_CALL_CASES = [
