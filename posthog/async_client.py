@@ -610,6 +610,7 @@ class AsyncClient:
                 trace_properties=(
                     _get_current_otel_span_properties()
                     if self.capture_trace_context
+                    or kwargs.get("_capture_trace_context")
                     else None
                 ),
             ),
@@ -922,6 +923,10 @@ class AsyncClient:
         ``level`` sets ``$exception_level`` and defaults to ``"error"``. An unknown
         value counts as unset. Reserved exception properties in ``properties``,
         such as ``$exception_list`` and ``$exception_level``, are ignored.
+
+        When OpenTelemetry is installed and a valid span is active, its trace and
+        span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
+        unless the event, a context tag or ``super_properties`` sets either one.
         """
         try:
             if exception is not None and exception_is_already_captured(exception):
@@ -998,6 +1003,7 @@ class AsyncClient:
                 flags=kwargs.get("flags"),
                 disable_geoip=kwargs.get("disable_geoip"),
                 options=kwargs.get("options"),
+                _capture_trace_context=True,
             )
             if exception is not None and result is not None:
                 mark_exception_as_captured(exception, result)

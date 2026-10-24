@@ -159,6 +159,7 @@ The headers only fill a missing distinct ID or session ID, and any client can se
 - `capture_exception` takes a `level=` argument on `Client`, `AsyncPosthog` and the module. It sets `$exception_level`, for example `"warning"` or `"fatal"`. The default is `"error"`, and an unknown value counts as unset.
 - `capture_exception` ignores reserved exception properties in `properties`, such as `$exception_list`, `$exception_level` and `$exception_source`. In 7.x they overrode the SDK's values, with a `DeprecationWarning`. Use `level=` instead of `$exception_level`.
 - `AsyncPosthog.capture_exception` now sends `$exception_level`.
+- `AsyncPosthog.capture_exception` now adds `$trace_id` and `$span_id` from the active OpenTelemetry span, like `Client.capture_exception`. In 7.x it added them only with `capture_trace_context=True`.
 
 ## Event options
 
