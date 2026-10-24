@@ -547,6 +547,7 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         system_properties: Optional[dict[str, Any]] = None,
         flag_properties: Optional[dict[str, Any]] = None,
+        trace_properties: Optional[dict[str, Any]] = None,
     ) -> _EventDefaults:
         return _build_event_defaults(
             super_properties=self.super_properties,
@@ -561,14 +562,13 @@ class AsyncClient:
             call_disable_geoip=disable_geoip,
             system_properties=system_properties,
             flag_properties=flag_properties,
+            trace_properties=trace_properties,
         )
 
     def _build_capture_event(
         self, event: str, kwargs: OptionalCaptureArgs
     ) -> tuple[dict[str, Any], Any, _EventDefaults]:
         properties = dict(kwargs.get("properties") or {})
-        if self.capture_trace_context:
-            properties = {**_get_current_otel_span_properties(), **properties}
         properties = _add_context_session_id(properties)
 
         distinct_id, personless = _get_identity_state(kwargs.get("distinct_id"))
@@ -607,6 +607,11 @@ class AsyncClient:
                 disable_geoip=kwargs.get("disable_geoip"),
                 system_properties=system_context(),
                 flag_properties=flag_properties,
+                trace_properties=(
+                    _get_current_otel_span_properties()
+                    if self.capture_trace_context
+                    else None
+                ),
             ),
         )
 

@@ -69,6 +69,9 @@ class OptionalCaptureArgs(TypedDict):
     _property_allowlist: NotRequired[
         Optional[FrozenSet[str]]
     ]  # Internal: strict allowlist applied to the fully-enriched event properties. Used by minimal $feature_flag_called events.
+    _capture_trace_context: NotRequired[
+        bool
+    ]  # Internal: add the active OpenTelemetry span's ids even when capture_trace_context is off. Used by capture_exception.
 
 
 class OptionalSetArgs(TypedDict):

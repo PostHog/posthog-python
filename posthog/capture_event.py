@@ -133,6 +133,7 @@ class _EventDefaults:
     property_layers: tuple[Mapping[str, Any], ...] = ()
     option_layers: tuple[Mapping[str, Any], ...] = ()
     property_allowlist: Optional[Collection[str]] = None
+    trace_properties: Optional[Mapping[str, Any]] = None
 
 
 def _build_event_defaults(
@@ -149,6 +150,7 @@ def _build_event_defaults(
     call_disable_geoip: Optional[bool] = None,
     system_properties: Optional[Mapping[str, Any]] = None,
     flag_properties: Optional[Mapping[str, Any]] = None,
+    trace_properties: Optional[Mapping[str, Any]] = None,
 ) -> _EventDefaults:
     """Order the layers: per-call arguments, context, global, then SDK values.
 
@@ -157,7 +159,8 @@ def _build_event_defaults(
     event's own ``$geoip_disable`` property beats it. ``flag_properties`` (the
     ``$feature/*`` and ``$active_feature_flags`` values from ``flags`` or
     ``send_feature_flags``) are SDK values, so context and super properties
-    beat them.
+    beat them. ``trace_properties`` (``$trace_id`` and ``$span_id`` from the
+    active OpenTelemetry span) are SDK values that fill as a pair.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
@@ -184,6 +187,7 @@ def _build_event_defaults(
             derived_options or {},
         ),
         property_allowlist=property_allowlist,
+        trace_properties=trace_properties,
     )
 
 
@@ -195,7 +199,8 @@ def _fill_event_defaults(
     A property is unset only when its key is missing. An option is unset when
     it is missing or ``None``, the same rule hoisting uses. ``$set``,
     ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep when the
-    event's value and the default are both dicts.
+    event's value and the default are both dicts. ``trace_properties`` fill
+    last, and only when the event and every layer leave all their keys unset.
     """
     if defaults is None:
         return
@@ -218,6 +223,13 @@ def _fill_event_defaults(
                 and isinstance(value, Mapping)
             ):
                 properties[key] = {**_clean(dict(value)), **existing}
+    # A trace id and a span id from different spans would point at no real span,
+    # so a value for either key from any layer keeps out both of the SDK's ids.
+    trace_properties = defaults.trace_properties or {}
+    if not any(key in properties for key in trace_properties):
+        for key, value in trace_properties.items():
+            if allowlist is None or key in allowlist:
+                properties[key] = _clean(value)
     options = _event_options(msg.get("options"))
     for option_layer in defaults.option_layers:
         for key, value in option_layer.items():
