@@ -702,6 +702,33 @@ def test_post_serializes_non_finite_floats_as_null():
     assert props["ok"] == 1.5
 
 
-def test_datetime_serializer_keeps_finite_values():
-    body = {"n": 1.5, "s": "x", "b": True, "i": 3, "none": None}
-    assert json.loads(json.dumps(body, cls=DatetimeSerializer)) == body
+@pytest.mark.parametrize("allow_nan", [False, True])
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            {"n": 1.5, "s": "x", "b": True, "none": None, "t": (1, 2.5)},
+            '{"n": 1.5, "s": "x", "b": true, "none": null, "t": [1, 2.5]}',
+        ),
+        (
+            {"n": float("nan"), "l": [float("inf"), (float("-inf"), 2.5)]},
+            '{"n": null, "l": [null, [null, 2.5]]}',
+        ),
+    ],
+)
+def test_datetime_serializer_writes_non_finite_floats_as_null(
+    body, expected, allow_nan
+):
+    assert json.dumps(body, cls=DatetimeSerializer, allow_nan=allow_nan) == expected
+
+
+def test_datetime_serializer_copies_only_events_with_non_finite_floats():
+    with mock.patch.object(
+        request_module,
+        "_replace_non_finite_floats",
+        wraps=request_module._replace_non_finite_floats,
+    ) as copy:
+        json.dumps({"n": [1.5]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_not_called()
+        json.dumps({"n": [float("nan")]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_called()

@@ -451,4 +451,10 @@ class DatetimeSerializer(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
     def encode(self, o: Any) -> str:
+        # A strict encode fails only on a non-finite float, so finite events skip the copy.
+        if not self.allow_nan:
+            try:
+                return super().encode(o)
+            except ValueError:
+                pass
         return super().encode(_replace_non_finite_floats(o))
