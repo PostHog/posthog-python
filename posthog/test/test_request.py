@@ -418,10 +418,13 @@ def test_routing_to_custom_host(host, expected):
 def test_enable_keep_alive_sets_socket_options():
     try:
         enable_keep_alive()
-        from posthog.request import _session
-
-        adapter = _session.get_adapter("https://example.com")
-        assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+        for session in (
+            request_module._get_session(),
+            request_module._get_flags_session(),
+            request_module._get_capture_session(),
+        ):
+            adapter = session.get_adapter("https://example.com")
+            assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
     finally:
         set_socket_options(None)
 
@@ -462,12 +465,14 @@ def test_set_socket_options_is_idempotent():
 class TestFlagsSession(unittest.TestCase):
     """Tests for flags session configuration."""
 
-    def test_flags_session_disables_adapter_retries(self):
-        """HTTP adapter retries are disabled; flags() handles bounded retries."""
-        from posthog.request import _build_flags_session
-
-        session = _build_flags_session()
-        adapter = session.get_adapter("https://test.posthog.com")
+    @parameterized.expand(
+        [
+            ("flags", request_module._get_flags_session),
+            ("capture", request_module._get_capture_session),
+        ]
+    )
+    def test_session_disables_adapter_retries(self, _name, get_session):
+        adapter = get_session().get_adapter("https://test.posthog.com")
         retry = adapter.max_retries
 
         self.assertEqual(retry.total, 0)

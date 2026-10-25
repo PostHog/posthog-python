@@ -47,7 +47,7 @@ def _record_wire(sent: list[tuple[str, list[dict]]]):
 
     session = mock.Mock()
     session.post.side_effect = post
-    return mock.patch("posthog.capture_send._get_session", return_value=session)
+    return mock.patch("posthog.capture_send._get_capture_session", return_value=session)
 
 
 def _send_sync(method_name: str, before_send) -> list[tuple[str, list[dict]]]:

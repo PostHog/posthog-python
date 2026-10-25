@@ -7,6 +7,8 @@ from uuid import UUID
 
 import zstandard
 
+from requests.adapters import HTTPAdapter
+
 from parameterized import parameterized
 
 from posthog import capture_send
@@ -731,6 +733,33 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(ctx.exception.endpoint, _CAPTURE_AI_V1_PATH)
         self.assertEqual(ctx.exception.attempts, 2)
         self.assertIsInstance(ctx.exception.__cause__, ConnectionError)
+
+    def test_refused_connection_is_retried_by_the_sdk_not_the_http_adapter(
+        self,
+    ) -> None:
+        # Each physical try must be its own SDK attempt, so capture gets a fresh request timestamp.
+        sent_attempts = []
+        real_send = HTTPAdapter.send
+
+        def record_send(adapter, request, **kwargs):
+            sent_attempts.append(request.headers[_HEADER_ATTEMPT])
+            return real_send(adapter, request, **kwargs)
+
+        with (
+            mock.patch.object(HTTPAdapter, "send", record_send),
+            mock.patch(
+                "urllib3.util.connection.create_connection",
+                side_effect=ConnectionRefusedError,
+            ) as connect,
+            self.assertRaises(CaptureError) as ctx,
+        ):
+            _send_v1_batch(
+                "phc_key", "https://app.posthog.com", [_msg("u-1")], max_retries=2
+            )
+
+        self.assertEqual(sent_attempts, ["1", "2", "3"])
+        self.assertEqual(connect.call_count, 3)
+        self.assertEqual(ctx.exception.attempts, 3)
 
     def test_negative_max_retries_still_attempts_delivery_once(self) -> None:
         stub = _PostV1Stub([_results_response({"u-1": "ok"})])

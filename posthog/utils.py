@@ -183,6 +183,28 @@ def _drop_invalid_event_name(logger: logging.Logger, msg: dict) -> bool:
     return True
 
 
+def _log_before_send_error(
+    logger: logging.Logger, event_name: Any, error: Exception
+) -> None:
+    """Log a raising before_send hook without its message, which can hold event data."""
+    logger.error(
+        "Error in before_send callback for event %s (%s), dropping the event",
+        event_name,
+        type(error).__name__,
+    )
+    logger.debug("before_send callback traceback", exc_info=error)
+
+
+def _log_before_send_bad_return(
+    logger: logging.Logger, event_name: Any, result: Any
+) -> None:
+    logger.error(
+        "before_send must return a dict or None, not %s, dropping event %s",
+        type(result).__name__,
+        event_name,
+    )
+
+
 def _drop_invalid_distinct_id(logger: logging.Logger, msg: dict) -> bool:
     """True when `msg` has no string distinct_id; logs once per reason.
 

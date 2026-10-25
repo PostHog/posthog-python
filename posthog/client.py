@@ -142,6 +142,8 @@ from posthog.utils import (
     _is_personal_api_key,
     _drop_invalid_distinct_id,
     _drop_invalid_event_name,
+    _log_before_send_bad_return,
+    _log_before_send_error,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -2601,16 +2603,18 @@ class Client(object):
         msg = clean(msg)
 
         if self.before_send:
+            event_name = msg.get("event")
             try:
                 modified_msg = self.before_send(msg)
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
                     return None
                 if not isinstance(modified_msg, dict):
-                    raise TypeError("before_send must return a dict or None")
+                    _log_before_send_bad_return(self.log, event_name, modified_msg)
+                    return None
                 msg = clean(modified_msg)
             except Exception as e:
-                self.log.exception(f"Error in before_send callback: {e}")
+                _log_before_send_error(self.log, event_name, e)
                 return None
 
         # Re-normalized after before_send, which may have replaced or removed

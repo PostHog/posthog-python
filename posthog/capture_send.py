@@ -44,7 +44,7 @@ from posthog.request import (
     DatetimeSerializer,
     USER_AGENT,
     APIError,
-    _get_session,
+    _get_capture_session,
     normalize_host,
 )
 from posthog.utils import _uuid7, remove_trailing_slash
@@ -376,7 +376,7 @@ def _post_v1(
         headers["Content-Encoding"] = encoding
 
     log.debug("capture v1 POST %s attempt=%s request_id=%s", url, attempt, request_id)
-    http = session or _get_session()
+    http = session or _get_capture_session()
     for _ in range(_MAX_REDIRECTS + 1):
         res = http.post(
             url, data=body, headers=headers, timeout=timeout, allow_redirects=False
