@@ -36,6 +36,7 @@ from posthog.capture_v1 import _send_v1_batch
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.contexts import (
     _get_current_context,
+    _get_active_span_context,
     get_capture_exception_code_variables_context,
     get_code_variables_detect_secrets_context,
     get_code_variables_ignore_patterns_context,
@@ -682,7 +683,7 @@ class Client(object):
         gzip=False,
         max_retries=3,
         sync_mode=False,
-        timeout=15,
+        timeout: float = 15,
         thread=1,
         poll_interval=30,
         personal_api_key=None,
@@ -690,7 +691,7 @@ class Client(object):
         disable_geoip=True,
         is_server=True,
         historical_migration=False,
-        feature_flags_request_timeout_seconds=3,
+        feature_flags_request_timeout_seconds: float = 3,
         feature_flags_request_max_retries=1,
         super_properties=None,
         enable_exception_autocapture=False,
@@ -2629,10 +2630,7 @@ class Client(object):
     def _tracing_context(self) -> Dict[str, Optional[str]]:
         # The request context's identity, which the Django middleware fills
         # from the X-POSTHOG-* headers: the span's person/session join keys.
-        return {
-            "distinct_id": get_context_distinct_id(),
-            "session_id": get_context_session_id(),
-        }
+        return _get_active_span_context()
 
     def start_span(
         self,
@@ -2716,25 +2714,41 @@ class Client(object):
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
-        Force a flush from the internal queue to the server. Do not use directly, call `shutdown()` instead.
+        Attempt immediate delivery of queued events and ended spans, keeping the client reusable.
+
+        For a client shared across requests or serverless invocations (including
+        the module-level client), call ``flush()`` before a short-lived invocation
+        returns. Use ``shutdown()`` instead only for final process cleanup or when
+        disposing of a client that will not be reused. Flush does not stop the
+        background workers or feature flag poller, and does not end open spans.
+
+        Returning does not guarantee server receipt: pending work can remain after
+        a timeout or span export failure, and failed events may be dropped by the
+        consumers. Calls made directly from SDK callbacks such as ``on_error`` are
+        deferred rather than blocking the worker that invoked the callback.
 
         Args:
-            timeout_seconds: Maximum seconds to wait for the queue to flush.
-                Defaults to 10 seconds. Pass ``None`` to wait indefinitely.
-                Queued spans are sent at the same time, within the same
-                budget: at least one span request is attempted even when the
-                budget is already spent, a retriable failure is retried after
-                its backoff while budget remains, no other request starts once
-                it is spent, and each request is bounded by ``timeout``. The
-                wait for the last request is not cut short, so a flush can
-                take up to ``timeout_seconds`` plus ``timeout`` in the worst
-                case. A span flush already in flight for the whole wait is
-                left to finish instead.
+            timeout_seconds: Seconds to wait for event queues to drain, shared
+                across event lanes. Defaults to 10 seconds. Pass ``None`` to wait
+                without a time limit; this does not guarantee successful delivery.
+                Queued spans flush concurrently. The span exporter waits up to
+                this many seconds for an in-flight flush, then uses a fresh drain
+                budget once it acquires the lock. If the lock wait times out, the
+                in-flight flush is left to finish. At least one span request is
+                attempted after acquiring the lock, even with no budget left;
+                retriable failures are retried after backoff while budget remains,
+                with one last attempt at the deadline. Each span request is
+                bounded by the client's ``timeout`` in
+                seconds, and the last request is not cut short. This is therefore
+                not a strict wall-clock limit for the whole call. With ``None``,
+                a retriable span failure is left for a later flush rather than
+                retried within this call.
 
         Examples:
             ```python
-            posthog.capture('event_name')
-            posthog.flush()  # Ensures the event is sent immediately
+            posthog.capture('event_name', distinct_id='user_id')
+            # Before a serverless invocation returns; keep the shared client open.
+            posthog.flush(timeout_seconds=10)
             ```
         """
         if self._defer_flush_from_callback(timeout_seconds):
@@ -3131,14 +3145,22 @@ class Client(object):
     @no_throw()
     def shutdown(self) -> None:
         """
-        Flush all messages and cleanly shutdown the client. Call this before the process ends in serverless environments to avoid data loss.
+        Attempt final delivery and permanently shut down the client.
+
+        Call this for final process cleanup or when disposing of a client that
+        will not be reused. It closes capture lanes, stops background workers and
+        the feature flag poller, and tears down integrations. Do not call it at the
+        end of each request or serverless invocation when the client is shared;
+        call ``flush()`` before returning instead. A shut-down client cannot be
+        reused; create a new client if needed.
 
         Normally this method blocks until queued events have been attempted and
         cleanup finishes. Failed or undrainable events may be dropped and
         reported through logging or ``on_error``; returning does not guarantee
-        server receipt. Queued spans get one final flush of up to 30 s (plus a
-        request already in flight); any it cannot send are discarded with a
-        warning, as are spans still open.
+        server receipt. Event draining has no timeout. Queued spans get one final
+        flush with up to 30 seconds waiting for an in-flight flush, then a fresh
+        30-second drain budget; the last HTTP request is not cut short. Any spans
+        it cannot send are discarded with a warning, as are spans still open.
         Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
@@ -3251,6 +3273,7 @@ class Client(object):
                 "group_type_mapping": self.group_type_mapping or {},
                 "cohorts": self.cohorts or {},
                 "property_matching_version": self._property_matching_version,
+                "minimal_flag_called_events": self._minimal_flag_called_events,
                 "flag_definition_version": self.flag_definition_version,
             }
 
@@ -4451,7 +4474,7 @@ class Client(object):
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
         )
-        response, fallback_to_flags = self._get_all_flags_and_payloads_locally(
+        response, fallback_to_flags, _ = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
             person_properties=local_person_properties,
@@ -4588,26 +4611,27 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
-        # Source the gate the same way as has_experiment below; see
-        # _capture_feature_flag_called_if_needed for why. Defaults to the poller's
-        # current state; a successful remote fallback overwrites it with that
-        # response's own field below.
-        minimal_flag_called_events = self._minimal_flag_called_events
-
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
         )
-        local_result, fallback_to_server = self._get_all_flags_and_payloads_locally(
-            distinct_id,
-            groups=dict(groups),
-            person_properties=local_person_properties,
-            group_properties=group_properties,
-            flag_keys_to_evaluate=flag_keys,
-            device_id=device_id,
+        local_result, fallback_to_server, definition_snapshot = (
+            self._get_all_flags_and_payloads_locally(
+                distinct_id,
+                groups=dict(groups),
+                person_properties=local_person_properties,
+                group_properties=group_properties,
+                flag_keys_to_evaluate=flag_keys,
+                device_id=device_id,
+            )
         )
 
-        feature_flags_by_key: Dict[str, Any] = self.feature_flags_by_key or {}
+        # Pin local tracking metadata to the definitions used for these values.
+        # A successful remote fallback below supplies its own gate instead.
+        minimal_flag_called_events = definition_snapshot.get(
+            "minimal_flag_called_events", False
+        )
+        feature_flags_by_key = definition_snapshot["flags_by_key"]
         local_flags = local_result.get("featureFlags") or {}
         local_payloads = local_result.get("featureFlagPayloads") or {}
         if requested_keys and not requested_keys.issubset(local_flags):
@@ -4731,7 +4755,7 @@ class Client(object):
         warn_on_unknown_groups=False,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
-    ) -> tuple[FlagsAndPayloads, bool]:
+    ) -> tuple[FlagsAndPayloads, bool, _LocalEvaluationSnapshot]:
         person_properties = person_properties or {}
         group_properties = group_properties or {}
 
@@ -4782,10 +4806,14 @@ class Client(object):
         else:
             fallback_to_flags = True
 
-        return {
-            "featureFlags": flags,
-            "featureFlagPayloads": payloads,
-        }, fallback_to_flags
+        return (
+            {
+                "featureFlags": flags,
+                "featureFlagPayloads": payloads,
+            },
+            fallback_to_flags,
+            snapshot,
+        )
 
     def _initialize_flag_cache(self, cache_url):
         """Initialize feature flag cache for graceful degradation during service outages.
@@ -4800,6 +4828,7 @@ class Client(object):
                 - "memory://local/?ttl=300&size=10000": Memory cache with TTL and size
                 - "redis://localhost:6379/0/?ttl=300": Redis cache with TTL
                 - "redis://username:password@host:port/?ttl=300": Redis with auth
+                - "rediss://username:password@host:port/?ttl=300": Redis over TLS
 
         Example usage:
             # Memory cache
@@ -4835,7 +4864,7 @@ class Client(object):
                 size = int(query_params.get("size", [10000])[0])
                 return FlagCache(size, ttl)
 
-            elif scheme == "redis":
+            elif scheme in ("redis", "rediss"):
                 try:
                     # Not worth importing redis if we're not using it
                     import redis
@@ -4868,7 +4897,7 @@ class Client(object):
                     return None
             else:
                 raise ValueError(
-                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis"
+                    f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis, rediss"
                 )
 
         except Exception as e:

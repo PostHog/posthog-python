@@ -4,6 +4,120 @@ All notable changes to `openfeature-provider-posthog` are documented here. This
 file is maintained by [Sampo](https://github.com/bruits/sampo) from changesets in
 `.sampo/changesets/` that target `pypi/openfeature-provider-posthog`.
 
+## 0.1.125 — 2026-10-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.11
+
+## 0.1.124 — 2026-10-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.10
+
+## 0.1.123 — 2026-10-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.9
+
+## 0.1.122 — 2026-10-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.8
+
+## 0.1.121 — 2026-10-23
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.7
+
+## 0.1.120 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.6
+
+## 0.1.119 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.5
+
+## 0.1.118 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.4
+
+## 0.1.117 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.3
+
+## 0.1.116 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.2
+
+## 0.1.115 — 2026-10-22
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.1
+
+## 0.1.114 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.75.0
+
+## 0.1.113 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.74.0
+
+## 0.1.112 — 2026-10-21
+
+### Patch changes
+
+- Updated dependencies: posthog@7.73.3
+
+## 0.1.111 — 2026-10-20
+
+### Patch changes
+
+- Updated dependencies: posthog@7.73.2
+
+## 0.1.110 — 2026-10-20
+
+### Patch changes
+
+- Updated dependencies: posthog@7.73.1
+
+## 0.1.109 — 2026-10-19
+
+### Patch changes
+
+- Updated dependencies: posthog@7.73.0
+
+## 0.1.108 — 2026-10-19
+
+### Patch changes
+
+- Updated dependencies: posthog@7.72.0
+
+## 0.1.107 — 2026-10-16
+
+### Patch changes
+
+- Updated dependencies: posthog@7.71.0
+
 ## 0.1.106 — 2026-10-15
 
 ### Patch changes

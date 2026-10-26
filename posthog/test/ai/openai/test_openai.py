@@ -36,7 +36,11 @@ try:
     from posthog.ai.openai import OpenAI
     from posthog.ai.openai.openai_async import AsyncOpenAI
     from posthog.ai.openai.wrapper_utils import reset_fallback_warnings
-    from posthog.test.ai.utils import RecordingAsyncStream, make_response_usage
+    from posthog.test.ai.utils import (
+        RecordingAsyncStream,
+        RecordingStream,
+        make_response_usage,
+    )
 
     OPENAI_AVAILABLE = True
 except ImportError:
@@ -730,6 +734,92 @@ def test_tool_calls_only_no_content(mock_client, mock_openai_response_tool_calls
         assert props["$ai_input_tokens"] == 25
         assert props["$ai_output_tokens"] == 10
         assert props["$ai_http_status"] == 200
+
+
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_custom_tool_calls_are_captured(mock_client, is_async):
+    """A custom tool call has `custom` instead of `function`. The wrapped call
+    must return the completion and capture it, not raise AttributeError."""
+    completion = ChatCompletion.model_validate(
+        {
+            "id": "test",
+            "model": "gpt-5",
+            "object": "chat.completion",
+            "created": 0,
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_fn",
+                                "type": "function",
+                                "function": {
+                                    "name": "get_weather",
+                                    "arguments": '{"location": "New York"}',
+                                },
+                            },
+                            {
+                                "id": "call_custom",
+                                "type": "custom",
+                                "custom": {"name": "code_exec", "input": "print(1)"},
+                            },
+                        ],
+                    },
+                }
+            ],
+            "usage": {"prompt_tokens": 25, "completion_tokens": 10, "total_tokens": 35},
+        }
+    )
+    kwargs = dict(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Run it"}],
+        tools=[{"type": "custom", "custom": {"name": "code_exec"}}],
+        posthog_distinct_id="test-id",
+    )
+
+    if is_async:
+        with patch(
+            "openai.resources.chat.completions.AsyncCompletions.create",
+            new_callable=AsyncMock,
+            return_value=completion,
+        ):
+            client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+            response = await client.chat.completions.create(**kwargs)
+    else:
+        with patch(
+            "openai.resources.chat.completions.Completions.create",
+            return_value=completion,
+        ):
+            client = OpenAI(api_key="test-key", posthog_client=mock_client)
+            response = client.chat.completions.create(**kwargs)
+
+    assert response == completion
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "function",
+                    "id": "call_fn",
+                    "function": {
+                        "name": "get_weather",
+                        "arguments": '{"location": "New York"}',
+                    },
+                },
+                {
+                    "type": "function",
+                    "id": "call_custom",
+                    "function": {"name": "code_exec", "arguments": "print(1)"},
+                },
+            ],
+        }
+    ]
 
 
 def test_responses_api_tool_calls(mock_client, mock_responses_api_with_tool_calls):
@@ -2398,6 +2488,119 @@ async def test_async_chat_streaming_early_exit_closes_provider_stream(
         async with response as stream:
             async for _ in stream:
                 break
+
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+
+
+def test_chat_streaming_supports_with_and_proxies_provider_stream(
+    mock_client, streaming_tool_call_chunks
+):
+    """Sync chat completions stream=True must keep the `openai.Stream` API:
+    `with`, and attributes such as `.response`."""
+    source = RecordingStream(streaming_tool_call_chunks)
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create", return_value=source
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response.response == "provider-response"
+        with response as stream:
+            chunks = list(stream)
+
+    assert chunks == streaming_tool_call_chunks
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert call_args["event"] == "$ai_generation"
+    assert props["$ai_provider"] == "openai"
+    assert props["$ai_model"] == "gpt-4"
+
+
+def test_responses_streaming_supports_with_and_proxies_provider_stream(mock_client):
+    """Sync responses stream=True must keep the `openai.Stream` API."""
+    from unittest.mock import MagicMock
+
+    chunk = MagicMock()
+    chunk.type = "response.text.delta"
+    chunk.text = "hello"
+    source = RecordingStream([chunk])
+
+    with patch("openai.resources.responses.Responses.create", return_value=source):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = client.responses.create(
+            model="gpt-4o-mini",
+            input=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        assert response.response == "provider-response"
+        with response as stream:
+            received = list(stream)
+
+    assert received == [chunk]
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+
+
+def test_chat_streaming_early_exit_closes_provider_stream(
+    mock_client, streaming_tool_call_chunks
+):
+    """Breaking out of a sync stream early must close the underlying provider
+    stream (release the HTTP connection) and still capture the event."""
+    source = RecordingStream(streaming_tool_call_chunks)
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create", return_value=source
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+
+        with response as stream:
+            for _ in stream:
+                break
+
+    assert source.closed is True
+    assert mock_client.capture.call_count == 1
+
+
+def test_chat_streaming_close_closes_provider_stream(
+    mock_client, streaming_tool_call_chunks
+):
+    """Calling `close()` mid-stream, outside a `with` block, must close the
+    provider stream and still capture the event."""
+    source = RecordingStream(streaming_tool_call_chunks)
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create", return_value=source
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hi"}],
+            stream=True,
+            posthog_distinct_id="test-id",
+        )
+        next(response)
+        response.close()
 
     assert source.closed is True
     assert mock_client.capture.call_count == 1

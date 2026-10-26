@@ -26,9 +26,42 @@ class _AnthropicStreamAccumulator:
         # web_search_tool_result, ...), so keep a list that lines up with it.
         self._blocks_by_index: List[StreamingContentBlock] = []
 
+    def _apply_cumulative_input_usage(self, usage: Any) -> None:
+        # Usage on message_delta is cumulative. With server tools (web search,
+        # web fetch, code execution) its input and cache counts grow past
+        # message_start's, which is all the per-event merge records for them.
+        # The totals never shrink, so keep the larger value; a field the event
+        # omits leaves message_start's count in place.
+        input_tokens = getattr(usage, "input_tokens", None)
+        if isinstance(input_tokens, int):
+            self.usage_stats["input_tokens"] = max(
+                self.usage_stats.get("input_tokens") or 0, input_tokens
+            )
+        cache_creation = getattr(usage, "cache_creation_input_tokens", None)
+        if isinstance(cache_creation, int):
+            self.usage_stats["cache_creation_input_tokens"] = max(
+                self.usage_stats.get("cache_creation_input_tokens") or 0,
+                cache_creation,
+            )
+        cache_read = getattr(usage, "cache_read_input_tokens", None)
+        if isinstance(cache_read, int):
+            self.usage_stats["cache_read_input_tokens"] = max(
+                self.usage_stats.get("cache_read_input_tokens") or 0, cache_read
+            )
+
     def consume(self, event: Any) -> None:
         event_usage = extract_anthropic_usage_from_event(event)
         merge_usage_stats(self.usage_stats, event_usage)
+        if getattr(event, "type", None) == "message_delta":
+            usage = getattr(event, "usage", None)
+            self._apply_cumulative_input_usage(usage)
+            output_tokens = getattr(usage, "output_tokens", None)
+            if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
+                # output_tokens on a message_delta is cumulative too, so the
+                # incremental merge above must not stack successive deltas
+                # (server tools can emit several in one stream). Keep the
+                # latest total; a field the event omits leaves the prior one.
+                self.usage_stats["output_tokens"] = output_tokens
 
         if getattr(event, "type", None) == "content_block_start":
             block, tool = handle_anthropic_content_block_start(event)

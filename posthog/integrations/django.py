@@ -1,12 +1,13 @@
-import re
 from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import contexts
 from ..client import Client
+from ..tracing._context import _enrich_current_span
 from ..exception_utils import (
     _ExceptionCaptureMetadata,
     _capture_exception_with_metadata,
 )
+from ._tracing_headers import _apply_tracing_headers, _resolve_capture_tracing_headers
 
 try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
@@ -25,35 +26,6 @@ except ImportError:
 if TYPE_CHECKING:
     from django.http import HttpRequest, HttpResponse  # noqa: F401
     from typing import Callable, Dict, Any, Union, Awaitable  # noqa: F401
-
-
-_MAX_TRACING_HEADER_LENGTH = 1000
-_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def _sanitize_tracing_header_value(value) -> Optional[str]:
-    """Return a safe tracing header value, or None if the value is invalid.
-
-    Tracing headers come from user-controlled HTTP requests and are copied into event properties.
-    Match the PostHog app's header sanitization: accept strings only, remove C0/C1 control
-    characters, trim surrounding whitespace, cap length, and drop empty results.
-    """
-    if not isinstance(value, str) or not value:
-        return None
-
-    return (
-        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[
-            :_MAX_TRACING_HEADER_LENGTH
-        ]
-        or None
-    )
-
-
-def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
-    try:
-        return _sanitize_tracing_header_value(request.headers.get(header_name))
-    except Exception:
-        return None
 
 
 class PosthogContextMiddleware:
@@ -78,10 +50,13 @@ class PosthogContextMiddleware:
     - `POSTHOG_MW_REQUEST_FILTER`: a callback receiving the request. Returning `False`
       disables both enrichment and automatic exception capture for that request.
     - `POSTHOG_MW_EXTRA_PROPERTIES`: a callback returning additional event properties.
-    - `POSTHOG_MW_TRUST_TRACING_HEADERS`: accept the client-controlled PostHog identity
-      and session headers only when `True` (default: `False`). These values are analytics
-      context, never authentication or authorization. Authenticated Django user identity
-      is still available when headers are disabled.
+    - `POSTHOG_MW_CAPTURE_TRACING_HEADERS`: read PostHog identity and session headers
+      as request-scoped analytics context (default: `True`). Explicit capture IDs and
+      event properties take precedence. These values are never authentication or
+      authorization. Authenticated Django user identity remains the fallback when no
+      usable header ID is available or header capture is disabled.
+    - `POSTHOG_MW_TRUST_TRACING_HEADERS`: deprecated alias for
+      `POSTHOG_MW_CAPTURE_TRACING_HEADERS`; the capture-named setting takes precedence.
     - `POSTHOG_MW_PROPERTIES_MAP`: an optional callback transforming request properties.
 
     The old `POSTHOG_MW_EXTRA_TAGS` and `POSTHOG_MW_TAG_MAP` settings remain aliases;
@@ -159,11 +134,17 @@ class PosthogContextMiddleware:
             if capture_exceptions is None or isinstance(capture_exceptions, bool)
             else True
         )
-        trust_tracing_headers = getattr(
-            settings, "POSTHOG_MW_TRUST_TRACING_HEADERS", False
+        capture_tracing_headers = getattr(
+            settings, "POSTHOG_MW_CAPTURE_TRACING_HEADERS", None
         )
-        self.trust_tracing_headers = (
-            trust_tracing_headers if isinstance(trust_tracing_headers, bool) else False
+        trust_tracing_headers = getattr(
+            settings, "POSTHOG_MW_TRUST_TRACING_HEADERS", None
+        )
+        self.capture_tracing_headers = _resolve_capture_tracing_headers(
+            capture_tracing_headers,
+            trust_tracing_headers,
+            canonical_name="POSTHOG_MW_CAPTURE_TRACING_HEADERS",
+            deprecated_name="POSTHOG_MW_TRUST_TRACING_HEADERS",
         )
 
         if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
@@ -172,6 +153,15 @@ class PosthogContextMiddleware:
             self.client = cast("Optional[Client]", settings.POSTHOG_MW_CLIENT)
         else:
             self.client = None
+
+    @property
+    def trust_tracing_headers(self) -> bool:
+        """Deprecated alias for ``capture_tracing_headers``."""
+        return self.capture_tracing_headers
+
+    @trust_tracing_headers.setter
+    def trust_tracing_headers(self, enabled: bool) -> None:
+        self.capture_tracing_headers = enabled
 
     @property
     def extra_tags(self):
@@ -211,19 +201,11 @@ class PosthogContextMiddleware:
         """
         tags = {}
 
-        # Client-controlled headers are analytics context, not authenticated identity.
-        session_id = None
-        distinct_id = user_id
-        if self.trust_tracing_headers:
-            session_id = _get_sanitized_tracing_header(request, "X-POSTHOG-SESSION-ID")
-            distinct_id = (
-                _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID")
-                or user_id
-            )
-        if session_id:
-            contexts.set_context_session(session_id)
-        if distinct_id:
-            contexts.identify_context(distinct_id)
+        _apply_tracing_headers(
+            request.headers.get,
+            self.capture_tracing_headers,
+            fallback_distinct_id=user_id,
+        )
 
         # Extract user email
         if user_email:
@@ -367,6 +349,7 @@ class PosthogContextMiddleware:
                 for k, v in self.extract_tags(request).items():
                     contexts.tag(k, v)
 
+                _enrich_current_span()
                 return self.get_response(request)
 
     async def __acall__(self, request):
@@ -387,6 +370,7 @@ class PosthogContextMiddleware:
             for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
+            _enrich_current_span()
             return await self.get_response(request)
 
     def process_exception(self, request, exception):

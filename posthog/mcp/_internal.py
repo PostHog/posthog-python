@@ -12,7 +12,6 @@ the server object, so state is isolated per server and garbage-collected with it
 from __future__ import annotations
 
 import asyncio
-import json
 import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -108,6 +107,11 @@ class MCPAnalyticsData:
     # Bounded FIFO of sessions we've emitted $mcp_initialize for, so a long-lived
     # server can't accumulate one entry per session forever.
     initialized_sessions: "OrderedDict[str, None]" = field(default_factory=OrderedDict)
+    # True once mcp 2.x `Server.middleware` observes this server's real
+    # `initialize`, on every transport. On mcp 1.x an ASGI middleware bound to
+    # this server observes it over HTTP and marks each request it passes on;
+    # whatever neither covers falls back to the first request of the session.
+    handshake_observed_in_process: bool = False
     server_name: Optional[str] = None
     # Validated once during setup. Keep it separate from the caller-owned
     # options object so later option changes cannot alter event attribution.
@@ -131,31 +135,24 @@ _server_tracking: "weakref.WeakKeyDictionary[Any, MCPAnalyticsData]" = (
 )
 
 
+def tracking_key(server: Any) -> Any:
+    """The underlying low-level server for high-level wrappers (SDK 1.x FastMCP and
+    jlowin's fastmcp expose ``_mcp_server``; SDK 2.x MCPServer renamed it
+    ``_lowlevel_server``), else the server itself. Used as the tracking key so
+    instrumenting a wrapper and its underlying server resolve to one state instead
+    of two divergent ones (matching the TS SDK)."""
+    low_level = getattr(server, "_mcp_server", None) or getattr(
+        server, "_lowlevel_server", None
+    )
+    return low_level if low_level is not None else server
+
+
 def get_server_tracking_data(server: Any) -> Optional[MCPAnalyticsData]:
     return _server_tracking.get(server)
 
 
 def set_server_tracking_data(server: Any, data: MCPAnalyticsData) -> None:
     _server_tracking[server] = data
-
-
-def are_identities_equal(a: UserIdentity, b: UserIdentity) -> bool:
-    if a.distinct_id != b.distinct_id:
-        return False
-    if json.dumps(a.groups or {}, sort_keys=True) != json.dumps(
-        b.groups or {}, sort_keys=True
-    ):
-        return False
-    a_props = a.properties or {}
-    b_props = b.properties or {}
-    if set(a_props.keys()) != set(b_props.keys()):
-        return False
-    for key in a_props:
-        if json.dumps(a_props[key], sort_keys=True, default=str) != json.dumps(
-            b_props[key], sort_keys=True, default=str
-        ):
-            return False
-    return True
 
 
 def merge_identities(
@@ -176,35 +173,18 @@ async def _maybe_await(value: Any) -> Any:
     return value
 
 
-def _captured_extra(extra: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    """Project ``extra`` down to JSON-safe scalars before it is captured.
-
-    Callbacks (``identify``, ``event_properties``, ``intent_fallback``) receive
-    the full dict — on MCP SDK v2 that includes the raw request ``ctx`` so hosts
-    can read headers. Captured event parameters must not: the sanitizer leaves
-    opaque objects untouched and truncation stringifies them, which would ship
-    whatever the object's repr carries (headers, auth material, transport state)
-    to PostHog without key-based redaction."""
-    if extra is None:
-        return None
-    return {
-        key: value
-        for key, value in extra.items()
-        if value is None or isinstance(value, (str, int, float, bool))
-    }
-
-
 async def handle_identify(
     data: MCPAnalyticsData,
     session_id: str,
     request: Dict[str, Any],
     extra: Optional[Dict[str, Any]] = None,
-) -> Optional[Dict[str, Any]]:
-    """Resolve the optional ``identify`` callback, dedupe against the identity
-    cache, and return an ``$identify`` event to emit only when the identity has
-    materially changed (otherwise ``None``)."""
+) -> None:
+    """Resolve the optional ``identify`` callback and merge the result into the
+    session's cached identity. Every event of the session then carries it as
+    ``distinct_id``/``$set``, so no standalone ``$identify`` is sent: without an
+    ``$anon_distinct_id`` it would merge no person in ingestion."""
     if not data.options.identify:
-        return None
+        return
 
     try:
         identify = data.options.identify
@@ -217,29 +197,16 @@ async def handle_identify(
             log(
                 f"Warning: Supplied identify function returned null for session {session_id}"
             )
-            return None
+            return
 
         previous = data.identified_sessions.get(session_id)
-        merged = merge_identities(previous, identity_result)
-        has_changed = not (previous and are_identities_equal(previous, merged))
-        data.identified_sessions.set(session_id, merged)
-
-        if has_changed:
-            from ._event_types import MCPAnalyticsEventType
-
-            log(f"Identified session {session_id}")
-            return {
-                "session_id": session_id,
-                "resource_name": _get_request_resource_name(request),
-                "event_type": MCPAnalyticsEventType.IDENTIFY,
-                "parameters": {"request": request, "extra": _captured_extra(extra)},
-                "timestamp": datetime.now(timezone.utc),
-            }
+        data.identified_sessions.set(
+            session_id, merge_identities(previous, identity_result)
+        )
     except Exception as error:  # noqa: BLE001
         log(
             f"Error: identify function threw while identifying session {session_id} - {error}"
         )
-    return None
 
 
 async def resolve_event_properties(
@@ -254,18 +221,3 @@ async def resolve_event_properties(
     except Exception as e:  # noqa: BLE001
         log(f"event_properties callback error: {e}")
         return None
-
-
-def _get_request_resource_name(request: Any) -> str:
-    """The thing the request acts on: a tool/prompt ``name``, or the ``uri`` of a
-    resource read — which is the only name a ``resources/read`` request carries."""
-    if not isinstance(request, dict):
-        return "Unknown"
-    params = request.get("params")
-    if not isinstance(params, dict):
-        return "Unknown"
-    for key in ("name", "uri"):
-        value = params.get(key)
-        if isinstance(value, str):
-            return value
-    return "Unknown"

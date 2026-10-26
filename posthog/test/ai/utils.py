@@ -41,6 +41,29 @@ def make_response_usage(
     )
 
 
+class RecordingStream:
+    """Mock provider sync stream that is iterable and records when closed.
+
+    Mirrors the real ``openai.Stream``: it supports ``for`` and exposes
+    ``close()`` plus a ``response`` attribute, so tests can assert both
+    iteration and that the underlying stream is closed on context exit.
+    """
+
+    def __init__(self, items):
+        self._items = iter(items)
+        self.closed = False
+        self.response = "provider-response"
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._items)
+
+    def close(self):
+        self.closed = True
+
+
 class RecordingAsyncStream:
     """Mock provider async stream that is iterable and records when closed.
 

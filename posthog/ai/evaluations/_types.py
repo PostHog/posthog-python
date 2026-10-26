@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from typing_extensions import TypedDict
 
+from ._dataset_types import DatasetItem
 from ._errors import EvaluationAPIError
 from ._serialization import (
     JSONValue,
@@ -134,6 +135,45 @@ class EvaluationItem:
     def to_dict(self) -> dict[str, Any]:
         """Return a defensive, JSON-serializable copy of the complete declaration."""
         return json.loads(self._json)
+
+    @classmethod
+    def from_dataset_item(
+        cls,
+        item: DatasetItem,
+        *,
+        output: JSONValue | _Unset = _UNSET,
+        id: str | UUID | None = None,
+        case_key: str | None = None,
+        trial: str | None = None,
+        application_trace_id: str | None = None,
+    ) -> EvaluationItem:
+        """Declare one execution of a dataset case, preserving its exact version.
+
+        Copies input, expected output, and metadata; supply the new execution's
+        output and trace ID. Source output/provenance are never substituted.
+        A fresh execution UUID is generated unless id is supplied. Reuse the
+        returned item across scorers; call again for each independent trial.
+        ``case_key`` defaults to the caller-owned client item ID, or stable item
+        UUID. Omit output for an execution that failed before producing one.
+        Use the owning snapshot's revision_id when creating the experiment.
+        """
+        if not isinstance(item, DatasetItem):
+            raise TypeError("Expected a DatasetItem.")
+        if item.archived:
+            raise ValueError("Archived dataset items cannot be evaluated.")
+        return cls(
+            id=id,
+            input=item.input,
+            output=output,
+            expected_output=item.expected_output,
+            metadata=item.metadata,
+            case_key=(item.client_item_id or item.id) if case_key is None else case_key,
+            trial=trial,
+            dataset_item_identifier=item.id,
+            dataset_item_version_identifier=item.version_id,
+            dataset_item_version_id=item.version_id,
+            application_trace_id=application_trace_id,
+        )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EvaluationItem:

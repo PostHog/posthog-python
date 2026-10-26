@@ -82,7 +82,7 @@ class AsyncClient:
             posthog_client: PostHog client for tracking usage
             posthog_distinct_id: Default distinct ID for all calls (can be overridden per call)
             posthog_properties: Default properties for all calls (can be overridden per call)
-            posthog_privacy_mode: Default privacy mode for all calls (can be overridden per call)
+            posthog_privacy_mode: Default privacy mode for all calls (a call can enable it, not disable it)
             posthog_groups: Default groups for all calls (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
@@ -196,7 +196,7 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_distinct_id: ID to associate with the usage event (overrides client default)
             posthog_trace_id: Trace UUID for linking events (auto-generated if not provided)
             posthog_properties: Extra properties to include in the event (merged with client defaults)
-            posthog_privacy_mode: Whether to redact sensitive information (overrides client default)
+            posthog_privacy_mode: Whether to redact sensitive information (cannot disable a client default of True)
             posthog_groups: Group analytics properties (overrides client default)
             **kwargs: Arguments passed to Gemini's generate_content
         """
@@ -253,6 +253,7 @@ class AsyncModels(_GeminiModelsPolicy):
             nonlocal accumulated_content
             nonlocal stop_reason
 
+            stream_error: Optional[BaseException] = None
             try:
                 async for chunk in response:
                     # Extract usage stats from chunk
@@ -275,6 +276,9 @@ class AsyncModels(_GeminiModelsPolicy):
 
                     yield chunk
 
+            except Exception as exc:
+                stream_error = exc
+                raise
             finally:
                 end_time = time.time()
                 latency = end_time - start_time
@@ -292,6 +296,7 @@ class AsyncModels(_GeminiModelsPolicy):
                     latency,
                     accumulated_content,
                     stop_reason=stop_reason,
+                    error=stream_error,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -366,7 +371,7 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_distinct_id: ID to associate with the usage event (overrides client default)
             posthog_trace_id: Trace UUID for linking events (auto-generated if not provided)
             posthog_properties: Extra properties to include in the event (merged with client defaults)
-            posthog_privacy_mode: Whether to redact sensitive information (overrides client default)
+            posthog_privacy_mode: Whether to redact sensitive information (cannot disable a client default of True)
             posthog_groups: Group analytics properties (overrides client default)
             **kwargs: Arguments passed to Gemini's embed_content (e.g., config)
         """

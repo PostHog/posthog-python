@@ -72,7 +72,7 @@ async def main() -> None:
     list_handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
     await list_handler(mcp_types.ListToolsRequest(method="tools/list"))
 
-    # tool calls -> $mcp_initialize (lazy, once), $identify, $mcp_tool_call x3, $exception
+    # tool calls -> $mcp_initialize (lazy, once), $mcp_tool_call x3, $exception
     await server._tool_manager.call_tool(
         "add",
         {"a": 2, "b": 3, "context": "adding two numbers to demo the python mcp sdk"},

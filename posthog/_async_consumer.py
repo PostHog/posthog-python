@@ -70,7 +70,7 @@ class _AsyncConsumer:
         flush_interval: float,
         gzip: bool,
         retries: int,
-        timeout: int,
+        timeout: float,
         historical_migration: bool,
         capture_mode: CaptureMode,
         capture_compression: CaptureCompression,
