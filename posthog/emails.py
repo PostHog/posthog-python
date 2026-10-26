@@ -242,7 +242,12 @@ def _error_name(status: Optional[int], code: str) -> str:
             else "concurrent_idempotent_requests"
         )
     if status == 422:
-        return "invalid_idempotent_request"
+        # The template send route also answers 422 for send checks such as recipient_suppressed.
+        return (
+            "invalid_idempotent_request"
+            if code == "idempotency_key_reused"
+            else "validation_error"
+        )
     if status == 429:
         return (
             "monthly_quota_exceeded" if code in _QUOTA_CODES else "rate_limit_exceeded"

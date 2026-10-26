@@ -220,6 +220,7 @@ def test_retries_only_what_waiting_can_fix(_name, first_reply, retried):
         (409, "idempotency_key_in_flight", "concurrent_idempotent_requests"),
         (409, "template_outdated", "validation_error"),
         (422, "idempotency_key_reused", "invalid_idempotent_request"),
+        (422, "recipient_suppressed", "validation_error"),
         (429, "throttled", "rate_limit_exceeded"),
         (429, "quota_limited", "monthly_quota_exceeded"),
         (503, "delivery_unavailable", "service_unavailable"),
