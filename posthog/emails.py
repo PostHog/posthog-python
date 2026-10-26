@@ -628,8 +628,14 @@ class AsyncEmails(_EmailsBase):
         url = self.host + prepared.path
         for attempt in range(self.max_retries + 1):
             try:
+                # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
+                # the secret key's Bearer header, and the send timeout applies whatever the client's default.
                 response = await client.post(
-                    url, content=prepared.body, headers=headers
+                    url,
+                    content=prepared.body,
+                    headers=headers,
+                    auth=None,
+                    timeout=self.timeout,
                 )
                 try:
                     try:

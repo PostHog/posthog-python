@@ -384,7 +384,10 @@ async def test_async_send_retries_with_the_same_key():
 
     emails = AsyncEmails(
         SECRET_KEY,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        timeout=3,
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), auth=("user", "pass"), timeout=None
+        ),
     )
 
     with mock.patch("posthog.emails.asyncio.sleep") as sleep:
@@ -397,6 +400,9 @@ async def test_async_send_retries_with_the_same_key():
     assert [str(request.url) for request in seen] == [SEND_URL, SEND_URL]
     assert seen[0].headers["Idempotency-Key"] == seen[1].headers["Idempotency-Key"]
     assert seen[0].headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert seen[0].extensions["timeout"] == dict.fromkeys(
+        ["connect", "read", "write", "pool"], 3
+    )
     assert json.loads(seen[0].content)["identifiers"] == {"distinct_id": "user_123"}
 
 
