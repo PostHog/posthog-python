@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from datetime import datetime, timezone
@@ -305,6 +306,21 @@ def test_a_disabled_client_sends_nothing():
     assert adapter.requests == []
 
 
+def test_a_shut_down_client_sends_no_email():
+    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+    emails = client.emails
+
+    client.shutdown()
+
+    with mock.patch.object(requests.Session, "request") as request:
+        for handle in (emails, client.emails):
+            with pytest.raises(EmailError) as raised:
+                send(handle)
+            assert raised.value.code == "client_closed"
+    request.assert_not_called()
+    assert emails._session is None
+
+
 @parameterized.expand(
     [
         ("several_recipients", {"to": ["a@example.com", "b@example.com"]}, TypeError),
@@ -361,3 +377,40 @@ async def test_async_disabled_client_sends_nothing():
 
     assert result.id is None
     assert emails._client is None
+
+
+@pytest.mark.asyncio
+async def test_async_shutdown_waits_for_a_send_in_flight_and_then_refuses_sends():
+    started, release = asyncio.Event(), asyncio.Event()
+    replies = [
+        httpx.Response(503, json={"code": "delivery_unavailable"}),
+        httpx.Response(202, json={"message_id": "msg_1"}),
+    ]
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        started.set()
+        await release.wait()
+        return replies.pop(0)
+
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
+    emails = client.emails
+    emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    with mock.patch("posthog.emails._retry_delay", return_value=0.0):
+        sending = asyncio.create_task(
+            emails.send(to="user@example.com", template_id=TEMPLATE_ID)
+        )
+        await started.wait()
+        shutting_down = asyncio.create_task(client.shutdown())
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert not shutting_down.done()
+        release.set()
+
+        assert (await sending).id == "msg_1"
+        await shutting_down
+
+    assert emails._client is None
+    with pytest.raises(EmailError) as raised:
+        await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
+    assert raised.value.code == "client_closed"

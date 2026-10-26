@@ -10,7 +10,7 @@ import threading
 import warnings
 import weakref
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -271,9 +271,20 @@ class AsyncClient:
         """
         if self._emails is None:
             self._emails = _client_emails(
-                AsyncEmails, self.secret_key, self.host, lambda: self.disabled
+                AsyncEmails,
+                self.secret_key,
+                self.host,
+                lambda: self.disabled,
+                self._admit_email_send,
             )
         return self._emails
+
+    def _admit_email_send(self) -> Optional[Callable[[], None]]:
+        # Shutdown waits for in-flight operations before it closes the email transport.
+        if not self._accepting or self._closed:
+            return None
+        completion = self._start_inflight_operation()
+        return lambda: self._finish_inflight_operation(completion)
 
     async def __aenter__(self) -> AsyncClient:
         self._ensure_workers_started()
