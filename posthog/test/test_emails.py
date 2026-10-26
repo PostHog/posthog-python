@@ -125,7 +125,6 @@ def test_send_posts_the_template_to_the_app_host(_name, overrides, extra_body):
         ("us_ingestion", "https://us.i.posthog.com", "https://us.posthog.com"),
         ("eu_ingestion", "https://eu.i.posthog.com/", "https://eu.posthog.com"),
         ("legacy_app", "https://app.posthog.com", "https://us.posthog.com"),
-        ("self_hosted", "https://posthog.example.com/", "https://posthog.example.com"),
     ]
 )
 def test_sends_go_to_the_app_host(_name, host, expected):
@@ -136,6 +135,24 @@ def test_sends_go_to_the_app_host(_name, host, expected):
         "phc_test", host=client_host, secret_key=SECRET_KEY, sync_mode=True
     )
     assert client.emails.host == expected
+
+
+def test_a_client_with_a_custom_host_never_sends_it_the_secret_key():
+    assert (
+        Emails(SECRET_KEY, host="https://ph.example.com/").host
+        == "https://ph.example.com"
+    )
+    client = Posthog(
+        "phc_test", host="https://ph.example.com", secret_key=SECRET_KEY, sync_mode=True
+    )
+    adapter = FakeAdapter([])
+    client.emails._get_session().mount("https://", adapter)
+
+    with pytest.raises(EmailError) as raised:
+        send(client.emails)
+
+    assert raised.value.code == "app_host_required"
+    assert adapter.requests == []
 
 
 @parameterized.expand(
@@ -282,7 +299,7 @@ def test_a_disabled_client_sends_nothing():
     emails._get_session().mount("https://", adapter)
 
     client.disabled = True
-    result = send(client.emails)
+    result = send(emails)
 
     assert result.id is None
     assert adapter.requests == []

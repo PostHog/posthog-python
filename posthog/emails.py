@@ -1,6 +1,6 @@
 """Transactional email, sent from an email template in PostHog.
 
-Use ``posthog.emails`` on a client created with a project secret API key, or
+Use ``client.emails`` on a client created with a project secret API key, or
 create :class:`Emails` directly in a process that only sends email:
 
 ```python
@@ -32,13 +32,18 @@ import threading
 import time
 from dataclasses import dataclass
 from types import TracebackType
-from typing import Any, Mapping, Optional, Union
+from typing import Any, Callable, Mapping, Optional, TypeVar, Union
 from uuid import UUID, uuid4
 
 import requests
 
 from .capture_v1 import _parse_retry_after
-from .request import DatetimeSerializer, determine_app_host
+from .request import (
+    EU_APP_ENDPOINT,
+    US_APP_ENDPOINT,
+    DatetimeSerializer,
+    determine_app_host,
+)
 from .utils import clean
 from .version import VERSION
 
@@ -272,7 +277,7 @@ def _retry_delay(error: EmailError, attempt: int, max_retries: int) -> Optional[
     # Retrying before a longer Retry-After would break the server's rate limit.
     if error.retry_after is not None and error.retry_after > _MAX_RETRY_DELAY:
         return None
-    backoff = min(_MAX_RETRY_DELAY, 2.0**attempt) * random.uniform(0.8, 1.2)
+    backoff = min(_MAX_RETRY_DELAY, 2.0**attempt * random.uniform(0.8, 1.2))
     return max(backoff, error.retry_after or 0.0)
 
 
@@ -317,8 +322,15 @@ class _EmailsBase:
         self.timeout = timeout
         self.max_retries = max_retries
         self.disabled = disabled
+        self._parent_disabled: Callable[[], bool] = lambda: False
+        self._host_error: Optional[str] = None
+
+    def _is_disabled(self) -> bool:
+        return self.disabled or self._parent_disabled()
 
     def _secret_key(self) -> str:
+        if self._host_error:
+            raise _sdk_error("app_host_required", self._host_error)
         if not self.secret_key:
             raise _sdk_error(
                 "missing_secret_key",
@@ -396,7 +408,7 @@ class Emails(_EmailsBase):
 
         Examples:
             ```python
-            posthog.emails.send(
+            emails.send(
                 to="user@example.com",
                 template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
                 template_data={"name": "Ada"},
@@ -408,7 +420,7 @@ class Emails(_EmailsBase):
         prepared = _prepare_send(
             to, template_id, template_data, distinct_id, idempotency_key
         )
-        if self.disabled:
+        if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
         auth = _BearerAuth(self._secret_key(), prepared.idempotency_key)
@@ -513,7 +525,7 @@ class AsyncEmails(_EmailsBase):
 
         Examples:
             ```python
-            await posthog.emails.send(
+            await emails.send(
                 to="user@example.com",
                 template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
                 template_data={"name": "Ada"},
@@ -524,7 +536,7 @@ class AsyncEmails(_EmailsBase):
         prepared = _prepare_send(
             to, template_id, template_data, distinct_id, idempotency_key
         )
-        if self.disabled:
+        if self._is_disabled():
             log.debug("PostHog client is disabled, so no email was sent.")
             return SendEmailResult(id=None)
         headers = _headers(self._secret_key(), prepared.idempotency_key)
@@ -588,3 +600,25 @@ class AsyncEmails(_EmailsBase):
                 timeout=self.timeout, follow_redirects=False
             )
         return httpx, self._client
+
+
+_EmailsT = TypeVar("_EmailsT", bound=_EmailsBase)
+
+
+def _client_emails(
+    factory: Callable[..., _EmailsT],
+    secret_key: Optional[str],
+    client_host: Optional[str],
+    is_disabled: Callable[[], bool],
+) -> _EmailsT:
+    app_host = determine_app_host(client_host)
+    is_cloud = app_host in (US_APP_ENDPOINT, EU_APP_ENDPOINT)
+    emails = factory(secret_key, host=app_host if is_cloud else None)
+    if not is_cloud:
+        # A custom host is often an ingestion proxy, which must not receive the secret key.
+        emails._host_error = (
+            "The client's host is not PostHog Cloud, so the client can't tell where to send email. "
+            "Create posthog.emails.Emails(secret_key, host=<your PostHog app host>) instead."
+        )
+    emails._parent_disabled = is_disabled
+    return emails

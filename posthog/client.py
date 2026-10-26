@@ -53,7 +53,7 @@ from posthog.contexts import (
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
-from posthog.emails import Emails
+from posthog.emails import Emails, _client_emails
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -1140,13 +1140,13 @@ class Client(object):
         Send transactional email from PostHog email templates.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
-        scope. Sends go to the app host of ``host``. A disabled client sends
-        nothing. To send email without capturing events, create
-        ``posthog.emails.Emails`` directly.
+        scope. Sends go to the PostHog Cloud app host of ``host``. For any other
+        host, or to send email without capturing events, create
+        ``posthog.emails.Emails`` with the app host. A disabled client sends nothing.
 
         Examples:
             ```python
-            posthog.emails.send(
+            client.emails.send(
                 to="user@example.com",
                 template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
                 template_data={"name": "Ada"},
@@ -1155,8 +1155,9 @@ class Client(object):
             ```
         """
         if self._emails is None:
-            self._emails = Emails(self.secret_key, host=self.host)
-        self._emails.disabled = self.disabled
+            self._emails = _client_emails(
+                Emails, self.secret_key, self.host, lambda: self.disabled
+            )
         return self._emails
 
     @property
@@ -2348,6 +2349,8 @@ class Client(object):
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
         self._lifecycle_owner = None
+        # The parent's email session and its lock are not safe to share with the child.
+        self._emails = None
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_dirty = False
         self._lifecycle_callback_context = ContextVar(
@@ -2986,6 +2989,12 @@ class Client(object):
                 self._shutdown_flag_definition_cache_provider,
                 errors,
             )
+            if self._emails is not None:
+                self._run_lifecycle_cleanup(
+                    "Failed to close the email transport during lifecycle cleanup",
+                    self._emails.close,
+                    errors,
+                )
             self._run_lifecycle_cleanup(
                 "Failed to unregister client during lifecycle cleanup",
                 self._unregister_duplicate_client,
