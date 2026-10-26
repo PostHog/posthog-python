@@ -48,7 +48,7 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 ``code``. The ones a setup usually hits:
 
 - ``missing_secret_key``: the client has no ``secret_key``.
-- ``app_host_required``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
+- ``missing_app_host``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
 - ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
   wrong, or it lacks ``hog_flow:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
@@ -389,7 +389,7 @@ class _EmailsBase:
 
     def _secret_key(self) -> str:
         if self._host_error:
-            raise _sdk_error("app_host_required", self._host_error)
+            raise _sdk_error("missing_app_host", self._host_error)
         if not self.secret_key:
             raise _sdk_error(
                 "missing_secret_key",
@@ -520,13 +520,14 @@ class Emails(_EmailsBase):
                     response.close()
                 _log_warnings(result)
                 return result
-            except requests.exceptions.RequestException:
+            except requests.exceptions.RequestException as exc:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
+                error.__cause__ = exc
             except EmailError as exc:
                 error = exc
             delay = _retry_delay(error, attempt, self.max_retries)
             if delay is None:
-                raise error from None
+                raise error
             time.sleep(delay)
         raise AssertionError("unreachable")
 
@@ -644,13 +645,14 @@ class AsyncEmails(_EmailsBase):
                     await response.aclose()
                 _log_warnings(result)
                 return result
-            except httpx.RequestError:
+            except httpx.RequestError as exc:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
+                error.__cause__ = exc
             except EmailError as exc:
                 error = exc
             delay = _retry_delay(error, attempt, self.max_retries)
             if delay is None:
-                raise error from None
+                raise error
             await asyncio.sleep(delay)
         raise AssertionError("unreachable")
 

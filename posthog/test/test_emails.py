@@ -158,7 +158,7 @@ def test_a_client_with_a_custom_host_never_sends_it_the_secret_key():
         with pytest.raises(EmailError) as raised:
             send(client.emails)
 
-    assert raised.value.code == "app_host_required"
+    assert raised.value.code == "missing_app_host"
     request.assert_not_called()
 
 
@@ -252,6 +252,7 @@ def test_network_failure_after_retries_is_service_unavailable():
         "network_error",
         "service_unavailable",
     )
+    assert isinstance(raised.value.__cause__, requests.exceptions.ConnectionError)
 
 
 def test_waits_for_retry_after_and_gives_up_on_a_longer_one(no_sleep):
