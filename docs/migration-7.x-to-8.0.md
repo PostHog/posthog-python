@@ -41,6 +41,14 @@ You need to change code if your app does any of these:
 If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
 An endpoint that is not served drops every event sent to it.
 
+If you send events through your own reverse proxy, update it before you upgrade:
+
+- Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
+- Pass `Authorization` (the project token, sent as `Bearer <token>`), every `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent` through unchanged. PostHog answers `401` without `Authorization` and `400` without the others, and the batch fails.
+- Accept request bodies up to 20 MB. AI requests are often larger than 1 MB, the default limit in nginx and ingress-nginx. A `413` from the proxy fails the batch.
+
+PostHog's managed reverse proxy already does this. See the [proxy guides](https://posthog.com/docs/advanced/proxy).
+
 The SDK follows a `307` or `308` redirect only to the origin of `host` (same scheme, host and port), at most 5 times.
 Any other redirect fails the batch and reaches `on_error`.
 In 7.x the sync client followed redirects to any origin.
