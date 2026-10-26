@@ -5,7 +5,6 @@ Guidance for coding agents working on the PostHog Python SDK (`posthog`). Runtim
 ## Start here
 
 - Use `uv`; follow [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and [checks](./CONTRIBUTING.md#ci-aligned-checks). Run the smallest relevant tests first.
-- Sign every commit; `main` rejects unsigned commits. Configure signing in the git config you commit with, as described in "Commit signing" in [CONTRIBUTING.md](./CONTRIBUTING.md).
 - For `openfeature-provider/` changes, also follow its [contributor guide](./openfeature-provider/CONTRIBUTING.md); root pytest collection does not cover it.
 - Read [RELEASING.md](./RELEASING.md) when adding changesets or changing builds/publishing. Releases publish both `posthog` and its generated `posthoganalytics` mirror.
 - For public API changes, update/review `references/public_api_snapshot.txt` and run its check as described in the contributor guide.

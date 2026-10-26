@@ -9,7 +9,6 @@
 ## :pencil: Checklist
 <!--- Put an `x` in the boxes that apply -->
 
-- [ ] All commits are signed (see [Commit signing](https://github.com/PostHog/posthog-python/blob/main/CONTRIBUTING.md#commit-signing))
 - [ ] I reviewed the submitted code.
 - [ ] I added tests to verify the changes.
 - [ ] I updated the docs if needed.
