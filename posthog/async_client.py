@@ -70,6 +70,7 @@ from .exception_utils import (
     try_attach_code_variables_to_frames,
 )
 from .consumer import MAX_MSG_SIZE
+from .emails import AsyncEmails
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -246,6 +247,30 @@ class AsyncClient:
         self._deferred_lifecycle_tasks: set[asyncio.Task[Any]] = set()
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self._register_duplicate_client()
+
+    _emails: Optional[AsyncEmails] = None
+
+    @property
+    def emails(self) -> AsyncEmails:
+        """
+        Send transactional email from PostHog email templates.
+
+        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        scope, and ``posthog[async]``. A disabled client sends nothing.
+
+        Examples:
+            ```python
+            await posthog.emails.send(
+                to="user@example.com",
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                distinct_id="user_123",
+            )
+            ```
+        """
+        if self._emails is None:
+            self._emails = AsyncEmails(self.secret_key, host=self.host)
+        self._emails.disabled = self.disabled
+        return self._emails
 
     async def __aenter__(self) -> AsyncClient:
         self._ensure_workers_started()
