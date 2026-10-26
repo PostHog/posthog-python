@@ -276,7 +276,9 @@ def test_resume_is_local_and_supports_references_without_scorer_discovery(client
 
 def test_same_item_is_declared_once_for_multiple_scorers(client):
     evaluations, transport = client
-    item = EvaluationItem(input={"question": "Paris?"}, output="France")
+    item = EvaluationItem(
+        input={"question": "Paris?"}, output="France", model_version="model-b"
+    )
     results = [
         result(item),
         EvaluationResult(item=item, scorer_version_id=OTHER_VERSION_ID, value=True),
@@ -286,9 +288,134 @@ def test_same_item_is_declared_once_for_multiple_scorers(client):
     )
     body = json.loads(transport.request.call_args.kwargs["body"])
     assert body["items"] == [item.to_dict()]
+    assert body["items"][0]["model_version"] == "model-b"
+    assert all("model_version" not in row for row in body["results"])
     assert len(receipt.chunks) == 1
     assert len(receipt.chunks[0].results) == 2
     assert len(receipt.chunks[0].items) == 1
+
+
+@pytest.mark.parametrize("experiment_options", [{}, {"model_version": "model-a"}, None])
+def test_item_models_are_declared_without_resolving_experiment_defaults(
+    client, experiment_options
+):
+    evaluations, transport = client
+    if experiment_options is None:
+        experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+        transport.request.assert_not_called()
+    else:
+        experiment = invoke(
+            evaluations.create_experiment, name="Models", **experiment_options
+        )
+        creation = json.loads(transport.request.call_args.kwargs["body"])
+        assert creation.get("model_version") == experiment_options.get("model_version")
+        transport.request.reset_mock()
+    items = [
+        EvaluationItem(model_version=model)
+        for model in ["model-b", "model-c", "x" * 255, " model with spaces ", None]
+    ] + [EvaluationItem()]
+    invoke(experiment.upload_results, [result(item) for item in items])
+    transport.request.assert_called_once()
+    assert transport.request.call_args.args == (
+        "POST",
+        BASE + experiment.id + "/upload/",
+    )
+    body = json.loads(transport.request.call_args.kwargs["body"])
+    assert body["items"] == [item.to_dict() for item in items]
+    assert [item.get("model_version") for item in body["items"]] == [
+        "model-b",
+        "model-c",
+        "x" * 255,
+        " model with spaces ",
+        None,
+        None,
+    ]
+    assert all("model_version" not in row for row in body["results"])
+    assert all("payload" not in item for item in body["items"])
+    if experiment_options is not None:
+        assert experiment.submission == creation
+
+
+@pytest.mark.parametrize("model", ["", 1, True, [], {}, "x" * 256, "with\x00null"])
+def test_invalid_item_models_are_rejected_before_io(client, model):
+    _, transport = client
+    with pytest.raises(ValueError, match="model_version"):
+        EvaluationItem(model_version=model)
+    with pytest.raises(ValueError, match="model_version"):
+        EvaluationItem.from_dict({"id": str(uuid4()), "model_version": model})
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "original_model,changed_model",
+    [("model-b", "model-c"), ("model-b", None), (None, "model-a")],
+)
+def test_conflicting_item_models_are_rejected_before_any_bulk_chunk(
+    client, monkeypatch, original_model, changed_model
+):
+    evaluations, transport = client
+    monkeypatch.setattr(_client, "_MAX_RESULTS", 1)
+    item = EvaluationItem(model_version=original_model)
+    changed = EvaluationItem(id=item.id, model_version=changed_model)
+    results = [
+        result(item),
+        EvaluationResult(item=changed, scorer_version_id=OTHER_VERSION_ID, value=True),
+    ]
+    with pytest.raises(ValueError, match="Conflicting"):
+        invoke(evaluations.resume_experiment(EXPERIMENT_ID).upload_results, results)
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "model_options", [{}, {"model_version": None}, {"model_version": "model-b"}]
+)
+def test_saved_item_models_replay_and_allow_another_scorer_by_uuid(
+    client, model_options
+):
+    evaluations, transport = client
+    experiment = invoke(
+        evaluations.create_experiment, name="Models", model_version="model-a"
+    )
+    item = EvaluationItem(**model_options)
+    original = result(item)
+    first = invoke(experiment.upload_results, [original]).chunks[0]
+    original_body = transport.request.call_args.kwargs["body"]
+    saved = item.to_dict()
+    saved.update(model_options)
+    restored_item = EvaluationItem.from_dict(saved)
+    restored = EvaluationResult.from_dict(original.to_dict(), item=restored_item)
+    second_scorer = EvaluationResult(
+        item=item, scorer_version_id=OTHER_VERSION_ID, value=True
+    )
+    restored_second = EvaluationResult.from_dict(
+        second_scorer.to_dict(), item=restored_item
+    )
+    saved["model_version"] = "changed"
+    assert restored_item.to_dict() == item.to_dict()
+    assert restored.item is restored_second.item is restored_item
+    assert restored.item_id == restored_second.item_id == item.id
+    transport.request.side_effect = lambda method, path, *, body: upload_response(
+        body, created=False
+    )
+    replayed = invoke(experiment.upload_results, [restored]).chunks[0]
+    assert transport.request.call_args.kwargs["body"] == original_body
+    for accepted, replay in zip(
+        first.items + first.results, replayed.items + replayed.results
+    ):
+        assert replay.id == accepted.id
+        assert replay.accepted_at == accepted.accepted_at
+        assert replay.created is False
+    transport.request.reset_mock()
+    invoke(
+        experiment.upload_result,
+        item=item.id,
+        scorer_version_id=OTHER_VERSION_ID,
+        value=True,
+    )
+    transport.request.assert_called_once()
+    body = json.loads(transport.request.call_args.kwargs["body"])
+    assert body["items"] == []
+    assert "model_version" not in body["results"][0]
 
 
 def test_real_result_count_boundary_splits_without_dropping_declarations(client):
@@ -319,6 +446,57 @@ def test_utf8_byte_boundary_splits_below_request_limit(client):
         len(call.kwargs["body"]) <= 5 * 1024 * 1024
         for call in transport.request.call_args_list
     )
+
+
+def test_item_models_count_towards_the_encoded_request_limit(client, monkeypatch):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    items = [EvaluationItem(), EvaluationItem()]
+    invoke(experiment.upload_results, [result(item) for item in items])
+    limit = len(transport.request.call_args.kwargs["body"])
+    monkeypatch.setattr(_client, "_MAX_REQUEST_BYTES", limit)
+    transport.request.reset_mock()
+    modeled = [EvaluationItem(id=item.id, model_version="🙂" * 20) for item in items]
+    receipt = invoke(experiment.upload_results, [result(item) for item in modeled])
+    assert len(receipt.chunks) == 2
+    for call, item in zip(transport.request.call_args_list, modeled):
+        assert len(call.kwargs["body"]) <= limit
+        assert json.loads(call.kwargs["body"])["items"] == [item.to_dict()]
+
+
+def test_shared_item_model_survives_partial_bulk_failure_and_recovery(client):
+    evaluations, transport = client
+    item = EvaluationItem(model_version="model-b")
+    results = [
+        EvaluationResult(
+            item=item, scorer_version_id=uuid5(UUID(VERSION_ID), str(index)), value=True
+        )
+        for index in range(1001)
+    ]
+
+    def fail_second(method, path, *, body):
+        if transport.request.call_count == 2:
+            raise EvaluationAPIError(persistence="unknown")
+        return upload_response(body)
+
+    transport.request.side_effect = fail_second
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    with pytest.raises(BulkUploadError) as caught:
+        invoke(experiment.upload_results, results)
+    error = caught.value
+    assert len(error.completed.chunks[0].results) == 1000
+    assert error.failed_index == 1000
+    assert error.pending_results == (results[-1],)
+    assert error.failed_chunk["items"] == [item.to_dict()]
+    failed_body = transport.request.call_args.kwargs["body"]
+    error.failed_chunk["items"][0]["model_version"] = "changed"
+    assert error.failed_chunk["items"] == [item.to_dict()]
+    transport.request.side_effect = respond
+    invoke(experiment.upload_results, error.pending_results)
+    assert transport.request.call_args.kwargs["body"] == failed_body
+    assert transport.request.call_count == 3
+    for call in transport.request.call_args_list:
+        assert json.loads(call.kwargs["body"])["items"] == [item.to_dict()]
 
 
 def test_shared_item_is_redeclared_in_each_independently_replayable_chunk(

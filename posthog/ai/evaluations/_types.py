@@ -83,6 +83,8 @@ class EvaluationItem:
     Payload values are copied as JSON. Omitted fields differ from explicit None.
     Use ``payload={}`` for an explicitly empty payload. Save ``to_dict()`` to
     restore exactly the same declaration after restarting the process.
+    ``model_version`` identifies this execution's model and overrides the
+    experiment default. Omit it or pass None to inherit the default on the server.
     """
 
     id: str
@@ -102,6 +104,7 @@ class EvaluationItem:
         dataset_item_version_identifier: str | None = None,
         dataset_item_version_id: str | UUID | None = None,
         application_trace_id: str | None = None,
+        model_version: str | None = None,
         payload: dict[str, JSONValue] | _Unset = _UNSET,
     ) -> None:
         identity = _uuid(uuid4() if id is None else id)
@@ -112,6 +115,7 @@ class EvaluationItem:
             "dataset_item_identifier": dataset_item_identifier,
             "dataset_item_version_identifier": dataset_item_version_identifier,
             "application_trace_id": application_trace_id,
+            "model_version": model_version,
         }.items():
             if value is not None:
                 data[key] = _identifier(value, key)
@@ -146,6 +150,7 @@ class EvaluationItem:
         case_key: str | None = None,
         trial: str | None = None,
         application_trace_id: str | None = None,
+        model_version: str | None = None,
     ) -> EvaluationItem:
         """Declare one execution of a dataset case, preserving its exact version.
 
@@ -156,6 +161,8 @@ class EvaluationItem:
         ``case_key`` defaults to the caller-owned client item ID, or stable item
         UUID. Omit output for an execution that failed before producing one.
         Use the owning snapshot's revision_id when creating the experiment.
+        Supply ``model_version`` for this execution's model; omitted or None
+        inherits the experiment default, never dataset metadata or source traces.
         """
         if not isinstance(item, DatasetItem):
             raise TypeError("Expected a DatasetItem.")
@@ -173,6 +180,7 @@ class EvaluationItem:
             dataset_item_version_identifier=item.version_id,
             dataset_item_version_id=item.version_id,
             application_trace_id=application_trace_id,
+            model_version=model_version,
         )
 
     @classmethod
