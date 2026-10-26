@@ -331,9 +331,13 @@ def test_a_disabled_client_sends_nothing():
 
     client.disabled = True
     with mock.patch.object(requests.Session, "request") as request:
-        result = send(emails)
+        with pytest.raises(EmailError) as raised:
+            send(emails)
 
-    assert result.id is None
+    assert (raised.value.code, raised.value.name) == (
+        "client_disabled",
+        "application_error",
+    )
     request.assert_not_called()
 
 
@@ -416,9 +420,10 @@ async def test_async_disabled_client_sends_nothing():
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
 
-    result = await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
+    with pytest.raises(EmailError) as raised:
+        await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
 
-    assert result.id is None
+    assert raised.value.code == "client_disabled"
     handler.assert_not_called()
 
 

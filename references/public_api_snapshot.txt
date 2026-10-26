@@ -891,7 +891,7 @@ attribute posthog.emails.EmailError.why = why
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
-attribute posthog.emails.SendEmailResult.id: Optional[str]
+attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
 attribute posthog.enable_exception_autocapture = False
@@ -1313,7 +1313,7 @@ class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[st
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None)
-class posthog.emails.SendEmailResult(id: Optional[str], replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
+class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)

@@ -53,6 +53,7 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
   wrong, or it lacks ``hog_flow:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
   enabled for the project.
+- ``client_disabled``: the client is disabled, so it sends nothing.
 - ``client_closed``: the client is shut down.
 
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
@@ -61,7 +62,7 @@ standalone :class:`Emails` with ``close()`` or a ``with`` block.
 Testing without network calls: pass your own transport, ``session`` to
 :class:`Emails` or ``http_client`` to :class:`AsyncEmails`, with a fake adapter
 or ``httpx.MockTransport``. Any library that mocks ``requests`` or ``httpx``
-works too. A disabled client returns a result with ``id=None`` and sends nothing.
+works too. A disabled client sends nothing and raises ``client_disabled``.
 """
 
 from __future__ import annotations
@@ -145,9 +146,9 @@ class EmailWarning:
 
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is ``None`` when the client is disabled and sent nothing."""
+    """The queued email. ``id`` is its message ID."""
 
-    id: Optional[str]
+    id: str
     replayed: bool = False
     warnings: tuple[EmailWarning, ...] = ()
 
@@ -489,8 +490,10 @@ class Emails(_EmailsBase):
             to, template_id, template_data, distinct_id, idempotency_key
         )
         if self._is_disabled():
-            log.debug("PostHog client is disabled, so no email was sent.")
-            return SendEmailResult(id=None)
+            raise _sdk_error(
+                "client_disabled",
+                "The PostHog client is disabled, so no email was sent.",
+            )
         finish = self._start_send()
         try:
             return self._deliver(prepared)
@@ -619,8 +622,10 @@ class AsyncEmails(_EmailsBase):
             to, template_id, template_data, distinct_id, idempotency_key
         )
         if self._is_disabled():
-            log.debug("PostHog client is disabled, so no email was sent.")
-            return SendEmailResult(id=None)
+            raise _sdk_error(
+                "client_disabled",
+                "The PostHog client is disabled, so no email was sent.",
+            )
         finish = self._start_send()
         try:
             return await self._deliver(prepared)
