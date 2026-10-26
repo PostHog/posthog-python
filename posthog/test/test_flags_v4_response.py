@@ -1,4 +1,4 @@
-"""Reading the ``/flags?v=3`` response, checked against the released wire contract.
+"""Reading the ``/flags?v=4`` response, checked against the released wire contract.
 
 The files in ``fixtures/feature_flag_rules_v2`` are copied unchanged from a released
 ``PostHog/posthog-sdk-test-harness`` contract. ``SOURCE.json`` records the release and
@@ -557,7 +557,7 @@ def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", False, None).value is False
 
 
-# Legacy accessor parity: a v3 record and the equivalent older-server record must give
+# Legacy accessor parity: a v4 record and the equivalent older-server record must give
 # identical legacy results.
 
 
@@ -572,8 +572,8 @@ def _legacy_maps(response: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _v3_record_for_v1_outcome(outcome: Dict[str, Any]) -> Dict[str, Any]:
-    """The v3 record of a v1 flag: ``value`` is the variant, or ``enabled`` without one."""
+def _v4_record_for_v1_outcome(outcome: Dict[str, Any]) -> Dict[str, Any]:
+    """The v4 record of a v1 flag: ``value`` is the variant, or ``enabled`` without one."""
     if outcome["failed"]:
         value = None
     elif outcome["variant"] is not None:
@@ -607,14 +607,14 @@ def test_v1_flags_render_the_same_legacy_values_from_both_shapes(case):
     v2_response = case["projections"]["flags_v2"]
     v1_maps = case["projections"]["flags_v1"]
     outcome = case["outcome"]
-    v3_flags = (
+    v4_flags = (
         {}
         if outcome["omitted"]
-        else {outcome["key"]: _v3_record_for_v1_outcome(outcome)}
+        else {outcome["key"]: _v4_record_for_v1_outcome(outcome)}
     )
-    v3_response = {
+    v4_response = {
         "errorsWhileComputingFlags": v2_response["errorsWhileComputingFlags"],
-        "flags": v3_flags,
+        "flags": v4_flags,
     }
     expected = {
         "featureFlags": v1_maps["featureFlags"],
@@ -625,7 +625,7 @@ def test_v1_flags_render_the_same_legacy_values_from_both_shapes(case):
     }
 
     assert _legacy_maps(v2_response) == expected
-    assert _legacy_maps(v3_response) == expected
+    assert _legacy_maps(v4_response) == expected
 
 
 VALUE_SUCCESS_CASES = [
@@ -642,9 +642,9 @@ def _value_case_records(case: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str,
         "description": "Evaluated",
     }
     metadata = {"id": 401, "version": 3, "description": None, "has_experiment": False}
-    v3_metadata = {**metadata, "config_version": 2, "payload": None}
+    v4_metadata = {**metadata, "config_version": 2, "payload": None}
     if rule:
-        v3_metadata.update(rule_type=rule["rule_type"], rule_id=rule["id"])
+        v4_metadata.update(rule_type=rule["rule_type"], rule_id=rule["id"])
     payload = legacy["payload"]
     v2_record = {
         "key": "typed-flag",
@@ -656,18 +656,18 @@ def _value_case_records(case: Dict[str, Any]) -> tuple[Dict[str, Any], Dict[str,
             "payload": None if payload is None else json.dumps(payload),
         },
     }
-    v3_record = {
+    v4_record = {
         "key": "typed-flag",
         "value": expected["value"],
         "reason": reason,
-        "metadata": v3_metadata,
+        "metadata": v4_metadata,
     }
-    return v2_record, v3_record
+    return v2_record, v4_record
 
 
 @pytest.mark.parametrize("case", VALUE_SUCCESS_CASES, ids=lambda case: case["id"])
 def test_typed_values_render_the_corpus_legacy_cells_from_both_shapes(case):
-    v2_record, v3_record = _value_case_records(case)
+    v2_record, v4_record = _value_case_records(case)
     legacy = case["legacy"]
     expected = {
         "featureFlags": {"typed-flag": legacy["value"]},
@@ -676,7 +676,7 @@ def test_typed_values_render_the_corpus_legacy_cells_from_both_shapes(case):
         else {"typed-flag": legacy["payload"]},
     }
 
-    for record in (v2_record, v3_record):
+    for record in (v2_record, v4_record):
         maps = _legacy_maps({"flags": {"typed-flag": record}})
         assert maps == expected
         assert type(maps["featureFlags"]["typed-flag"]) is type(legacy["value"])
@@ -702,11 +702,11 @@ def test_number_and_object_payloads_are_compact_json_in_wire_order():
     assert payloads == {"number": "12.5", "object": '{"b":"ü","a":[1,true,null]}'}
 
 
-# Every legacy getter and event, end to end: a v2-shaped and a v3-shaped response for
+# Every legacy getter and event, end to end: a v2-shaped and a v4-shaped response for
 # the same flags give identical results.
 
 PARITY_FLAGS = [
-    # key, v2 record fields, v3 value
+    # key, v2 record fields, v4 value
     ("bool-on", {"enabled": True, "variant": None}, True),
     ("bool-off", {"enabled": False, "variant": None}, False),
     ("v1-variant", {"enabled": True, "variant": "control"}, "control"),
@@ -836,11 +836,11 @@ def _legacy_outputs(shape: str) -> Dict[str, Any]:
 
 def test_every_legacy_getter_and_event_is_identical_for_both_shapes():
     v2_outputs = _legacy_outputs("v2")
-    v3_outputs = _legacy_outputs("v3")
+    v4_outputs = _legacy_outputs("v4")
 
-    assert v3_outputs == v2_outputs
+    assert v4_outputs == v2_outputs
     # Spot-check the legacy rendering itself.
-    assert v3_outputs["get_all_flags"] == {
+    assert v4_outputs["get_all_flags"] == {
         "bool-on": True,
         "bool-off": False,
         "v1-variant": "control",
@@ -849,8 +849,8 @@ def test_every_legacy_getter_and_event_is_identical_for_both_shapes():
         "v2-number": True,
         "v2-object": True,
     }
-    assert v3_outputs["get_feature_flag_payload:v2-object"] == {"layout": "compact"}
-    assert v3_outputs["snapshot.get_flag_payload:v2-number"] == 12.5
+    assert v4_outputs["get_feature_flag_payload:v2-object"] == {"layout": "compact"}
+    assert v4_outputs["snapshot.get_flag_payload:v2-number"] == 12.5
 
 
 def test_feature_flag_called_properties_are_unchanged_for_a_v1_flag(client):
@@ -899,7 +899,7 @@ def test_typed_accessors_report_access_like_get_flag(client):
     assert snapshot.only_accessed().keys == ["string-flag"]
 
 
-async def test_async_client_reads_the_v3_response():
+async def test_async_client_reads_the_v4_response():
     with mock.patch(
         "posthog.async_client._async_flags",
         new=mock.AsyncMock(return_value=_typed_response(TYPED_VALUES)),

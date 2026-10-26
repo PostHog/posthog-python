@@ -329,7 +329,7 @@ def flags(
             res = post(
                 api_key,
                 host,
-                "/flags/?v=3",
+                "/flags/?v=4",
                 gzip,
                 timeout,
                 session=_get_flags_session(),

@@ -153,7 +153,7 @@ class FlagMetadata:
         id: Numeric feature flag ID.
         payload: Payload configured for the matched flag value, if any. For a
             number or object value it is the value encoded as JSON, the way
-            servers before ``/flags?v=3`` sent it.
+            servers before ``/flags?v=4`` sent it.
         version: Feature flag version.
         description: Feature flag description.
         has_experiment: Whether the flag has a linked experiment. ``None`` when
@@ -182,7 +182,7 @@ class FlagMetadata:
     def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
         """Parse the metadata of a record without a typed ``value``.
 
-        Such a record comes from a server before ``/flags?v=3``, so only the
+        Such a record comes from a server before ``/flags?v=4``, so only the
         fields that response carries are read, and ``config_version`` is ``1``.
         """
         if not resp:
@@ -241,7 +241,7 @@ class FeatureFlag:
 
     ``value``, ``failed``, ``reason`` and ``metadata`` are the evaluation details.
     ``enabled``, ``variant`` and ``metadata.payload`` are the value rendered the way
-    responses before ``/flags?v=3`` carried it, which the legacy getters return.
+    responses before ``/flags?v=4`` carried it, which the legacy getters return.
 
     Attributes:
         key: Feature flag key.
@@ -283,7 +283,7 @@ class FeatureFlag:
     def from_json(cls, resp: Any) -> "FeatureFlag":
         """Parse one flag record of a ``/flags`` response.
 
-        A record with a ``value`` member is a ``/flags?v=3`` record. A record
+        A record with a ``value`` member is a ``/flags?v=4`` record. A record
         without one comes from an older server: its value is ``variant``, or
         ``enabled`` when there is no variant, and its config version is ``1``.
         """
@@ -377,7 +377,7 @@ def _legacy_rendering(value: Any) -> tuple[bool, Optional[str], Optional[str]]:
     """Render a typed value as ``(enabled, variant, encoded payload)``.
 
     A string is the variant, ``None`` is disabled, and a number or object is enabled
-    with the value as a JSON-encoded payload, as servers before ``/flags?v=3`` sent it.
+    with the value as a JSON-encoded payload, as servers before ``/flags?v=4`` sent it.
     """
     if value is None or isinstance(value, bool):
         return bool(value), None, None
@@ -387,7 +387,7 @@ def _legacy_rendering(value: Any) -> tuple[bool, Optional[str], Optional[str]]:
 
 
 def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
-    """Parse a ``/flags?v=3`` record, which carries a typed ``value``.
+    """Parse a ``/flags?v=4`` record, which carries a typed ``value``.
 
     Unknown fields are ignored. A known field with the wrong JSON type fails only
     this record, with ``PARSE_ERROR``. An absent or null field reads as absent,
@@ -683,7 +683,7 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
     Normalize the response from the flags API endpoint into a FlagsResponse.
 
     Args:
-        resp: A v1, v2 or v3 response from the flags API endpoint.
+        resp: A v1, v2 or v4 response from the flags API endpoint.
 
     Returns:
         A FlagsResponse containing feature flags and their details.
