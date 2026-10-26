@@ -1,22 +1,67 @@
 """Transactional email, sent from an email template in PostHog.
 
-Use ``client.emails`` on a client created with a project secret API key, or
-create :class:`Emails` directly in a process that only sends email:
+Setup:
+
+1. In PostHog, open the email template under Workflows, make it transactional,
+   and copy its ID. ``template_id`` is that UUID.
+2. Create a project secret API key (``phs_...``) with Workflow write access
+   (``hog_flow:write``) in your project settings. The project API key
+   (``phc_...``) captures events but cannot send email.
+3. Send from the client you already use, or from :class:`Emails` in a process
+   that only sends email:
 
 ```python
-from posthog.emails import Emails
+from posthog import Posthog
 
-emails = Emails("phs_...")
-result = emails.send(
+posthog = Posthog("phc_...", secret_key="phs_...", host="https://eu.i.posthog.com")
+result = posthog.emails.send(
     to="user@example.com",
     template_id="<template UUID>",
-    template_data={"name": "Ada"},
+    template_data={"name": "Ada"},  # fills {{ variables.name }}
     distinct_id="user_123",
     idempotency_key="welcome:user_123",
 )
+print(result.id)  # the queued email
 ```
 
-A result means PostHog queued the email. It does not mean the email was delivered.
+``posthog.emails`` above is the client's property. For async code, use
+``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
+
+Where sends go: a client on PostHog Cloud sends to its region's app host,
+``us.posthog.com`` or ``eu.posthog.com``. For any other ``host``, such as a
+reverse proxy, set ``app_host`` on the client, because the proxy must not
+receive the secret key. :class:`Emails` takes the app host as ``host``.
+
+What a result means: PostHog queued the email. Delivery happens later, and the
+template's workflow in PostHog shows its sends, deliveries and failures.
+
+Timeouts and retries: each request times out after 15 seconds. A send retries
+network errors, rate limits and an unavailable service twice, waiting about 1
+and then 2 seconds, or the server's ``Retry-After`` if that is longer. A
+``Retry-After`` over 30 seconds raises at once. Every attempt sends the same
+idempotency key, so a retry never sends twice. Set
+``email_request_max_retries=0`` on the client, or ``max_retries=0`` on
+:class:`Emails`, when a job runner already retries the send, and pass an
+``idempotency_key`` that names the email, such as ``welcome:user_123``.
+
+Errors: a send that is not queued raises :class:`EmailError`. Branch on
+``code``. The ones a setup usually hits:
+
+- ``missing_secret_key``: the client has no ``secret_key``.
+- ``app_host_required``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
+- ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
+  wrong, or it lacks ``hog_flow:write``.
+- ``not_found`` (404): the template ID is wrong, or transactional email is not
+  enabled for the project.
+- ``client_closed``: the client is shut down.
+
+Cleanup: ``shutdown()`` on the client closes its email connections. Close a
+standalone :class:`Emails` with ``close()`` or a ``with`` block.
+
+Testing without network calls: pass your own transport, ``session`` to
+:class:`Emails` or ``http_client`` to :class:`AsyncEmails`, with a fake adapter
+or ``httpx.MockTransport``. Any library that mocks ``requests`` or ``httpx``
+works too. A disabled client returns a result with ``id=None`` and sends nothing.
 """
 
 from __future__ import annotations
@@ -362,7 +407,9 @@ class Emails(_EmailsBase):
 
     Each send retries network errors, rate limits and an unavailable service up
     to ``max_retries`` times, with the same idempotency key. Set
-    ``max_retries=0`` when a job runner already retries the send.
+    ``max_retries=0`` when a job runner already retries the send. ``timeout``
+    is in seconds, per request. Pass ``session`` to send through your own
+    ``requests.Session``, for example a test double.
     """
 
     def __init__(
@@ -373,6 +420,7 @@ class Emails(_EmailsBase):
         timeout: float = 15,
         max_retries: int = 2,
         disabled: bool = False,
+        session: Optional[requests.Session] = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -381,7 +429,8 @@ class Emails(_EmailsBase):
             max_retries=max_retries,
             disabled=disabled,
         )
-        self._session: Optional[requests.Session] = None
+        self._session: Optional[requests.Session] = session
+        self._owns_session = session is None
         self._session_lock = threading.Lock()
 
     def send(
@@ -482,9 +531,9 @@ class Emails(_EmailsBase):
         raise AssertionError("unreachable")
 
     def close(self) -> None:
-        """Close the client's HTTP connections."""
+        """Close the HTTP connections this client opened. A ``session`` you passed in stays open."""
         with self._session_lock:
-            if self._session is not None:
+            if self._session is not None and self._owns_session:
                 self._session.close()
                 self._session = None
 
@@ -510,7 +559,11 @@ class Emails(_EmailsBase):
 
 
 class AsyncEmails(_EmailsBase):
-    """The async counterpart of :class:`Emails`. Needs ``posthog[async]``."""
+    """The async counterpart of :class:`Emails`. Needs ``posthog[async]``.
+
+    Pass ``http_client`` to send through your own ``httpx.AsyncClient``, for
+    example one with an ``httpx.MockTransport`` in tests.
+    """
 
     def __init__(
         self,
@@ -520,6 +573,7 @@ class AsyncEmails(_EmailsBase):
         timeout: float = 15,
         max_retries: int = 2,
         disabled: bool = False,
+        http_client: Any = None,
     ) -> None:
         super().__init__(
             secret_key,
@@ -528,7 +582,8 @@ class AsyncEmails(_EmailsBase):
             max_retries=max_retries,
             disabled=disabled,
         )
-        self._client: Any = None
+        self._client: Any = http_client
+        self._owns_client = http_client is None
 
     async def send(
         self,
@@ -600,8 +655,8 @@ class AsyncEmails(_EmailsBase):
         raise AssertionError("unreachable")
 
     async def aclose(self) -> None:
-        """Close the client's HTTP connections."""
-        if self._client is not None:
+        """Close the HTTP connections this client opened. An ``http_client`` you passed in stays open."""
+        if self._client is not None and self._owns_client:
             client, self._client = self._client, None
             await client.aclose()
 
@@ -639,15 +694,31 @@ def _client_emails(
     client_host: Optional[str],
     is_disabled: Callable[[], bool],
     admit: Callable[[], Optional[Callable[[], None]]],
+    *,
+    app_host: Optional[str],
+    timeout: float,
+    max_retries: int,
 ) -> _EmailsT:
-    app_host = determine_app_host(client_host)
-    is_cloud = app_host in (US_APP_ENDPOINT, EU_APP_ENDPOINT)
-    emails = factory(secret_key, host=app_host if is_cloud else None)
+    if app_host:
+        emails = factory(
+            secret_key, host=app_host, timeout=timeout, max_retries=max_retries
+        )
+        emails._parent_disabled = is_disabled
+        emails._admit = admit
+        return emails
+    inferred_host = determine_app_host(client_host)
+    is_cloud = inferred_host in (US_APP_ENDPOINT, EU_APP_ENDPOINT)
+    emails = factory(
+        secret_key,
+        host=inferred_host if is_cloud else None,
+        timeout=timeout,
+        max_retries=max_retries,
+    )
     if not is_cloud:
         # A custom host is often an ingestion proxy, which must not receive the secret key.
         emails._host_error = (
             "The client's host is not PostHog Cloud, so the client can't tell where to send email. "
-            "Create posthog.emails.Emails(secret_key, host=<your PostHog app host>) instead."
+            "Set app_host to your PostHog app host on the client."
         )
     emails._parent_disabled = is_disabled
     emails._admit = admit

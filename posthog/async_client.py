@@ -70,7 +70,7 @@ from .exception_utils import (
     try_attach_code_variables_to_frames,
 )
 from .consumer import MAX_MSG_SIZE
-from .emails import AsyncEmails, _client_emails
+from .emails import AsyncEmails, _client_emails, _validate_options
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -130,6 +130,9 @@ class AsyncClient:
         personal_api_key: Optional[str] = None,
         feature_flags_request_timeout_seconds: float = 3,
         feature_flags_request_max_retries: int = 1,
+        app_host: Optional[str] = None,
+        email_request_timeout_seconds: float = 15,
+        email_request_max_retries: int = 2,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -174,6 +177,10 @@ class AsyncClient:
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
+        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        self.app_host = app_host
+        self.email_request_timeout_seconds = email_request_timeout_seconds
+        self.email_request_max_retries = email_request_max_retries
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
         )
@@ -256,9 +263,10 @@ class AsyncClient:
         Send transactional email from PostHog email templates.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
-        scope, and ``posthog[async]``. Sends go to the PostHog Cloud app host of
-        ``host``. For any other host, create ``posthog.emails.AsyncEmails`` with
-        the app host. A disabled client sends nothing.
+        scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
+        Cloud app host of ``host``. ``email_request_timeout_seconds`` and
+        ``email_request_max_retries`` configure each send. A disabled or shut-down
+        client sends nothing. See ``posthog.emails`` for setup.
 
         Examples:
             ```python
@@ -276,6 +284,9 @@ class AsyncClient:
                 self.host,
                 lambda: self.disabled,
                 self._admit_email_send,
+                app_host=self.app_host,
+                timeout=self.email_request_timeout_seconds,
+                max_retries=self.email_request_max_retries,
             )
         return self._emails
 
