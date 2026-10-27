@@ -2816,6 +2816,39 @@ wheels = [
 ]
 
 [[package]]
+name = "opentelemetry-instrumentation-flask"
+version = "0.66b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-instrumentation-wsgi" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c0/fc/c1a692ceb7ed56818f2f4f88044b5a0895b6666da954dbd566fdf265195b/opentelemetry_instrumentation_flask-0.66b1.tar.gz", hash = "sha256:10f788aff95236f0dbaaa066687283bf6345bb3c77bbb437f0fb67cb6222d5eb", size = 23876, upload-time = "2026-10-06T17:36:25.763Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/65/7aa45ca677c51afb185bcd5e7ed121c84b07b2c566a72948a9e56fd16ae7/opentelemetry_instrumentation_flask-0.66b1-py3-none-any.whl", hash = "sha256:2933e71b94cc9e8e943e648d872fd3dead9cdb61295dc6deffd5d6fa8f27a39b", size = 14961, upload-time = "2026-10-06T17:35:34.002Z" },
+]
+
+[[package]]
+name = "opentelemetry-instrumentation-httpx"
+version = "0.66b1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "opentelemetry-api" },
+    { name = "opentelemetry-instrumentation" },
+    { name = "opentelemetry-semantic-conventions" },
+    { name = "opentelemetry-util-http" },
+    { name = "wrapt" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/50/41544799b043d14fdfa6fe62fa2518eaba22793fce03e9abde930b92e671/opentelemetry_instrumentation_httpx-0.66b1.tar.gz", hash = "sha256:5865a72c68098c85955a271ab8744b480a36e3ee492d35b8cadb93c7c4dbb618", size = 26637, upload-time = "2026-10-06T17:36:27.265Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/c6/e5682b1bfb320b32505e88255c34ae1e99fe9fb220cc465c244e91967eac/opentelemetry_instrumentation_httpx-0.66b1-py3-none-any.whl", hash = "sha256:0342a4002c6dbc6c4bf22cc7e698f50f5c8b77f63325c6f40c94ab87e016bf4d", size = 17723, upload-time = "2026-10-06T17:35:36.501Z" },
+]
+
+[[package]]
 name = "opentelemetry-instrumentation-requests"
 version = "0.66b1"
 source = { registry = "https://pypi.org/simple" }
@@ -3207,6 +3240,8 @@ test = [
     { name = "opentelemetry-exporter-otlp-proto-http" },
     { name = "opentelemetry-instrumentation" },
     { name = "opentelemetry-instrumentation-celery" },
+    { name = "opentelemetry-instrumentation-flask" },
+    { name = "opentelemetry-instrumentation-httpx" },
     { name = "opentelemetry-instrumentation-requests" },
     { name = "opentelemetry-instrumentation-sqlite3" },
     { name = "opentelemetry-instrumentation-system-metrics" },
@@ -3265,18 +3300,20 @@ requires-dist = [
     { name = "mypy", marker = "extra == 'dev'" },
     { name = "mypy-baseline", marker = "extra == 'dev'" },
     { name = "openai-agents", marker = "extra == 'test'", specifier = ">=0.18" },
-    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'metrics'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'metrics'", specifier = ">=1.37.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'test'", specifier = ">=1.20.0" },
-    { name = "opentelemetry-instrumentation", marker = "extra == 'metrics'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation", marker = "extra == 'test'", specifier = ">=0.41b0" },
+    { name = "opentelemetry-instrumentation", marker = "extra == 'metrics'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation", marker = "extra == 'test'", specifier = ">=0.58b0" },
     { name = "opentelemetry-instrumentation-celery", marker = "extra == 'test'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-requests", marker = "extra == 'test'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-sqlite3", marker = "extra == 'test'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-system-metrics", marker = "extra == 'metrics'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-system-metrics", marker = "extra == 'test'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-instrumentation-wsgi", marker = "extra == 'test'", specifier = ">=0.41b0" },
-    { name = "opentelemetry-sdk", marker = "extra == 'metrics'", specifier = ">=1.20.0" },
+    { name = "opentelemetry-instrumentation-flask", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-httpx", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-requests", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-sqlite3", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-system-metrics", marker = "extra == 'metrics'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-system-metrics", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-instrumentation-wsgi", marker = "extra == 'test'", specifier = ">=0.58b0" },
+    { name = "opentelemetry-sdk", marker = "extra == 'metrics'", specifier = ">=1.37.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'otel'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'test'", specifier = ">=1.20.0" },
     { name = "packaging", marker = "extra == 'dev'" },

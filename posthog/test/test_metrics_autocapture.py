@@ -1,15 +1,24 @@
 import os
+import socket
 import sqlite3
+import subprocess
+import sys
+import textwrap
 import threading
 import time
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from unittest import mock
 
+import flask
+import httpx
 import pytest
 import requests
 from opentelemetry.instrumentation._semconv import (
     _OpenTelemetrySemanticConventionStability,
 )
+from opentelemetry.instrumentation.requests import RequestsInstrumentor
 from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 from opentelemetry.sdk.metrics import Histogram, MeterProvider
 from opentelemetry.sdk.metrics.export import (
@@ -18,10 +27,11 @@ from opentelemetry.sdk.metrics.export import (
 )
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind, Status, StatusCode
+from opentelemetry.util.http import parse_excluded_urls
 
-from posthog import metrics_autocapture
+from posthog import _metrics_autocapture as metrics_autocapture
 from posthog.client import Client
-from posthog.metrics_autocapture import (
+from posthog._metrics_autocapture import (
     DbSpanMetricsProcessor,
     _BoundedMeterProvider,
     start_metrics_autocapture,
@@ -86,6 +96,71 @@ def started():
     yield handles
     for handle in handles:
         handle.shutdown()
+
+
+@pytest.fixture(autouse=True)
+def _reset_autocapture():
+    # A failed test must not leave autocapture running for the tests after it.
+    yield
+    active = metrics_autocapture._active
+    if active is not None:
+        active.shutdown()
+    metrics_autocapture._warned_about_missing_packages = False
+
+
+class _ObservedLock:
+    """A lock that sets ``waited`` when a thread has to wait for it."""
+
+    def __init__(self, waited: threading.Event):
+        self._lock = threading.Lock()
+        self._waited = waited
+
+    def __enter__(self):
+        if not self._lock.acquire(blocking=False):
+            self._waited.set()
+            self._lock.acquire()
+        return self
+
+    def __exit__(self, *exc_info):
+        self._lock.release()
+
+
+@contextmanager
+def _held_by_another_thread(lock):
+    # A forked child has no copy of this thread, so the lock stays held there.
+    held, release = threading.Event(), threading.Event()
+
+    def hold():
+        with lock:
+            held.set()
+            release.wait()
+
+    thread = threading.Thread(target=hold, daemon=True)
+    thread.start()
+    held.wait()
+    try:
+        yield
+    finally:
+        release.set()
+        thread.join()
+
+
+def _child_result(pid, read_fd, timeout=20):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if os.waitpid(pid, os.WNOHANG) != (0, 0):
+            break
+        time.sleep(0.05)
+    else:
+        os.kill(pid, 9)
+        os.waitpid(pid, 0)
+    result = os.read(read_fd, 16)
+    os.close(read_fd)
+    return result
+
+
+def _metrics_exports(server):
+    return [r for r in server.received if r["path"].endswith("/i/v1/metrics")]
 
 
 def _start(posthog_host, started, reader=None, **overrides):
@@ -213,8 +288,8 @@ class TestStartMetricsAutocapture:
         def missing(name):
             raise ImportError(f"No module named '{name}'")
 
-        with mock.patch("posthog.metrics_autocapture._import_module", missing):
-            with mock.patch("posthog.metrics_autocapture.log") as log:
+        with mock.patch("posthog._metrics_autocapture._import_module", missing):
+            with mock.patch("posthog._metrics_autocapture.log") as log:
                 assert _start(posthog_host, started) is None
                 assert _start(posthog_host, started) is None
 
@@ -227,7 +302,7 @@ class TestStartMetricsAutocapture:
         with mock.patch(
             "opentelemetry.metrics.get_meter_provider", return_value=MeterProvider()
         ):
-            with mock.patch("posthog.metrics_autocapture.log") as log:
+            with mock.patch("posthog._metrics_autocapture.log") as log:
                 assert _start(posthog_host, started) is None
 
         assert "already set up" in str(log.warning.call_args)
@@ -236,7 +311,7 @@ class TestStartMetricsAutocapture:
         self, posthog_host, started
     ):
         first = _start(posthog_host, started, InMemoryMetricReader())
-        with mock.patch("posthog.metrics_autocapture.log") as log:
+        with mock.patch("posthog._metrics_autocapture.log") as log:
             assert _start(posthog_host, started) is None
         assert log.warning.call_count == 1
 
@@ -275,26 +350,27 @@ class TestStartMetricsAutocapture:
             app_instrumentor.uninstrument()
 
     def test_a_client_that_starts_during_shutdown_records_http_metrics(
-        self, posthog_host, app_server, started
+        self, posthog_host, app_server, started, monkeypatch
     ):
+        # Set when the other client has started, or has to wait for this shutdown.
+        progress = threading.Event()
+        monkeypatch.setattr(metrics_autocapture, "_lock", _ObservedLock(progress))
         first = _start(posthog_host, started, areas={"http": True})
         reader = InMemoryMetricReader()
         replacement = []
-        starting = threading.Event()
 
         def start_replacement():
-            starting.set()
             replacement.append(
                 _start(posthog_host, started, reader, areas={"http": True})
             )
+            progress.set()
 
         thread = threading.Thread(target=start_replacement)
 
         class StartsAnotherClientDuringShutdown(list):
             def __iter__(self):
                 thread.start()
-                starting.wait()
-                thread.join(timeout=0.5)
+                assert progress.wait(timeout=10)
                 return super().__iter__()
 
         first._instrumentors = StartsAnotherClientDuringShutdown(first._instrumentors)
@@ -370,8 +446,7 @@ class TestStartMetricsAutocapture:
         handle = _start(posthog_host, started, reader)
         read_fd, write_fd = os.pipe()
 
-        # A parent thread can hold the lock at fork time.
-        with metrics_autocapture._lock:
+        with _held_by_another_thread(metrics_autocapture._lock):
             pid = os.fork()
         if pid == 0:  # pragma: no cover - runs in the child
             result = b"fail"
@@ -390,19 +465,288 @@ class TestStartMetricsAutocapture:
                 os._exit(0)
 
         os.close(write_fd)
-        deadline = time.monotonic() + 20
-        while time.monotonic() < deadline:
-            if os.waitpid(pid, os.WNOHANG) != (0, 0):
-                break
-            time.sleep(0.05)
-        else:
-            os.kill(pid, 9)
-            os.waitpid(pid, 0)
-        result = os.read(read_fd, 16)
-        os.close(read_fd)
-        assert result == b"ok"
+        assert _child_result(pid, read_fd) == b"ok"
         # The child's shutdown does not stop the parent's autocapture.
         assert metrics_autocapture._active is handle
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
+    def test_exports_from_a_child_forked_during_an_export(self, posthog_host, started):
+        handle = _start(posthog_host, started, export_interval_seconds=3600)
+        read_fd, write_fd = os.pipe()
+
+        # The export thread holds this lock while it sends.
+        with _held_by_another_thread(handle._reader._export_lock):
+            pid = os.fork()
+        if pid == 0:  # pragma: no cover - runs in the child
+            result = b"fail"
+            try:
+                handle.force_flush()
+                result = b"ok"
+            finally:
+                os.write(write_fd, result)
+                os._exit(0)
+
+        os.close(write_fd)
+        assert _child_result(pid, read_fd, timeout=15) == b"ok"
+
+    def test_does_not_send_the_apps_otlp_settings_to_posthog(
+        self, posthog_host, app_server, started, monkeypatch
+    ):
+        # These configure the app's own collector, not PostHog.
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-key=vendor-secret")
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")
+        handle = _start(posthog_host, started)
+        requests.get(f"{app_server.url}/health")
+
+        handle.force_flush()
+
+        exports = _metrics_exports(posthog_host)
+        assert exports
+        headers = {k.lower(): v for k, v in exports[0]["headers"].items()}
+        assert "x-vendor-key" not in headers
+        assert "content-encoding" not in headers
+        assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "x-vendor-key=vendor-secret"
+
+    def test_does_not_add_trace_context_to_app_requests(
+        self, posthog_host, app_server, started
+    ):
+        # The spans are never exported, so a downstream service must not see them.
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader)
+
+        requests.get(f"{app_server.url}/health")
+
+        headers = {k.lower() for k in app_server.received[-1]["headers"]}
+        assert "traceparent" not in headers
+        [point] = _points(reader, "http.client.request.duration")
+        assert point.attributes["http.response.status_code"] == 200
+
+    def test_records_nothing_while_disabled(self, posthog_host, app_server, started):
+        # Measurements from the disabled period must not go out once it is enabled.
+        enabled = [False]
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, is_enabled=lambda: enabled[0])
+
+        requests.get(f"{app_server.url}/health")
+        connection = sqlite3.connect(":memory:")
+        connection.cursor().execute("SELECT 1")
+        connection.close()
+        enabled[0] = True
+
+        assert not _points(reader, "http.client.request.duration")
+        assert not _points(reader, "db.client.operation.duration")
+
+    def test_applies_before_send_to_measurements(
+        self, posthog_host, app_server, started
+    ):
+        samples = []
+
+        def before_send(sample):
+            samples.append(dict(sample))
+            if sample["attributes"].get("http.request.method") == "POST":
+                return None
+            sample["attributes"] = {
+                key: value
+                for key, value in sample["attributes"].items()
+                if key != "server.address"
+            }
+            return sample
+
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host, started, reader, areas={"http": True}, before_send=before_send
+        )
+
+        requests.get(f"{app_server.url}/a")
+        requests.post(f"{app_server.url}/b", data="{}")
+
+        points = _points(reader, "http.client.request.duration")
+        assert [point.attributes["http.request.method"] for point in points] == ["GET"]
+        assert "server.address" not in points[0].attributes
+        sample = next(s for s in samples if s["name"] == "http.client.request.duration")
+        assert sample["type"] == "histogram"
+        assert sample["unit"] == "s"
+        assert isinstance(sample["value"], float)
+
+    def test_drops_measurements_when_before_send_raises(
+        self, posthog_host, app_server, started
+    ):
+        def before_send(sample):
+            raise ValueError("bug in the hook")
+
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host, started, reader, areas={"http": True}, before_send=before_send
+        )
+
+        with mock.patch("posthog._metrics_autocapture.log") as log:
+            response = requests.get(f"{app_server.url}/health")
+
+        assert response.status_code == 200
+        assert not _points(reader, "http.client.request.duration")
+        assert log.error.called
+
+    def test_applies_before_send_to_runtime_metrics(self, posthog_host, started):
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host,
+            started,
+            reader,
+            areas={"runtime": True},
+            before_send=lambda s: None if s["name"] == "process.cpu.time" else s,
+        )
+
+        names = _names(reader)
+        assert "process.cpu.time" not in names
+        assert "process.memory.usage" in names
+
+    def test_does_not_record_requests_to_posthog_whatever_the_host_case(
+        self, posthog_host, started
+    ):
+        reader = InMemoryMetricReader()
+        host = f"http://LocalHost:{posthog_host.port}"
+        _start(posthog_host, started, reader, host=host)
+
+        requests.post(f"{host}/batch/", data="{}")
+
+        assert not _points(reader, "http.client.request.duration")
+
+    def test_keeps_the_apps_excluded_urls(
+        self, posthog_host, app_server, started, monkeypatch
+    ):
+        monkeypatch.setenv("OTEL_PYTHON_REQUESTS_EXCLUDED_URLS", "healthz")
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, areas={"http": True})
+
+        requests.get(f"{app_server.url}/healthz")
+        requests.post(f"{app_server.url}/orders", data="{}")
+
+        methods = {
+            point.attributes["http.request.method"]
+            for point in _points(reader, "http.client.request.duration")
+        }
+        assert methods == {"POST"}
+        assert os.environ["OTEL_PYTHON_REQUESTS_EXCLUDED_URLS"] == "healthz"
+
+    def test_does_not_record_httpx_requests_to_posthog(
+        self, posthog_host, app_server, started
+    ):
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, areas={"http": True})
+
+        httpx.post(f"{posthog_host.url}/batch/", content="{}")
+        httpx.get(f"{app_server.url}/health")
+
+        ports = [
+            point.attributes.get("server.port")
+            for point in _points(reader, "http.client.request.duration")
+        ]
+        assert app_server.port in ports
+        assert posthog_host.port not in ports
+
+    def test_measures_an_existing_flask_app_again_after_a_restart(
+        self, posthog_host, started
+    ):
+        first_reader = InMemoryMetricReader()
+        first = _start(posthog_host, started, first_reader, areas={"http": True})
+        app = flask.Flask(__name__)
+        app.add_url_rule("/health", "health", lambda: "ok")
+        app.test_client().get("/health")
+        assert _points(first_reader, "http.server.request.duration")
+
+        first.shutdown()
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, areas={"http": True})
+        app.test_client().get("/health")
+
+        [point] = _points(reader, "http.server.request.duration")
+        assert point.count == 1
+
+    def test_cleans_up_when_startup_fails(self, posthog_host, started):
+        real_entry_points = metrics_autocapture.entry_points
+
+        def failing_entry_points(**kwargs):
+            yield from real_entry_points(**kwargs)
+            raise RuntimeError("broken plugin")
+
+        def reader_threads():
+            return [
+                thread
+                for thread in threading.enumerate()
+                if thread.name == "OtelPeriodicExportingMetricReader"
+            ]
+
+        before = len(reader_threads())
+        with mock.patch.object(
+            metrics_autocapture, "entry_points", failing_entry_points
+        ):
+            with mock.patch("posthog._metrics_autocapture.log"):
+                assert _start(posthog_host, started) is None
+
+        assert len(reader_threads()) == before
+        assert not RequestsInstrumentor().is_instrumented_by_opentelemetry
+        assert metrics_autocapture._active is None
+
+    def test_uses_the_same_resource_as_the_manual_metrics_api(
+        self, posthog_host, started, monkeypatch
+    ):
+        monkeypatch.setenv("OTEL_SERVICE_NAME", "from-env")
+        monkeypatch.setenv("OTEL_RESOURCE_ATTRIBUTES", "team=from-env")
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host,
+            started,
+            reader,
+            areas={"runtime": True},
+            service_name=None,
+            resource_attributes={},
+        )
+
+        resource = reader.get_metrics_data().resource_metrics[0].resource.attributes
+        assert resource["service.name"] == "unknown_service"
+        assert "team" not in resource
+        assert resource["telemetry.distro.name"] == "posthog-python"
+
+    def test_shutdown_twice_is_safe(self, posthog_host, started):
+        handle = _start(posthog_host, started, InMemoryMetricReader())
+
+        handle.shutdown()
+        handle.shutdown()
+
+        assert metrics_autocapture._active is None
+
+
+class TestPostHogUrlExclusion:
+    def _excluded(self, host, url):
+        pattern = metrics_autocapture._posthog_url_pattern(host)
+        return parse_excluded_urls(pattern).url_disabled(url)
+
+    def test_matches_the_host_with_or_without_its_default_port(self):
+        assert self._excluded(
+            "https://us.i.posthog.com", "https://us.i.posthog.com:443/batch/"
+        )
+        assert self._excluded(
+            "https://us.i.posthog.com:443", "https://us.i.posthog.com/batch/"
+        )
+        assert self._excluded("http://LocalHost:8000", "http://localhost:8000/batch/")
+
+    def test_does_not_match_other_hosts_ports_or_paths(self):
+        assert not self._excluded(
+            "https://us.i.posthog.com", "https://us.i.posthog.com.evil.com/"
+        )
+        assert not self._excluded(
+            "https://us.i.posthog.com", "https://us.i.posthog.com:8443/batch/"
+        )
+        assert not self._excluded(
+            "https://example.com/ingest", "https://example.com/ingestion"
+        )
+
+    def test_keeps_a_comma_in_the_host_path(self):
+        assert self._excluded(
+            "https://example.com/a,b", "https://example.com/a,b/i/v1/metrics"
+        )
+        assert not self._excluded("https://example.com/a,b", "https://unrelated.com/b")
 
 
 class TestBoundedMeterProvider:
@@ -474,6 +818,17 @@ class TestDbSpanMetricsProcessor:
             "error.type": "_OTHER",
         }
 
+    def test_keeps_only_the_first_word_of_the_operation(self):
+        points = self._record(
+            "opentelemetry.instrumentation.psycopg",
+            attributes={
+                "db.system": "postgresql",
+                "db.operation.name": "SELECT orders",
+            },
+        )
+
+        assert points[0].attributes["db.operation.name"] == "SELECT"
+
     def test_skips_orm_layers_and_other_spans(self):
         # SQLAlchemy wraps a driver span, so counting it would count the query twice.
         assert (
@@ -507,7 +862,7 @@ class TestClientOption:
         client = Client(
             FAKE_API_KEY, host=posthog_host.url, metrics={"autocapture": True}
         )
-        with mock.patch("posthog.metrics_autocapture.log"):
+        with mock.patch("posthog._metrics_autocapture.log"):
             assert _start(posthog_host, started) is None
 
         client.shutdown()
@@ -542,3 +897,151 @@ class TestClientOption:
             ] == []
         finally:
             client.shutdown()
+
+    def test_passes_the_metrics_options_to_autocapture(self, posthog_host):
+        def before_send(sample):
+            return sample
+
+        with mock.patch(
+            "posthog._metrics_autocapture.start_metrics_autocapture", return_value=None
+        ) as start:
+            Client(
+                FAKE_API_KEY,
+                host=posthog_host.url,
+                metrics={
+                    "autocapture": {"runtime": False},
+                    "service_name": "billing-api",
+                    "service_version": "1.2.3",
+                    "environment": "staging",
+                    "resource_attributes": {
+                        "deployment.environment": "prod",
+                        "team": "core",
+                    },
+                    "flush_interval": 30,
+                    "before_send": before_send,
+                },
+            ).shutdown()
+            Client(
+                FAKE_API_KEY,
+                host=posthog_host.url,
+                metrics={
+                    "autocapture": True,
+                    "service_name": "billing-api",
+                    "resource_attributes": {"service.name": "billing-worker"},
+                },
+            ).shutdown()
+
+        first, second = (call.kwargs for call in start.call_args_list)
+        assert first["host"] == posthog_host.url
+        assert first["api_key"] == FAKE_API_KEY
+        assert first["areas"] == {"http": True, "db": True, "runtime": False}
+        assert first["service_name"] == "billing-api"
+        assert first["resource_attributes"] == {
+            "deployment.environment": "prod",
+            "team": "core",
+            "service.version": "1.2.3",
+        }
+        assert first["export_interval_seconds"] == 30
+        assert first["before_send"] is before_send
+        assert second["areas"] == {"http": True, "db": True, "runtime": True}
+        assert second["service_name"] == "billing-worker"
+        assert second["export_interval_seconds"] == 10
+        assert second["before_send"] is None
+
+    @pytest.mark.parametrize("flush_interval", [-1, "5", True])
+    def test_ignores_an_invalid_flush_interval(self, posthog_host, flush_interval):
+        client = Client(
+            FAKE_API_KEY,
+            host=posthog_host.url,
+            metrics={"autocapture": True, "flush_interval": flush_interval},
+        )
+        try:
+            assert client._metrics_autocapture is not None
+            assert client._metrics_autocapture._reader._export_interval_millis == 10_000
+        finally:
+            client.shutdown()
+
+    def test_flush_exports_autocaptured_metrics(self, posthog_host, app_server):
+        client = Client(
+            FAKE_API_KEY,
+            host=posthog_host.url,
+            metrics={"autocapture": True, "flush_interval": 3600},
+        )
+        try:
+            requests.get(f"{app_server.url}/health")
+            client.flush()
+            assert _metrics_exports(posthog_host)
+        finally:
+            client.shutdown()
+
+    def test_shutdown_twice_is_safe(self, posthog_host):
+        client = Client(
+            FAKE_API_KEY, host=posthog_host.url, metrics={"autocapture": True}
+        )
+
+        client.shutdown()
+        client.shutdown()
+
+        assert metrics_autocapture._active is None
+
+    def test_exit_does_not_wait_for_an_unreachable_host(self):
+        # Accepts connections and never answers, like a host behind a dead proxy.
+        server = socket.socket()
+        server.bind(("127.0.0.1", 0))
+        server.listen(16)
+        script = textwrap.dedent(
+            f"""
+            from posthog.client import Client
+            Client(
+                "{FAKE_API_KEY}",
+                host="http://127.0.0.1:{server.getsockname()[1]}",
+                metrics={{"autocapture": {{"http": False, "db": False}}}},
+            )
+            """
+        )
+        try:
+            began = time.monotonic()
+            subprocess.run(
+                [sys.executable, "-c", script],
+                check=True,
+                timeout=60,
+                cwd=Path(__file__).resolve().parents[2],
+            )
+            elapsed = time.monotonic() - began
+        finally:
+            server.close()
+
+        assert elapsed < 6
+
+    def test_starts_on_a_later_module_setup(self, posthog_host, monkeypatch):
+        # A Django ready() hook can set the option after setup() already ran.
+        import posthog
+
+        monkeypatch.setattr(posthog, "default_client", None)
+        monkeypatch.setattr(posthog, "api_key", FAKE_API_KEY)
+        monkeypatch.setattr(posthog, "host", posthog_host.url)
+        monkeypatch.setattr(posthog, "metrics", None)
+        client = posthog.setup()
+        try:
+            assert client._metrics_autocapture is None
+            monkeypatch.setattr(posthog, "metrics", {"autocapture": True})
+            assert posthog.setup() is client
+            assert client._metrics_autocapture is not None
+        finally:
+            client.shutdown()
+
+    def test_module_setup_tries_to_start_once(self, posthog_host, started, monkeypatch):
+        import posthog
+
+        assert _start(posthog_host, started, InMemoryMetricReader()) is not None
+        monkeypatch.setattr(posthog, "default_client", None)
+        monkeypatch.setattr(posthog, "api_key", FAKE_API_KEY)
+        monkeypatch.setattr(posthog, "host", posthog_host.url)
+        monkeypatch.setattr(posthog, "metrics", {"autocapture": True})
+        with mock.patch("posthog._metrics_autocapture.log") as log:
+            client = posthog.setup()
+            posthog.setup()
+            posthog.setup()
+        client.shutdown()
+
+        assert log.warning.call_count == 1

@@ -52,11 +52,13 @@ otel = [
 # Metrics autocapture (`metrics={"autocapture": True}`). Library instrumentors
 # (requests, Django, psycopg, ...) are separate packages: `opentelemetry-bootstrap
 # -a install` adds the ones that match the installed libraries.
+# 0.58b0 is the first release with the `process.*` and `cpython.gc.*` names that
+# runtime autocapture configures.
 metrics = [
-    "opentelemetry-sdk>=1.20.0",
-    "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-    "opentelemetry-instrumentation>=0.41b0",
-    "opentelemetry-instrumentation-system-metrics>=0.41b0",
+    "opentelemetry-sdk>=1.37.0",
+    "opentelemetry-exporter-otlp-proto-http>=1.37.0",
+    "opentelemetry-instrumentation>=0.58b0",
+    "opentelemetry-instrumentation-system-metrics>=0.58b0",
 ]
 dev = [
     "django-stubs",
@@ -109,11 +111,13 @@ test = [
     "fastmcp>=2.0",
     "opentelemetry-sdk>=1.20.0",
     "opentelemetry-exporter-otlp-proto-http>=1.20.0",
-    "opentelemetry-instrumentation>=0.41b0",
-    "opentelemetry-instrumentation-system-metrics>=0.41b0",
-    "opentelemetry-instrumentation-requests>=0.41b0",
-    "opentelemetry-instrumentation-sqlite3>=0.41b0",
-    "opentelemetry-instrumentation-wsgi>=0.41b0",
+    "opentelemetry-instrumentation>=0.58b0",
+    "opentelemetry-instrumentation-system-metrics>=0.58b0",
+    "opentelemetry-instrumentation-requests>=0.58b0",
+    "opentelemetry-instrumentation-sqlite3>=0.58b0",
+    "opentelemetry-instrumentation-wsgi>=0.58b0",
+    "opentelemetry-instrumentation-flask>=0.58b0",
+    "opentelemetry-instrumentation-httpx>=0.58b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.
