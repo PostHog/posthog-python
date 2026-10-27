@@ -237,6 +237,10 @@ def health():
         "capture_v1",
         "capture_ai_v1",
         "event_options",
+        "event_uuid_override",
+        "bounded_retries",
+        "disable_geoip",
+        "historical_migration",
         "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
     ]
