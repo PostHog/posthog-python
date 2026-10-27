@@ -884,8 +884,10 @@ class Client(object):
             capture_trace_context: When OpenTelemetry is installed and a valid span is
                 active at capture time, add its trace and span IDs as ``$trace_id`` and
                 ``$span_id`` properties to events captured with ``capture()`` and
-                ``capture_ai()``, so they can be correlated with backend traces. Explicit
-                ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
+                ``capture_ai()``, so they can be correlated with backend traces. They fill
+                after context tags and ``super_properties``, before ``before_send``. A
+                ``$trace_id`` or ``$span_id`` from the event, a context tag or
+                ``super_properties`` stops the SDK adding either ID. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
             traces: Config dict for distributed tracing: ``service_name``,
@@ -1808,8 +1810,11 @@ class Client(object):
 
         properties = dict(properties or {})
 
-        if self.capture_trace_context:
-            properties = {**_get_current_otel_span_properties(), **properties}
+        trace_properties = (
+            _get_current_otel_span_properties()
+            if self.capture_trace_context or kwargs.get("_capture_trace_context")
+            else None
+        )
 
         properties = _add_context_session_id(properties)
 
@@ -1924,6 +1929,7 @@ class Client(object):
             derived_options=_personless_options(personless),
             system_properties=system_context(),
             flag_properties=extra_properties,
+            trace_properties=trace_properties,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2239,7 +2245,8 @@ class Client(object):
         Capture an exception for error tracking.
 
         When OpenTelemetry is installed and a valid span is active, its trace and
-        span IDs are added as ``$trace_id`` and ``$span_id`` event properties.
+        span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
+        unless the event, a context tag or ``super_properties`` sets either one.
 
         Args:
             exception: The exception to capture.
@@ -2316,7 +2323,6 @@ class Client(object):
 
             caller_properties = properties
             properties = {
-                **_get_current_otel_span_properties(),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
                 "$exception_level": _exception_level(
                     capture_metadata.get("level"), level
@@ -2388,6 +2394,7 @@ class Client(object):
                 send_feature_flags=send_feature_flags,
                 disable_geoip=disable_geoip,
                 options=kwargs.get("options", None),
+                _capture_trace_context=True,
             )
 
             # Mark the exception as captured to prevent duplicate captures
@@ -2539,6 +2546,7 @@ class Client(object):
         derived_options=None,
         system_properties=None,
         flag_properties=None,
+        trace_properties=None,
     ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -2587,6 +2595,7 @@ class Client(object):
                 call_disable_geoip=disable_geoip,
                 system_properties=system_properties,
                 flag_properties=flag_properties,
+                trace_properties=trace_properties,
             ),
         )
 
