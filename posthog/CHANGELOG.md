@@ -1,5 +1,11 @@
 # posthog
 
+## 7.76.0 — 2026-10-27
+
+### Minor changes
+
+- [284340d](https://github.com/posthog/posthog-python/commit/284340d6ba6df08f68c27eac750b13f3ec89ab19) Add optional per-item model_version to offline evaluations and dataset conversion, preserving model attribution across serialization, retries, and recovery. — Thanks @Radu-Raicea!
+
 ## 7.75.11 — 2026-10-23
 
 ### Patch changes
