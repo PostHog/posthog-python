@@ -12,8 +12,15 @@ import httpx
 import pytest
 import requests
 
+from posthog.ai.evaluations import (
+    AsyncOfflineEvaluations,
+    EvaluationItem,
+    OfflineEvaluations,
+)
 from posthog.ai.evaluations._errors import EvaluationAPIError
 from posthog.ai.evaluations._transport import AsyncTransport, SyncTransport
+
+from .test_evaluations import EXPERIMENT_ID, VERSION_ID, invoke, upload_response
 
 PATH = "/api/projects/123/ai_observability/offline_experiments/"
 BODY = b'{"id":"stable-id","name":"evaluation data"}'
@@ -100,6 +107,90 @@ def test_lost_response_retries_identical_body_and_identity(transport):
     assert request.call_count == 2
     assert request.call_args_list[0] == request.call_args_list[1]
     sleep.assert_called_once()
+
+
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "original_model,changed_model",
+    [("model-b", "model-c"), ("model-b", None), (None, "model-a")],
+)
+def test_item_models_survive_transport_retries_and_content_conflicts(
+    asynchronous, original_model, changed_model
+):
+    evaluations = (AsyncOfflineEvaluations if asynchronous else OfflineEvaluations)(
+        project_id=123, secret_key="phx_test_secret"
+    )
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    item = EvaluationItem(model_version=original_model)
+    conflict = {
+        "code": "content_conflict",
+        "detail": "Item content differs from its accepted declaration.",
+        "attr": "items.0.model_version",
+    }
+    attempts = []
+
+    def respond(method, url, **kwargs):
+        body = kwargs["content" if asynchronous else "data"]
+        attempts.append((method, url, body))
+        if len(attempts) == 1:
+            raise (
+                httpx.ReadTimeout("lost response")
+                if asynchronous
+                else requests.ReadTimeout()
+            )
+        status, payload = (
+            (201, upload_response(body)) if len(attempts) == 2 else (409, conflict)
+        )
+        return (
+            httpx.Response(status, json=payload)
+            if asynchronous
+            else response(status, payload)
+        )
+
+    target = (
+        evaluations._transport._client
+        if asynchronous
+        else evaluations._transport._session
+    )
+    try:
+        with (
+            patch.object(target, "request", side_effect=respond),
+            patch("posthog.ai.evaluations._transport.time.sleep"),
+            patch(
+                "posthog.ai.evaluations._transport.asyncio.sleep",
+                new_callable=AsyncMock,
+            ),
+        ):
+            receipt = invoke(
+                experiment.upload_result,
+                item=item,
+                scorer_version_id=VERSION_ID,
+                value=True,
+            )
+            assert receipt.items[0].id == item.id
+            assert len(attempts) == 2
+            assert attempts[0] == attempts[1]
+            assert json.loads(attempts[0][2])["items"] == [item.to_dict()]
+            changed = EvaluationItem(id=item.id, model_version=changed_model)
+            with pytest.raises(EvaluationAPIError) as caught:
+                invoke(
+                    experiment.upload_result,
+                    item=changed,
+                    scorer_version_id=VERSION_ID,
+                    value=True,
+                )
+            assert caught.value.status == 409
+            assert caught.value.code == "content_conflict"
+            assert caught.value.response == conflict
+            assert caught.value.persistence == "rejected"
+            assert len(attempts) == 3
+            assert json.loads(attempts[2][2])["items"] == [changed.to_dict()]
+            assert all(
+                method == "POST" and url.endswith(f"/{EXPERIMENT_ID}/upload/")
+                for method, url, _ in attempts
+            )
+    finally:
+        invoke(evaluations.aclose if asynchronous else evaluations.close)
 
 
 @pytest.mark.parametrize("failure", [requests.ReadTimeout(), response(503)])

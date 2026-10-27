@@ -648,6 +648,57 @@ def test_dataset_to_execution_copies_payload_and_keeps_trials_independent(client
         EvaluationItem.from_dataset_item(replace(case, archived=True))
 
 
+def test_dataset_executions_keep_explicit_models_and_never_infer_them(client):
+    evaluations, transport = client
+    transport.request.return_value = item_response(
+        metadata={"model_version": "source-model"}
+    )
+    case = invoke(evaluations.datasets.get_item, ITEM_ID)
+    transport.request.reset_mock()
+    items = [
+        EvaluationItem.from_dataset_item(case, output="Paris", model_version="model-b"),
+        EvaluationItem.from_dataset_item(case, output="Lyon", model_version="model-c"),
+        EvaluationItem.from_dataset_item(case),
+        EvaluationItem.from_dataset_item(case, model_version=None),
+    ]
+    assert len({item.id for item in items}) == 4
+    for item in items:
+        data = item.to_dict()
+        assert data["case_key"] == "capital-france"
+        assert data["dataset_item_version_id"] == VERSION_ID
+        assert data["payload"]["metadata"] == {"model_version": "source-model"}
+        assert EvaluationItem.from_dict(data).to_dict() == data
+    for invalid in ["", 1, True, "x" * 256]:
+        with pytest.raises(ValueError, match="model_version"):
+            EvaluationItem.from_dataset_item(case, model_version=invalid)
+    transport.request.assert_not_called()
+    transport.request.side_effect = respond_to_experiment
+    experiment = invoke(
+        evaluations.create_experiment, name="Models", model_version="model-a"
+    )
+    invoke(
+        experiment.upload_results,
+        [
+            EvaluationResult(item=item, scorer_version_id=OTHER_ITEM_ID, value=True)
+            for item in items
+        ],
+    )
+    body = json.loads(transport.request.call_args.kwargs["body"])
+    assert body["items"] == [item.to_dict() for item in items]
+    assert [item.get("model_version") for item in body["items"]] == [
+        "model-b",
+        "model-c",
+        None,
+        None,
+    ]
+    assert [item["payload"].get("output") for item in body["items"]] == [
+        "Paris",
+        "Lyon",
+        None,
+        None,
+    ]
+
+
 def test_dataset_scorer_experiment_flow_pins_both_versions_and_reuses_execution(client):
     evaluations, transport = client
     bodies = []
