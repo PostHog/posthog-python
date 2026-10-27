@@ -1142,6 +1142,9 @@ class Client(object):
         self._metrics_autocapture = self._start_metrics_autocapture(
             metrics_config, autocapture if isinstance(autocapture, dict) else {}
         )
+        # Sync mode has no exit hook for events; the window needs its own.
+        if self._metrics_autocapture is not None and self.sync_mode and self.send:
+            atexit.register(self._atexit_metrics_autocapture)
 
     def _start_metrics_autocapture(self, metrics_config: dict, areas: dict):
         # Imported here, so a client without autocapture never loads OpenTelemetry.
@@ -1158,6 +1161,26 @@ class Client(object):
             if metrics_config.get(key) and attribute not in resource_attributes:
                 resource_attributes[attribute] = metrics_config[key]
         weak_self = weakref.ref(self)
+        before_send = _validated_before_send(metrics_config.get("before_send"))
+        if before_send is not None:
+            hook = before_send
+
+            def run_as_callback(sample):
+                # The hook runs while OpenTelemetry collects or records. As an
+                # SDK callback, a flush() or shutdown() it calls is deferred, so
+                # it does not wait for that same collection.
+                client = weak_self()
+                if client is None:
+                    return hook(sample)
+                callback_context = client._lifecycle_callback_context
+                token = callback_context.set(True)
+                try:
+                    return hook(sample)
+                finally:
+                    callback_context.reset(token)
+
+            before_send = run_as_callback
+
         return start_metrics_autocapture(
             host=self.host,
             api_key=self.api_key,
@@ -1175,7 +1198,7 @@ class Client(object):
             export_interval_seconds=_validated_flush_interval(
                 metrics_config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
             ),
-            before_send=_validated_before_send(metrics_config.get("before_send")),
+            before_send=before_send,
         )
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
@@ -3188,6 +3211,12 @@ class Client(object):
             with self._lifecycle_condition:
                 self._lifecycle_owner = None
                 self._lifecycle_condition.notify_all()
+
+    @no_throw()
+    def _atexit_metrics_autocapture(self) -> None:
+        waiter = self._start_metrics_autocapture_flush()
+        if waiter is not None:
+            waiter(max(0.0, _get_atexit_deadline() - time.monotonic()))
 
     @no_throw()
     def _atexit_spans(self) -> None:

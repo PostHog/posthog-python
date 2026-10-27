@@ -19,7 +19,8 @@ instruments it. Apps with their own OpenTelemetry instrumentation should export
 their metrics to PostHog and not turn on autocapture.
 
 Spans are only used to derive database metrics and are never exported. The HTTP
-instrumentors get no tracer, so no trace context goes to other services.
+instrumentors get no tracer, and the instrumentors that autocapture starts do not
+propagate context, so no trace context or baggage goes to other services.
 """
 
 import importlib
@@ -137,6 +138,9 @@ _warned_about_missing_packages = False
 # restores only the Flask class, so shutdown uninstruments these apps and the
 # next autocapture instruments them again.
 _flask_apps: "weakref.WeakSet[Any]" = weakref.WeakSet()
+# The `inject` functions that autocapture replaced in instrumentor modules,
+# by module name.
+_replaced_injects: Dict[str, Any] = {}
 
 
 def _always_enabled() -> bool:
@@ -209,8 +213,10 @@ class _BoundedInstrument:
         name: str = "",
         metric_type: str = "",
         unit: str = "",
+        stopped: Optional[threading.Event] = None,
     ):
         self._instrument = instrument
+        self._stopped = stopped
         self._limit = limit
         self._is_enabled = is_enabled
         self._before_send = before_send
@@ -235,7 +241,10 @@ class _BoundedInstrument:
     def _record(self, method: str, amount, attributes, args, kwargs):
         # Like `client.metrics`, nothing is recorded while the client is disabled,
         # so that period is not exported once the client is enabled again.
-        if not self._is_enabled():
+        # Instrumentation that shutdown leaves in place records nothing more.
+        if (
+            self._stopped is not None and self._stopped.is_set()
+        ) or not self._is_enabled():
             return None
         if self._before_send is not None:
             measurement = _apply_before_send(
@@ -273,11 +282,13 @@ class _BoundedMeter:
         limit: int,
         is_enabled: Callable[[], bool] = _always_enabled,
         before_send: Optional[Callable] = None,
+        stopped: Optional[threading.Event] = None,
     ):
         self._meter = meter
         self._limit = limit
         self._is_enabled = is_enabled
         self._before_send = before_send
+        self._stopped = stopped
 
     def _bounded(self, factory: str, args, kwargs) -> _BoundedInstrument:
         name, unit = _instrument_name_and_unit(args, kwargs, unit_index=1)
@@ -289,11 +300,13 @@ class _BoundedMeter:
             name,
             _SAMPLE_TYPES[factory],
             unit,
+            self._stopped,
         )
 
     def _observable(self, factory: str, args, kwargs):
         # Observable instruments report from bounded callbacks (runtime metrics),
-        # so only the enabled check and `before_send` apply to them.
+        # so only the enabled check and `before_send` apply to them. They still
+        # report in the last collection of shutdown.
         name, unit = _instrument_name_and_unit(args, kwargs, unit_index=2)
         args = list(args)
         if len(args) > 1:
@@ -375,11 +388,13 @@ class _BoundedMeterProvider:
         limit: int,
         is_enabled: Callable[[], bool] = _always_enabled,
         before_send: Optional[Callable] = None,
+        stopped: Optional[threading.Event] = None,
     ):
         self._meter_provider = meter_provider
         self._limit = limit
         self._is_enabled = is_enabled
         self._before_send = before_send
+        self._stopped = stopped
 
     def get_meter(self, *args, **kwargs):
         return _BoundedMeter(
@@ -387,6 +402,7 @@ class _BoundedMeterProvider:
             self._limit,
             self._is_enabled,
             self._before_send,
+            self._stopped,
         )
 
     def __getattr__(self, name):
@@ -496,12 +512,14 @@ def _track_flask_apps(instrumentor_class: Any, providers: Dict[str, Any]) -> Non
             teardown_funcs = self.teardown_request_funcs.get(None)
             if not hasattr(self, "_teardown_request") and teardown_funcs:
                 self._teardown_request = teardown_funcs[-1]
+            self._posthog_wsgi_app = self.wsgi_app
             _flask_apps.add(self)
 
     flask.Flask = _TrackedFlask
     for app in list(_flask_apps):
         if not getattr(app, "_is_instrumented_by_opentelemetry", False):
             instrumentor_class.instrument_app(app, **providers)
+            app._posthog_wsgi_app = app.wsgi_app
 
 
 def _uninstrument_flask_apps() -> None:
@@ -509,8 +527,50 @@ def _uninstrument_flask_apps() -> None:
     if flask_instrumentation is None:
         return
     for app in list(_flask_apps):
-        if getattr(app, "_is_instrumented_by_opentelemetry", False):
-            flask_instrumentation.FlaskInstrumentor.uninstrument_app(app)
+        if not getattr(app, "_is_instrumented_by_opentelemetry", False):
+            continue
+        # uninstrument_app() restores the WSGI app saved when the app was
+        # instrumented, which would remove middleware that the app added later,
+        # such as authentication. Such an app keeps the instrumentation, which
+        # records nothing after shutdown, and is not measured again.
+        if getattr(app, "wsgi_app", None) is not getattr(
+            app, "_posthog_wsgi_app", None
+        ):
+            log.debug(
+                "Metrics autocapture left the instrumentation of %r in place", app
+            )
+            continue
+        flask_instrumentation.FlaskInstrumentor.uninstrument_app(app)
+
+
+def _no_inject(*args: Any, **kwargs: Any) -> None:
+    return None
+
+
+def _disable_propagation(instrumentor_class: Any) -> None:
+    """Replaces ``inject`` in the instrumentor's modules, which would send the
+    current trace context and baggage to other services. The instrumentors call
+    it through their module global, and autocapture owns these instrumentors
+    while it runs."""
+    inject = _import_module("opentelemetry.propagate").inject
+    package = instrumentor_class.__module__
+    if package.startswith("opentelemetry.instrumentation."):
+        # Such as `opentelemetry.instrumentation.tornado`, with its client module.
+        package = ".".join(package.split(".")[:3])
+    for name, module in list(sys.modules.items()):
+        if name != package and not name.startswith(package + "."):
+            continue
+        if getattr(module, "inject", None) is inject:
+            _replaced_injects[name] = inject
+            setattr(module, "inject", _no_inject)
+
+
+def _restore_propagation() -> None:
+    while _replaced_injects:
+        name, inject = _replaced_injects.popitem()
+        module = sys.modules.get(name)
+        if module is not None and getattr(module, "inject", None) is _no_inject:
+            setattr(module, "inject", inject)
 
 
 def _first_string(attributes: Any, keys: tuple) -> Optional[str]:
@@ -623,29 +683,60 @@ class MetricsAutocapture:
     """The running autocapture. ``shutdown()`` exports the last window and
     removes the instrumentation."""
 
-    def __init__(self, meter_provider, tracer_provider, instrumentors, reader):
+    def __init__(
+        self,
+        meter_provider,
+        tracer_provider,
+        instrumentors,
+        reader,
+        stopped: Optional[threading.Event] = None,
+    ):
         self._meter_provider = meter_provider
         self._tracer_provider = tracer_provider
         self._instrumentors = instrumentors
         self._reader = reader
+        self._stopped = stopped if stopped is not None else threading.Event()
+        self._flush_lock = threading.Lock()
+        self._flush_thread: Optional[threading.Thread] = None
+        self._flush_again = False
 
     def force_flush(self, timeout_millis: int = 10_000) -> None:
         self._meter_provider.force_flush(timeout_millis)
 
     def start_flush(self) -> Optional[Callable[[Optional[float]], None]]:
         """Starts an export of the current window. Returns a function that waits
-        for it, at most the given seconds, or ``None`` when no thread can start
-        (at interpreter shutdown)."""
-        flusher = threading.Thread(
-            target=self._flush_quietly,
-            name="posthog-metrics-autocapture-flush",
-            daemon=True,
-        )
-        try:
-            flusher.start()
-        except RuntimeError:
-            return None
-        return flusher.join
+        for it, at most the given seconds, or ``None`` when there is nothing to
+        wait for.
+
+        One thread exports at a time. A call made while it exports asks it for
+        one more export, so the measurements recorded before the call are also
+        sent, and callers with short timeouts do not start a thread each."""
+        with self._flush_lock:
+            flusher = self._flush_thread
+            if flusher is not None:
+                self._flush_again = True
+                # From the export itself, waiting would never end.
+                return None if flusher is threading.current_thread() else flusher.join
+            flusher = threading.Thread(
+                target=self._flush_until_done,
+                name="posthog-metrics-autocapture-flush",
+                daemon=True,
+            )
+            try:
+                flusher.start()
+            except RuntimeError:  # no new threads at interpreter shutdown
+                return None
+            self._flush_thread = flusher
+            return flusher.join
+
+    def _flush_until_done(self) -> None:
+        while True:
+            self._flush_quietly()
+            with self._flush_lock:
+                if not self._flush_again:
+                    self._flush_thread = None
+                    return
+                self._flush_again = False
 
     def _flush_quietly(self) -> None:
         try:
@@ -660,6 +751,16 @@ class MetricsAutocapture:
         # hold at fork time.
         if getattr(self._reader, "_export_lock", None) is not None:
             self._reader._export_lock = threading.Lock()
+        # The parent's flush thread does not exist in the child.
+        self._flush_lock = threading.Lock()
+        self._flush_thread = None
+        self._flush_again = False
+        try:
+            _replace_collection_locks(self._meter_provider)
+        except Exception:
+            log.debug(
+                "Metrics autocapture failed to reset locks after fork", exc_info=True
+            )
         # The runtime instrumentor keeps the process it was created in, so it
         # would report the parent process.
         for instrumentor in self._instrumentors:
@@ -679,6 +780,7 @@ class MetricsAutocapture:
         with _lock:
             if _active is not self:
                 return
+            self._stopped.set()
             # Uninstrument before another client can start. It would skip the
             # libraries that are still instrumented, and then lose them here.
             _uninstrument(self._instrumentors)
@@ -703,6 +805,44 @@ def _uninstrument(instrumentors: List[Any]) -> None:
         log.debug(
             "Metrics autocapture failed to uninstrument Flask apps", exc_info=True
         )
+    _restore_propagation()
+
+
+def _fresh_lock(owner: Any, name: str = "_lock") -> None:
+    lock = getattr(owner, name, None)
+    if lock is None:
+        return
+    rlock_type = type(threading.RLock())
+    setattr(
+        owner,
+        name,
+        threading.RLock() if isinstance(lock, rlock_type) else threading.Lock(),
+    )
+
+
+def _replace_collection_locks(meter_provider: Any) -> None:
+    """Replaces the locks of the metrics SDK that a parent thread can hold at
+    fork time, while it collects or records. The SDK replaces only the locks of
+    the meter provider itself. In the child, no thread holds these locks."""
+    for meter in list(getattr(meter_provider, "_meters", {}).values()):
+        _fresh_lock(meter, "_instrument_registration_lock")
+    consumer = getattr(meter_provider, "_measurement_consumer", None)
+    if consumer is None:
+        return
+    _fresh_lock(consumer)
+    for storage in list(getattr(consumer, "_reader_storages", {}).values()):
+        _fresh_lock(storage)
+        matches_by_instrument = getattr(
+            storage, "_instrument_view_instrument_matches", {}
+        )
+        for matches in list(matches_by_instrument.values()):
+            for match in matches:
+                _fresh_lock(match)
+                for aggregation in list(
+                    getattr(match, "_attributes_aggregation", {}).values()
+                ):
+                    _fresh_lock(aggregation)
+                    _fresh_lock(getattr(aggregation, "_reservoir", None))
 
 
 def _shut_down(*components: Any) -> None:
@@ -891,18 +1031,20 @@ def start_metrics_autocapture(
                     links=None,
                     trace_state=None,
                 ):
-                    decision = (
-                        sampling.Decision.RECORD_ONLY
-                        if kind == trace_api.SpanKind.CLIENT
-                        else sampling.Decision.DROP
+                    if kind != trace_api.SpanKind.CLIENT:
+                        return sampling.SamplingResult(sampling.Decision.DROP)
+                    # A recorded span starts with these attributes only. Some
+                    # instrumentors, such as asyncpg, pass `db.system` here.
+                    return sampling.SamplingResult(
+                        sampling.Decision.RECORD_ONLY, attributes
                     )
-                    return sampling.SamplingResult(decision)
 
                 def get_description(self):
                     return "PostHogClientSpansOnly"
 
+            stopped = threading.Event()
             bounded_meter_provider = _BoundedMeterProvider(
-                meter_provider, _MAX_ATTRIBUTE_SETS, is_enabled, before_send
+                meter_provider, _MAX_ATTRIBUTE_SETS, is_enabled, before_send, stopped
             )
             tracer_provider = sdk_trace.TracerProvider(
                 resource=resource, sampler=_ClientSpansOnly(), shutdown_on_exit=False
@@ -964,6 +1106,7 @@ def start_metrics_autocapture(
                             instrumentor.instrument(**kwargs)
                         if instrumentor.is_instrumented_by_opentelemetry:
                             instrumentors.append(instrumentor)
+                            _disable_propagation(instrumentor_class)
                             if entry_point.name == "flask":
                                 _track_flask_apps(
                                     instrumentor_class,
@@ -980,7 +1123,7 @@ def start_metrics_autocapture(
                         )
 
             _active = MetricsAutocapture(
-                meter_provider, tracer_provider, instrumentors, reader
+                meter_provider, tracer_provider, instrumentors, reader, stopped
             )
             return _active
         except Exception:

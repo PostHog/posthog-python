@@ -6,15 +6,17 @@ import sys
 import textwrap
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
 import flask
 import httpx
+import opentelemetry.propagate
 import pytest
 import requests
+from opentelemetry import baggage, context, trace
 from opentelemetry.instrumentation._semconv import (
     _OpenTelemetrySemanticConventionStability,
 )
@@ -490,6 +492,46 @@ class TestStartMetricsAutocapture:
         os.close(write_fd)
         assert _child_result(pid, read_fd, timeout=15) == b"ok"
 
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
+    def test_records_in_a_child_forked_during_a_collection(
+        self, posthog_host, app_server, started
+    ):
+        handle = _start(
+            posthog_host, started, export_interval_seconds=3600, areas={"http": True}
+        )
+        requests.get(f"{app_server.url}/health")
+        consumer = handle._meter_provider._measurement_consumer
+        locks = [consumer._lock]
+        for storage in consumer._reader_storages.values():
+            locks.append(storage._lock)
+            for matches in storage._instrument_view_instrument_matches.values():
+                for match in matches:
+                    locks.append(match._lock)
+                    locks.extend(
+                        aggregation._lock
+                        for aggregation in match._attributes_aggregation.values()
+                    )
+        read_fd, write_fd = os.pipe()
+
+        # Collection and recording hold these locks in other threads.
+        with ExitStack() as stack:
+            for lock in locks:
+                stack.enter_context(_held_by_another_thread(lock))
+            pid = os.fork()
+        if pid == 0:  # pragma: no cover - runs in the child
+            result = b"fail"
+            try:
+                requests.get(f"{app_server.url}/health")
+                handle.force_flush()
+                result = b"ok"
+            finally:
+                os.write(write_fd, result)
+                os._exit(0)
+
+        os.close(write_fd)
+        assert _child_result(pid, read_fd, timeout=15) == b"ok"
+
     def test_does_not_send_the_apps_otlp_settings_to_posthog(
         self, posthog_host, app_server, started, monkeypatch
     ):
@@ -662,6 +704,124 @@ class TestStartMetricsAutocapture:
 
         [point] = _points(reader, "http.server.request.duration")
         assert point.count == 1
+
+    def test_shutdown_keeps_middleware_that_the_app_added(self, posthog_host, started):
+        samples = []
+
+        def before_send(sample):
+            samples.append(sample["name"])
+            return sample
+
+        handle = _start(
+            posthog_host,
+            started,
+            InMemoryMetricReader(),
+            areas={"http": True},
+            before_send=before_send,
+        )
+        app = flask.Flask(__name__)
+        app.add_url_rule("/secret", "secret", lambda: "secret")
+        protected = app.wsgi_app
+
+        def require_auth(environ, start_response):
+            if environ.get("HTTP_AUTHORIZATION") != "token":
+                start_response("401 Unauthorized", [("Content-Length", "0")])
+                return [b""]
+            return protected(environ, start_response)
+
+        app.wsgi_app = require_auth
+        client = app.test_client()
+        assert client.get("/secret").status_code == 401
+
+        handle.shutdown()
+        samples.clear()
+
+        assert client.get("/secret").status_code == 401
+        assert (
+            client.get("/secret", headers={"Authorization": "token"}).status_code == 200
+        )
+        # The instrumentation left inside the middleware records nothing more.
+        assert samples == []
+
+    def test_does_not_propagate_context_to_other_services(
+        self, posthog_host, app_server, started
+    ):
+        reader = InMemoryMetricReader()
+        handle = _start(posthog_host, started, reader, areas={"http": True})
+        remote = trace.SpanContext(
+            trace_id=0x1234,
+            span_id=0x5678,
+            is_remote=True,
+            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
+        )
+        # Baggage and an incoming trace, as a server instrumentor attaches them.
+        current = baggage.set_baggage(
+            "user.email",
+            "a@b.c",
+            trace.set_span_in_context(trace.NonRecordingSpan(remote)),
+        )
+        token = context.attach(current)
+        try:
+            requests.get(f"{app_server.url}/a")
+            httpx.get(f"{app_server.url}/b")
+        finally:
+            context.detach(token)
+
+        for request in app_server.received:
+            headers = {key.lower() for key in request["headers"]}
+            assert not headers & {"traceparent", "tracestate", "baggage"}
+        assert len(_points(reader, "http.client.request.duration")) == 2
+
+        handle.shutdown()
+        requests_instrumentation = sys.modules["opentelemetry.instrumentation.requests"]
+        assert requests_instrumentation.inject is opentelemetry.propagate.inject
+
+    def test_keeps_the_attributes_a_database_span_starts_with(
+        self, posthog_host, started
+    ):
+        # asyncpg passes `db.system` when it starts the span, not later.
+        reader = InMemoryMetricReader()
+        handle = _start(posthog_host, started, reader, areas={"db": True})
+        tracer = handle._tracer_provider.get_tracer(
+            "opentelemetry.instrumentation.asyncpg"
+        )
+
+        tracer.start_span(
+            "SELECT",
+            kind=SpanKind.CLIENT,
+            attributes={"db.system": "postgresql", "db.operation": "SELECT"},
+        ).end()
+
+        [point] = _points(reader, "db.client.operation.duration")
+        assert dict(point.attributes) == {
+            "db.system.name": "postgresql",
+            "db.operation.name": "SELECT",
+        }
+
+    def test_coalesces_concurrent_flushes(self, posthog_host, started, monkeypatch):
+        handle = _start(posthog_host, started, InMemoryMetricReader())
+        release = threading.Event()
+        flushes = []
+
+        def slow_force_flush(*args, **kwargs):
+            flushes.append(threading.current_thread().name)
+            release.wait(10)
+
+        monkeypatch.setattr(handle._meter_provider, "force_flush", slow_force_flush)
+        waiters = [handle.start_flush() for _ in range(5)]
+        flushers = [
+            thread
+            for thread in threading.enumerate()
+            if thread.name == "posthog-metrics-autocapture-flush"
+        ]
+        release.set()
+        for wait in waiters:
+            wait(10)
+
+        assert len(flushers) == 1
+        # The calls made during the first flush get one more, so their
+        # measurements are exported too.
+        assert len(flushes) == 2
 
     def test_cleans_up_when_startup_fails(self, posthog_host, started):
         real_entry_points = metrics_autocapture.entry_points
@@ -899,13 +1059,16 @@ class TestClientOption:
             client.shutdown()
 
     def test_passes_the_metrics_options_to_autocapture(self, posthog_host):
+        hook_calls = []
+
         def before_send(sample):
-            return sample
+            hook_calls.append(configured._lifecycle_callback_context.get())
+            return {**sample, "value": 2.0}
 
         with mock.patch(
             "posthog._metrics_autocapture.start_metrics_autocapture", return_value=None
         ) as start:
-            Client(
+            configured = Client(
                 FAKE_API_KEY,
                 host=posthog_host.url,
                 metrics={
@@ -920,7 +1083,8 @@ class TestClientOption:
                     "flush_interval": 30,
                     "before_send": before_send,
                 },
-            ).shutdown()
+            )
+            configured.shutdown()
             Client(
                 FAKE_API_KEY,
                 host=posthog_host.url,
@@ -942,7 +1106,12 @@ class TestClientOption:
             "service.version": "1.2.3",
         }
         assert first["export_interval_seconds"] == 30
-        assert first["before_send"] is before_send
+        # The hook runs as an SDK callback, so a flush() it calls is deferred.
+        assert first["before_send"]({"name": "m", "value": 1.0}) == {
+            "name": "m",
+            "value": 2.0,
+        }
+        assert hook_calls == [True]
         assert second["areas"] == {"http": True, "db": True, "runtime": True}
         assert second["service_name"] == "billing-worker"
         assert second["export_interval_seconds"] == 10
@@ -1012,6 +1181,77 @@ class TestClientOption:
             server.close()
 
         assert elapsed < 6
+
+    def test_sync_mode_exports_the_last_window_at_exit(self, posthog_host):
+        script = textwrap.dedent(
+            f"""
+            import sqlite3
+            from posthog.client import Client
+            Client(
+                "{FAKE_API_KEY}",
+                host="{posthog_host.url}",
+                sync_mode=True,
+                metrics={{
+                    "autocapture": {{"http": False, "runtime": False}},
+                    "flush_interval": 3600,
+                }},
+            )
+            connection = sqlite3.connect(":memory:")
+            connection.cursor().execute("SELECT 1")
+            connection.close()
+            """
+        )
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            timeout=60,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+
+        exports = _metrics_exports(posthog_host)
+        assert exports
+        assert b"db.client.operation.duration" in b"".join(r["body"] for r in exports)
+
+    def test_before_send_can_call_flush(self, posthog_host):
+        # Runtime callbacks run while OpenTelemetry holds its collection lock.
+        script = textwrap.dedent(
+            f"""
+            import os, threading
+            from posthog.client import Client
+
+            def before_send(sample):
+                if sample["name"] == "process.cpu.time":
+                    client.flush(timeout_seconds=None)
+                return sample
+
+            client = Client(
+                "{FAKE_API_KEY}",
+                host="{posthog_host.url}",
+                metrics={{
+                    "autocapture": {{"http": False, "db": False}},
+                    "flush_interval": 3600,
+                    "before_send": before_send,
+                }},
+            )
+            flush = threading.Thread(
+                target=client.flush, kwargs={{"timeout_seconds": None}}, daemon=True
+            )
+            flush.start()
+            flush.join(10)
+            print("deadlock" if flush.is_alive() else "ok", flush=True)
+            os._exit(0)
+            """
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+
+        assert result.stdout.strip() == "ok"
+        assert _metrics_exports(posthog_host)
 
     def test_starts_on_a_later_module_setup(self, posthog_host, monkeypatch):
         # A Django ready() hook can set the option after setup() already ran.
