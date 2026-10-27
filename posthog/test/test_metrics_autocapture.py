@@ -35,6 +35,7 @@ from posthog import _metrics_autocapture as metrics_autocapture
 from posthog.client import Client
 from posthog._metrics_autocapture import (
     DbSpanMetricsProcessor,
+    _BoundedInstrument,
     _BoundedMeterProvider,
     start_metrics_autocapture,
 )
@@ -800,15 +801,19 @@ class TestStartMetricsAutocapture:
 
     def test_coalesces_concurrent_flushes(self, posthog_host, started, monkeypatch):
         handle = _start(posthog_host, started, InMemoryMetricReader())
+        exporting = threading.Event()
         release = threading.Event()
         flushes = []
 
         def slow_force_flush(*args, **kwargs):
             flushes.append(threading.current_thread().name)
+            exporting.set()
             release.wait(10)
 
         monkeypatch.setattr(handle._meter_provider, "force_flush", slow_force_flush)
-        waiters = [handle.start_flush() for _ in range(5)]
+        waiters = [handle.start_flush()]
+        assert exporting.wait(5)
+        waiters += [handle.start_flush() for _ in range(4)]
         flushers = [
             thread
             for thread in threading.enumerate()
@@ -822,6 +827,82 @@ class TestStartMetricsAutocapture:
         # The calls made during the first flush get one more, so their
         # measurements are exported too.
         assert len(flushes) == 2
+
+    def test_a_flush_waits_only_for_the_export_after_it(
+        self, posthog_host, started, monkeypatch
+    ):
+        handle = _start(posthog_host, started, InMemoryMetricReader())
+        exporting = [threading.Event(), threading.Event()]
+        release = [threading.Event(), threading.Event()]
+        exports = []
+
+        def slow_force_flush(*args, **kwargs):
+            export = min(len(exports), 1)
+            exports.append(export)
+            exporting[export].set()
+            release[export].wait(10)
+
+        monkeypatch.setattr(handle._meter_provider, "force_flush", slow_force_flush)
+        first = handle.start_flush()
+        assert exporting[0].wait(5)
+        second = handle.start_flush()
+        release[0].set()
+        assert exporting[1].wait(5)
+
+        # The second export is still running, but it is not for the first call.
+        began = time.monotonic()
+        assert first(5)
+        assert time.monotonic() - began < 2
+        assert not second(0.1)
+        release[1].set()
+        assert second(5)
+
+    def test_normalizes_attributes_from_before_send(
+        self, posthog_host, app_server, started
+    ):
+        def before_send(sample):
+            sample["attributes"] = {
+                **sample["attributes"],
+                "deployment.tags": ["blue", "canary"],
+                "owner": {"team": "core"},
+            }
+            return sample
+
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host, started, reader, areas={"http": True}, before_send=before_send
+        )
+
+        response = requests.get(f"{app_server.url}/health")
+
+        assert response.status_code == 200
+        [point] = _points(reader, "http.client.request.duration")
+        assert point.attributes["deployment.tags"] == ("blue", "canary")
+        assert "owner" not in point.attributes
+
+    def test_normalizes_runtime_attributes_from_before_send(
+        self, posthog_host, started
+    ):
+        def before_send(sample):
+            sample["attributes"] = {
+                **sample["attributes"],
+                "deployment.tags": ["blue"],
+                "owner": {"team": "core"},
+            }
+            return sample
+
+        reader = InMemoryMetricReader()
+        _start(
+            posthog_host,
+            started,
+            reader,
+            areas={"runtime": True},
+            before_send=before_send,
+        )
+
+        [point, *_] = _points(reader, "process.thread.count")
+        assert point.attributes["deployment.tags"] == ("blue",)
+        assert "owner" not in point.attributes
 
     def test_cleans_up_when_startup_fails(self, posthog_host, started):
         real_entry_points = metrics_autocapture.entry_points
@@ -910,6 +991,47 @@ class TestPostHogUrlExclusion:
 
 
 class TestBoundedMeterProvider:
+    def test_drops_raw_url_and_client_attributes(self):
+        # As the Tornado instrumentor records them: raw paths can hold tokens.
+        reader = InMemoryMetricReader()
+        provider = _BoundedMeterProvider(MeterProvider(metric_readers=[reader]), 10)
+        histogram = provider.get_meter("test").create_histogram("http.server.duration")
+
+        histogram.record(
+            1,
+            {
+                "http.method": "GET",
+                "http.status_code": 200,
+                "http.host": "shop.example",
+                "http.target": "/reset/private-token",
+                "http.url": "https://shop.example/reset/private-token?email=a@b.c",
+                "url.full": "https://shop.example/reset/private-token",
+                "url.path": "/reset/private-token",
+                "url.query": "email=a@b.c",
+                "http.client_ip": "203.0.113.7",
+                "client.address": "203.0.113.7",
+                "net.peer.ip": "203.0.113.7",
+                "http.user_agent": "Mozilla/5.0",
+                "user_agent.original": "Mozilla/5.0",
+                "http.request.header.authorization": ("Bearer secret",),
+                "http.response.header.set_cookie": ("session=secret",),
+            },
+        )
+
+        [point] = _points(reader, "http.server.duration")
+        assert dict(point.attributes) == {
+            "http.method": "GET",
+            "http.status_code": 200,
+            "http.host": "shop.example",
+        }
+
+    def test_never_raises_into_the_instrumented_call(self):
+        class BrokenInstrument:
+            def record(self, *args, **kwargs):
+                raise TypeError("broken")
+
+        _BoundedInstrument(BrokenInstrument(), 10).record(1.0, {"a": "b"})
+
     def test_sends_new_attribute_sets_to_an_overflow_series(self):
         # Delta, as autocapture exports: the SDK still keeps each attribute set.
         reader = InMemoryMetricReader(
@@ -1304,6 +1426,41 @@ class TestClientOption:
         )
 
         assert "_DjangoMiddleware" in result.stdout, result.stderr[-2000:]
+
+    def test_a_flush_from_before_send_does_not_repeat(self, posthog_host):
+        # Each autocapture export runs the hook again.
+        script = textwrap.dedent(
+            f"""
+            import os, time
+            from posthog.client import Client
+
+            def before_send(sample):
+                if sample["name"] == "process.cpu.time":
+                    client.flush()
+                return sample
+
+            client = Client(
+                "{FAKE_API_KEY}",
+                host="{posthog_host.url}",
+                metrics={{
+                    "autocapture": {{"http": False, "db": False}},
+                    "flush_interval": 3600,
+                    "before_send": before_send,
+                }},
+            )
+            client.flush(timeout_seconds=5)
+            time.sleep(2)
+            os._exit(0)
+            """
+        )
+        subprocess.run(
+            [sys.executable, "-c", script],
+            check=True,
+            timeout=60,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+
+        assert len(_metrics_exports(posthog_host)) == 1
 
     def test_starts_on_a_later_module_setup(self, posthog_host, monkeypatch):
         # A Django ready() hook can set the option after setup() already ran.

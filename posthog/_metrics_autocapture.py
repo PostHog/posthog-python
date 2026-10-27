@@ -19,7 +19,9 @@ instrument a library again with its own OpenTelemetry setup while autocapture
 instruments it. Apps with their own OpenTelemetry instrumentation should export
 their metrics to PostHog and not turn on autocapture.
 
-Spans are only used to derive database metrics and are never exported. The HTTP
+Raw URLs and paths, client addresses, user agents and captured headers are never
+recorded; routes (such as ``/users/{id}``) are. Spans are only used to derive
+database metrics and are never exported. The HTTP
 instrumentors get no tracer, and the instrumentors that autocapture starts do not
 propagate context, so no trace context or baggage goes to other services.
 """
@@ -114,6 +116,27 @@ _STATEMENT_KEYWORD = re.compile(r"^\s*([A-Za-z]{2,20})\b")
 _MAX_ATTRIBUTE_SETS = 2000
 _OVERFLOW_ATTRIBUTES = {"otel.metric.overflow": True}
 
+# Attributes that some instrumentors put on metrics, such as Tornado's raw
+# `http.target` and `http.url`. Paths and URLs can hold tokens and emails, and
+# client addresses and user agents identify users. They are never recorded.
+_UNSAFE_ATTRIBUTES = frozenset(
+    {
+        "http.url",
+        "http.target",
+        "url.full",
+        "url.path",
+        "url.query",
+        "http.client_ip",
+        "client.address",
+        "net.peer.ip",
+        "net.sock.peer.addr",
+        "http.user_agent",
+        "user_agent.original",
+    }
+)
+_UNSAFE_ATTRIBUTE_PREFIXES = ("http.request.header.", "http.response.header.")
+_ATTRIBUTE_VALUE_TYPES = (str, bool, int, float)
+
 _SEMCONV_OPT_IN = "OTEL_SEMCONV_STABILITY_OPT_IN"
 # The app's OTLP settings (headers with other vendors' keys, endpoint, TLS files)
 # are for its own collector. The exporter reads them when it is created.
@@ -194,6 +217,33 @@ def _apply_before_send(
     return value, attributes
 
 
+def _clean_attributes(attributes: Any) -> Any:
+    """Removes the unsafe attributes, and keeps only valid OpenTelemetry values,
+    with sequences as tuples. Some OpenTelemetry versions raise for a list value,
+    and `before_send` can return any value."""
+    if not attributes:
+        return attributes
+    try:
+        items = list(attributes.items())
+    except (AttributeError, TypeError):
+        return None
+    cleaned: Dict[str, Any] = {}
+    for key, value in items:
+        if (
+            not isinstance(key, str)
+            or key in _UNSAFE_ATTRIBUTES
+            or key.startswith(_UNSAFE_ATTRIBUTE_PREFIXES)
+        ):
+            continue
+        if isinstance(value, _ATTRIBUTE_VALUE_TYPES):
+            cleaned[key] = value
+        elif isinstance(value, (list, tuple)) and all(
+            isinstance(item, _ATTRIBUTE_VALUE_TYPES) for item in value
+        ):
+            cleaned[key] = tuple(value)
+    return cleaned
+
+
 def _instrument_name_and_unit(args: tuple, kwargs: dict, unit_index: int):
     name = kwargs.get("name", args[0] if args else "")
     unit = kwargs.get("unit", args[unit_index] if len(args) > unit_index else "")
@@ -247,6 +297,7 @@ class _BoundedInstrument:
             self._stopped is not None and self._stopped.is_set()
         ) or not self._is_enabled():
             return None
+        attributes = _clean_attributes(attributes)
         if self._before_send is not None:
             measurement = _apply_before_send(
                 self._before_send,
@@ -259,9 +310,17 @@ class _BoundedInstrument:
             if measurement is None:
                 return None
             amount, attributes = measurement
-        return getattr(self._instrument, method)(
-            amount, self._bounded(attributes), *args, **kwargs
-        )
+            attributes = _clean_attributes(attributes)
+        # This runs in the instrumented call, such as the app's HTTP request.
+        try:
+            return getattr(self._instrument, method)(
+                amount, self._bounded(attributes), *args, **kwargs
+            )
+        except Exception:
+            log.debug(
+                "Metrics autocapture failed to record %s", self._name, exc_info=True
+            )
+            return None
 
     def add(self, amount, attributes=None, *args, **kwargs):
         return self._record("add", amount, attributes, args, kwargs)
@@ -342,7 +401,10 @@ class _BoundedMeter:
                         observation.attributes,
                     )
                     if measurement is not None:
-                        kept.append(observation_class(*measurement))
+                        value, attributes = measurement
+                        kept.append(
+                            observation_class(value, _clean_attributes(attributes))
+                        )
                 return kept
 
             return observe
@@ -702,47 +764,67 @@ class MetricsAutocapture:
         self._instrumentors = instrumentors
         self._reader = reader
         self._stopped = stopped if stopped is not None else threading.Event()
-        self._flush_lock = threading.Lock()
-        self._flush_thread: Optional[threading.Thread] = None
-        self._flush_again = False
+        self._reset_flush_state()
 
     def force_flush(self, timeout_millis: int = 10_000) -> None:
         self._meter_provider.force_flush(timeout_millis)
 
-    def start_flush(self) -> Optional[Callable[[Optional[float]], None]]:
-        """Starts an export of the current window. Returns a function that waits
-        for it, at most the given seconds, or ``None`` when there is nothing to
-        wait for.
+    def _reset_flush_state(self) -> None:
+        self._flush_done = threading.Condition()
+        self._flush_thread: Optional[threading.Thread] = None
+        # Flush requests are numbered. An export covers the requests made
+        # before it starts.
+        self._flush_requested = 0
+        self._flush_exported = 0
 
-        One thread exports at a time. A call made while it exports asks it for
-        one more export, so the measurements recorded before the call are also
-        sent, and callers with short timeouts do not start a thread each."""
-        with self._flush_lock:
+    def start_flush(self) -> Optional[Callable[[Optional[float]], bool]]:
+        """Starts an export of the current window. Returns a function that waits
+        for it, at most the given seconds, and returns whether it finished; or
+        ``None`` when there is nothing to wait for.
+
+        One thread exports at a time. A call made while it exports gets one more
+        export, so the measurements recorded before the call are also sent, and
+        callers with short timeouts do not start a thread each. Each call waits
+        only for the first export that starts after it."""
+        with self._flush_done:
+            self._flush_requested += 1
+            request = self._flush_requested
             flusher = self._flush_thread
-            if flusher is not None:
-                self._flush_again = True
+            if flusher is threading.current_thread():
                 # From the export itself, waiting would never end.
-                return None if flusher is threading.current_thread() else flusher.join
-            flusher = threading.Thread(
-                target=self._flush_until_done,
-                name="posthog-metrics-autocapture-flush",
-                daemon=True,
-            )
-            try:
-                flusher.start()
-            except RuntimeError:  # no new threads at interpreter shutdown
                 return None
-            self._flush_thread = flusher
-            return flusher.join
+            if flusher is None:
+                flusher = threading.Thread(
+                    target=self._flush_until_done,
+                    name="posthog-metrics-autocapture-flush",
+                    daemon=True,
+                )
+                try:
+                    flusher.start()
+                except RuntimeError:  # no new threads at interpreter shutdown
+                    self._flush_requested -= 1
+                    return None
+                self._flush_thread = flusher
+
+        def wait(timeout: Optional[float] = None) -> bool:
+            with self._flush_done:
+                return self._flush_done.wait_for(
+                    lambda: self._flush_exported >= request, timeout
+                )
+
+        return wait
 
     def _flush_until_done(self) -> None:
         while True:
+            with self._flush_done:
+                covered = self._flush_requested
             self._flush_quietly()
-            with self._flush_lock:
-                if not self._flush_again:
+            with self._flush_done:
+                self._flush_exported = covered
+                self._flush_done.notify_all()
+                if self._flush_requested == covered:
                     self._flush_thread = None
                     return
-                self._flush_again = False
 
     def _flush_quietly(self) -> None:
         try:
@@ -758,9 +840,7 @@ class MetricsAutocapture:
         if getattr(self._reader, "_export_lock", None) is not None:
             self._reader._export_lock = threading.Lock()
         # The parent's flush thread does not exist in the child.
-        self._flush_lock = threading.Lock()
-        self._flush_thread = None
-        self._flush_again = False
+        self._reset_flush_state()
         try:
             _replace_collection_locks(self._meter_provider)
         except Exception:
