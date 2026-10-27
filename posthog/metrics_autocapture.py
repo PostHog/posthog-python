@@ -10,7 +10,10 @@ psycopg, ...) are found through the ``opentelemetry_instrumentor`` entry points,
 the same way ``opentelemetry-instrument`` finds them.
 
 The meter and tracer providers are private: nothing is set on the OpenTelemetry
-globals, so an app that adds its own OpenTelemetry setup later is not changed.
+globals. The library instrumentors are process-wide singletons, though, so an
+app cannot instrument a library again with its own OpenTelemetry setup while
+autocapture instruments it. Apps with their own OpenTelemetry instrumentation
+should export their metrics to PostHog and not turn on autocapture.
 Spans are only used to derive database metrics and are never exported.
 """
 
@@ -348,16 +351,19 @@ class MetricsAutocapture:
         with _lock:
             if _active is not self:
                 return
+            # Uninstrument before another client can start. It would skip the
+            # libraries that are still instrumented, and then lose them here.
+            for instrumentor in self._instrumentors:
+                try:
+                    instrumentor.uninstrument()
+                except Exception:
+                    log.debug(
+                        "Metrics autocapture failed to uninstrument %s",
+                        instrumentor,
+                        exc_info=True,
+                    )
             _active = None
-        for instrumentor in self._instrumentors:
-            try:
-                instrumentor.uninstrument()
-            except Exception:
-                log.debug(
-                    "Metrics autocapture failed to uninstrument %s",
-                    instrumentor,
-                    exc_info=True,
-                )
+        # The last export can take a while, so it runs outside the lock.
         for provider in (self._tracer_provider, self._meter_provider):
             try:
                 provider.shutdown()
@@ -549,6 +555,15 @@ def start_metrics_autocapture(
                         continue
                     try:
                         instrumentor_class = entry_point.load()
+                        # Instrumentors are singletons, and creating one runs
+                        # `__init__` again on the existing instance. That would
+                        # reset the config of an instance that the app uses.
+                        existing = getattr(instrumentor_class, "_instance", None)
+                        if (
+                            existing is not None
+                            and existing.is_instrumented_by_opentelemetry
+                        ):
+                            continue
                         instrumentor = (
                             instrumentor_class(config=_RUNTIME_CONFIG)
                             if entry_point.name == "system_metrics"

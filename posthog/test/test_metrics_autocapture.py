@@ -7,6 +7,7 @@ from unittest import mock
 
 import pytest
 import requests
+from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 from opentelemetry.sdk.metrics import Histogram, MeterProvider
 from opentelemetry.sdk.metrics.export import (
     AggregationTemporality,
@@ -244,6 +245,62 @@ class TestStartMetricsAutocapture:
         connection.cursor().execute("SELECT 1")
         connection.close()
         assert _points(reader, "db.client.operation.duration")
+
+    def test_does_not_reconfigure_runtime_metrics_that_the_app_set_up(
+        self, posthog_host, started
+    ):
+        # The app's meter provider is private, so autocapture still starts.
+        app_reader = InMemoryMetricReader()
+        app_instrumentor = SystemMetricsInstrumentor(
+            config={"system.cpu.time": ["idle", "user"]}
+        )
+        app_instrumentor.instrument(
+            meter_provider=MeterProvider(metric_readers=[app_reader])
+        )
+        try:
+            assert (
+                _start(
+                    posthog_host,
+                    started,
+                    InMemoryMetricReader(),
+                    areas={"runtime": True},
+                )
+                is not None
+            )
+            assert "system.cpu.time" in _names(app_reader)
+        finally:
+            app_instrumentor.uninstrument()
+
+    def test_a_client_that_starts_during_shutdown_records_http_metrics(
+        self, posthog_host, app_server, started
+    ):
+        first = _start(posthog_host, started, areas={"http": True})
+        reader = InMemoryMetricReader()
+        replacement = []
+        starting = threading.Event()
+
+        def start_replacement():
+            starting.set()
+            replacement.append(
+                _start(posthog_host, started, reader, areas={"http": True})
+            )
+
+        thread = threading.Thread(target=start_replacement)
+
+        class StartsAnotherClientDuringShutdown(list):
+            def __iter__(self):
+                thread.start()
+                starting.wait()
+                thread.join(timeout=0.5)
+                return super().__iter__()
+
+        first._instrumentors = StartsAnotherClientDuringShutdown(first._instrumentors)
+        first.shutdown()
+        thread.join()
+
+        assert replacement[0] is not None
+        requests.get(f"{app_server.url}/health")
+        assert _points(reader, "http.client.request.duration")
 
     def test_strips_a_trailing_slash_from_the_host(
         self, posthog_host, app_server, started
