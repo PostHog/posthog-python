@@ -21,6 +21,7 @@ from server import BenchmarkServer
 HERE = Path(__file__).resolve().parent
 WORKER = HERE / "worker.py"
 TIMEOUT = 120
+MAX_WORKER_TIMEOUTS = 2
 RSS_LIMIT = 512 * 1024 * 1024
 
 
@@ -54,7 +55,7 @@ def run_worker(python, spec, measurement_pass, timeout=TIMEOUT, rss_limit=RSS_LI
         with subprocess.Popen(
             command,
             cwd=directory,
-            env=worker_env(),
+            env={**worker_env(), "TMPDIR": directory},
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         ) as process:
@@ -151,6 +152,7 @@ def document_for(directory, role, pair_id, suite):
             "resource_limits": {
                 "process_rss_limit_bytes": RSS_LIMIT,
                 "worker_timeout_ms": TIMEOUT * 1000,
+                "max_worker_timeouts": MAX_WORKER_TIMEOUTS,
             },
         }
     )
@@ -345,6 +347,7 @@ def main(args=None):
             temporary.replace(options.output / f"{role}.json")
 
     failures = 0
+    timeouts = 0
     for spec in specs:
         records = {}
         for role in directories:
@@ -375,11 +378,14 @@ def main(args=None):
                     )
                     append_sample(records[role], raw, repetition)
                     failures += raw["status"] != "ok"
+                    timeouts += raw["status"] == "timeout"
                     print(
                         f"{spec['id']} {measurement_pass} {repetition + 1}/{options.repetitions} {role}: {raw['status']}",
                         file=sys.stderr,
                     )
                     save()
+                if timeouts >= MAX_WORKER_TIMEOUTS:
+                    return 1
             if any(record["status"] != "ok" for record in records.values()):
                 break
     return int(failures > 0)

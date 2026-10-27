@@ -281,6 +281,47 @@ class BenchmarksTest(unittest.TestCase):
         self.assertTrue(limited["rss_limit_exceeded"])
         self.assertEqual(limited["status"], "error")
 
+    def test_killed_worker_temporary_files_are_removed_by_the_coordinator(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = Path(directory) / "worker.py"
+            worker.write_text(
+                "import tempfile, time\nprint(tempfile.mkdtemp(prefix='profile-'), flush=True)\ntime.sleep(10)\n"
+            )
+            with patch("run.WORKER", worker):
+                raw = run_worker(PYTHON, workloads(True)[0], "allocation", timeout=0.5)
+            self.assertEqual(raw["status"], "timeout")
+            profile = Path(raw["stdout"].strip())
+            self.assertTrue(profile.name.startswith("profile-"))
+            self.assertTrue(profile.parent.name.startswith("posthog-benchmark-worker-"))
+            self.assertFalse(profile.parent.exists())
+
+    def test_repeated_timeouts_stop_the_suite_with_partial_results(self):
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch(
+                "run.run_worker", return_value={"status": "timeout", "pass": "timing"}
+            ) as worker,
+        ):
+            code = main(
+                [
+                    "--base",
+                    str(ROOT),
+                    "--head",
+                    str(ROOT),
+                    "--output",
+                    directory,
+                    "--smoke",
+                ]
+            )
+            self.assertEqual(code, 1)
+            self.assertEqual(worker.call_count, 2)
+            for role in ("base", "head"):
+                document = json.loads((Path(directory) / f"{role}.json").read_text())
+                self.assertEqual(len(document["benchmarks"]), 1)
+                self.assertEqual(document["benchmarks"][0]["status"], "timeout")
+                self.assertEqual(document["benchmarks"][0]["metrics"], [])
+                self.assertEqual(len(document["benchmarks"][0]["runs"]), 1)
+
     def test_oom_classification_requires_evidence(self):
         self.assertEqual(classify_exit(stderr="Killed"), "error")
         self.assertEqual(classify_exit(stderr="Traceback...\nMemoryError\n"), "oom")

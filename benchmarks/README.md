@@ -106,7 +106,7 @@ The control suite demonstrates that this configuration records freed small alloc
 
 CPython has no uninstrumented total managed-heap byte counter equivalent to Node's `heapUsed`. `post_settling_heap_used` is explicitly unsupported; enabling tracing in the RSS pass would change the measurement. Retained RSS alone does not prove a leak because allocators can keep arenas resident. A public-entry control deliberately retains 8 MiB on each refresh and verifies that post-GC checkpoints expose the growth.
 
-Each worker has a two-minute timeout and an externally monitored **512 MiB RSS ceiling**, checked approximately every 20 ms. This is a safety bound, not an exact OS-enforced limit: short spikes can exceed it between observations. A ceiling violation is reported as `error` with `rss_limit_exceeded`, not falsely described as a confirmed OS OOM. An explicit Python `MemoryError` is classified as OOM; a generic kill is not.
+Each worker has a two-minute timeout and an externally monitored **512 MiB RSS ceiling**, checked approximately every 20 ms. This is a safety bound, not an exact OS-enforced limit: short spikes can exceed it between observations. A ceiling violation is reported as `error` with `rss_limit_exceeded`, not falsely described as a confirmed OS OOM. An explicit Python `MemoryError` is classified as OOM; a generic kill is not. The suite stops after two worker timeouts, after completing the current base/head pair, and preserves partial results for upload. Worker temporary files, including profiler traces, are owned and removed by the coordinator even when a worker is killed.
 
 ## Results and CI
 
