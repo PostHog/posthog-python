@@ -531,8 +531,8 @@ def _span_ids(properties):
     return {k: properties[k] for k in SPAN_IDS if k in properties}
 
 
-def _sync_trace_context(method):
-    # Sync capture_exception adds the span ids even with capture_trace_context off.
+def _trace_context_setting(method):
+    # capture_exception adds the span ids even with capture_trace_context off.
     return method != "capture_exception"
 
 
@@ -541,7 +541,7 @@ def _sync_trace_context(method):
 def test_sync_span_ids_fill_as_a_pair_below_caller_layers(method, source, expected):
     events = _sync_wire_events(
         _capture_in_span(method, source),
-        **_trace_config(source, _sync_trace_context(method)),
+        **_trace_config(source, _trace_context_setting(method)),
     )
     assert _span_ids(events[0]["properties"]) == expected
 
@@ -553,7 +553,8 @@ async def test_async_span_ids_fill_as_a_pair_below_caller_layers(
     method, source, expected
 ):
     events = await _async_wire_events(
-        _capture_in_span(method, source), **_trace_config(source)
+        _capture_in_span(method, source),
+        **_trace_config(source, _trace_context_setting(method)),
     )
     assert _span_ids(events[0]["properties"]) == expected
 
@@ -572,7 +573,7 @@ def test_sync_before_send_sees_and_changes_span_ids(method):
     events = _sync_wire_events(
         _capture_in_span(method),
         before_send=_span_id_hook(seen),
-        **_trace_config(None, _sync_trace_context(method)),
+        **_trace_config(None, _trace_context_setting(method)),
     )
     assert seen == [SPAN_IDS]
     assert _span_ids(events[0]["properties"]) == {**SPAN_IDS, "$span_id": "hook"}
@@ -583,7 +584,9 @@ def test_sync_before_send_sees_and_changes_span_ids(method):
 async def test_async_before_send_sees_and_changes_span_ids(method):
     seen: list = []
     events = await _async_wire_events(
-        _capture_in_span(method), before_send=_span_id_hook(seen), **_trace_config(None)
+        _capture_in_span(method),
+        before_send=_span_id_hook(seen),
+        **_trace_config(None, _trace_context_setting(method)),
     )
     assert seen == [SPAN_IDS]
     assert _span_ids(events[0]["properties"]) == {**SPAN_IDS, "$span_id": "hook"}
