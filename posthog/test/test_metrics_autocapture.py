@@ -1,18 +1,25 @@
+import os
 import sqlite3
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
 import pytest
 import requests
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import InMemoryMetricReader
+from opentelemetry.sdk.metrics import Histogram, MeterProvider
+from opentelemetry.sdk.metrics.export import (
+    AggregationTemporality,
+    InMemoryMetricReader,
+)
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.trace import SpanKind, Status, StatusCode
 
+from posthog import metrics_autocapture
 from posthog.client import Client
 from posthog.metrics_autocapture import (
     DbSpanMetricsProcessor,
+    _BoundedMeterProvider,
     start_metrics_autocapture,
 )
 
@@ -238,6 +245,109 @@ class TestStartMetricsAutocapture:
         connection.close()
         assert _points(reader, "db.client.operation.duration")
 
+    def test_strips_a_trailing_slash_from_the_host(
+        self, posthog_host, app_server, started
+    ):
+        # A reverse proxy path, as in `host="https://example.com/ingest/"`.
+        handle = _start(posthog_host, started, host=f"{posthog_host.url}/ingest/")
+        requests.get(f"{app_server.url}/health")
+
+        handle.force_flush()
+
+        paths = {r["path"] for r in posthog_host.received}
+        assert "/ingest/i/v1/metrics" in paths
+        assert "/ingest//i/v1/metrics" not in paths
+
+    def test_does_not_change_the_process_environment(
+        self, posthog_host, started, monkeypatch
+    ):
+        monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
+        assert _start(posthog_host, started, InMemoryMetricReader()) is not None
+        assert "OTEL_SEMCONV_STABILITY_OPT_IN" not in os.environ
+
+    def test_keeps_an_opt_in_that_the_app_set(self, posthog_host, started, monkeypatch):
+        monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
+        assert _start(posthog_host, started, InMemoryMetricReader()) is not None
+        assert os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http/dup"
+
+    def test_limits_http_attribute_sets(self, posthog_host, app_server, started):
+        reader = InMemoryMetricReader()
+        with mock.patch.object(metrics_autocapture, "_MAX_ATTRIBUTE_SETS", 1):
+            _start(posthog_host, started, reader)
+
+        requests.get(f"{app_server.url}/a")
+        requests.post(f"{app_server.url}/b", data="{}")
+
+        attributes = [
+            dict(point.attributes)
+            for point in _points(reader, "http.client.request.duration")
+        ]
+        assert len(attributes) == 2
+        assert {"otel.metric.overflow": True} in attributes
+
+    @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+    @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
+    def test_keeps_working_in_a_forked_child(self, posthog_host, app_server, started):
+        reader = InMemoryMetricReader()
+        handle = _start(posthog_host, started, reader)
+        read_fd, write_fd = os.pipe()
+
+        # A parent thread can hold the lock at fork time.
+        with metrics_autocapture._lock:
+            pid = os.fork()
+        if pid == 0:  # pragma: no cover - runs in the child
+            result = b"fail"
+            try:
+                runtime = [i for i in handle._instrumentors if hasattr(i, "_proc")]
+                requests.get(f"{app_server.url}/child")
+                if (
+                    runtime
+                    and all(i._proc.pid == os.getpid() for i in runtime)
+                    and _points(reader, "http.client.request.duration")
+                ):
+                    handle.shutdown()
+                    result = b"ok"
+            finally:
+                os.write(write_fd, result)
+                os._exit(0)
+
+        os.close(write_fd)
+        deadline = time.monotonic() + 20
+        while time.monotonic() < deadline:
+            if os.waitpid(pid, os.WNOHANG) != (0, 0):
+                break
+            time.sleep(0.05)
+        else:
+            os.kill(pid, 9)
+            os.waitpid(pid, 0)
+        result = os.read(read_fd, 16)
+        os.close(read_fd)
+        assert result == b"ok"
+        # The child's shutdown does not stop the parent's autocapture.
+        assert metrics_autocapture._active is handle
+
+
+class TestBoundedMeterProvider:
+    def test_sends_new_attribute_sets_to_an_overflow_series(self):
+        # Delta, as autocapture exports: the SDK still keeps each attribute set.
+        reader = InMemoryMetricReader(
+            preferred_temporality={Histogram: AggregationTemporality.DELTA}
+        )
+        provider = _BoundedMeterProvider(MeterProvider(metric_readers=[reader]), 2)
+        histogram = provider.get_meter("test").create_histogram("duration")
+
+        for _ in range(2):
+            for host in ("a", "b", "c", "d"):
+                histogram.record(1, {"server.address": host})
+            points = _points(reader, "duration")
+            assert sorted(
+                (str(dict(point.attributes)), point.count) for point in points
+            ) == [
+                ("{'otel.metric.overflow': True}", 2),
+                ("{'server.address': 'a'}", 1),
+                ("{'server.address': 'b'}", 1),
+            ]
+
 
 class TestDbSpanMetricsProcessor:
     def _record(self, scope, kind=SpanKind.CLIENT, attributes=None, error=False):
@@ -337,3 +447,20 @@ class TestClientOption:
         assert _start(posthog_host, started) is not None
         plain.shutdown()
         disabled.shutdown()
+
+    def test_sends_nothing_when_send_is_false(self, posthog_host, app_server):
+        client = Client(
+            FAKE_API_KEY,
+            host=posthog_host.url,
+            send=False,
+            metrics={"autocapture": True},
+        )
+        try:
+            assert client._metrics_autocapture is not None
+            requests.get(f"{app_server.url}/health")
+            client._metrics_autocapture.force_flush()
+            assert [
+                r for r in posthog_host.received if r["path"] == "/i/v1/metrics"
+            ] == []
+        finally:
+            client.shutdown()
