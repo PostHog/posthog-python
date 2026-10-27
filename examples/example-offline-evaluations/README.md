@@ -65,6 +65,7 @@ with OfflineEvaluations(
         output="Paris",
         expected_output="Paris",
         case_key="capital-france",
+        model_version="model-b",
     )
     receipt = experiment.upload_result(
         item=item,
@@ -76,6 +77,8 @@ with OfflineEvaluations(
 ```
 
 Use one `EvaluationItem` for the application's execution and reuse it across scorer results. `upload_results([EvaluationResult(...), ...])` uploads a finite sequence, eagerly and sequentially. It splits at 1,000 items/results or 5 MiB of UTF-8 JSON per request, whichever comes first. Item payloads are limited to 1 MiB; result payloads to 256 KiB. Payload JSON supports at most 32 nested containers. The SDK raises for invalid values and oversized payloads without truncating them. Memory use scales with the sequence you supply, so submit caller-sized batches for large datasets.
+
+Set `model_version` on each item to compare executions from different models in one experiment. It identifies the application's model and overrides the default supplied to `create_experiment(model_version=...)`. Omit it or pass `None` to inherit that default on the server; without either value, the model remains unknown. Explicit model identifiers must be nonempty strings of at most 255 characters and are preserved without trimming. The declared model is immutable item content: changing, adding, or removing it after acceptance causes a `content_conflict`, even if the effective model is unchanged. Create a new item for a different model execution, and preserve the original declaration for retries.
 
 `status="ok"` means the evaluator ran successfully. Its boolean, number, or category-list `value` is uploaded with its original polarity. Numeric scores use finite double-precision (binary64) values; integer inputs are rejected if conversion would change their value. Use `error`, `skipped`, or `not_applicable` without a value for other outcomes. `error_code` and a non-null `error_message` are valid only with `status="error"`.
 
@@ -153,6 +156,8 @@ with OfflineEvaluations(project_id=123, secret_key=personal_api_key) as evaluati
 This example uses string inputs. Replace `capital_answer` and the equality check with your own application and judge. The SDK does not run scorer definitions. For multiple scorers, reuse the same `EvaluationItem` and upload one result per scorer-version UUID. For independent trials, call `from_dataset_item` again and pass a distinct `trial`, such as `trial="2"`; each call generates a new execution UUID. The helper defaults `case_key` to `client_item_id`, falling back to the stable dataset item UUID, and accepts an explicit override.
 
 `from_dataset_item` copies input, expected output, metadata, and immutable item provenance. It never uses `source_output` as a new execution's output or expected answer, and never uses the original source trace as the new application's trace. Pass `application_trace_id` explicitly for the new execution. Omit `output` if execution failed before producing one, then upload an error outcome. Omitted output differs from `output=None`.
+
+Pass `EvaluationItem.from_dataset_item(case, output=output, model_version="model-b")` to attribute a dataset execution to a model. Calling it again with another model creates a new execution UUID while preserving the same case key and dataset-item version. Omitting the model or passing `None` leaves experiment fallback to the server; dataset metadata and source traces never supply the execution model.
 
 ### Snapshot and pagination behavior
 
