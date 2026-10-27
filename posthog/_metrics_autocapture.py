@@ -9,7 +9,8 @@ imported only when autocapture starts. Library instrumentors (requests, Django,
 psycopg, ...) are found through the ``opentelemetry_instrumentor`` entry points,
 the same way ``opentelemetry-instrument`` finds them. An instrumentor changes the
 library classes when it starts, so objects created before that, such as a Flask
-or FastAPI app, are not measured: create the client before the web app.
+or FastAPI app, are not measured: create the client before the web app. Django
+is instrumented only when its settings are configured, as in ``AppConfig.ready()``.
 
 The meter and tracer providers are private: nothing is set on the OpenTelemetry
 globals, and the app's ``OTEL_EXPORTER_OTLP_*`` settings are not used. The
@@ -543,6 +544,11 @@ def _uninstrument_flask_apps() -> None:
         flask_instrumentation.FlaskInstrumentor.uninstrument_app(app)
 
 
+def _django_settings_configured() -> bool:
+    conf = sys.modules.get("django.conf")
+    return bool(getattr(getattr(conf, "settings", None), "configured", False))
+
+
 def _no_inject(*args: Any, **kwargs: Any) -> None:
     return None
 
@@ -1068,6 +1074,17 @@ def start_metrics_autocapture(
             with _stable_http_semconv():
                 for entry_point in entry_points(group="opentelemetry_instrumentor"):
                     if entry_point.name not in wanted:
+                        continue
+                    if (
+                        entry_point.name == "django"
+                        and not _django_settings_configured()
+                    ):
+                        # Without settings, the Django instrumentor configures empty
+                        # ones, and the app's own settings.configure() then fails.
+                        # In AppConfig.ready() the settings are configured.
+                        log.debug(
+                            "Metrics autocapture skipped django: its settings are not configured yet"
+                        )
                         continue
                     try:
                         kwargs: Dict[str, Any] = {

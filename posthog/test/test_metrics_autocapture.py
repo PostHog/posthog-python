@@ -1253,6 +1253,58 @@ class TestClientOption:
         assert result.stdout.strip() == "ok"
         assert _metrics_exports(posthog_host)
 
+    def _run_django_script(self, posthog_host, body):
+        script = textwrap.dedent(
+            f"""
+            import os
+            os.environ.pop("DJANGO_SETTINGS_MODULE", None)
+            from django.conf import settings
+            from posthog.client import Client
+
+            def start():
+                return Client(
+                    "{FAKE_API_KEY}",
+                    host="{posthog_host.url}",
+                    metrics={{"autocapture": {{"db": False, "runtime": False}}}},
+                )
+            """
+        ) + textwrap.dedent(body)
+        return subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            cwd=Path(__file__).resolve().parents[2],
+        )
+
+    def test_does_not_configure_django_settings(self, posthog_host):
+        # Django apps that configure settings in code do it after imports.
+        result = self._run_django_script(
+            posthog_host,
+            """
+            client = start()
+            settings.configure(DEBUG=True)
+            print("configured", settings.DEBUG)
+            client.shutdown()
+            """,
+        )
+
+        assert result.stdout.strip() == "configured True", result.stderr[-2000:]
+
+    def test_instruments_django_once_its_settings_are_configured(self, posthog_host):
+        # As in AppConfig.ready().
+        result = self._run_django_script(
+            posthog_host,
+            """
+            settings.configure(MIDDLEWARE=[])
+            client = start()
+            print("middleware", settings.MIDDLEWARE)
+            client.shutdown()
+            """,
+        )
+
+        assert "_DjangoMiddleware" in result.stdout, result.stderr[-2000:]
+
     def test_starts_on_a_later_module_setup(self, posthog_host, monkeypatch):
         # A Django ready() hook can set the option after setup() already ran.
         import posthog

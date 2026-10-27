@@ -119,6 +119,7 @@ test = [
     "opentelemetry-instrumentation-wsgi>=0.60b0",
     "opentelemetry-instrumentation-flask>=0.60b0",
     "opentelemetry-instrumentation-httpx>=0.60b0",
+    "opentelemetry-instrumentation-django>=0.60b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.
