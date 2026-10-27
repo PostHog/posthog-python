@@ -197,8 +197,10 @@ def _stable_http_semconv() -> Iterator[None]:
     """Selects the stable HTTP names (`http.server.request.duration`, seconds),
     the same names posthog-node sends, while the instrumentors load.
 
-    OpenTelemetry reads the opt-in once per process. The process environment is
-    restored afterwards, so subprocesses and other code do not see the change.
+    OpenTelemetry reads the opt-in once per process. If another instrumentor
+    read it first, without an opt-in, the HTTP mode is set here, so the names
+    do not depend on import order. The process environment is restored
+    afterwards, so subprocesses and other code do not see the change.
     An opt-in that the app set is kept."""
     previous = os.environ.get(_SEMCONV_OPT_IN)
     if previous is None:
@@ -206,7 +208,12 @@ def _stable_http_semconv() -> Iterator[None]:
     try:
         try:
             semconv = _import_module("opentelemetry.instrumentation._semconv")
-            semconv._OpenTelemetrySemanticConventionStability._initialize()
+            stability = semconv._OpenTelemetrySemanticConventionStability
+            stability._initialize()
+            if previous is None:
+                stability._OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING[
+                    semconv._OpenTelemetryStabilitySignalType.HTTP
+                ] = semconv._StabilityMode.HTTP
         except Exception:  # older instrumentation packages have no opt-in
             pass
         yield

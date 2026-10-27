@@ -7,6 +7,9 @@ from unittest import mock
 
 import pytest
 import requests
+from opentelemetry.instrumentation._semconv import (
+    _OpenTelemetrySemanticConventionStability,
+)
 from opentelemetry.instrumentation.system_metrics import SystemMetricsInstrumentor
 from opentelemetry.sdk.metrics import Histogram, MeterProvider
 from opentelemetry.sdk.metrics.export import (
@@ -326,6 +329,24 @@ class TestStartMetricsAutocapture:
         monkeypatch.setenv("OTEL_SEMCONV_STABILITY_OPT_IN", "http/dup")
         assert _start(posthog_host, started, InMemoryMetricReader()) is not None
         assert os.environ["OTEL_SEMCONV_STABILITY_OPT_IN"] == "http/dup"
+
+    def test_uses_stable_http_names_when_opentelemetry_read_the_opt_in_before(
+        self, posthog_host, app_server, started, monkeypatch
+    ):
+        # Each OpenTelemetry instrumentor reads the opt-in, but only the first
+        # read in the process counts.
+        stability = _OpenTelemetrySemanticConventionStability
+        monkeypatch.delenv("OTEL_SEMCONV_STABILITY_OPT_IN", raising=False)
+        monkeypatch.setattr(stability, "_initialized", False)
+        monkeypatch.setattr(stability, "_OTEL_SEMCONV_STABILITY_SIGNAL_MAPPING", {})
+        stability._initialize()
+
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, areas={"http": True})
+        requests.get(f"{app_server.url}/health")
+
+        assert _points(reader, "http.client.request.duration")
+        assert not _points(reader, "http.client.duration")
 
     def test_limits_http_attribute_sets(self, posthog_host, app_server, started):
         reader = InMemoryMetricReader()
