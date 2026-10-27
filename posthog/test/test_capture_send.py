@@ -678,7 +678,7 @@ class TestSendV1Batch(unittest.TestCase):
     @parameterized.expand(
         [
             ("bad_request", 400),
-            ("rate_limited", 429),
+            ("billing_limit", 402),
             ("unfollowed_redirect", 307),
             ("unfollowed_permanent_redirect", 308),
         ]
@@ -692,23 +692,29 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(len(stub.calls), 1)  # not retried
         self.assertEqual(exc.status, status)
 
-    def test_retryable_status_then_success(self) -> None:
+    @parameterized.expand(
+        [("not_found", 404), ("rate_limited", 429), ("unavailable", 503)]
+    )
+    def test_retryable_status_then_success(self, _name, status) -> None:
         stub = self._run(
             [_msg("u-1")],
             [
-                _FakeResponse(503, headers={"Retry-After": "2"}),
+                _FakeResponse(status, headers={"Retry-After": "2"}),
                 _results_response({"u-1": "ok"}),
             ],
         )
         self.assertEqual(len(stub.calls), 2)
         self.sleep.assert_called_once_with(2.0)  # honored Retry-After
 
-    def test_retryable_status_exhausted_raises(self) -> None:
+    @parameterized.expand(
+        [("not_found", 404), ("rate_limited", 429), ("unavailable", 503)]
+    )
+    def test_retryable_status_exhausted_raises(self, _name, status) -> None:
         stub, exc = self._run_expecting_error(
-            [_msg("u-1")], [_FakeResponse(503), _FakeResponse(503)], max_retries=1
+            [_msg("u-1")], [_FakeResponse(status), _FakeResponse(status)], max_retries=1
         )
         self.assertEqual(len(stub.calls), 2)
-        self.assertEqual(exc.status, 503)
+        self.assertEqual(exc.status, status)
 
     def test_transport_error_then_success(self) -> None:
         stub = self._run(
