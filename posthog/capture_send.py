@@ -79,13 +79,12 @@ _RESULT_RETRY = "retry"
 # Drop reason for a later copy of a uuid that capture discarded in favor of the first.
 _DUPLICATE_EVENT_UUID = "duplicate_event_uuid"
 
-# HTTP status classification. 429 is terminal in v1 (unlike v0, where it is
-# retried) — the backend signals overload via retryable 5xx + Retry-After.
-_RETRYABLE_STATUSES = frozenset({408, 500, 502, 503, 504})
+# HTTP status classification. 404 and 429 can come from a proxy in front of capture.
+_RETRYABLE_STATUSES = frozenset({404, 408, 429, 500, 502, 503, 504})
 # Only these keep the method and body, so a resent batch is unchanged.
 _REDIRECT_STATUSES = frozenset({307, 308})
 _MAX_REDIRECTS = 5
-_TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415, 429})
+_TERMINAL_STATUSES = frozenset({400, 401, 402, 413, 415})
 
 # Single ceiling (seconds) for the retry backoff: caps the exponential schedule
 # and clamps a server ``Retry-After`` to the same value. Keeps the max retry
@@ -655,7 +654,7 @@ def _send_v1_batch(
             continue
 
         # Non-2xx. Retryable transient statuses back off; everything else
-        # (400/401/402/413/415/429/...) is terminal. Any drops collected from a
+        # (400/401/402/413/415/...) is terminal. Any drops collected from a
         # prior 2xx attempt ride along so on_error still sees them.
         v1_error = capture_error(
             parsed.status_code,
