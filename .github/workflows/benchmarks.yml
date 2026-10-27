@@ -9,6 +9,7 @@ on:
             - 'setup.py'
             - 'uv.lock'
             - '.github/workflows/benchmarks.yml'
+            - '.github/workflows/benchmark-report.yml'
 
 permissions: {}
 
@@ -61,12 +62,31 @@ jobs:
               run: .venv-benchmark/bin/python -B benchmarks/test_benchmarks.py
 
             - name: Measure paired base and head
+              id: measure
               run: |
                   .venv-benchmark/bin/python -B benchmarks/run.py \
                     --base "$BASE_WORKTREE" \
                     --head "$GITHUB_WORKSPACE" \
                     --output "$RESULTS" \
                     --repetitions 6
+
+            - name: Render benchmark comparison
+              if: ${{ !cancelled() && (steps.measure.outcome == 'success' || steps.measure.outcome == 'failure') }}
+              uses: PostHog/posthog-sdk-test-harness/.github/actions/benchmark-report@a558711336bd3b81be4a820ed10f26372fc568ed # SDK benchmark reporting (harness PR #93)
+              with:
+                  mode: render
+                  base-results: ${{ runner.temp }}/python-benchmark-results/base.json
+                  head-results: ${{ runner.temp }}/python-benchmark-results/head.json
+                  output-directory: ${{ runner.temp }}/python-benchmark-report
+
+            - name: Upload rendered comparison
+              if: always()
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: python-benchmark-report
+                  path: ${{ runner.temp }}/python-benchmark-report
+                  if-no-files-found: ignore
+                  retention-days: 14
 
             - name: Upload raw benchmark results
               if: always()
