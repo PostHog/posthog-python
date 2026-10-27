@@ -41,6 +41,14 @@ You need to change code if your app does any of these:
 If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
 An endpoint that is not served drops every event sent to it.
 
+If you send events through your own reverse proxy, update it before you upgrade:
+
+- Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
+- Pass `Authorization` (the project token, sent as `Bearer <token>`), every `PostHog-*` header, `Content-Type`, `Content-Encoding` and `User-Agent` through unchanged. PostHog answers `401` without `Authorization` and `400` without the others, and the batch fails.
+- Accept request bodies up to 20 MB. AI requests are often larger than 1 MB, the default limit in nginx and ingress-nginx. A `413` from the proxy fails the batch.
+
+PostHog's managed reverse proxy already does this. See the [proxy guides](https://posthog.com/docs/advanced/proxy).
+
 The SDK follows a `307` or `308` redirect only to the origin of `host` (same scheme, host and port), at most 5 times.
 Any other redirect fails the batch and reaches `on_error`.
 In 7.x the sync client followed redirects to any origin.
@@ -103,8 +111,9 @@ When the whole request is over the billing limit, capture returns a `402` with n
 - In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`. With `debug=True` it calls `on_error` and then re-raises the error.
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
 - The SDK retries `408`, `500`, `502`, `503` and `504` responses and network errors. Other error statuses fail the batch at once, including `429` and the other 5xx codes. 7.x also retried `429` and every 5xx. Capture itself does not return `429`; a proxy in front of it can.
+- Each attempt makes one connection try. 7.x also retried a failed connection up to twice inside each attempt, so a capture request could block for up to three times the `timeout` per attempt.
 - Retries start at 100 ms and double each attempt, up to 30 seconds. Each wait varies randomly by up to 25%, so many clients do not retry at the same moment. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
-- The SDK's own log lines no longer contain event content: the debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. An exception your `before_send` hook raises is still logged with its message. To inspect events, use `before_send`.
+- The SDK's own log lines no longer contain event content: the debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. When your `before_send` hook raises, the error line names the event and the exception type, not the exception message, which can hold the data the hook was removing. The traceback is logged at debug level. To inspect events, use `before_send`.
 - A personal API key (`phx_...`) passed as the project API key disables the client and logs one error, as an empty key does. Capture rejects personal API keys, and the SDK no longer sends one with every request.
 
 ## Invalid events
@@ -181,6 +190,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
   | --- | --- |
   | `$cookieless_mode` | `cookieless_mode` |
   | `$ignore_sent_at` | `disable_skew_correction` |
+  | `$product_tour_id` | `product_tour_id` |
   | `$process_person_profile` | `process_person_profile` |
 
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.

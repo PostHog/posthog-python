@@ -7,6 +7,7 @@ from parameterized import parameterized
 import posthog
 
 from posthog.client import Client
+from posthog.test.logging_helpers import assert_before_send_failure_logged
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.test.capture_helpers import (
     patch_capture_send,
@@ -172,14 +173,16 @@ class TestClient(unittest.TestCase):
                     "_normalize_event_uuid",
                     wraps=client._normalize_event_uuid,
                 ) as normalize_uuid,
-                self.assertLogs("posthog", level="ERROR") as logs,
+                self.assertLogs("posthog", level="DEBUG") as logs,
             ):
                 msg_uuid = client.capture("robust_event", distinct_id="user1")
 
             self.assertIsNone(msg_uuid)
             mock_post.assert_not_called()
             normalize_uuid.assert_called_once()
-            self.assertIn("Error in before_send callback: Oops!", logs.output[0])
+            assert_before_send_failure_logged(
+                logs.records, "robust_event", "ValueError"
+            )
 
     def test_before_send_callback_exception_does_not_enqueue_mutated_event(self):
         def buggy_before_send(event):
@@ -229,20 +232,22 @@ class TestClient(unittest.TestCase):
         self.assertIsNone(sent_event["properties"]["marker"])
 
     def test_before_send_callback_non_dict_output_drops_event(self):
-        with (
-            patch_capture_send("client") as mock_post,
-            mock.patch("posthog.client.Client.log.exception") as mock_log,
-        ):
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 before_send=lambda _event: "invalid",
                 sync_mode=True,
             )
-            self.assertIsNone(client.capture("original", distinct_id="user1"))
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                self.assertIsNone(client.capture("original", distinct_id="user1"))
 
         mock_post.assert_not_called()
-        self.assertIn(
-            "before_send must return a dict or None", mock_log.call_args.args[0]
+        self.assertEqual(
+            logs.output,
+            [
+                "ERROR:posthog:[PostHog] before_send must return a dict or None, "
+                "not str, dropping event original"
+            ],
         )
 
     @parameterized.expand(

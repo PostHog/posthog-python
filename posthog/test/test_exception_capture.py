@@ -291,7 +291,7 @@ def test_excepthook(tmpdir):
     import posthog.request
     from posthog.test.capture_helpers import offline_v1_post
 
-    posthog.request._session.post = offline_v1_post
+    posthog.request._capture_session.post = offline_v1_post
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
     # frame_value = "LOL"

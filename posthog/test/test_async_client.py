@@ -28,6 +28,7 @@ from posthog.contexts import (
 )
 from posthog.request import APIError
 from posthog.test.capture_helpers import patch_async_capture_send
+from posthog.test.logging_helpers import assert_before_send_failure_logged
 
 
 @pytest.mark.asyncio
@@ -294,7 +295,7 @@ async def test_capture_offloads_synchronous_before_send():
 
 
 @pytest.mark.asyncio
-async def test_capture_drops_event_when_before_send_raises():
+async def test_capture_drops_event_when_before_send_raises(caplog):
     async def before_send(_event):
         raise RuntimeError("callback failed")
 
@@ -302,11 +303,29 @@ async def test_capture_drops_event_when_before_send_raises():
         async with AsyncPosthog(
             "test-key", before_send=before_send, flush_interval=0.01
         ) as client:
-            accepted_uuid = client.capture("event", distinct_id="user-1")
-            await client.flush(timeout_seconds=1)
+            with caplog.at_level(logging.DEBUG, logger="posthog"):
+                accepted_uuid = client.capture("event", distinct_id="user-1")
+                await client.flush(timeout_seconds=1)
 
     assert accepted_uuid is not None
     send_batch.assert_not_awaited()
+    assert_before_send_failure_logged(caplog.records, "event", "RuntimeError")
+
+
+@pytest.mark.asyncio
+async def test_capture_drops_event_when_before_send_returns_non_dict(caplog):
+    with patch_async_capture_send(new=mock.AsyncMock()) as send_batch:
+        async with AsyncPosthog(
+            "test-key", before_send=lambda _event: "invalid", flush_interval=0.01
+        ) as client:
+            with caplog.at_level(logging.ERROR, logger="posthog"):
+                client.capture("event", distinct_id="user-1")
+                await client.flush(timeout_seconds=1)
+
+    send_batch.assert_not_awaited()
+    assert [r.getMessage() for r in caplog.records] == [
+        "[PostHog] before_send must return a dict or None, not str, dropping event event"
+    ]
 
 
 @pytest.mark.asyncio

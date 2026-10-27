@@ -105,6 +105,8 @@ from .utils import (
     clean,
     _drop_invalid_distinct_id,
     _drop_invalid_event_name,
+    _log_before_send_bad_return,
+    _log_before_send_error,
     system_context,
 )
 from .version import VERSION
@@ -524,18 +526,20 @@ class AsyncClient:
             return msg
 
         original_uuid = msg["uuid"]
+        event_name = msg.get("event")
         try:
             result = await _invoke_callback(self.before_send, msg)
             if result is None:
                 self.log.debug("event dropped by before_send callback")
                 return None
             if not isinstance(result, dict):
-                raise TypeError("before_send must return a dict or None")
+                _log_before_send_bad_return(self.log, event_name, result)
+                return None
             processed = clean(result)
             processed["uuid"] = original_uuid
             return processed
         except Exception as error:
-            self.log.error("Error in before_send callback (%s)", type(error).__name__)
+            _log_before_send_error(self.log, event_name, error)
             return None
 
     def _event_defaults(

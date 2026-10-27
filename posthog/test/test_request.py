@@ -418,10 +418,13 @@ def test_routing_to_custom_host(host, expected):
 def test_enable_keep_alive_sets_socket_options():
     try:
         enable_keep_alive()
-        from posthog.request import _session
-
-        adapter = _session.get_adapter("https://example.com")
-        assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+        for session in (
+            request_module._get_session(),
+            request_module._get_flags_session(),
+            request_module._get_capture_session(),
+        ):
+            adapter = session.get_adapter("https://example.com")
+            assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
     finally:
         set_socket_options(None)
 
@@ -462,12 +465,14 @@ def test_set_socket_options_is_idempotent():
 class TestFlagsSession(unittest.TestCase):
     """Tests for flags session configuration."""
 
-    def test_flags_session_disables_adapter_retries(self):
-        """HTTP adapter retries are disabled; flags() handles bounded retries."""
-        from posthog.request import _build_flags_session
-
-        session = _build_flags_session()
-        adapter = session.get_adapter("https://test.posthog.com")
+    @parameterized.expand(
+        [
+            ("flags", request_module._get_flags_session),
+            ("capture", request_module._get_capture_session),
+        ]
+    )
+    def test_session_disables_adapter_retries(self, _name, get_session):
+        adapter = get_session().get_adapter("https://test.posthog.com")
         retry = adapter.max_retries
 
         self.assertEqual(retry.total, 0)
@@ -697,6 +702,33 @@ def test_post_serializes_non_finite_floats_as_null():
     assert props["ok"] == 1.5
 
 
-def test_datetime_serializer_keeps_finite_values():
-    body = {"n": 1.5, "s": "x", "b": True, "i": 3, "none": None}
-    assert json.loads(json.dumps(body, cls=DatetimeSerializer)) == body
+@pytest.mark.parametrize("allow_nan", [False, True])
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            {"n": 1.5, "s": "x", "b": True, "none": None, "t": (1, 2.5)},
+            '{"n": 1.5, "s": "x", "b": true, "none": null, "t": [1, 2.5]}',
+        ),
+        (
+            {"n": float("nan"), "l": [float("inf"), (float("-inf"), 2.5)]},
+            '{"n": null, "l": [null, [null, 2.5]]}',
+        ),
+    ],
+)
+def test_datetime_serializer_writes_non_finite_floats_as_null(
+    body, expected, allow_nan
+):
+    assert json.dumps(body, cls=DatetimeSerializer, allow_nan=allow_nan) == expected
+
+
+def test_datetime_serializer_copies_only_events_with_non_finite_floats():
+    with mock.patch.object(
+        request_module,
+        "_replace_non_finite_floats",
+        wraps=request_module._replace_non_finite_floats,
+    ) as copy:
+        json.dumps({"n": [1.5]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_not_called()
+        json.dumps({"n": [float("nan")]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_called()

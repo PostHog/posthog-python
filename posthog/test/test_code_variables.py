@@ -116,7 +116,7 @@ import posthog.request
 from posthog.test.capture_helpers import offline_v1_post
 
 
-posthog.request._session.post = offline_v1_post
+posthog.request._capture_session.post = offline_v1_post
 
 
 def print_event(event):

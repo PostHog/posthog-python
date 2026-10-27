@@ -391,6 +391,27 @@ class TestUtils(unittest.TestCase):
             mock.call(message, "empty"),
         ]
 
+    def test_before_send_logs_name_the_event_and_never_the_exception_message(self):
+        logger = mock.Mock()
+        error = ValueError("secret@example.com")
+
+        utils._log_before_send_error(logger, "signup", error)
+        utils._log_before_send_bad_return(logger, "signup", ["not", "a", "dict"])
+
+        assert logger.method_calls == [
+            mock.call.error(
+                "Error in before_send callback for event %s (%s), dropping the event",
+                "signup",
+                "ValueError",
+            ),
+            mock.call.debug("before_send callback traceback", exc_info=error),
+            mock.call.error(
+                "before_send must return a dict or None, not %s, dropping event %s",
+                "list",
+                "signup",
+            ),
+        ]
+
     def test_drop_invalid_distinct_id_logs_each_reason_once(self):
         logger = mock.Mock()
         with mock.patch.object(utils, "_warned_reasons", set()):

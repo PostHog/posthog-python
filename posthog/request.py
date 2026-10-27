@@ -73,7 +73,7 @@ class HTTPAdapterWithSocketOptions(HTTPAdapter):
 
 
 def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
-    """Build a session for general requests (batch, remote config, etc.)."""
+    """Build a session for general requests (remote config, flag definitions, etc.)."""
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(
             total=2,
@@ -87,13 +87,13 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
     return session
 
 
-def _build_flags_session(
+def _build_no_retry_session(
     socket_options: Optional[SocketOptions] = None,
 ) -> requests.Session:
-    """Build a session for feature flag requests.
+    """Build a session whose adapter never retries; ``flags()`` and capture own retries.
 
-    /flags retries are handled explicitly in ``flags()`` so that only
-    transport failures and contract-defined transient HTTP responses are retried.
+    Capture needs a fresh ``PostHog-Request-Timestamp`` on every physical attempt,
+    because capture uses it to correct clock skew.
     """
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(total=0, connect=0, read=0, status=0),
@@ -105,7 +105,8 @@ def _build_flags_session(
 
 
 _session = _build_session()
-_flags_session = _build_flags_session()
+_flags_session = _build_no_retry_session()
+_capture_session = _build_no_retry_session()
 _socket_options: Optional[SocketOptions] = None
 _pooling_enabled = True
 
@@ -119,7 +120,13 @@ def _get_session() -> requests.Session:
 def _get_flags_session() -> requests.Session:
     if _pooling_enabled:
         return _flags_session
-    return _build_flags_session(_socket_options)
+    return _build_no_retry_session(_socket_options)
+
+
+def _get_capture_session() -> requests.Session:
+    if _pooling_enabled:
+        return _capture_session
+    return _build_no_retry_session(_socket_options)
 
 
 def reset_sessions() -> None:
@@ -127,13 +134,16 @@ def reset_sessions() -> None:
     Reset the global sessions. This should be called after a fork to ensure
     that the child process does not use the parent's connection pool.
     """
-    global _session, _flags_session
+    global _session, _flags_session, _capture_session
     if _session:
         _session.close()
     if _flags_session:
         _flags_session.close()
+    if _capture_session:
+        _capture_session.close()
     _session = _build_session(_socket_options)
-    _flags_session = _build_flags_session(_socket_options)
+    _flags_session = _build_no_retry_session(_socket_options)
+    _capture_session = _build_no_retry_session(_socket_options)
 
 
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
@@ -151,12 +161,13 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         from posthog import set_socket_options
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
     """
-    global _session, _flags_session, _socket_options
+    global _session, _flags_session, _capture_session, _socket_options
     if socket_options == _socket_options:
         return
     _socket_options = socket_options
     _session = _build_session(socket_options)
-    _flags_session = _build_flags_session(socket_options)
+    _flags_session = _build_no_retry_session(socket_options)
+    _capture_session = _build_no_retry_session(socket_options)
 
 
 def enable_keep_alive() -> None:
@@ -440,4 +451,10 @@ class DatetimeSerializer(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
     def encode(self, o: Any) -> str:
+        # A strict encode fails only on a non-finite float, so finite events skip the copy.
+        if not self.allow_nan:
+            try:
+                return super().encode(o)
+            except ValueError:
+                pass
         return super().encode(_replace_non_finite_floats(o))
