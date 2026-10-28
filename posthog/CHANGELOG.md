@@ -1,5 +1,11 @@
 # posthog
 
+## 7.78.0 — 2026-10-28
+
+### Minor changes
+
+- [351da59](https://github.com/posthog/posthog-python/commit/351da59c252afb7bffed79d21c23aa7e2539a38e) Add a `send_tools_list_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_tools_list`. — Thanks @gesh!
+
 ## 7.77.0 — 2026-10-28
 
 ### Minor changes
