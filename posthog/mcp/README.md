@@ -41,8 +41,8 @@ Use a client dedicated to MCP analytics if the application also captures unrelat
 A valid echoed conversation handle takes precedence over transport sessions. A request that already carries a transport session or a PostHog session token does not mint a new handle or append a prompt-back block. Requests carrying neither use the conversation fallback.
 
 
-Intent, model capture, conversation correlation, and MCP exception capture are on by default.
-Missing-capability reporting and feedback collection remain off.
+Intent, model capture, conversation correlation, MCP exception capture, and `$mcp_initialize`
+are on by default. Missing-capability reporting and feedback collection remain off.
 
 ```python
 from posthog.mcp import MCPAnalyticsOptions, instrument
@@ -87,6 +87,16 @@ The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
   `initialize` that reuses an existing session id reports none.
 - **MCP SDK 1.x over stdio**: from the session's first request. A stdio server
   serves one client, so this misses only a client that never sends a request.
+
+Set `send_initialize_event=False` to stop sending `$mcp_initialize`. Many clients reconnect before
+every few tool calls, so this event can outnumber `$mcp_tool_call`. Nothing else changes in what
+the SDK sends: tool calls keep their sessions and client names. In PostHog, MCP onboarding and the
+users and sessions tiles of the default MCP dashboard read `$mcp_initialize`. They show no data
+while the option is off.
+
+```python
+instrument(server, posthog, MCPAnalyticsOptions(send_initialize_event=False))
+```
 
 `identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the
 SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
