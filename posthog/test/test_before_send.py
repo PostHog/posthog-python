@@ -16,6 +16,10 @@ from posthog.test.capture_helpers import (
 )
 
 
+_CIRCULAR: dict = {}
+_CIRCULAR["self"] = _CIRCULAR
+
+
 class TestClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -259,6 +263,10 @@ class TestClient(unittest.TestCase):
                 "private-value",
                 ["malformed", "valid"],
             ),
+            # A circular value fails cleaning, so its event is dropped before it is queued.
+            ("circular_reference", "private-key", _CIRCULAR, ["valid"]),
+            # A value that survives cleaning but not json costs only its queued event.
+            ("unserializable_value", "private-key", complex(1, 2), ["valid"]),
         ]
     )
     def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(
