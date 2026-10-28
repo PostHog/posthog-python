@@ -97,7 +97,7 @@ __all__ = ["AsyncEmails", "EmailError", "EmailWarning", "Emails", "SendEmailResu
 
 log = logging.getLogger("posthog")
 
-_SEND_PATH = "/api/projects/@current/messaging_templates/{template_id}/send/"
+_SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
@@ -193,13 +193,14 @@ def _prepare_send(
         )
 
     payload: dict[str, Any] = {
+        "template": {"id": str(template_uuid)},
         "to": to,
         "message_data": clean(dict(template_data or {})),
     }
     if distinct_id is not None:
         payload["identifiers"] = {"distinct_id": distinct_id}
     return _PreparedSend(
-        path=_SEND_PATH.format(template_id=template_uuid),
+        path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
     )

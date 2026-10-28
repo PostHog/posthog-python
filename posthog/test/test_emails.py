@@ -19,7 +19,7 @@ from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
 TEMPLATE_ID = "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b"
-SEND_URL = f"https://us.posthog.com/api/projects/@current/messaging_templates/{TEMPLATE_ID}/send/"
+SEND_URL = "https://us.posthog.com/api/projects/@current/messaging/send/email/"
 
 Reply = Union[Exception, tuple[int, Optional[dict[str, Any]], dict[str, str]]]
 
@@ -121,6 +121,7 @@ def test_send_posts_the_template_to_the_app_host(_name, overrides, extra_body):
     assert request.headers["Idempotency-Key"] == "welcome:user_123"
     assert request.headers["User-Agent"] == f"posthog-python/{VERSION}"
     assert json.loads(request.body) == {
+        "template": {"id": TEMPLATE_ID},
         "to": "user@example.com",
         "message_data": {"total": 19.5, "expires_at": "2026-11-20T00:00:00+00:00"},
         **extra_body,
