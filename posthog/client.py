@@ -11,7 +11,7 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -931,6 +931,8 @@ class Client(object):
         # Flag key -> definition fingerprint of flags already warned about as never
         # resolvable locally, so each warning fires once until the definition changes.
         self._warned_unresolvable_flags: Dict[str, str] = {}
+        # Definitions fingerprint of the last scan for never-resolvable flags.
+        self._unresolvable_flags_fingerprint: Optional[str] = None
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
             _BackgroundEventLoopRunner
@@ -3257,7 +3259,6 @@ class Client(object):
 
             if fingerprint != self._flag_definition_fingerprint:
                 self._flag_definition_fingerprint = fingerprint
-                self._warn_unresolvable_flags()
                 if self.flag_cache:
                     self.flag_definition_version += 1
                     # No Redis I/O under this lock. The fingerprint remains valid
@@ -3269,18 +3270,54 @@ class Client(object):
         return None
 
     def _warn_unresolvable_flags(self) -> None:
-        flags_by_key = self.feature_flags_by_key or {}
-        cohorts = self.cohorts or {}
-        group_type_mapping = self.group_type_mapping or {}
-        # Rebuilt from the current definitions, so a flag that is deleted or becomes
-        # resolvable is forgotten and warns again if it later becomes unresolvable.
-        warned: Dict[str, str] = {}
-        new_keys_by_reason: Dict[UnresolvedFlagReason, List[str]] = {}
-        for flag in self.feature_flags or []:
+        """Log flags the published definitions can never resolve locally.
+
+        Call it after publication, outside the publication lock: classifying every
+        flag walks its cohorts, and log handlers can be slow."""
+        with self._flag_definition_publication_lock:
+            definitions_fingerprint = self._flag_definition_fingerprint
+            if definitions_fingerprint == self._unresolvable_flags_fingerprint:
+                return
+            snapshot = self._local_evaluation_snapshot()
+
+        unresolvable = self._classify_unresolvable_flags(snapshot)
+
+        with self._flag_definition_publication_lock:
+            # Newer definitions or another caller own the warning for this state.
+            if (
+                definitions_fingerprint != self._flag_definition_fingerprint
+                or definitions_fingerprint == self._unresolvable_flags_fingerprint
+            ):
+                return
+            self._unresolvable_flags_fingerprint = definitions_fingerprint
+            new_keys_by_reason: Dict[UnresolvedFlagReason, List[str]] = {}
+            for key, (reason, fingerprint) in unresolvable.items():
+                if self._warned_unresolvable_flags.get(key) != fingerprint:
+                    new_keys_by_reason.setdefault(reason, []).append(key)
+            # Rebuilt from the current definitions, so a flag that is deleted or
+            # becomes resolvable is forgotten and warns again if it later becomes
+            # unresolvable.
+            self._warned_unresolvable_flags = {
+                key: fingerprint for key, (_, fingerprint) in unresolvable.items()
+            }
+
+        self._log_unresolvable_flags(new_keys_by_reason)
+
+    @staticmethod
+    def _classify_unresolvable_flags(
+        snapshot: _LocalEvaluationSnapshot,
+    ) -> Dict[str, Tuple[UnresolvedFlagReason, str]]:
+        """Map each never-resolvable flag key to its reason and a fingerprint of its
+        definition."""
+        unresolvable: Dict[str, Tuple[UnresolvedFlagReason, str]] = {}
+        for flag in snapshot["flags"]:
             try:
                 key = flag["key"]
                 reason = _get_definition_unresolved_reason(
-                    flag, flags_by_key, cohorts, group_type_mapping
+                    flag,
+                    snapshot["flags_by_key"],
+                    snapshot["cohorts"],
+                    snapshot["group_type_mapping"],
                 )
             except Exception:
                 # Evaluation reports a definition this malformed when the flag is used.
@@ -3292,11 +3329,12 @@ class Client(object):
                     "utf-8"
                 )
             ).hexdigest()
-            warned[key] = fingerprint
-            if self._warned_unresolvable_flags.get(key) != fingerprint:
-                new_keys_by_reason.setdefault(reason, []).append(str(key))
-        self._warned_unresolvable_flags = warned
+            unresolvable[str(key)] = (reason, fingerprint)
+        return unresolvable
 
+    def _log_unresolvable_flags(
+        self, new_keys_by_reason: Dict[UnresolvedFlagReason, List[str]]
+    ) -> None:
         experience_continuity_keys = new_keys_by_reason.get(
             UnresolvedFlagReason.EXPERIENCE_CONTINUITY
         )
@@ -3365,6 +3403,7 @@ class Client(object):
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
                     old_fingerprint = self._update_flag_state(cached_data)
+                    self._warn_unresolvable_flags()
                     if isinstance(self.flag_cache, RedisFlagCache):
                         self.flag_cache._invalidate_snapshot(old_fingerprint)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
@@ -3469,6 +3508,8 @@ class Client(object):
                 self._flags_etag = response.etag
                 self._flag_definition_published_generation = fetch_generation
                 self._flag_definition_cache_generation = fetch_generation
+
+            self._warn_unresolvable_flags()
 
             if cache_data_to_store and self._flag_definition_cache_provider:
                 # Keep provider I/O out of the publication lock. The separate lock

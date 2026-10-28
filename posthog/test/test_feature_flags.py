@@ -6699,25 +6699,49 @@ class TestUnresolvedReasons(unittest.TestCase):
             {},
         )
 
-    def test_dependency_requiring_server_does_not_overwrite_unsupported_definition(
+    @parameterized.expand(
+        [
+            ("dependency_only", [[_depends_on("base")]], "unresolved_dependency"),
+            (
+                "unknown_operator_first",
+                [[UNKNOWN_OPERATOR], [_depends_on("base")]],
+                "unsupported_definition",
+            ),
+            (
+                "dependency_first",
+                [[_depends_on("base")], [UNKNOWN_OPERATOR]],
+                "unsupported_definition",
+            ),
+        ]
+    )
+    def test_dependency_requiring_server_is_inconclusive(
+        self, _name, conditions, reason
+    ):
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason(reason),
+            _flag("checkout", *conditions),
+            {"plan": "pro"},
+            flags=[_flag("base", [STATIC_COHORT])],
+        )
+
+    def test_unexpected_error_after_inconclusive_filter_lets_later_conditions_resolve(
         self,
     ):
-        base = _flag("base", [STATIC_COHORT])
+        malformed_filter = "not-a-filter"
 
-        self.assert_unresolved(
-            RequiresServerEvaluation,
-            UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
-            _flag("checkout", [_depends_on("base")]),
-            {},
-            flags=[base],
+        self.assertIs(
+            self.evaluate(
+                _flag("checkout", [PLAN_IS_PRO, malformed_filter], [EMAIL_IS_SET]),
+                {"email": "a@b.c"},
+            ),
+            True,
         )
-        self.assert_unresolved(
-            RequiresServerEvaluation,
-            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
-            _flag("checkout", [UNKNOWN_OPERATOR], [_depends_on("base")]),
-            {"plan": "pro"},
-            flags=[base],
-        )
+        with self.assertRaises(AttributeError):
+            self.evaluate(
+                _flag("checkout", [malformed_filter, PLAN_IS_PRO], [EMAIL_IS_SET]),
+                {"email": "a@b.c"},
+            )
 
     def test_dependency_with_experience_continuity_is_unresolved_dependency(self):
         base = _flag("base", [], ensure_experience_continuity=True)
@@ -6861,10 +6885,33 @@ class TestUnresolvedReasons(unittest.TestCase):
                 _flag("checkout", [{"key": "id", "value": 1, "type": "cohort"}]),
                 UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
             ),
+            (
+                "cohort_cycle",
+                _flag("checkout", [{"key": "id", "value": 2, "type": "cohort"}]),
+                None,
+            ),
+            (
+                "unknown_cohort_operator",
+                _flag(
+                    "checkout",
+                    [{"key": "id", "value": 2, "type": "cohort", "operator": "bogus"}],
+                ),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
         ]
     )
     def test_definition_unresolved_reason(self, _name, flag, expected):
-        cohorts = {"1": {"type": "OR", "values": [STATIC_COHORT]}}
+        cohorts = {
+            "1": {"type": "OR", "values": [STATIC_COHORT]},
+            "2": {
+                "type": "OR",
+                "values": [{"key": "id", "value": 3, "type": "cohort"}],
+            },
+            "3": {
+                "type": "OR",
+                "values": [{"key": "id", "value": 2, "type": "cohort"}],
+            },
+        }
 
         self.assertEqual(
             _get_definition_unresolved_reason(flag, {flag["key"]: flag}, cohorts, {}),

@@ -771,17 +771,34 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("request_fails", Exception("flags request failed")),
-            ("returns_no_flags", None),
+            (
+                "request_fails",
+                Exception("flags request failed"),
+                {},
+                "local_evaluation_inconclusive",
+            ),
+            ("returns_no_flags", None, {}, "local_evaluation_inconclusive"),
+            (
+                "errors_while_computing",
+                None,
+                {"errorsWhileComputingFlags": True},
+                "errors_while_computing_flags,local_evaluation_inconclusive",
+            ),
         ]
     )
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
     def test_flag_left_without_remote_value_is_unresolved(
-        self, _name, side_effect, patch_capture, patch_flags
+        self,
+        _name,
+        side_effect,
+        extra_response,
+        expected_error,
+        patch_capture,
+        patch_flags,
     ):
         patch_flags.side_effect = side_effect
-        patch_flags.return_value = {"flags": {}}
+        patch_flags.return_value = {"flags": {}, **extra_response}
 
         flags = self.client.evaluate_flags("user-123")
 
@@ -792,9 +809,7 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
         )
         flags.is_enabled("checkout")
         properties = _flag_called_properties(patch_capture)["checkout"]
-        self.assertEqual(
-            properties["$feature_flag_error"], "local_evaluation_inconclusive"
-        )
+        self.assertEqual(properties["$feature_flag_error"], expected_error)
 
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")
@@ -1081,6 +1096,21 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
         self.assertIn("continuity", messages)
         for key in ("inactive", "needs-plan", "dependent"):
             self.assertNotIn(key, messages)
+
+    def test_malformed_flag_does_not_block_other_warnings(self):
+        client = self._client()
+        broken = {"key": "broken", "active": True, "filters": {"groups": [None]}}
+
+        with self.assertLogs("posthog", level=logging.WARNING) as logs:
+            self._refresh_with(
+                client,
+                broken,
+                _always_on_flag("checkout", ensure_experience_continuity=True),
+            )
+
+        self.assertEqual(
+            len(self._warnings(logs, "checkout", "experience_continuity")), 1
+        )
 
     def test_removed_flag_is_forgotten_and_warns_again_when_it_returns(self):
         client = self._client()

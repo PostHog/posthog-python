@@ -1301,7 +1301,7 @@ class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABL
 class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None, unresolved_flags: Optional[Mapping[str, UnresolvedFlagReason]] = None)
 class posthog.feature_flags.ConditionMatch 
 class posthog.feature_flags.InconclusiveMatchError(*args, reason: Optional[UnresolvedFlagReason] = None)
-class posthog.feature_flags.RequiresServerEvaluation(*args, reason: Optional[UnresolvedFlagReason] = None)
+class posthog.feature_flags.RequiresServerEvaluation 
 class posthog.flag_definition_cache.FlagDefinitionCacheData 
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
 class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: Optional[bool] = None, *, capture_tracing_headers: Optional[bool] = None)
