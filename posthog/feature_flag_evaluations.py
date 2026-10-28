@@ -6,9 +6,10 @@ values the code branched on, with no additional /flags request.
 """
 
 from dataclasses import dataclass
+from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FlagValue
+from posthog.types import FlagValue, UnresolvedFlagReason
 
 
 @dataclass(frozen=True)
@@ -73,6 +74,7 @@ class FeatureFlagEvaluations:
         quota_limited: bool = False,
         minimal_flag_called_events: bool = False,
         accessed: Optional[Set[str]] = None,
+        unresolved_flags: Optional[Mapping[str, UnresolvedFlagReason]] = None,
     ) -> None:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
         self._host = host
@@ -89,6 +91,9 @@ class FeatureFlagEvaluations:
         # server response, not whatever the client-wide gate happens to be at send time.
         self._minimal_flag_called_events = minimal_flag_called_events
         self._accessed: Set[str] = set(accessed) if accessed is not None else set()
+        self._unresolved_flags: Dict[str, UnresolvedFlagReason] = dict(
+            unresolved_flags or {}
+        )
 
     def is_enabled(self, key: str, default_value: bool = False) -> bool:
         """Return whether the flag is enabled. Fires ``$feature_flag_called`` on the
@@ -164,6 +169,22 @@ class FeatureFlagEvaluations:
     def keys(self) -> List[str]:
         """Return the flag keys that are part of this evaluation."""
         return list(self._flags.keys())
+
+    @property
+    def unresolved_flags(self) -> Mapping[str, UnresolvedFlagReason]:
+        """Return a read-only mapping of flag key to the reason local evaluation
+        left it without a value.
+
+        A flag is listed when it has a loaded local definition, was in the requested
+        scope, was inconclusive locally, and no remote value filled the gap. Listed
+        flags are not part of :attr:`keys`, and reading one reports the
+        ``local_evaluation_inconclusive`` error instead of ``flag_missing``. Reading
+        this mapping does not count as an access and does not fire any event.
+        Snapshots returned by :meth:`only` and :meth:`only_accessed`, and by
+        ``AsyncClient.evaluate_flags()``, which evaluates only remotely, carry no
+        entries.
+        """
+        return MappingProxyType(self._unresolved_flags)
 
     # --- Internal -------------------------------------------------------------
 
@@ -256,14 +277,19 @@ class FeatureFlagEvaluations:
 
         # Build the comma-joined `$feature_flag_error` matching the single-flag path's
         # granularity: response-level errors (errors-while-computing, quota-limited) are
-        # combined with per-flag errors (flag-missing) so consumers can filter by type.
+        # combined with per-flag errors (flag-missing or local-evaluation-inconclusive)
+        # so consumers can filter by type.
         errors: List[str] = []
         if self._errors_while_computing:
             errors.append("errors_while_computing_flags")
         if self._quota_limited:
             errors.append("quota_limited")
         if flag is None:
-            errors.append("flag_missing")
+            errors.append(
+                "local_evaluation_inconclusive"
+                if key in self._unresolved_flags
+                else "flag_missing"
+            )
         if errors:
             properties["$feature_flag_error"] = ",".join(errors)
 

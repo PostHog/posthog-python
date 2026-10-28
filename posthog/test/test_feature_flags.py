@@ -19,14 +19,17 @@ from posthog.feature_flags import (
     _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
     RequiresServerEvaluation,
+    _get_definition_unresolved_reason,
+    _pick_unresolved_reason,
     match_cohort,
+    match_feature_flag_properties,
     match_property,
     match_property_group,
     parse_datetime,
     relative_date_parse_for_feature_flag_matching,
 )
 from posthog.request import APIError, GetResponse
-from posthog.types import FeatureFlagEvaluationRuntime
+from posthog.types import FeatureFlagEvaluationRuntime, UnresolvedFlagReason
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.utils import FlagCache
 
@@ -2006,14 +2009,15 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(patch_flags.call_count, 1)
         patch_load.assert_not_called()
 
-        # Test with email that doesn't match (should also fall back to remote due to missing dependency)
+        # An email that doesn't match rules the condition out whatever the missing
+        # dependency would evaluate to, so the flag resolves locally.
         feature_flag_match = client.get_feature_flag(
             "flag-with-dependencies",
             "test-user-2",
             person_properties={"email": "test@other.com"},
         )
-        self.assertIsNone(feature_flag_match)
-        self.assertEqual(patch_flags.call_count, 2)  # Called twice now
+        self.assertIs(feature_flag_match, False)
+        self.assertEqual(patch_flags.call_count, 1)
         patch_load.assert_not_called()
 
     @mock.patch("posthog.client.flags")
@@ -5367,6 +5371,153 @@ class TestMatchProperties(unittest.TestCase):
 
         return result
 
+    @parameterized.expand(
+        [
+            ("unknown_operator", "x", "bogus", {"key": "x"}, "UNSUPPORTED_DEFINITION"),
+            ("missing_property", "x", "exact", {}, "MISSING_CONTEXT"),
+            (
+                "invalid_flag_date",
+                "not-a-date",
+                "is_date_before",
+                {"key": "2024-01-01"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_property_date",
+                "2024-01-01",
+                "is_date_before",
+                {"key": "not-a-date"},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "invalid_flag_semver",
+                "x.y",
+                "semver_gt",
+                {"key": "1.2.3"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_property_semver",
+                "1.2.3",
+                "semver_gt",
+                {"key": "x.y"},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "invalid_flag_and_property_semver",
+                "x.y",
+                "semver_gt",
+                {"key": "a.b"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_flag_semver_and_missing_property",
+                "x.y",
+                "semver_gt",
+                {},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_flag_wildcard_and_property",
+                "1x.*",
+                "semver_wildcard",
+                {"key": "a.b"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "boolean_flag_date",
+                True,
+                "is_date_after",
+                {"key": "2024-01-01"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "non_date_property",
+                "2024-01-01",
+                "is_date_after",
+                {"key": 5},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "invalid_flag_number",
+                "abc",
+                "gt",
+                {"key": 5},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "invalid_flag_number_and_missing_property",
+                "abc",
+                "gt",
+                {},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "non_json_property",
+                "x",
+                "exact",
+                {"key": object()},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "non_finite_property",
+                "x",
+                "icontains",
+                {"key": float("nan")},
+                "MISSING_CONTEXT",
+            ),
+            (
+                "non_finite_flag_value",
+                float("nan"),
+                "exact",
+                {"key": "x"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "non_finite_flag_value_and_property",
+                [float("inf")],
+                "exact",
+                {"key": float("nan")},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "non_finite_flag_value_and_missing_property",
+                float("nan"),
+                "icontains",
+                {},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "deferred_regex",
+                r"\bfoo",
+                "regex",
+                {"key": "foo"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "deferred_regex_and_missing_property",
+                r"\bfoo",
+                "regex",
+                {},
+                "UNSUPPORTED_DEFINITION",
+            ),
+            (
+                "regex_deferred_for_property_value",
+                r"\w+",
+                "regex",
+                {"key": "é"},
+                "UNSUPPORTED_DEFINITION",
+            ),
+        ]
+    )
+    def test_inconclusive_match_reports_reason(
+        self, _name, value, operator, properties, reason
+    ):
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_property(self.property("key", value, operator), properties)
+
+        self.assertEqual(ctx.exception.reason, UnresolvedFlagReason[reason])
+
     def test_every_supported_operator_has_a_dispatch_branch(self):
         # PROPERTY_OPERATORS gates local evaluation, but match_property dispatches
         # on a hand-written if-chain. An operator listed in the tuple but missing a
@@ -6400,6 +6551,399 @@ class TestMatchProperties(unittest.TestCase):
             match_property(property_a, {"key": "random"})
         self.assertEqual(
             str(exception_context.exception), "Unknown operator is_unknown"
+        )
+
+
+PLAN_IS_PRO = {"key": "plan", "operator": "exact", "value": "pro", "type": "person"}
+PLAN_IS_FREE = {"key": "plan", "operator": "exact", "value": "free", "type": "person"}
+EMAIL_IS_SET = {"key": "email", "operator": "is_set", "type": "person"}
+UNKNOWN_OPERATOR = {"key": "plan", "operator": "bogus", "value": "x", "type": "person"}
+STATIC_COHORT = {"key": "id", "value": 42, "type": "cohort"}
+
+
+def _depends_on(key):
+    return {
+        "key": key,
+        "type": "flag",
+        "value": True,
+        "operator": "flag_evaluates_to",
+        "dependency_chain": [key],
+    }
+
+
+def _flag(key, *conditions, **extra):
+    return {
+        "key": key,
+        "active": True,
+        "filters": {
+            "groups": [
+                {"properties": list(properties), "rollout_percentage": 100}
+                for properties in conditions
+            ]
+        },
+        **extra,
+    }
+
+
+class TestUnresolvedReasons(unittest.TestCase):
+    def evaluate(self, flag, properties, flags=(), cohorts=None):
+        return match_feature_flag_properties(
+            flag,
+            "user-123",
+            properties,
+            cohort_properties=cohorts or {},
+            flags_by_key={f["key"]: f for f in (flag, *flags)},
+            evaluation_cache={},
+            bucketing_value="user-123",
+        )
+
+    def assert_unresolved(
+        self, error_type, reason, flag, properties, flags=(), cohorts=None
+    ):
+        with self.assertRaises(error_type) as ctx:
+            self.evaluate(flag, properties, flags, cohorts)
+        self.assertIs(type(ctx.exception), error_type)
+        self.assertEqual(ctx.exception.reason, reason)
+
+    @parameterized.expand(
+        [
+            (
+                "experience_continuity_first",
+                [None, UnresolvedFlagReason.EXPERIENCE_CONTINUITY],
+                UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+            ),
+            (
+                "unsupported_over_missing",
+                [
+                    UnresolvedFlagReason.MISSING_CONTEXT,
+                    UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                ],
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "dependency_over_missing",
+                [
+                    UnresolvedFlagReason.MISSING_CONTEXT,
+                    UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+                ],
+                UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            ),
+            (
+                "unsupported_kept_over_dependency",
+                [
+                    UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                    UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+                ],
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "experience_continuity_kept",
+                [
+                    UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+                    UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                ],
+                UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+            ),
+        ]
+    )
+    def test_pick_unresolved_reason_follows_spec_order(self, _name, reasons, expected):
+        current, new = reasons
+        self.assertEqual(_pick_unresolved_reason(current, new), expected)
+
+    @parameterized.expand(
+        [
+            ("missing_property_first", [EMAIL_IS_SET, PLAN_IS_FREE]),
+            ("missing_property_last", [PLAN_IS_FREE, EMAIL_IS_SET]),
+            ("static_cohort_first", [STATIC_COHORT, PLAN_IS_FREE]),
+            ("unknown_operator_first", [UNKNOWN_OPERATOR, PLAN_IS_FREE]),
+        ]
+    )
+    def test_filter_that_does_not_match_rules_condition_out(self, _name, properties):
+        self.assertIs(
+            self.evaluate(_flag("checkout", properties), {"plan": "pro"}), False
+        )
+
+        with self.assertRaises((InconclusiveMatchError, RequiresServerEvaluation)):
+            self.evaluate(_flag("checkout", properties), {"plan": "free"})
+
+    def test_condition_reports_highest_precedence_reason(self):
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            _flag("checkout", [PLAN_IS_PRO, UNKNOWN_OPERATOR]),
+            {},
+        )
+
+    def test_static_cohort_first_unchecked_filter_requires_server(self):
+        self.assert_unresolved(
+            RequiresServerEvaluation,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            _flag("checkout", [STATIC_COHORT, PLAN_IS_PRO]),
+            {},
+        )
+
+    def test_static_cohort_after_unchecked_filter_lets_later_conditions_resolve(self):
+        flag = _flag("checkout", [PLAN_IS_PRO, STATIC_COHORT], [EMAIL_IS_SET])
+
+        self.assertIs(self.evaluate(flag, {"email": "a@b.c"}), True)
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            flag,
+            {},
+        )
+
+    def test_later_static_cohort_condition_keeps_higher_precedence_reason(self):
+        self.assert_unresolved(
+            RequiresServerEvaluation,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            _flag("checkout", [PLAN_IS_PRO], [STATIC_COHORT]),
+            {},
+        )
+
+    @parameterized.expand(
+        [
+            ("dependency_only", [[_depends_on("base")]], "unresolved_dependency"),
+            (
+                "unknown_operator_first",
+                [[UNKNOWN_OPERATOR], [_depends_on("base")]],
+                "unsupported_definition",
+            ),
+            (
+                "dependency_first",
+                [[_depends_on("base")], [UNKNOWN_OPERATOR]],
+                "unsupported_definition",
+            ),
+            (
+                "dependency_reused_after_unchecked_filter",
+                [[EMAIL_IS_SET, _depends_on("base")], [_depends_on("base")]],
+                "unresolved_dependency",
+            ),
+            (
+                "unknown_operator_after_dependency_in_same_condition",
+                [[_depends_on("base"), UNKNOWN_OPERATOR]],
+                "unsupported_definition",
+            ),
+            (
+                "cohort_with_dependency_first",
+                [[{"key": "id", "value": 1, "type": "cohort"}]],
+                "unsupported_definition",
+            ),
+            (
+                "cohort_with_unknown_operator_first",
+                [[{"key": "id", "value": 2, "type": "cohort"}]],
+                "unsupported_definition",
+            ),
+        ]
+    )
+    def test_dependency_requiring_server_requires_server(
+        self, _name, conditions, reason
+    ):
+        cohorts = {
+            "1": {"type": "AND", "values": [_depends_on("base"), UNKNOWN_OPERATOR]},
+            "2": {"type": "AND", "values": [UNKNOWN_OPERATOR, _depends_on("base")]},
+        }
+
+        self.assert_unresolved(
+            RequiresServerEvaluation,
+            UnresolvedFlagReason(reason),
+            _flag("checkout", *conditions),
+            {"plan": "pro"},
+            flags=[_flag("base", [STATIC_COHORT])],
+            cohorts=cohorts,
+        )
+
+    def test_unexpected_error_after_inconclusive_filter_lets_later_conditions_resolve(
+        self,
+    ):
+        malformed_filter = "not-a-filter"
+
+        self.assertIs(
+            self.evaluate(
+                _flag("checkout", [PLAN_IS_PRO, malformed_filter], [EMAIL_IS_SET]),
+                {"email": "a@b.c"},
+            ),
+            True,
+        )
+        with self.assertRaises(AttributeError):
+            self.evaluate(
+                _flag("checkout", [malformed_filter, PLAN_IS_PRO], [EMAIL_IS_SET]),
+                {"email": "a@b.c"},
+            )
+
+    def test_dependency_with_experience_continuity_is_unresolved_dependency(self):
+        base = _flag("base", [], ensure_experience_continuity=True)
+
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            _flag("checkout", [_depends_on("base")]),
+            {},
+            flags=[base],
+        )
+
+    def test_inactive_dependency_with_experience_continuity_is_false(self):
+        base = _flag("base", [], active=False, ensure_experience_continuity=True)
+        checkout = _flag("checkout", [{**_depends_on("base"), "value": False}])
+
+        self.assertIs(self.evaluate(checkout, {}, flags=[base]), True)
+
+    def test_missing_dependency_outranks_inconclusive_one_earlier_in_chain(self):
+        base = _flag("base", [PLAN_IS_PRO])
+        dependency = {**_depends_on("missing"), "dependency_chain": ["base", "missing"]}
+
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            _flag("checkout", [dependency]),
+            {},
+            flags=[base],
+        )
+
+    @parameterized.expand(
+        [
+            ("circular", []),
+            ("not_a_list", None),
+        ]
+    )
+    def test_malformed_dependency_chain_is_unsupported_definition(
+        self, _name, dependency_chain
+    ):
+        dependency = {**_depends_on("base"), "dependency_chain": dependency_chain}
+
+        self.assert_unresolved(
+            InconclusiveMatchError,
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            _flag("checkout", [dependency]),
+            {},
+            flags=[_flag("base", [])],
+        )
+
+    def test_missing_group_properties_is_missing_context(self):
+        flag = _flag("checkout", [])
+        flag["filters"]["groups"][0]["aggregation_group_type_index"] = 0
+
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_feature_flag_properties(
+                flag,
+                "user-123",
+                {},
+                flags_by_key={"checkout": flag},
+                evaluation_cache={},
+                bucketing_value="user-123",
+                group_type_mapping={"0": "company"},
+                groups={"company": "acme"},
+            )
+        self.assertEqual(ctx.exception.reason, UnresolvedFlagReason.MISSING_CONTEXT)
+
+    def test_unsupported_cohort_operator_outranks_member_missing_context(self):
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_cohort(
+                {"key": "id", "value": 1, "type": "cohort", "operator": "bogus"},
+                {},
+                {"1": {"type": "AND", "values": [PLAN_IS_PRO]}},
+            )
+        self.assertEqual(
+            ctx.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
+
+    def test_cohort_group_keeps_highest_precedence_reason(self):
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_property_group(
+                {"type": "AND", "values": [PLAN_IS_PRO, UNKNOWN_OPERATOR]}, {}, {}
+            )
+        self.assertEqual(
+            ctx.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
+
+    @parameterized.expand(
+        [
+            ("resolvable", _flag("checkout", [PLAN_IS_PRO]), None),
+            ("inactive", _flag("checkout", [STATIC_COHORT], active=False), None),
+            (
+                "experience_continuity",
+                _flag("checkout", [STATIC_COHORT], ensure_experience_continuity=True),
+                UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+            ),
+            (
+                "static_cohort",
+                _flag("checkout", [PLAN_IS_PRO], [STATIC_COHORT]),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "unknown_operator",
+                _flag("checkout", [UNKNOWN_OPERATOR]),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "malformed_value",
+                _flag(
+                    "checkout",
+                    [{"key": "n", "operator": "gt", "value": "abc", "type": "person"}],
+                ),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "missing_dependency",
+                _flag("checkout", [_depends_on("missing")]),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "circular_dependency",
+                _flag(
+                    "checkout", [{**_depends_on("checkout"), "dependency_chain": []}]
+                ),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "malformed_dependency_shape",
+                _flag("checkout", [{**_depends_on("missing"), "operator": "exact"}]),
+                None,
+            ),
+            (
+                "unknown_group_type",
+                {
+                    **_flag("checkout", []),
+                    "filters": {"aggregation_group_type_index": 9, "groups": []},
+                },
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "static_cohort_nested_in_cohort",
+                _flag("checkout", [{"key": "id", "value": 1, "type": "cohort"}]),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+            (
+                "cohort_cycle",
+                _flag("checkout", [{"key": "id", "value": 2, "type": "cohort"}]),
+                None,
+            ),
+            (
+                "unknown_cohort_operator",
+                _flag(
+                    "checkout",
+                    [{"key": "id", "value": 2, "type": "cohort", "operator": "bogus"}],
+                ),
+                UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            ),
+        ]
+    )
+    def test_definition_unresolved_reason(self, _name, flag, expected):
+        cohorts = {
+            "1": {"type": "OR", "values": [STATIC_COHORT]},
+            "2": {
+                "type": "OR",
+                "values": [{"key": "id", "value": 3, "type": "cohort"}],
+            },
+            "3": {
+                "type": "OR",
+                "values": [{"key": "id", "value": 2, "type": "cohort"}],
+            },
+        }
+
+        self.assertEqual(
+            _get_definition_unresolved_reason(flag, {flag["key"]: flag}, cohorts, {}),
+            expected,
         )
 
 
