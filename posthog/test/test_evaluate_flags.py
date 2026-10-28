@@ -1126,6 +1126,34 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
             len(self._warnings(logs, "checkout", "experience_continuity")), 2
         )
 
+    def test_classifies_and_logs_outside_the_publication_lock(self):
+        client = self._client()
+        lock = client._flag_definition_publication_lock
+        lock_held = []
+        classify = Client._classify_unresolvable_flags
+
+        def record_lock_and_classify(snapshot):
+            lock_held.append(lock._is_owned())
+            return classify(snapshot)
+
+        with (
+            mock.patch.object(
+                Client,
+                "_classify_unresolvable_flags",
+                side_effect=record_lock_and_classify,
+            ),
+            mock.patch.object(
+                client.log,
+                "warning",
+                side_effect=lambda *args, **kwargs: lock_held.append(lock._is_owned()),
+            ),
+        ):
+            self._refresh_with(
+                client, _always_on_flag("checkout", ensure_experience_continuity=True)
+            )
+
+        self.assertEqual(lock_held, [False, False])
+
 
 class TestEvaluateFlagsFiltering(unittest.TestCase):
     def setUp(self):
