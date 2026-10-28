@@ -89,8 +89,10 @@ The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
   serves one client, so this misses only a client that never sends a request.
 
 Set `send_initialize_event=False` to stop sending `$mcp_initialize`. Many clients reconnect before
-every few tool calls, so this event can outnumber `$mcp_tool_call`. Nothing else changes: tool
-calls keep their sessions and client names.
+every few tool calls, so this event can outnumber `$mcp_tool_call`. Nothing else changes in what
+the SDK sends: tool calls keep their sessions and client names. In PostHog, MCP onboarding and the
+users and sessions tiles of the default MCP dashboard read `$mcp_initialize`. They show no data
+while the option is off.
 
 ```python
 instrument(server, posthog, MCPAnalyticsOptions(send_initialize_event=False))
