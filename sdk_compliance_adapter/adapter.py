@@ -170,7 +170,7 @@ class SDKState:
     def record_drops(self, error: Exception, batch: List[Dict[str, Any]]) -> None:
         """on_error hook: record each event capture dropped, by uuid."""
         # A duplicate uuid has several names in batch order; capture keeps the first copy.
-        names: Dict[str, List[str]] = {}
+        names: Dict[Optional[str], List[Optional[str]]] = {}
         for event in batch or []:
             names.setdefault(event.get("uuid"), []).append(event.get("event"))
         duplicates_seen: Dict[str, int] = {}
@@ -181,13 +181,9 @@ class SDKState:
                 if details == "duplicate_event_uuid":
                     index = duplicates_seen.get(uuid, 0) + 1
                     duplicates_seen[uuid] = index
-                event = (
-                    copies[index]
-                    if index < len(copies)
-                    else (copies[0] if copies else None)
-                )
+                name = copies[min(index, len(copies) - 1)] if copies else None
                 self.reported_drops.append(
-                    {"uuid": uuid, "event": event, "details": details}
+                    {"uuid": uuid, "event": name, "details": details}
                 )
 
     def record_log(self, line: str) -> None:
