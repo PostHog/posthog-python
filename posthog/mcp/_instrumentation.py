@@ -264,7 +264,7 @@ async def record_initialize(
     await handle_identify(data, session_id, request, extra)
     # The option stops only the event. Identify still runs, so later events of
     # the session keep an identity that only the handshake can resolve.
-    if not data.options.capture_initialize:
+    if not data.options.send_initialize_event:
         return
 
     def text(value: Any) -> Optional[str]:
@@ -326,7 +326,7 @@ async def _maybe_emit_initialize(
     """Emit ``$mcp_initialize`` once per session from its first request, where no
     seam observes the real ``initialize`` (see
     :func:`_first_request_stands_in_for_initialize`)."""
-    if not data.options.capture_initialize:
+    if not data.options.send_initialize_event:
         return
     if not _first_request_stands_in_for_initialize(data, session_source, extra):
         return

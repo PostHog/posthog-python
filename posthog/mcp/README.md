@@ -88,12 +88,12 @@ The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
 - **MCP SDK 1.x over stdio**: from the session's first request. A stdio server
   serves one client, so this misses only a client that never sends a request.
 
-Set `capture_initialize=False` to stop sending `$mcp_initialize`. Many clients reconnect before
+Set `send_initialize_event=False` to stop sending `$mcp_initialize`. Many clients reconnect before
 every few tool calls, so this event can outnumber `$mcp_tool_call`. Nothing else changes: tool
 calls keep their sessions and client names.
 
 ```python
-instrument(server, posthog, MCPAnalyticsOptions(capture_initialize=False))
+instrument(server, posthog, MCPAnalyticsOptions(send_initialize_event=False))
 ```
 
 `identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the

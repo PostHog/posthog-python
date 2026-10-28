@@ -248,7 +248,7 @@ class MCPAnalyticsOptions:
     resolve_original_tool: Optional[Callable[[str], Any]] = None
     # Send `$mcp_initialize` for each `initialize` handshake. On by default.
     # False sends no `$mcp_initialize`. Nothing else changes.
-    capture_initialize: bool = True
+    send_initialize_event: bool = True
 
 
 @dataclass

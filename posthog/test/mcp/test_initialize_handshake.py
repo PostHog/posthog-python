@@ -990,17 +990,17 @@ async def test_a_nested_method_before_the_top_level_initialize_is_counted(kind):
     assert init["properties"]["$mcp_client_name"] == "nested-client"
 
 
-# --- capture_initialize=False --------------------------------------------------------
+# --- send_initialize_event=False -----------------------------------------------------
 
 
 @pytest.mark.parametrize("kind", KINDS)
-async def test_capture_initialize_off_sends_no_initialize_and_keeps_sessions(kind):
+async def test_send_initialize_event_off_sends_no_initialize_and_keeps_sessions(kind):
     # The multi-pod scenario with the option off: no $mcp_initialize. Nothing else
     # changes: the token is still minted, so each connection's tool calls keep its
     # session and its client name on every pod.
     client = FakeClient()
     options = MCPAnalyticsOptions(
-        enable_conversation_id=False, capture_initialize=False
+        enable_conversation_id=False, send_initialize_event=False
     )
     sessions = []
     async with fleet(client, pods=2, kind=kind, options=options) as lb:
@@ -1026,7 +1026,7 @@ async def test_capture_initialize_off_sends_no_initialize_and_keeps_sessions(kin
 
 
 @pytest.mark.parametrize("kind", KINDS)
-async def test_capture_initialize_off_keeps_the_handshake_identity(kind):
+async def test_send_initialize_event_off_keeps_the_handshake_identity(kind):
     # The option stops only the event. An identify that resolves the user only
     # from the handshake still attributes the session's later tool calls.
     def identify(request, extra):
@@ -1036,7 +1036,7 @@ async def test_capture_initialize_off_keeps_the_handshake_identity(kind):
 
     client = FakeClient()
     options = MCPAnalyticsOptions(
-        enable_conversation_id=False, identify=identify, capture_initialize=False
+        enable_conversation_id=False, identify=identify, send_initialize_event=False
     )
     async with fleet(client, kind=kind, options=options) as lb:
         headers, _ = await handshake(lb)
@@ -1050,11 +1050,11 @@ async def test_capture_initialize_off_keeps_the_handshake_identity(kind):
 
 @pytest.mark.skipif(MCP_MAJOR >= 2, reason="the first-request fallback is mcp 1.x")
 @pytest.mark.parametrize("capture", [True, False])
-async def test_capture_initialize_off_also_gates_the_first_request_fallback(capture):
+async def test_send_initialize_event_off_also_gates_the_first_request_fallback(capture):
     # No HTTP, as on stdio: the first tool call stands in for the handshake.
     client = FakeClient()
     options = MCPAnalyticsOptions(
-        enable_conversation_id=False, capture_initialize=capture
+        enable_conversation_id=False, send_initialize_event=capture
     )
     _, _, server = make_pod(client, options=options)
     await server._tool_manager.call_tool("add", {"a": 1, "b": 2, "context": "stdio"})
