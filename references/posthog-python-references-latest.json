@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.78.0",
+    "version": "7.79.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -871,7 +871,7 @@
             },
             {
               "name": "only_evaluate_locally",
-              "description": "If True, never fall back to remote evaluation \u2014         flags that can't be evaluated locally are simply omitted from the snapshot.",
+              "description": "If True, never fall back to remote evaluation \u2014         flags that can't be evaluated locally are omitted from the snapshot and         listed with a reason in its ``unresolved_flags``.",
               "isOptional": false,
               "type": "bool"
             },
@@ -2352,7 +2352,7 @@
             },
             {
               "name": "only_evaluate_locally",
-              "description": "If ``True``, never fall back to remote evaluation and         omit flags that cannot be evaluated locally.",
+              "description": "If ``True``, never fall back to remote evaluation and         omit flags that cannot be evaluated locally. The snapshot's         ``unresolved_flags`` lists them with a reason.",
               "isOptional": false,
               "type": "bool"
             },
