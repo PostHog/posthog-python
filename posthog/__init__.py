@@ -90,6 +90,7 @@ from posthog.types import (
     FeatureFlagEvaluationRuntime as FeatureFlagEvaluationRuntime,
     FlagValue as FlagValue,
     FlagsAndPayloads as FlagsAndPayloads,
+    UnresolvedFlagReason as UnresolvedFlagReason,
 )
 from posthog.types import (
     FeatureFlagResult as FeatureFlagResult,
@@ -1175,7 +1176,8 @@ def evaluate_flags(
         person_properties: Person properties to use for evaluation.
         group_properties: Group properties keyed by group type.
         only_evaluate_locally: If ``True``, never fall back to remote evaluation and
-            omit flags that cannot be evaluated locally.
+            omit flags that cannot be evaluated locally. The snapshot's
+            ``unresolved_flags`` lists them with a reason.
         disable_geoip: Whether to disable GeoIP lookup.
         flag_keys: Optional list that scopes local evaluation, the underlying ``/flags``
             request, and the returned snapshot. When omitted or ``None``, all flags are evaluated.
