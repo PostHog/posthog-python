@@ -795,6 +795,32 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
         self.assertEqual(flags.get_flag("target"), "a")
         patch_flags.assert_called_once()
 
+    @parameterized.expand(
+        [
+            ("not_an_object", "not-a-filter"),
+            ("dependency_without_key", {**_depends_on("dep"), "key": None}),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_dependency_that_needs_the_server_falls_back_despite_malformed_later_condition(
+        self, _name, malformed_filter, patch_flags
+    ):
+        dep, target = self._target_depending_on(
+            {"key": "id", "type": "cohort", "value": 999}
+        )
+        target["filters"]["groups"][1]["properties"] = [malformed_filter]
+        self.client.feature_flags = [dep, target]
+        patch_flags.return_value = {
+            "flags": {"target": {"enabled": True, "variant": "a"}}
+        }
+
+        with mock.patch.object(self.client.log, "exception") as patch_exception:
+            flags = self.client.evaluate_flags("user-123", flag_keys=["target"])
+
+        self.assertEqual(flags.get_flag("target"), "a")
+        patch_flags.assert_called_once()
+        patch_exception.assert_not_called()
+
     @mock.patch("posthog.client.flags")
     def test_dependency_that_needs_the_server_leaves_flag_unresolved_locally(
         self, patch_flags

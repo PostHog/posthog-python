@@ -6586,20 +6586,22 @@ def _flag(key, *conditions, **extra):
 
 
 class TestUnresolvedReasons(unittest.TestCase):
-    def evaluate(self, flag, properties, flags=()):
+    def evaluate(self, flag, properties, flags=(), cohorts=None):
         return match_feature_flag_properties(
             flag,
             "user-123",
             properties,
-            cohort_properties={},
+            cohort_properties=cohorts or {},
             flags_by_key={f["key"]: f for f in (flag, *flags)},
             evaluation_cache={},
             bucketing_value="user-123",
         )
 
-    def assert_unresolved(self, error_type, reason, flag, properties, flags=()):
+    def assert_unresolved(
+        self, error_type, reason, flag, properties, flags=(), cohorts=None
+    ):
         with self.assertRaises(error_type) as ctx:
-            self.evaluate(flag, properties, flags)
+            self.evaluate(flag, properties, flags, cohorts)
         self.assertIs(type(ctx.exception), error_type)
         self.assertEqual(ctx.exception.reason, reason)
 
@@ -6717,17 +6719,38 @@ class TestUnresolvedReasons(unittest.TestCase):
                 [[EMAIL_IS_SET, _depends_on("base")], [_depends_on("base")]],
                 "unresolved_dependency",
             ),
+            (
+                "unknown_operator_after_dependency_in_same_condition",
+                [[_depends_on("base"), UNKNOWN_OPERATOR]],
+                "unsupported_definition",
+            ),
+            (
+                "cohort_with_dependency_first",
+                [[{"key": "id", "value": 1, "type": "cohort"}]],
+                "unsupported_definition",
+            ),
+            (
+                "cohort_with_unknown_operator_first",
+                [[{"key": "id", "value": 2, "type": "cohort"}]],
+                "unsupported_definition",
+            ),
         ]
     )
     def test_dependency_requiring_server_requires_server(
         self, _name, conditions, reason
     ):
+        cohorts = {
+            "1": {"type": "AND", "values": [_depends_on("base"), UNKNOWN_OPERATOR]},
+            "2": {"type": "AND", "values": [UNKNOWN_OPERATOR, _depends_on("base")]},
+        }
+
         self.assert_unresolved(
             RequiresServerEvaluation,
             UnresolvedFlagReason(reason),
             _flag("checkout", *conditions),
             {"plan": "pro"},
             flags=[_flag("base", [STATIC_COHORT])],
+            cohorts=cohorts,
         )
 
     def test_unexpected_error_after_inconclusive_filter_lets_later_conditions_resolve(

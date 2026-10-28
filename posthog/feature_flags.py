@@ -576,11 +576,15 @@ def match_feature_flag_properties(
                 return False
         except RequiresServerEvaluation as e:
             # Static cohort or other missing server-side data - must fallback to API.
-            # The loop stops here, so a condition it did not reach can still carry a
-            # higher-precedence reason in its definition.
-            definition_reason = _get_definition_unresolved_reason(
-                flag, flags_by_key or {}, cohort_properties, group_type_mapping
-            )
+            # The loop stops here, so a filter it did not reach can still carry a
+            # higher-precedence reason in the flag's definition.
+            try:
+                definition_reason = _get_definition_unresolved_reason(
+                    flag, flags_by_key or {}, cohort_properties, group_type_mapping
+                )
+            except Exception:
+                # A malformed definition must not stop the fallback to the server.
+                definition_reason = None
             if definition_reason is not None:
                 e.reason = _pick_unresolved_reason(e.reason, definition_reason)
             raise
