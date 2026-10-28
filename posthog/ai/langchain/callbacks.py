@@ -724,6 +724,8 @@ class CallbackHandler(BaseCallbackHandler):
                 )
             if usage.reasoning_tokens is not None:
                 event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
+            if usage.web_search_count is not None and usage.web_search_count > 0:
+                event_properties["$ai_web_search_count"] = usage.web_search_count
 
             # Generation results
             generation_result = output.generations[-1]
@@ -856,6 +858,23 @@ class ModelUsage:
     reasoning_tokens: Optional[int]
     cache_write_5m_tokens: Optional[int] = None
     cache_write_1h_tokens: Optional[int] = None
+    web_search_count: Optional[int] = None
+
+
+def _extract_web_search_requests(usage: Union[BaseModel, dict]) -> Optional[int]:
+    if isinstance(usage, BaseModel):
+        usage = usage.__dict__
+    server_tool_use = usage.get("server_tool_use")
+    web_search_requests = (
+        server_tool_use.get("web_search_requests")
+        if isinstance(server_tool_use, dict)
+        else getattr(server_tool_use, "web_search_requests", None)
+    )
+    if isinstance(web_search_requests, int) and not isinstance(
+        web_search_requests, bool
+    ):
+        return web_search_requests
+    return None
 
 
 def _parse_usage_model(
@@ -924,6 +943,11 @@ def _parse_usage_model(
     ):
         parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
 
+    # Anthropic reports the exact number of web searches of a response
+    web_search_requests = _extract_web_search_requests(usage)
+    if web_search_requests is not None:
+        parsed_usage["web_search"] = web_search_requests
+
     field_mapping = {
         "input": "input_tokens",
         "output": "output_tokens",
@@ -938,6 +962,7 @@ def _parse_usage_model(
         },
         cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),
         cache_write_1h_tokens=parsed_usage.get("cache_write_1h"),
+        web_search_count=parsed_usage.get("web_search"),
     )
     # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
     # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
@@ -975,11 +1000,18 @@ def _parse_usage(
         reasoning_tokens=None,
     )
 
+    # The generations loop below can replace the llm_output usage, which is the
+    # only place langchain-anthropic reports server_tool_use, so read it here.
+    web_search_count: Optional[int] = None
+
     if response.llm_output is not None:
         for key in llm_usage_keys:
             if response.llm_output.get(key):
                 llm_usage = _parse_usage_model(
                     response.llm_output[key], provider, model
+                )
+                web_search_count = _extract_web_search_requests(
+                    response.llm_output[key]
                 )
                 break
 
@@ -1025,6 +1057,9 @@ def _parse_usage(
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage, provider, model)
                     break
+
+    if llm_usage.web_search_count is None:
+        llm_usage.web_search_count = web_search_count
 
     return llm_usage
 

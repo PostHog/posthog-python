@@ -2965,6 +2965,57 @@ def test_stop_reason_resolution(
     assert props.get("$ai_stop_reason") == expected
 
 
+@pytest.mark.parametrize(
+    "server_tool_use,expected",
+    [
+        # Anthropic reports the exact number of searches
+        ({"web_search_requests": 2}, 2),
+        # no search is not worth an event property
+        ({"web_search_requests": 0}, None),
+        # the provider reports nothing
+        (None, None),
+    ],
+)
+def test_web_search_count(mock_client, server_tool_use, expected):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet"},
+    )
+    usage = {"input_tokens": 10, "output_tokens": 5}
+    if server_tool_use is not None:
+        usage["server_tool_use"] = server_tool_use
+    # langchain-anthropic always sets usage_metadata on the message, which the
+    # generations loop prefers over llm_output["usage"]
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="r",
+                        usage_metadata={
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    )
+                )
+            ]
+        ],
+        llm_output={"usage": usage},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props.get("$ai_web_search_count") == expected
+
+
 class TestGetHttpStatus:
     def test_uses_the_status_code_of_an_http_error(self):
         from posthog.ai.langchain.callbacks import _get_http_status
