@@ -16,6 +16,10 @@ from posthog.test.capture_helpers import (
 )
 
 
+_CIRCULAR: dict = {}
+_CIRCULAR["self"] = _CIRCULAR
+
+
 class TestClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -259,6 +263,8 @@ class TestClient(unittest.TestCase):
                 "private-value",
                 ["malformed", "valid"],
             ),
+            # A value json cannot write costs only that event.
+            ("circular_reference", "private-key", _CIRCULAR, ["valid"]),
         ]
     )
     def test_malformed_before_send_event_does_not_stop_consumer_or_shutdown(
