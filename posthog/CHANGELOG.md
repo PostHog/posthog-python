@@ -1,5 +1,11 @@
 # posthog
 
+## 7.77.0 — 2026-10-28
+
+### Minor changes
+
+- [d8a1b97](https://github.com/posthog/posthog-python/commit/d8a1b976d665d9f7b3249ac788ef253bb21eed50) Add a `send_initialize_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_initialize`. — Thanks @gesh!
+
 ## 7.76.1 — 2026-10-28
 
 ### Patch changes
