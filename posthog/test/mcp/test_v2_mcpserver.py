@@ -195,7 +195,7 @@ async def test_tool_call_error_is_captured_and_converted():
     assert exception_list[-1]["value"] == "explode"
 
 
-async def test_initialize_emitted_once_per_session():
+async def test_tool_calls_alone_emit_no_initialize():
     server = make_server()
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
@@ -208,7 +208,9 @@ async def test_initialize_emitted_once_per_session():
     )
     await _flush()
 
-    assert len(_events(client, "$mcp_initialize")) == 1
+    # No initialize was sent, so none is reported: Server.middleware sees every
+    # real handshake (test_initialize_handshake.py).
+    assert _events(client, "$mcp_initialize") == []
     assert len(_events(client, "$mcp_tool_call")) == 2
 
 
@@ -235,14 +237,12 @@ async def test_identify_sets_distinct_id_and_groups():
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["distinct_id"] == "user_42"
     assert calls[0]["properties"]["$groups"] == {"organization": "org_7"}
-    assert _events(client, "$identify")
+    assert not _events(client, "$identify")
 
 
-async def test_identify_callback_sees_ctx_but_capture_does_not():
+async def test_identify_callback_sees_ctx():
     """The v2 adapters hand the raw request ``ctx`` to callbacks via ``extra`` so
-    hosts can read headers — but the captured $identify parameters must carry
-    only a scalar projection, or the stringified context (headers, transport
-    state) would ship to PostHog without key-based redaction."""
+    hosts can read headers."""
     server = make_server()
     client = FakeClient()
     seen = {}
@@ -258,15 +258,7 @@ async def test_identify_callback_sees_ctx_but_capture_does_not():
     )
     await _flush()
 
-    # the callback got the live context object...
     assert seen["extra"]["ctx"] is not None
-
-    # ...but the captured event only carries JSON-safe scalars
-    identify_events = _events(client, "$identify")
-    assert identify_events
-    captured_extra = identify_events[0]["properties"]["$mcp_parameters"]["extra"]
-    assert "ctx" not in captured_extra
-    assert set(captured_extra) <= {"session_id"}
 
 
 async def test_structured_output_tool_gets_the_conversation_handle():

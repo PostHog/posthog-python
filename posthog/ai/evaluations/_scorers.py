@@ -5,11 +5,9 @@ from __future__ import annotations
 import copy
 import json
 from datetime import datetime
-from typing import Any, Callable, Literal, TypeVar, cast, overload
-from urllib.parse import parse_qs, urlsplit
+from typing import Any, Callable, Literal, Sequence, TypeVar, cast, overload
 from uuid import UUID
 
-from ._errors import EvaluationAPIError
 from ._scorer_types import (
     BooleanScorerConfig,
     CategoricalScorerConfig,
@@ -22,6 +20,8 @@ from ._scorer_types import (
     ScorerVersion,
     ScorerVersionPage,
 )
+from ._serialization import _integer, _next_offset, _parse_response, _text
+from ._tags import _response_tags, _tag_names, _tag_params
 from ._transport import AsyncTransport, SyncTransport
 
 
@@ -44,18 +44,6 @@ def _uuid(value: str | UUID) -> str:
         return str(UUID(value))
     except ValueError:
         raise ValueError("Scorer and version IDs must be UUIDs.") from None
-
-
-def _integer(value: Any, *, minimum: int = 0) -> int:
-    if type(value) is not int or value < minimum:
-        raise ValueError("Expected an integer within the supported range.")
-    return value
-
-
-def _text(value: Any) -> str:
-    if not isinstance(value, str):
-        raise ValueError("Expected a string.")
-    return value
 
 
 def _optional_text(value: Any) -> str | None:
@@ -100,6 +88,7 @@ def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
         updated_at=_timestamp(data["updated_at"]),
         created_by=None if created_by is None else _mapping(created_by),
         team=_integer(data["team"], minimum=1),
+        tags=_response_tags(data.get("tags", [])),
     )
 
 
@@ -127,24 +116,18 @@ def _results(data: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _scorer_page(data: dict[str, Any]) -> ScorerPage:
     next_url = _optional_text(data["next"])
-    next_offset = None
-    if next_url is not None:
-        offsets = parse_qs(urlsplit(next_url).query).get("offset")
-        if offsets is None or len(offsets) != 1:
-            raise ValueError("Missing scorer page offset.")
-        next_offset = _integer(int(offsets[0]))
     return ScorerPage(
-        count=_integer(data["count"]),
+        count=_integer(data["count"], minimum=0),
         results=tuple(_scorer(row) for row in _results(data)),
         next=next_url,
         previous=_optional_text(data["previous"]),
-        next_offset=next_offset,
+        next_offset=_next_offset(next_url),
     )
 
 
 def _version_page(data: dict[str, Any]) -> ScorerVersionPage:
     return ScorerVersionPage(
-        count=_integer(data["count"]),
+        count=_integer(data["count"], minimum=0),
         results=tuple(_version(row) for row in _results(data)),
         next_cursor=_optional_text(data["next_cursor"]),
     )
@@ -153,15 +136,9 @@ def _version_page(data: dict[str, Any]) -> ScorerVersionPage:
 def _parse(
     parser: Callable[[dict[str, Any]], _ResultT], data: dict[str, Any]
 ) -> _ResultT:
-    try:
-        return parser(data)
-    except (KeyError, TypeError, ValueError, OverflowError):
-        raise EvaluationAPIError(
-            code="invalid_response",
-            detail="The scorer API returned an invalid response.",
-            response=data,
-            persistence="unknown",
-        ) from None
+    return _parse_response(
+        parser, data, detail="The scorer API returned an invalid response."
+    )
 
 
 def _encode(data: dict[str, Any]) -> bytes:
@@ -176,6 +153,7 @@ def _create_body(
     kind: ScorerKind,
     config: ScorerConfig,
     description: str | None | _Omitted,
+    tags: Sequence[str] | _Omitted,
 ) -> bytes:
     data: dict[str, Any] = {
         "name": name,
@@ -184,6 +162,8 @@ def _create_body(
     }
     if not isinstance(description, _Omitted):
         data["description"] = description
+    if not isinstance(tags, _Omitted):
+        data["tags"] = _tag_names(tags)
     return _encode(data)
 
 
@@ -191,8 +171,9 @@ def _metadata(
     name: str | _Omitted,
     description: str | None | _Omitted,
     archived: bool | _Omitted = _OMITTED,
+    tags: Sequence[str] | _Omitted = _OMITTED,
 ) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         key: value
         for key, value in {
             "name": name,
@@ -201,6 +182,9 @@ def _metadata(
         }.items()
         if not isinstance(value, _Omitted)
     }
+    if not isinstance(tags, _Omitted):
+        data["tags"] = _tag_names(tags)
+    return data
 
 
 def _version_body(
@@ -223,10 +207,13 @@ def _list_params(
     kind: ScorerKind | None,
     archived: bool | None,
     order_by: ScorerOrder | None,
+    tags: Sequence[str] | None,
+    tag_match: Literal["any", "all"],
 ) -> dict[str, str | int]:
+    tag_params = _tag_params(tags, tag_match)
     params: dict[str, str | int] = {
         "limit": _integer(limit, minimum=1),
-        "offset": _integer(offset),
+        "offset": _integer(offset, minimum=0),
     }
     if search is not None:
         params["search"] = search
@@ -238,6 +225,7 @@ def _list_params(
         params["archived"] = "true" if archived else "false"
     if order_by is not None:
         params["order_by"] = order_by
+    params.update(tag_params)
     return params
 
 
@@ -273,6 +261,7 @@ class Scorers:
         kind: Literal["boolean"],
         config: BooleanScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -283,6 +272,7 @@ class Scorers:
         kind: Literal["numeric"],
         config: NumericScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -293,6 +283,7 @@ class Scorers:
         kind: Literal["categorical"],
         config: CategoricalScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     def create(
@@ -302,14 +293,18 @@ class Scorers:
         kind: ScorerKind,
         config: ScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
-        """Create an active scorer and its first immutable configuration version."""
+        """Create a scorer and its first version, optionally assigning tags.
+
+        Tag names are trimmed, lowercased, deduplicated, and sorted by the server.
+        """
         return _parse(
             _scorer,
             self._transport.request(
                 "POST",
                 self._base,
-                body=_create_body(name, kind, config, description),
+                body=_create_body(name, kind, config, description, tags),
                 retry_safe=False,
             ),
         )
@@ -327,18 +322,24 @@ class Scorers:
         kind: ScorerKind | None = None,
         archived: bool | None = None,
         order_by: ScorerOrder | None = None,
+        tags: Sequence[str] | None = None,
+        tag_match: Literal["any", "all"] = "any",
     ) -> ScorerPage:
         """Fetch one page. Omit ``archived`` to list active scorers.
 
         Keep the same filters and pass the returned ``next_offset`` to continue.
         Search matches names and descriptions; scorer names are not unique.
+        ``tags`` accepts up to 20 names. ``tag_match`` matches any (default) or
+        all selected tags; an empty sequence disables tag filtering.
         """
         return _parse(
             _scorer_page,
             self._transport.request(
                 "GET",
                 self._base,
-                params=_list_params(limit, offset, search, kind, archived, order_by),
+                params=_list_params(
+                    limit, offset, search, kind, archived, order_by, tags, tag_match
+                ),
             ),
         )
 
@@ -349,17 +350,20 @@ class Scorers:
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
         archived: bool | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
         """Update metadata. Use ``create_version`` to change configuration.
 
         Omitted fields are preserved. An explicit null description clears it.
+        ``tags`` replaces the current tags; pass [] to clear them. Tag changes
+        do not create a scorer version.
         """
         return _parse(
             _scorer,
             self._transport.request(
                 "PATCH",
                 self._path(scorer_id),
-                body=_encode(_metadata(name, description, archived)),
+                body=_encode(_metadata(name, description, archived, tags)),
                 retry_safe=False,
             ),
         )
@@ -435,6 +439,7 @@ class AsyncScorers:
         kind: Literal["boolean"],
         config: BooleanScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -445,6 +450,7 @@ class AsyncScorers:
         kind: Literal["numeric"],
         config: NumericScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -455,6 +461,7 @@ class AsyncScorers:
         kind: Literal["categorical"],
         config: CategoricalScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     async def create(
@@ -464,14 +471,15 @@ class AsyncScorers:
         kind: ScorerKind,
         config: ScorerConfig,
         description: str | None | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
-        """Create an active scorer and its first version; never retry mutations."""
+        """Create a scorer with optional tags. See Scorers.create."""
         return _parse(
             _scorer,
             await self._transport.request(
                 "POST",
                 self._base,
-                body=_create_body(name, kind, config, description),
+                body=_create_body(name, kind, config, description, tags),
                 retry_safe=False,
             ),
         )
@@ -491,14 +499,18 @@ class AsyncScorers:
         kind: ScorerKind | None = None,
         archived: bool | None = None,
         order_by: ScorerOrder | None = None,
+        tags: Sequence[str] | None = None,
+        tag_match: Literal["any", "all"] = "any",
     ) -> ScorerPage:
-        """Fetch one page; preserve filters and use ``next_offset`` to continue."""
+        """Fetch one page with optional tag filters. See Scorers.list."""
         return _parse(
             _scorer_page,
             await self._transport.request(
                 "GET",
                 self._base,
-                params=_list_params(limit, offset, search, kind, archived, order_by),
+                params=_list_params(
+                    limit, offset, search, kind, archived, order_by, tags, tag_match
+                ),
             ),
         )
 
@@ -509,14 +521,15 @@ class AsyncScorers:
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
         archived: bool | _Omitted = _OMITTED,
+        tags: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
-        """Update metadata; omission preserves values and null clears description."""
+        """Update metadata, including replacement tags. See Scorers.update."""
         return _parse(
             _scorer,
             await self._transport.request(
                 "PATCH",
                 self._path(scorer_id),
-                body=_encode(_metadata(name, description, archived)),
+                body=_encode(_metadata(name, description, archived, tags)),
                 retry_safe=False,
             ),
         )

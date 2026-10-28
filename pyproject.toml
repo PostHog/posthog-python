@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.64.1"
+version = "7.76.1"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -69,6 +69,10 @@ dev = [
 ]
 test = [
     "freezegun==1.5.1",
+    "flask>=2.2",
+    "celery>=5.3,<6",
+    "opentelemetry-instrumentation-celery>=0.41b0",
+    "fastapi>=0.115,<1",
     "python-dateutil>=2.9.0.post0",
     "tzdata",
     "coverage",
@@ -77,6 +81,7 @@ test = [
     "pytest-asyncio",
     "jsonschema>=4.0",
     "django>=5.2.15,<6.0",
+    "djangorestframework>=3.15,<4",
     "openai-agents>=0.18",
     "anthropic>=0.72",
     "langgraph>=1.0",
@@ -127,6 +132,8 @@ packages = [
 
 [tool.uv]
 exclude-newer = "7 days"
+# certifi 2026.10.19 drops the compromised eMudhra root and is newer than the 7-day cooldown.
+exclude-newer-package = { certifi = "1 day" }
 required-version = ">=0.8.0"
 
 # Declares a uv workspace so tooling (incl. Sampo's release flow) discovers the

@@ -132,7 +132,7 @@ async def async_flags(
     api_key: str,
     host: Optional[str],
     *,
-    timeout: int,
+    timeout: float,
     max_retries: int,
     client: Optional[Any] = None,
     **request_data: Any,
@@ -175,7 +175,7 @@ async def async_remote_config(
     host: Optional[str],
     key: str,
     *,
-    timeout: int,
+    timeout: float,
     client: Optional[Any] = None,
 ) -> Any:
     """Fetch and decrypt one remote-config payload."""
@@ -203,7 +203,7 @@ async def async_batch_post(
     batch: list[dict[str, Any]],
     path: str,
     gzip: bool = False,
-    timeout: int = 15,
+    timeout: float = 15,
     historical_migration: bool = False,
     client: Optional[Any] = None,
 ) -> None:
@@ -260,7 +260,7 @@ async def async_send_v1_batch(
     batch: list[dict[str, Any]],
     *,
     compression: CaptureCompression,
-    timeout: int,
+    timeout: float,
     max_retries: int,
     historical_migration: bool,
 ) -> None:

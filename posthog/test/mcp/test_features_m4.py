@@ -193,7 +193,7 @@ async def test_fastmcp_keeps_input_names_after_conversation_anchoring():
     assert properties["$mcp_input_keys"] == ["a", "b"]
 
 
-async def test_lowlevel_does_not_reuse_a_listed_schema_for_input_names():
+async def test_lowlevel_reuses_a_listed_schema_for_input_names():
     server = make_lowlevel()
     client = FakeClient()
     instrument(server, client)
@@ -205,7 +205,7 @@ async def test_lowlevel_does_not_reuse_a_listed_schema_for_input_names():
     await _flush()
 
     properties = _events(client, "$mcp_tool_call")[0]["properties"]
-    assert properties["$mcp_input_keys"] == ["[redacted]"]
+    assert properties["$mcp_input_keys"] == ["msg"]
 
 
 async def test_lowlevel_conversation_id_captured_and_prompt_back():

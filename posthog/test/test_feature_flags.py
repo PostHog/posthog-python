@@ -3,6 +3,7 @@ import hashlib
 import threading
 import unittest
 
+from decimal import Decimal
 from unittest import mock
 from zoneinfo import ZoneInfo
 from dateutil import parser
@@ -115,6 +116,105 @@ class TestCohortMatching(unittest.TestCase):
                         {"type": group_type, "values": values},
                         {"country": country},
                         {},
+                    )
+
+
+class TestNumericOrderingLocalEvaluation(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY)
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @parameterized.expand([("get_feature_flag",), ("evaluate_flags",)])
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_numeric_ordering_and_remote_fallback(self, api, _capture, remote):
+        cases = (
+            ("gt", 2, {"amount": "10"}, True, False),
+            ("lt", 30, {"amount": "100"}, False, False),
+            ("gte", "5", {"amount": "10"}, True, False),
+            ("lte", "5", {"amount": "10"}, False, False),
+            ("gt", "5", {"amount": "10px"}, False, False),
+            ("gt", "5", {"amount": None}, False, False),
+            ("gt", "5px", {"amount": "10"}, True, True),
+            ("gt", "5px", {"amount": None}, True, True),
+            ("gt", "5", {}, True, True),
+            ("gt", "2", {"amount": Decimal(10)}, True, False),
+            ("gte", "5", {"amount": Decimal(5)}, True, False),
+            ("lt", "5", {"amount": Decimal(2)}, True, False),
+            ("lte", "5", {"amount": Decimal(5)}, True, False),
+            (
+                "gt",
+                "9007199254740992",
+                {"amount": Decimal(9007199254740993)},
+                False,
+                False,
+            ),
+            ("gte", "0.1", {"amount": Decimal("0.1")}, True, False),
+            ("lte", "0", {"amount": Decimal("1e-400")}, True, False),
+            ("gt", "2", {"amount": Decimal("1e10000")}, False, False),
+            ("gt", "2", {"amount": Decimal("-1e10000")}, False, False),
+            ("gt", "2", {"amount": Decimal("NaN")}, False, False),
+            ("gt", "2", {"amount": Decimal("sNaN")}, False, False),
+            ("gt", "2", {"amount": Decimal("Infinity")}, False, False),
+            ("gt", "2", {"amount": Decimal("-Infinity")}, False, False),
+        )
+        for operator, condition, properties, expected, fallback in cases:
+            for local_only in (False, True):
+                with self.subTest(
+                    operator=operator,
+                    condition=condition,
+                    properties=properties,
+                    local_only=local_only,
+                ):
+                    self.client.feature_flags = [
+                        {
+                            "id": 1,
+                            "key": "numeric-flag",
+                            "active": True,
+                            "filters": {
+                                "groups": [
+                                    {
+                                        "properties": [
+                                            {
+                                                "key": "amount",
+                                                "operator": operator,
+                                                "value": condition,
+                                                "type": "person",
+                                            }
+                                        ],
+                                        "rollout_percentage": 100,
+                                    }
+                                ]
+                            },
+                        }
+                    ]
+                    remote.reset_mock()
+                    remote.return_value = {
+                        "flags": {"numeric-flag": {"enabled": True, "variant": None}}
+                    }
+                    kwargs = {
+                        "person_properties": properties,
+                        "only_evaluate_locally": local_only,
+                    }
+                    if api == "get_feature_flag":
+                        result = self.client.get_feature_flag(
+                            "numeric-flag",
+                            "user-1",
+                            send_feature_flag_events=False,
+                            **kwargs,
+                        )
+                    else:
+                        result = self.client.evaluate_flags(
+                            "user-1", **kwargs
+                        ).get_flag("numeric-flag")
+                    if fallback and local_only:
+                        self.assertIsNone(result)
+                    else:
+                        self.assertIs(result, expected)
+                    self.assertEqual(
+                        remote.call_count, int(fallback and not local_only)
                     )
 
 
@@ -5554,6 +5654,41 @@ class TestMatchProperties(unittest.TestCase):
         prop = self.property("key", value, operator)
         self.assertTrue(match_property(prop, {"key": property_value}))
 
+    @parameterized.expand(
+        [
+            ("icontains", "nul", True),
+            ("icontains", "x", False),
+            ("not_icontains", "x", True),
+            ("not_icontains", "nul", False),
+            ("starts_with", "NU", True),
+            ("starts_with", "x", False),
+            ("not_starts_with", "x", True),
+            ("not_starts_with", "nu", False),
+            ("ends_with", "LL", True),
+            ("ends_with", "x", False),
+            ("not_ends_with", "x", True),
+            ("not_ends_with", "ll", False),
+            ("regex", "^nu", True),
+            ("regex", "Nu", False),
+            ("regex", "^None$", False),
+            ("regex", "x", False),
+            ("not_regex", "x", True),
+            ("not_regex", "^nu", False),
+            ("not_regex", "^None$", True),
+            ("regex", "[", False),
+            ("not_regex", "[", False),
+        ]
+    )
+    def test_string_operators_match_explicit_null(self, operator, value, expected):
+        prop = self.property("key", value, operator)
+        self.assertEqual(expected, match_property(prop, {"key": None}))
+
+    def test_string_operators_with_omitted_key_are_inconclusive(self):
+        for operator in posthog.feature_flags.STRING_OPERATORS:
+            with self.subTest(operator=operator):
+                with self.assertRaises(InconclusiveMatchError):
+                    match_property(self.property("key", "x", operator), {})
+
     def test_match_properties_regex(self):
         property_a = self.property(key="key", value=r"\.com$", operator="regex")
         self.assertTrue(match_property(property_a, {"key": "value.com"}))
@@ -5625,16 +5760,121 @@ class TestMatchProperties(unittest.TestCase):
         property_e = self.property(key="key", value="30", operator="lt")
         self.assertTrue(match_property(property_e, {"key": "29"}))
 
-        # depending on the type of override, we adjust type comparison
-        self.assertTrue(match_property(property_e, {"key": "100"}))
+        self.assertFalse(match_property(property_e, {"key": "100"}))
         self.assertFalse(match_property(property_e, {"key": 100}))
 
         property_f = self.property(key="key", value="123aloha", operator="gt")
-        self.assertFalse(match_property(property_f, {"key": "123"}))
-        self.assertFalse(match_property(property_f, {"key": 122}))
+        for actual in ("123", 122, 129):
+            with self.assertRaises(InconclusiveMatchError):
+                match_property(property_f, {"key": actual})
 
-        # this turns into a string comparison
-        self.assertTrue(match_property(property_f, {"key": 129}))
+    @parameterized.expand(
+        [
+            ("gt", "10", 2, True),
+            ("lt", "100", 30, False),
+            ("gte", "10", "5", True),
+            ("lte", "10", "5", False),
+            ("gt", "+1.e1", "+.5e+1", True),
+            ("lt", "-1.25E+2", "-12.5", True),
+            ("gte", "-.5", "-5e-1", True),
+            ("lte", "1e-400", 0, True),
+            ("gte", "1.7976931348623157e308", 1e308, True),
+            ("gt", "9007199254740993", "9007199254740992", False),
+            ("gt", 9007199254740993, 9007199254740992, False),
+            ("gt", Decimal(9007199254740993), "9007199254740992", False),
+            ("gte", Decimal("0.1"), "0.1", True),
+            ("lte", Decimal("1e-400"), "0", True),
+        ]
+    )
+    def test_numeric_ordering_regressions(self, operator, actual, condition, expected):
+        for version in (1, 2):
+            with self.subTest(version=version):
+                self.assertEqual(
+                    match_property(
+                        self.property("key", condition, operator),
+                        {"key": actual},
+                        property_matching_version=version,
+                    ),
+                    expected,
+                )
+
+    def test_numeric_ordering_operand_types_and_boundaries(self):
+        for operator, expected_results in (
+            ("gt", (False, False, True)),
+            ("gte", (False, True, True)),
+            ("lt", (True, False, False)),
+            ("lte", (True, True, False)),
+        ):
+            for condition in (5, 5.0, "5"):
+                prop = self.property("key", condition, operator)
+                for actuals, expected in zip(
+                    (
+                        (2, 2.0, "2", Decimal(2)),
+                        (5, 5.0, "5", Decimal(5)),
+                        (10, 10.0, "10", Decimal(10)),
+                    ),
+                    expected_results,
+                ):
+                    for actual in actuals:
+                        with self.subTest(
+                            operator=operator, condition=condition, actual=actual
+                        ):
+                            self.assertEqual(
+                                match_property(prop, {"key": actual}), expected
+                            )
+
+    def test_numeric_ordering_invalid_operands(self):
+        invalid_values = (
+            "",
+            "abc",
+            "10px",
+            " 10",
+            "10 ",
+            "10\n",
+            "1_0",
+            "1,0",
+            "1e",
+            "0x10",
+            "١٠",
+            "NaN",
+            "Infinity",
+            "-inf",
+            "1e309",
+            float("nan"),
+            float("inf"),
+            float("-inf"),
+            Decimal("1e10000"),
+            Decimal("-1e10000"),
+            Decimal("NaN"),
+            Decimal("sNaN"),
+            Decimal("Infinity"),
+            Decimal("-Infinity"),
+            10**400,
+            True,
+            False,
+            None,
+            [],
+            [10],
+            {},
+            {"value": 10},
+            b"10",
+        )
+        for operator in ("gt", "gte", "lt", "lte"):
+            for invalid in invalid_values:
+                with self.subTest(operator=operator, invalid=invalid):
+                    for condition in (5, "5"):
+                        prop = self.property("key", condition, operator)
+                        self.assertFalse(match_property(prop, {"key": invalid}))
+                    prop = self.property("key", invalid, operator)
+                    for actual in (10, "10", None):
+                        with self.assertRaises(InconclusiveMatchError):
+                            match_property(prop, {"key": actual})
+            for condition in (5, "5"):
+                prop = self.property("key", condition, operator)
+                with self.assertRaises(InconclusiveMatchError):
+                    match_property(prop, {})
+            with self.assertRaises(InconclusiveMatchError):
+                match_property({"key": "key", "operator": operator}, {"key": 10})
 
     def test_match_property_date_operators(self):
         property_a = self.property(
@@ -5889,10 +6129,12 @@ class TestMatchProperties(unittest.TestCase):
         self.assertFalse(match_property(property_f, {"key": None}))
 
         property_g = self.property(key="key", value="xyz", operator="gte")
-        self.assertFalse(match_property(property_g, {"key": None}))
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_g, {"key": None})
 
         property_h = self.property(key="key", value="Oo", operator="lte")
-        self.assertFalse(match_property(property_h, {"key": None}))
+        with self.assertRaises(InconclusiveMatchError):
+            match_property(property_h, {"key": None})
 
         property_i = self.property(
             key="key", value="2022-05-01", operator="is_date_before"

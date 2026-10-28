@@ -12,6 +12,7 @@ from parameterized import parameterized
 # Configure Django settings before importing middleware
 import django
 from django.conf import settings
+from django.test import override_settings
 
 if not settings.configured:
     settings.configure(
@@ -55,6 +56,7 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         tag_map=None,
         capture_exceptions=True,
         get_response=None,
+        capture_tracing_headers=True,
     ):
         """Helper to create middleware instance with mock Django settings"""
         if get_response is None:
@@ -67,6 +69,8 @@ class TestPosthogContextMiddleware(unittest.TestCase):
             mock_settings.POSTHOG_MW_TAG_MAP = tag_map
             mock_settings.POSTHOG_MW_CAPTURE_EXCEPTIONS = capture_exceptions
             mock_settings.POSTHOG_MW_CLIENT = None
+            mock_settings.POSTHOG_MW_CAPTURE_TRACING_HEADERS = capture_tracing_headers
+            mock_settings.POSTHOG_MW_TRUST_TRACING_HEADERS = None
 
             # Make hasattr work correctly
             def mock_hasattr(obj, name):
@@ -309,7 +313,14 @@ class TestPosthogContextMiddleware(unittest.TestCase):
         response = middleware(request)
 
         self.assertEqual(response.status_code, 500)
-        mock_client.capture_exception.assert_called_once_with(view_exception)
+        mock_client.capture_exception.assert_called_once_with(
+            view_exception,
+            _capture_metadata={
+                "level": "error",
+                "source": "django.middleware",
+                "mechanism": {"type": "middleware", "handled": False},
+            },
+        )
 
     def test_process_exception_respects_capture_exceptions_false(self):
         """Verify process_exception respects capture_exceptions=False setting"""
@@ -445,7 +456,14 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
         if hasattr(middleware, "process_exception"):
             exception = ValueError("View error")
             middleware.process_exception(request, exception)
-            mock_client.capture_exception.assert_called_once_with(exception)
+            mock_client.capture_exception.assert_called_once_with(
+                exception,
+                _capture_metadata={
+                    "level": "error",
+                    "source": "django.middleware",
+                    "mechanism": {"type": "middleware", "handled": False},
+                },
+            )
         else:
             self.fail(
                 "process_exception missing - view exceptions will not be captured!"
@@ -454,6 +472,12 @@ class TestPosthogContextMiddlewareSync(unittest.TestCase):
 
 class TestPosthogContextMiddlewareAsync(unittest.TestCase):
     """Test asynchronous middleware behavior"""
+
+    def setUp(self):
+        # Header propagation tests explicitly opt in to analytics attribution.
+        configuration = override_settings(POSTHOG_MW_CAPTURE_TRACING_HEADERS=True)
+        configuration.enable()
+        self.addCleanup(configuration.disable)
 
     def test_async_middleware_detection(self):
         """Test that async get_response is correctly detected"""

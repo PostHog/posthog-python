@@ -174,6 +174,104 @@ def test_metadata_update_preserves_omission_null_and_false(scorers):
     assert json.loads(transport.request.call_args.kwargs["body"]) == {"name": "Renamed"}
 
 
+@pytest.mark.parametrize("tags", [[" Quality ", "production", "Quality"], (), []])
+@pytest.mark.parametrize("operation", ["create", "update"])
+def test_tags_are_mutable_metadata_with_normalized_response(scorers, tags, operation):
+    namespace, transport = scorers
+    normalized = sorted({tag.strip().lower() for tag in tags})
+    transport.request.return_value = scorer_response(tags=normalized)
+    if operation == "create":
+        scorer = invoke(
+            namespace.create, name="Quality", kind="numeric", config={}, tags=tags
+        )
+    else:
+        scorer = invoke(namespace.update, SCORER_ID, tags=tags)
+        assert json.loads(transport.request.call_args.kwargs["body"]) == {
+            "tags": list(tags)
+        }
+    assert json.loads(transport.request.call_args.kwargs["body"])["tags"] == list(tags)
+    assert transport.request.call_args.kwargs["retry_safe"] is False
+    assert scorer.tags == tuple(normalized)
+    assert scorer.current_version_id == VERSION_ID
+    normalized.append("later")
+    assert "later" not in scorer.tags
+    transport.request.assert_called_once()
+
+
+def test_scorer_tags_are_optional_for_older_servers(scorers):
+    namespace, _ = scorers
+    assert invoke(namespace.get, SCORER_ID).tags == ()
+
+
+@pytest.mark.parametrize("tags", [None, "quality", [None], [1], {}])
+def test_invalid_scorer_response_tags_raise(scorers, tags):
+    namespace, transport = scorers
+    transport.request.return_value = scorer_response(tags=tags)
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(namespace.get, SCORER_ID)
+    assert caught.value.code == "invalid_response"
+    assert caught.value.persistence == "unknown"
+
+
+@pytest.mark.parametrize("tag_match", ["any", "all"])
+@pytest.mark.parametrize("tags", [None, [], ("quality", 'a,b"c', "品質")])
+def test_scorer_list_tag_filters_use_json_and_preserve_other_filters(
+    scorers, tags, tag_match
+):
+    namespace, transport = scorers
+    transport.request.return_value = {
+        "count": 1,
+        "next": None,
+        "previous": None,
+        "results": [scorer_response(tags=["quality"])],
+    }
+    page = invoke(
+        namespace.list, tags=tags, tag_match=tag_match, offset=3, search="score"
+    )
+    params = transport.request.call_args.kwargs["params"]
+    if tags is None:
+        assert "tags" not in params
+    else:
+        assert json.loads(params["tags"]) == list(tags)
+    if tags is None and tag_match == "any":
+        assert "tag_match" not in params
+    else:
+        assert params["tag_match"] == tag_match
+    assert params["offset"] == 3
+    assert params["search"] == "score"
+    assert page.results[0].tags == ("quality",)
+
+
+@pytest.mark.parametrize("operation", ["create", "update", "list"])
+@pytest.mark.parametrize(
+    "tags", ["quality", {"quality": True}, [1], [None], [" "], ["x" * 256]]
+)
+def test_invalid_tag_names_fail_before_scorer_request(scorers, tags, operation):
+    namespace, transport = scorers
+    with pytest.raises(ValueError):
+        if operation == "create":
+            invoke(namespace.create, name="Score", kind="numeric", config={}, tags=tags)
+        elif operation == "update":
+            invoke(namespace.update, SCORER_ID, tags=tags)
+        else:
+            invoke(namespace.list, tags=tags)
+    transport.request.assert_not_called()
+
+
+def test_tag_count_limits_and_null_writes_are_rejected(scorers):
+    namespace, transport = scorers
+    for tags in (None, ["quality"] * 101):
+        with pytest.raises(ValueError):
+            invoke(namespace.create, name="Score", kind="numeric", config={}, tags=tags)
+        with pytest.raises(ValueError):
+            invoke(namespace.update, SCORER_ID, tags=tags)
+    with pytest.raises(ValueError):
+        invoke(namespace.list, tags=["quality"] * 21)
+    with pytest.raises(ValueError):
+        invoke(namespace.list, tag_match="invalid")
+    transport.request.assert_not_called()
+
+
 def test_version_bump_preserves_configuration_and_concurrency_guard(scorers):
     namespace, transport = scorers
     config = NumericScorerConfig(min=0, max=1)
@@ -326,6 +424,8 @@ def test_malformed_success_preserves_unknown_persistence(scorers, override):
         )
     assert caught.value.code == "invalid_response"
     assert caught.value.persistence == "unknown"
+    assert caught.value.detail == "The scorer API returned an invalid response."
+    assert caught.value.response == transport.request.return_value
     assert "Quality" not in str(caught.value)
     transport.request.assert_called_once()
 

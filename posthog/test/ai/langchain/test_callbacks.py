@@ -2716,16 +2716,26 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     assert span_props["$ai_error"] == "ValueError: test error"
 
 
-def test_exception_autocapture_disabled_does_not_capture():
-    """Test that capture_exception is NOT called when autocapture is disabled."""
+@pytest.mark.parametrize(
+    "autocapture, client_privacy_mode, handler_privacy_mode, expected_error",
+    [
+        (False, False, False, "ValueError: test error"),
+        (True, True, False, "ValueError"),
+        (True, False, True, "ValueError"),
+    ],
+)
+def test_exception_autocapture_disabled_does_not_capture(
+    autocapture, client_privacy_mode, handler_privacy_mode, expected_error
+):
+    """capture_exception is skipped when autocapture is off or privacy mode is on."""
     mock_client = MagicMock()
-    mock_client.privacy_mode = False
-    mock_client.enable_exception_autocapture = False
+    mock_client.privacy_mode = client_privacy_mode
+    mock_client.enable_exception_autocapture = autocapture
 
     def failing_span(_):
         raise ValueError("test error")
 
-    callbacks = [CallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client, privacy_mode=handler_privacy_mode)]
     chain = RunnableLambda(failing_span)
 
     try:
@@ -2746,7 +2756,7 @@ def test_exception_autocapture_disabled_does_not_capture():
 
     span_props = span_calls[0][1]["properties"]
     assert "$exception_event_id" not in span_props
-    assert span_props["$ai_error"] == "ValueError: test error"
+    assert span_props["$ai_error"] == expected_error
 
 
 def test_exception_autocapture_on_llm_generation_error(mock_client):
@@ -2953,3 +2963,115 @@ def test_stop_reason_resolution(
 
     props = mock_client.capture.call_args.kwargs["properties"]
     assert props.get("$ai_stop_reason") == expected
+
+
+@pytest.mark.parametrize(
+    "server_tool_use,expected",
+    [
+        # Anthropic reports the exact number of searches
+        ({"web_search_requests": 2}, 2),
+        # no search is not worth an event property
+        ({"web_search_requests": 0}, None),
+        # the provider reports nothing
+        (None, None),
+    ],
+)
+def test_web_search_count(mock_client, server_tool_use, expected):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet"},
+    )
+    usage = {"input_tokens": 10, "output_tokens": 5}
+    if server_tool_use is not None:
+        usage["server_tool_use"] = server_tool_use
+    # langchain-anthropic always sets usage_metadata on the message, which the
+    # generations loop prefers over llm_output["usage"]
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="r",
+                        usage_metadata={
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    )
+                )
+            ]
+        ],
+        llm_output={"usage": usage},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props.get("$ai_web_search_count") == expected
+
+
+class TestGetHttpStatus:
+    def test_uses_the_status_code_of_an_http_error(self):
+        from posthog.ai.langchain.callbacks import _get_http_status
+
+        error = Exception("rate limited")
+        error.status_code = 429  # type: ignore[attr-defined]
+
+        assert _get_http_status(error) == 429
+
+    def test_uses_an_integer_code_when_there_is_no_status_code(self):
+        from posthog.ai.langchain.callbacks import _get_http_status
+
+        error = Exception("quota")
+        error.code = 503  # type: ignore[attr-defined]
+
+        assert _get_http_status(error) == 503
+
+    def test_ignores_a_string_code(self):
+        """OpenAI's APIError carries code="rate_limit_exceeded" and no status code."""
+        from posthog.ai.langchain.callbacks import _get_http_status
+
+        error = Exception("Rate limit reached")
+        error.code = "rate_limit_exceeded"  # type: ignore[attr-defined]
+
+        assert _get_http_status(error) == 0
+
+    def test_falls_back_to_zero_without_a_status(self):
+        from posthog.ai.langchain.callbacks import _get_http_status
+
+        assert _get_http_status(Exception("boom")) == 0
+
+    def test_an_error_event_records_an_integer_status(self):
+        import httpx
+        import openai
+        from unittest.mock import MagicMock
+        from uuid import uuid4
+
+        from posthog.ai.langchain import CallbackHandler
+
+        client = MagicMock()
+        client.privacy_mode = False
+        callback = CallbackHandler(client)
+        run_id = uuid4()
+        callback._set_llm_metadata(
+            serialized={},
+            run_id=run_id,
+            messages=[{"role": "user", "content": "test"}],
+            metadata={"ls_provider": "openai", "ls_model_name": "gpt-5.6-sol"},
+        )
+        error = openai.APIError(
+            "Rate limit reached",
+            request=httpx.Request("POST", "https://api.openai.com/v1/chat/completions"),
+            body={"code": "rate_limit_exceeded", "message": "Rate limit reached"},
+        )
+
+        callback._pop_run_and_capture_generation(run_id, None, error)
+
+        properties = client.capture.call_args_list[0][1]["properties"]
+        assert properties["$ai_http_status"] == 0

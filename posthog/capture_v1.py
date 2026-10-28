@@ -347,7 +347,7 @@ def _post_v1(
     attempt: int,
     request_id: str,
     compression: CaptureCompression = CaptureCompression.NONE,
-    timeout: int = 15,
+    timeout: float = 15,
     sdk_info: str = USER_AGENT,
     session: Optional["requests.Session"] = None,
 ) -> "requests.Response":
@@ -468,7 +468,7 @@ def _send_v1_batch(
     batch: list[dict],
     *,
     compression: CaptureCompression = CaptureCompression.NONE,
-    timeout: int = 15,
+    timeout: float = 15,
     max_retries: int = 3,
     historical_migration: bool = False,
     sdk_info: str = USER_AGENT,

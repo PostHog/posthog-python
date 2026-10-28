@@ -1,8 +1,13 @@
-import re
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Any, Optional, cast
 
 from .. import contexts
 from ..client import Client
+from ..tracing._context import _enrich_current_span
+from ..exception_utils import (
+    _ExceptionCaptureMetadata,
+    _capture_exception_with_metadata,
+)
+from ._tracing_headers import _apply_tracing_headers, _resolve_capture_tracing_headers
 
 try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
@@ -23,35 +28,6 @@ if TYPE_CHECKING:
     from typing import Callable, Dict, Any, Union, Awaitable  # noqa: F401
 
 
-_MAX_TRACING_HEADER_LENGTH = 1000
-_TRACING_HEADER_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def _sanitize_tracing_header_value(value) -> Optional[str]:
-    """Return a safe tracing header value, or None if the value is invalid.
-
-    Tracing headers come from user-controlled HTTP requests and are copied into event properties.
-    Match the PostHog app's header sanitization: accept strings only, remove C0/C1 control
-    characters, trim surrounding whitespace, cap length, and drop empty results.
-    """
-    if not isinstance(value, str) or not value:
-        return None
-
-    return (
-        _TRACING_HEADER_CONTROL_CHARS_RE.sub("", value).strip()[
-            :_MAX_TRACING_HEADER_LENGTH
-        ]
-        or None
-    )
-
-
-def _get_sanitized_tracing_header(request, header_name) -> Optional[str]:
-    try:
-        return _sanitize_tracing_header_value(request.headers.get(header_name))
-    except Exception:
-        return None
-
-
 class PosthogContextMiddleware:
     """Middleware to automatically track Django requests.
 
@@ -65,18 +41,29 @@ class PosthogContextMiddleware:
     - Forwarded IP address as `$ip`
     - User agent as `$user_agent`
 
-    The context will also auto-capture exceptions and send them to PostHog, unless you disable it by setting
-    `POSTHOG_MW_CAPTURE_EXCEPTIONS` to `False` in your Django settings. The exceptions are captured using the
-    global client, unless the setting `POSTHOG_MW_CLIENT` is set to a custom client instance
+    Configure the integration with these Django settings:
+    - `POSTHOG_MW_CLIENT`: client used for automatic exception capture, or the global client.
+      This does not redirect events explicitly captured through other clients.
+    - `POSTHOG_MW_CAPTURE_EXCEPTIONS`: `False` enables context enrichment only;
+      `True` enables automatic exception capture; `None` inherits the effective client's
+      `enable_exception_autocapture`. When omitted, the legacy default is `True`.
+    - `POSTHOG_MW_REQUEST_FILTER`: a callback receiving the request. Returning `False`
+      disables both enrichment and automatic exception capture for that request.
+    - `POSTHOG_MW_EXTRA_PROPERTIES`: a callback returning additional event properties.
+    - `POSTHOG_MW_CAPTURE_TRACING_HEADERS`: read PostHog identity and session headers
+      as request-scoped analytics context (default: `True`). Explicit capture IDs and
+      event properties take precedence. These values are never authentication or
+      authorization. Authenticated Django user identity remains the fallback when no
+      usable header ID is available or header capture is disabled.
+    - `POSTHOG_MW_TRUST_TRACING_HEADERS`: deprecated alias for
+      `POSTHOG_MW_CAPTURE_TRACING_HEADERS`; the capture-named setting takes precedence.
+    - `POSTHOG_MW_PROPERTIES_MAP`: an optional callback transforming request properties.
 
-    The middleware behaviour is customisable through 3 additional functions:
-    - `POSTHOG_MW_EXTRA_TAGS`, which is a Callable[[HttpRequest], Dict[str, Any]] expected to return a dictionary of additional tags to be added to the context.
-    - `POSTHOG_MW_REQUEST_FILTER`, which is a Callable[[HttpRequest], bool] expected to return `False` if the request should not be tracked.
-    - `POSTHOG_MW_TAG_MAP`, which is a Callable[[Dict[str, Any]], Dict[str, Any]], which you can use to modify the tags before they're added to the context.
+    The old `POSTHOG_MW_EXTRA_TAGS` and `POSTHOG_MW_TAG_MAP` settings remain aliases;
+    the property-named settings take precedence when both are configured.
 
-    You can use the `POSTHOG_MW_TAG_MAP` function to remove any default tags you don't want to capture, or override them with your own values.
-
-    Context tags are automatically included as properties on all events captured within a context, including exceptions.
+    Request properties are included on all events captured within the active context,
+    including when automatic exception capture is disabled.
     See the context documentation for more information. The extracted distinct ID and session ID,
     if found, are used to associate all events captured in the middleware context with the same distinct ID
     and session as currently active on the frontend. See the documentation for `set_context_session`
@@ -109,15 +96,16 @@ class PosthogContextMiddleware:
 
         from django.conf import settings
 
-        if hasattr(settings, "POSTHOG_MW_EXTRA_TAGS") and callable(
-            settings.POSTHOG_MW_EXTRA_TAGS
-        ):
-            self.extra_tags = cast(
-                "Optional[Callable[[HttpRequest], Dict[str, Any]]]",
-                settings.POSTHOG_MW_EXTRA_TAGS,
-            )
-        else:
-            self.extra_tags = None
+        extra_properties = (
+            settings.POSTHOG_MW_EXTRA_PROPERTIES
+            if hasattr(settings, "POSTHOG_MW_EXTRA_PROPERTIES")
+            else getattr(settings, "POSTHOG_MW_EXTRA_TAGS", None)
+        )
+        self.extra_properties = (
+            cast("Callable[[HttpRequest], Dict[str, Any]]", extra_properties)
+            if callable(extra_properties)
+            else None
+        )
 
         if hasattr(settings, "POSTHOG_MW_REQUEST_FILTER") and callable(
             settings.POSTHOG_MW_REQUEST_FILTER
@@ -129,22 +117,35 @@ class PosthogContextMiddleware:
         else:
             self.request_filter = None
 
-        if hasattr(settings, "POSTHOG_MW_TAG_MAP") and callable(
-            settings.POSTHOG_MW_TAG_MAP
-        ):
-            self.tag_map = cast(
-                "Optional[Callable[[Dict[str, Any]], Dict[str, Any]]]",
-                settings.POSTHOG_MW_TAG_MAP,
-            )
-        else:
-            self.tag_map = None
+        properties_map = (
+            settings.POSTHOG_MW_PROPERTIES_MAP
+            if hasattr(settings, "POSTHOG_MW_PROPERTIES_MAP")
+            else getattr(settings, "POSTHOG_MW_TAG_MAP", None)
+        )
+        self.properties_map = (
+            cast("Callable[[Dict[str, Any]], Dict[str, Any]]", properties_map)
+            if callable(properties_map)
+            else None
+        )
 
-        if hasattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS") and isinstance(
-            settings.POSTHOG_MW_CAPTURE_EXCEPTIONS, bool
-        ):
-            self.capture_exceptions = settings.POSTHOG_MW_CAPTURE_EXCEPTIONS
-        else:
-            self.capture_exceptions = True
+        capture_exceptions = getattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS", True)
+        self.capture_exceptions: Optional[bool] = (
+            capture_exceptions
+            if capture_exceptions is None or isinstance(capture_exceptions, bool)
+            else True
+        )
+        capture_tracing_headers = getattr(
+            settings, "POSTHOG_MW_CAPTURE_TRACING_HEADERS", None
+        )
+        trust_tracing_headers = getattr(
+            settings, "POSTHOG_MW_TRUST_TRACING_HEADERS", None
+        )
+        self.capture_tracing_headers = _resolve_capture_tracing_headers(
+            capture_tracing_headers,
+            trust_tracing_headers,
+            canonical_name="POSTHOG_MW_CAPTURE_TRACING_HEADERS",
+            deprecated_name="POSTHOG_MW_TRUST_TRACING_HEADERS",
+        )
 
         if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
             settings.POSTHOG_MW_CLIENT, Client
@@ -153,9 +154,41 @@ class PosthogContextMiddleware:
         else:
             self.client = None
 
+    @property
+    def trust_tracing_headers(self) -> bool:
+        """Deprecated alias for ``capture_tracing_headers``."""
+        return self.capture_tracing_headers
+
+    @trust_tracing_headers.setter
+    def trust_tracing_headers(self, enabled: bool) -> None:
+        self.capture_tracing_headers = enabled
+
+    @property
+    def extra_tags(self):
+        """Compatibility alias for ``extra_properties``."""
+        return self.extra_properties
+
+    @extra_tags.setter
+    def extra_tags(self, callback):
+        self.extra_properties = callback
+
+    @property
+    def tag_map(self):
+        """Compatibility alias for ``properties_map``."""
+        return self.properties_map
+
+    @tag_map.setter
+    def tag_map(self, callback):
+        self.properties_map = callback
+
     def extract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
-        """Extract tags from request in sync context."""
+        """Compatibility alias for ``extract_properties``."""
+        return self.extract_properties(request)
+
+    def extract_properties(self, request):
+        # type: (HttpRequest) -> Dict[str, Any]
+        """Extract event properties and identity from a synchronous request."""
         user_id, user_email = self.extract_request_user(request)
         return self._build_tags(request, user_id, user_email)
 
@@ -168,17 +201,11 @@ class PosthogContextMiddleware:
         """
         tags = {}
 
-        # Extract session ID from X-POSTHOG-SESSION-ID header
-        session_id = _get_sanitized_tracing_header(request, "X-POSTHOG-SESSION-ID")
-        if session_id:
-            contexts.set_context_session(session_id)
-
-        # Extract distinct ID from X-POSTHOG-DISTINCT-ID header or request user id
-        distinct_id = (
-            _get_sanitized_tracing_header(request, "X-POSTHOG-DISTINCT-ID") or user_id
+        _apply_tracing_headers(
+            request.headers.get,
+            self.capture_tracing_headers,
+            fallback_distinct_id=user_id,
         )
-        if distinct_id:
-            contexts.identify_context(distinct_id)
 
         # Extract user email
         if user_email:
@@ -209,15 +236,14 @@ class PosthogContextMiddleware:
             tags["$user_agent"] = user_agent
             tags["$raw_user_agent"] = user_agent
 
-        # Apply extra tags if configured
-        if self.extra_tags:
-            extra = self.extra_tags(request)
+        # Apply application-specific properties, then the optional transform.
+        if self.extra_properties:
+            extra = self.extra_properties(request)
             if extra:
                 tags.update(extra)
 
-        # Apply tag mapping if configured
-        if self.tag_map:
-            tags = self.tag_map(tags)
+        if self.properties_map:
+            tags = self.properties_map(tags)
 
         return tags
 
@@ -229,8 +255,13 @@ class PosthogContextMiddleware:
 
     async def aextract_tags(self, request):
         # type: (HttpRequest) -> Dict[str, Any]
+        """Compatibility alias for ``aextract_properties``."""
+        return await self.aextract_properties(request)
+
+    async def aextract_properties(self, request):
+        # type: (HttpRequest) -> Dict[str, Any]
         """
-        Async version of extract_tags for use in async request handling.
+        Async version of extract_properties for use in async request handling.
 
         Uses await request.auser() instead of request.user to avoid
         SynchronousOnlyOperation in async context.
@@ -318,6 +349,7 @@ class PosthogContextMiddleware:
                 for k, v in self.extract_tags(request).items():
                     contexts.tag(k, v)
 
+                _enrich_current_span()
                 return self.get_response(request)
 
     async def __acall__(self, request):
@@ -338,6 +370,7 @@ class PosthogContextMiddleware:
             for k, v in (await self.aextract_tags(request)).items():
                 contexts.tag(k, v)
 
+            _enrich_current_span()
             return await self.get_response(request)
 
     def process_exception(self, request, exception):
@@ -357,14 +390,24 @@ class PosthogContextMiddleware:
         if self.request_filter and not self.request_filter(request):
             return
 
-        if not self.capture_exceptions:
+        capture_exceptions = (
+            self.capture_exceptions
+            if self.capture_exceptions is not None
+            else contexts._default_capture_exceptions(self.client)
+        )
+        if not capture_exceptions:
             return
 
         # Context and tags already set by __call__ or __acall__
         # Just capture the exception
+        capture_metadata: _ExceptionCaptureMetadata = {
+            "level": "error",
+            "source": "django.middleware",
+            "mechanism": {"type": "middleware", "handled": False},
+        }
         if self.client:
-            self.client.capture_exception(exception)
+            _capture_exception_with_metadata(self.client, exception, capture_metadata)
         else:
-            from posthog import capture_exception
+            from .. import capture_exception
 
-            capture_exception(exception)
+            cast(Any, capture_exception)(exception, _capture_metadata=capture_metadata)

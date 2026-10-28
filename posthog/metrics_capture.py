@@ -12,6 +12,11 @@ Deliberately unlike event capture, no per-user context (distinct ID, session)
 is attached: every attribute value creates a new series, and per-user series
 are the canonical metrics-cardinality explosion.
 
+A sample recorded inside a sampled span (a PostHog ``start_span`` span, or the
+current OpenTelemetry span) stamps its series with an exemplar: the trace and
+span IDs plus the value. One exemplar per series per window, last sample wins,
+so a metric point links to one representative trace at no cardinality cost.
+
 Delivery is at-least-once: a request that succeeds server-side but fails
 client-side (e.g. a read timeout) is retried with the next window, which can
 double-count that window's deltas. Failed flushes retry with exponential
@@ -36,6 +41,8 @@ import requests
 from posthog.request import _get_session
 from posthog.utils import remove_trailing_slash
 from posthog.version import VERSION
+
+from .tracing._traceparent import TRACE_FLAGS_SAMPLED, parse_traceparent
 
 log = logging.getLogger("posthog")
 
@@ -74,6 +81,8 @@ _MAX_RETRY_BACKOFF_MULTIPLIER = 64
 _DEFAULT_FLUSH_INTERVAL_SECONDS = 10.0
 _DEFAULT_MAX_SERIES_PER_FLUSH = 1000
 _SCOPE_NAME = "posthog-python"
+# None until the first lookup; False when opentelemetry-api is not installed.
+_otel_trace: Any = None
 
 
 def _snapshot_attribute_value(value: Any) -> Any:
@@ -135,6 +144,52 @@ def _bucket_index_for(value: float, bounds: list) -> int:
     return len(bounds)
 
 
+def _parse_sampled_traceparent(value: Any) -> Optional[tuple[str, str]]:
+    """The (trace_id, span_id) of a sampled W3C ``traceparent``, or None."""
+    context = parse_traceparent(value)
+    if context is None or context.flags != TRACE_FLAGS_SAMPLED:
+        return None
+    return context.trace_id, context.span_id
+
+
+def _otel_trace_module() -> Any:
+    global _otel_trace
+    if _otel_trace is None:
+        try:
+            from opentelemetry import trace
+
+            _otel_trace = trace
+        except ImportError:
+            _otel_trace = False
+    return _otel_trace
+
+
+def _active_trace_context(client: Any) -> Optional[tuple[str, str]]:
+    """The sampled span a sample is recorded in: PostHog's own active span first,
+    then the current OpenTelemetry span. An unsampled span is never exported, so
+    an exemplar pointing at it would link to a trace that does not exist."""
+    try:
+        get_active_span = getattr(client, "get_active_span", None)
+        span = get_active_span() if callable(get_active_span) else None
+        if span is not None:
+            # A PostHog span is active, so it is the innermost context; an
+            # unsampled one must not fall through to an outer OTel span.
+            return _parse_sampled_traceparent(span.traceparent())
+    except Exception:
+        pass
+
+    trace = _otel_trace_module()
+    if not trace:
+        return None
+    try:
+        span_context = trace.get_current_span().get_span_context()
+        if not span_context.is_valid or not span_context.trace_flags.sampled:
+            return None
+        return f"{span_context.trace_id:032x}", f"{span_context.span_id:016x}"
+    except Exception:
+        return None
+
+
 def _series_key(
     metric_type: str, name: str, unit: Optional[str], attributes: Optional[dict]
 ) -> str:
@@ -153,6 +208,24 @@ def _series_key(
     return "\x00".join((metric_type, name, unit or "", attrs_part))
 
 
+def _build_exemplars(exemplar: Optional[dict]) -> dict:
+    # Spread into the data point, so a point without an exemplar keeps its
+    # exact pre-exemplar wire shape. OTLP/JSON encodes trace and span IDs as hex.
+    if exemplar is None:
+        return {}
+    return {
+        "exemplars": [
+            {
+                "filteredAttributes": [],
+                "timeUnixNano": _ms_to_unix_nano(exemplar["time_ms"]),
+                "asDouble": exemplar["value"],
+                "traceId": exemplar["trace_id"],
+                "spanId": exemplar["span_id"],
+            }
+        ]
+    }
+
+
 class _SeriesState:
     __slots__ = (
         "name",
@@ -163,6 +236,7 @@ class _SeriesState:
         "total",
         "last",
         "hist",
+        "exemplar",
     )
 
     def __init__(
@@ -195,6 +269,7 @@ class _SeriesState:
         self.total: Optional[float] = None
         self.last: Optional[float] = None
         self.hist: Optional[dict] = None
+        self.exemplar: Optional[dict] = None
 
 
 class PostHogMetrics:
@@ -412,6 +487,7 @@ class PostHogMetrics:
             # series identity too — otherwise two indistinguishable data points emit.
             attributes = {k: v for k, v in attributes.items() if v is not None}
         key = _series_key(metric_type, name, unit, attributes)
+        trace_context = _active_trace_context(self._client)
 
         with self._lock:
             self._reset_after_fork_locked()
@@ -446,6 +522,13 @@ class PostHogMetrics:
                 )
 
             self._fold(state, float(value))
+            if trace_context is not None:
+                state.exemplar = {
+                    "trace_id": trace_context[0],
+                    "span_id": trace_context[1],
+                    "value": float(value),
+                    "time_ms": int(time.time() * 1000),
+                }
             self._arm_flush_timer()
 
     def _reinit_after_fork(self) -> None:
@@ -641,6 +724,9 @@ class PostHogMetrics:
                 self._series[key] = old
                 continue
             current.window_start_ms = min(current.window_start_ms, old.window_start_ms)
+            # The live window's exemplar is newer; the old one only fills a gap.
+            if current.exemplar is None:
+                current.exemplar = old.exemplar
             if current.type == "count":
                 current.total = (current.total or 0.0) + (old.total or 0.0)
             elif current.type == "histogram" and old.hist:
@@ -718,6 +804,7 @@ class PostHogMetrics:
 
             attributes = _to_otlp_key_value_list(state.attributes or {})
             start_nano = _ms_to_unix_nano(state.window_start_ms)
+            exemplars = _build_exemplars(state.exemplar)
 
             if state.type == "count":
                 metric["sum"]["dataPoints"].append(
@@ -726,6 +813,7 @@ class PostHogMetrics:
                         "startTimeUnixNano": start_nano,
                         "timeUnixNano": now_nano,
                         "asDouble": state.total or 0.0,
+                        **exemplars,
                     }
                 )
             elif state.type == "gauge":
@@ -734,6 +822,7 @@ class PostHogMetrics:
                         "attributes": attributes,
                         "timeUnixNano": now_nano,
                         "asDouble": state.last or 0.0,
+                        **exemplars,
                     }
                 )
             elif state.hist is not None:
@@ -751,6 +840,7 @@ class PostHogMetrics:
                         "max": state.hist["max"],
                         "bucketCounts": state.hist["bucket_counts"],
                         "explicitBounds": DEFAULT_HISTOGRAM_BOUNDS,
+                        **exemplars,
                     }
                 )
 

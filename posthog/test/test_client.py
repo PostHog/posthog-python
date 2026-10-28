@@ -24,6 +24,7 @@ from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
+from posthog.utils import RedisFlagCache
 from posthog.version import VERSION
 from posthog.contexts import tag
 
@@ -572,6 +573,45 @@ class TestClient(unittest.TestCase):
             capture_call = patch_capture.call_args
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
+
+    def test_reserved_exception_property_overrides_are_deprecated(self):
+        custom_exception_list = [{"type": "CustomError", "value": "custom"}]
+        properties = {
+            "$exception_list": custom_exception_list,
+            "$exception_level": "warning",
+            "$exception_source": "custom.source",
+            "$exception_issue_id": "legacy-issue-id",
+        }
+
+        with (
+            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
+            self.assertWarnsRegex(
+                DeprecationWarning,
+                "Reserved exception properties.*next major version",
+            ),
+        ):
+            self.client.capture_exception(
+                Exception("test exception"), properties=properties
+            )
+
+        captured_properties = patch_capture.call_args.kwargs["properties"]
+        self.assertIs(captured_properties["$exception_list"], custom_exception_list)
+        self.assertEqual(captured_properties["$exception_level"], "warning")
+        self.assertEqual(captured_properties["$exception_source"], "custom.source")
+        self.assertEqual(captured_properties["$exception_issue_id"], "legacy-issue-id")
+
+    def test_reserved_exception_property_warning_cannot_drop_the_event(self):
+        with (
+            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("error", DeprecationWarning)
+            self.client.capture_exception(
+                Exception("test exception"),
+                properties={"$exception_level": "warning"},
+            )
+
+        patch_capture.assert_called_once()
 
     @parameterized.expand(
         [
@@ -2549,6 +2589,32 @@ class TestClient(unittest.TestCase):
         client.shutdown()
 
         self.assertEqual(len(client.distinct_ids_feature_flags_reported), 0)
+
+    @parameterized.expand(
+        [
+            ("redis://localhost:6379/0/?ttl=120", "redis://localhost:6379/0/"),
+            (
+                "rediss://user:secret@cache.example.com:6380/1?ttl=120",
+                "rediss://user:secret@cache.example.com:6380/1",
+            ),
+        ]
+    )
+    def test_flag_fallback_cache_url_accepts_redis_schemes(
+        self, cache_url, expected_redis_url
+    ):
+        fake_redis = mock.Mock()
+        with mock.patch.dict(sys.modules, {"redis": fake_redis}):
+            client = Client(
+                FAKE_TEST_API_KEY,
+                send=False,
+                thread=0,
+                flag_fallback_cache_url=cache_url,
+            )
+
+        fake_redis.from_url.assert_called_once_with(expected_redis_url)
+        self.assertIsInstance(client.flag_cache, RedisFlagCache)
+        self.assertEqual(client.flag_cache.default_ttl, 120)
+        client.shutdown()
 
     def test_shutdown_flushes_without_timeout(self):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)

@@ -47,7 +47,10 @@ from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
     finalize_ai_content,
+    _format_ai_error,
     get_model_params,
+    _privacy_mode_enabled,
+    _redact_mcp_tool_credentials,
     _responses_stop_reason,
     with_privacy_mode,
 )
@@ -560,14 +563,12 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties.update(self._properties)
 
         if isinstance(outputs, BaseException):
-            event_properties["$ai_error"] = _stringify_exception(outputs)
+            event_properties["$ai_error"] = _format_ai_error(
+                self._ph_client, self._privacy_mode, outputs, _stringify_exception
+            )
             event_properties["$ai_is_error"] = True
-            event_properties = _capture_exception_and_update_properties(
-                self._ph_client,
-                outputs,
-                self._distinct_id,
-                self._groups,
-                event_properties,
+            event_properties = self._capture_exception_and_update_properties(
+                outputs, event_properties
             )
 
         elif outputs is not None:
@@ -587,6 +588,25 @@ class CallbackHandler(BaseCallbackHandler):
             properties=event_properties,
             groups=self._groups,
         )
+
+    def _capture_exception_and_update_properties(
+        self, exception: BaseException, event_properties: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        # An `$exception` event carries the message and stack, which echo prompts and output.
+        if not self._ph_client.enable_exception_autocapture or _privacy_mode_enabled(
+            self._ph_client, self._privacy_mode
+        ):
+            return event_properties
+
+        exception_id = self._ph_client.capture_exception(
+            exception,
+            distinct_id=self._distinct_id,
+            groups=self._groups,
+            properties=event_properties,
+        )
+        if exception_id:
+            event_properties["$exception_event_id"] = exception_id
+        return event_properties
 
     def _pop_run_and_capture_generation(
         self,
@@ -657,7 +677,7 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties.update(run.posthog_properties)
 
         if run.tools:
-            event_properties["$ai_tools"] = run.tools
+            event_properties["$ai_tools"] = _redact_mcp_tool_credentials(run.tools)
 
         if self._properties:
             event_properties.update(self._properties)
@@ -667,15 +687,13 @@ class CallbackHandler(BaseCallbackHandler):
 
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
-            event_properties["$ai_error"] = _stringify_exception(output)
+            event_properties["$ai_error"] = _format_ai_error(
+                self._ph_client, self._privacy_mode, output, _stringify_exception
+            )
             event_properties["$ai_is_error"] = True
 
-            event_properties = _capture_exception_and_update_properties(
-                self._ph_client,
-                output,
-                self._distinct_id,
-                self._groups,
-                event_properties,
+            event_properties = self._capture_exception_and_update_properties(
+                output, event_properties
             )
         else:
             # Add usage
@@ -706,6 +724,8 @@ class CallbackHandler(BaseCallbackHandler):
                 )
             if usage.reasoning_tokens is not None:
                 event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
+            if usage.web_search_count is not None and usage.web_search_count > 0:
+                event_properties["$ai_web_search_count"] = usage.web_search_count
 
             # Generation results
             generation_result = output.generations[-1]
@@ -838,6 +858,23 @@ class ModelUsage:
     reasoning_tokens: Optional[int]
     cache_write_5m_tokens: Optional[int] = None
     cache_write_1h_tokens: Optional[int] = None
+    web_search_count: Optional[int] = None
+
+
+def _extract_web_search_requests(usage: Union[BaseModel, dict]) -> Optional[int]:
+    if isinstance(usage, BaseModel):
+        usage = usage.__dict__
+    server_tool_use = usage.get("server_tool_use")
+    web_search_requests = (
+        server_tool_use.get("web_search_requests")
+        if isinstance(server_tool_use, dict)
+        else getattr(server_tool_use, "web_search_requests", None)
+    )
+    if isinstance(web_search_requests, int) and not isinstance(
+        web_search_requests, bool
+    ):
+        return web_search_requests
+    return None
 
 
 def _parse_usage_model(
@@ -906,6 +943,11 @@ def _parse_usage_model(
     ):
         parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
 
+    # Anthropic reports the exact number of web searches of a response
+    web_search_requests = _extract_web_search_requests(usage)
+    if web_search_requests is not None:
+        parsed_usage["web_search"] = web_search_requests
+
     field_mapping = {
         "input": "input_tokens",
         "output": "output_tokens",
@@ -920,6 +962,7 @@ def _parse_usage_model(
         },
         cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),
         cache_write_1h_tokens=parsed_usage.get("cache_write_1h"),
+        web_search_count=parsed_usage.get("web_search"),
     )
     # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
     # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
@@ -957,11 +1000,18 @@ def _parse_usage(
         reasoning_tokens=None,
     )
 
+    # The generations loop below can replace the llm_output usage, which is the
+    # only place langchain-anthropic reports server_tool_use, so read it here.
+    web_search_count: Optional[int] = None
+
     if response.llm_output is not None:
         for key in llm_usage_keys:
             if response.llm_output.get(key):
                 llm_usage = _parse_usage_model(
                     response.llm_output[key], provider, model
+                )
+                web_search_count = _extract_web_search_requests(
+                    response.llm_output[key]
                 )
                 break
 
@@ -1008,36 +1058,22 @@ def _parse_usage(
                     llm_usage = _parse_usage_model(chunk_usage, provider, model)
                     break
 
+    if llm_usage.web_search_count is None:
+        llm_usage.web_search_count = web_search_count
+
     return llm_usage
-
-
-def _capture_exception_and_update_properties(
-    client: Client,
-    exception: BaseException,
-    distinct_id: Optional[Union[str, int, UUID]],
-    groups: Optional[Dict[str, Any]],
-    event_properties: Dict[str, Any],
-):
-    if client.enable_exception_autocapture:
-        exception_id = client.capture_exception(
-            exception,
-            distinct_id=distinct_id,
-            groups=groups,
-            properties=event_properties,
-        )
-
-        if exception_id:
-            event_properties["$exception_event_id"] = exception_id
-
-    return event_properties
 
 
 def _get_http_status(error: BaseException) -> int:
     # OpenAI: https://github.com/openai/openai-python/blob/main/src/openai/_exceptions.py
     # Anthropic: https://github.com/anthropics/anthropic-sdk-python/blob/main/src/anthropic/_exceptions.py
     # Google: https://github.com/googleapis/python-api-core/blob/main/google/api_core/exceptions.py
-    status_code = getattr(error, "status_code", getattr(error, "code", 0))
-    return status_code
+    # `code` is a string on some errors (OpenAI's "rate_limit_exceeded"), so only ints count
+    for attribute in ("status_code", "code"):
+        value = getattr(error, attribute, None)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return 0
 
 
 def _get_langchain_run_name(

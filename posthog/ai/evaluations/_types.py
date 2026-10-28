@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from typing_extensions import TypedDict
 
+from ._dataset_types import DatasetItem
 from ._errors import EvaluationAPIError
 from ._serialization import (
     JSONValue,
@@ -82,6 +83,8 @@ class EvaluationItem:
     Payload values are copied as JSON. Omitted fields differ from explicit None.
     Use ``payload={}`` for an explicitly empty payload. Save ``to_dict()`` to
     restore exactly the same declaration after restarting the process.
+    ``model_version`` identifies this execution's model and overrides the
+    experiment default. Omit it or pass None to inherit the default on the server.
     """
 
     id: str
@@ -101,6 +104,7 @@ class EvaluationItem:
         dataset_item_version_identifier: str | None = None,
         dataset_item_version_id: str | UUID | None = None,
         application_trace_id: str | None = None,
+        model_version: str | None = None,
         payload: dict[str, JSONValue] | _Unset = _UNSET,
     ) -> None:
         identity = _uuid(uuid4() if id is None else id)
@@ -111,6 +115,7 @@ class EvaluationItem:
             "dataset_item_identifier": dataset_item_identifier,
             "dataset_item_version_identifier": dataset_item_version_identifier,
             "application_trace_id": application_trace_id,
+            "model_version": model_version,
         }.items():
             if value is not None:
                 data[key] = _identifier(value, key)
@@ -134,6 +139,49 @@ class EvaluationItem:
     def to_dict(self) -> dict[str, Any]:
         """Return a defensive, JSON-serializable copy of the complete declaration."""
         return json.loads(self._json)
+
+    @classmethod
+    def from_dataset_item(
+        cls,
+        item: DatasetItem,
+        *,
+        output: JSONValue | _Unset = _UNSET,
+        id: str | UUID | None = None,
+        case_key: str | None = None,
+        trial: str | None = None,
+        application_trace_id: str | None = None,
+        model_version: str | None = None,
+    ) -> EvaluationItem:
+        """Declare one execution of a dataset case, preserving its exact version.
+
+        Copies input, expected output, and metadata; supply the new execution's
+        output and trace ID. Source output/provenance are never substituted.
+        A fresh execution UUID is generated unless id is supplied. Reuse the
+        returned item across scorers; call again for each independent trial.
+        ``case_key`` defaults to the caller-owned client item ID, or stable item
+        UUID. Omit output for an execution that failed before producing one.
+        Use the owning snapshot's revision_id when creating the experiment.
+        Supply ``model_version`` for this execution's model; omitted or None
+        inherits the experiment default, never dataset metadata or source traces.
+        """
+        if not isinstance(item, DatasetItem):
+            raise TypeError("Expected a DatasetItem.")
+        if item.archived:
+            raise ValueError("Archived dataset items cannot be evaluated.")
+        return cls(
+            id=id,
+            input=item.input,
+            output=output,
+            expected_output=item.expected_output,
+            metadata=item.metadata,
+            case_key=(item.client_item_id or item.id) if case_key is None else case_key,
+            trial=trial,
+            dataset_item_identifier=item.id,
+            dataset_item_version_identifier=item.version_id,
+            dataset_item_version_id=item.version_id,
+            application_trace_id=application_trace_id,
+            model_version=model_version,
+        )
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> EvaluationItem:

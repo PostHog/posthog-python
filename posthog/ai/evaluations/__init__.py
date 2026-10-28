@@ -1,4 +1,4 @@
-"""Typed offline evaluation uploads, experiment lifecycle, and scorer management.
+"""Typed offline evaluation uploads, experiments, scorers, and dataset management.
 
 from posthog.ai.evaluations import OfflineEvaluations, EvaluationItem
 
@@ -10,6 +10,17 @@ with OfflineEvaluations(project_id=123, secret_key="phs_example") as evaluations
     # experiment.complete()
 """
 
+from ._async_datasets import AsyncDatasets, AsyncDatasetSnapshot
+from ._dataset_types import (
+    Dataset,
+    DatasetItem,
+    DatasetItemPage,
+    DatasetOrder,
+    DatasetPage,
+    DatasetRevision,
+    DatasetRevisionPage,
+)
+from ._datasets import Datasets, DatasetSnapshot
 from ._client import (
     AsyncExperiment,
     AsyncOfflineEvaluations,
@@ -51,6 +62,8 @@ from ._types import (
 )
 
 __all__ = [
+    "AsyncDatasets",
+    "AsyncDatasetSnapshot",
     "AsyncExperiment",
     "AsyncOfflineEvaluations",
     "AsyncScorers",
@@ -60,6 +73,15 @@ __all__ = [
     "CategoricalPassingRule",
     "CategoricalScorerConfig",
     "CategoricalScorerOption",
+    "Dataset",
+    "DatasetItem",
+    "DatasetItemPage",
+    "DatasetOrder",
+    "DatasetPage",
+    "DatasetRevision",
+    "DatasetRevisionPage",
+    "Datasets",
+    "DatasetSnapshot",
     "EvaluationAPIError",
     "EvaluationItem",
     "EvaluationResult",
