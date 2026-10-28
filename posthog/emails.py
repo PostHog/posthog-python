@@ -56,6 +56,12 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 - ``client_disabled``: the client is disabled, so it sends nothing.
 - ``client_closed``: the client is shut down.
 
+Status: ``emails.get(message_id)`` reads what happened to a sent email, for
+30 days after the send, as an :class:`EmailStatus`. A key with only
+``hog_flow:read`` can read statuses but not send. ``get`` raises ``not_found``
+(404) for an unknown ID, an email older than 30 days, or for a few seconds
+after the send.
+
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
 
@@ -77,6 +83,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from types import TracebackType
 from typing import Any, Callable, Mapping, Optional, TypeVar, Union
 from uuid import UUID, uuid4
@@ -93,11 +100,19 @@ from .request import (
 from .utils import clean
 from .version import VERSION
 
-__all__ = ["AsyncEmails", "EmailError", "EmailWarning", "Emails", "SendEmailResult"]
+__all__ = [
+    "AsyncEmails",
+    "EmailError",
+    "EmailStatus",
+    "EmailWarning",
+    "Emails",
+    "SendEmailResult",
+]
 
 log = logging.getLogger("posthog")
 
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
+_STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
@@ -154,6 +169,32 @@ class SendEmailResult:
 
 
 @dataclass(frozen=True)
+class EmailStatus:
+    """What happened to an email that ``send()`` queued.
+
+    ``status`` is one of:
+
+    - ``queued``: the email waits to go out.
+    - ``sent``: PostHog handed the email to the email provider.
+    - ``failed``: the email was not sent, and ``reason`` says why.
+    - ``delivered``: the recipient's mail server accepted the email.
+    - ``bounced`` and ``complained``: the recipient's mail provider reported
+      them after delivery.
+
+    Later SDK versions can see values this list does not have yet.
+    ``reason`` says why a failed email was not sent, such as
+    ``provider_error`` or ``recipient_suppressed``, or gives the bounce type of
+    a bounced email: ``hard``, ``soft`` or ``unknown``. It is ``None`` otherwise.
+    """
+
+    id: str
+    status: str
+    created_at: datetime
+    status_at: datetime
+    reason: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class _PreparedSend:
     path: str
     body: bytes
@@ -204,6 +245,16 @@ def _prepare_send(
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
     )
+
+
+def _status_path(message_id: Union[str, UUID]) -> str:
+    try:
+        message_uuid = message_id if isinstance(message_id, UUID) else UUID(message_id)
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(
+            "message_id must be the message ID that send() returned."
+        ) from None
+    return _STATUS_PATH.format(message_id=message_uuid)
 
 
 def _validate_options(timeout: float, max_retries: int) -> None:
@@ -298,8 +349,55 @@ def _parse_response(
                 if isinstance(warning, dict)
             ),
         )
+    raise _response_error(fields, status, retry_after_header)
+
+
+def _timestamp(value: Any) -> Optional[datetime]:
+    text = _text(value)
+    if text is None:
+        return None
+    try:
+        # fromisoformat reads a trailing Z only from Python 3.11.
+        return datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith("Z") else text
+        )
+    except ValueError:
+        return None
+
+
+def _parse_status_response(
+    status: int, payload: Any, retry_after_header: Optional[str]
+) -> EmailStatus:
+    fields = payload if isinstance(payload, dict) else {}
+    if not 200 <= status < 300:
+        raise _response_error(fields, status, retry_after_header)
+    message_id = _text(fields.get("id"))
+    delivery_status = _text(fields.get("status"))
+    created_at = _timestamp(fields.get("created_at"))
+    status_at = _timestamp(fields.get("status_at"))
+    if (
+        message_id is None
+        or delivery_status is None
+        or created_at is None
+        or status_at is None
+    ):
+        raise _sdk_error(
+            "api_error", "PostHog answered without an email status.", status
+        )
+    return EmailStatus(
+        id=message_id,
+        status=delivery_status,
+        created_at=created_at,
+        status_at=status_at,
+        reason=_text(fields.get("reason")),
+    )
+
+
+def _response_error(
+    fields: Mapping[str, Any], status: int, retry_after_header: Optional[str]
+) -> EmailError:
     code = _text(fields.get("code")) or "api_error"
-    raise EmailError(
+    return EmailError(
         name=_error_name(status, code),
         code=code,
         message=_text(fields.get("detail")) or f"PostHog answered HTTP {status}.",
@@ -313,7 +411,7 @@ def _parse_response(
 
 
 def _is_retryable(error: EmailError) -> bool:
-    # Every request carries an idempotency key, so a retry can't queue a second email.
+    # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
     if error.status_code is None:
         return error.code == "network_error"
     if error.status_code == 409:
@@ -342,19 +440,32 @@ def _log_warnings(result: SendEmailResult) -> None:
         log.warning("PostHog email warning %s: %s", warning.code, warning.message)
 
 
-def _headers(secret_key: str, idempotency_key: str) -> dict[str, str]:
-    return {
+def _headers(secret_key: str, idempotency_key: Optional[str]) -> dict[str, str]:
+    headers = {
         "Authorization": f"Bearer {secret_key}",
         "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Idempotency-Key": idempotency_key,
         "User-Agent": f"posthog-python/{VERSION}",
     }
+    if idempotency_key is not None:
+        headers["Content-Type"] = "application/json"
+        headers["Idempotency-Key"] = idempotency_key
+    return headers
+
+
+_SEND_NOT_DONE = "no email was sent"
+_GET_NOT_DONE = "no email status was read"
+_SEND_KEY_NEEDED = "Sending email needs secret_key, a project secret API key with the hog_flow:write scope."
+_GET_KEY_NEEDED = (
+    "Reading an email status needs secret_key, a project secret API key with the "
+    "hog_flow:read or hog_flow:write scope."
+)
+_ResultT = TypeVar("_ResultT")
+_Parse = Callable[[int, Any, Optional[str]], _ResultT]
 
 
 class _BearerAuth(requests.auth.AuthBase):
-    def __init__(self, secret_key: str, idempotency_key: str) -> None:
-        self._headers = _headers(secret_key, idempotency_key)
+    def __init__(self, headers: dict[str, str]) -> None:
+        self._headers = headers
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         # Setting auth explicitly stops requests from substituting .netrc credentials.
@@ -385,23 +496,23 @@ class _EmailsBase:
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()
 
-    def _start_send(self) -> Callable[[], None]:
+    def _start(self, not_done: str) -> Callable[[], None]:
+        if self._is_disabled():
+            raise _sdk_error(
+                "client_disabled", f"The PostHog client is disabled, so {not_done}."
+            )
         finish = self._admit()
         if finish is None:
             raise _sdk_error(
-                "client_closed",
-                "The PostHog client is shut down, so no email was sent.",
+                "client_closed", f"The PostHog client is shut down, so {not_done}."
             )
         return finish
 
-    def _secret_key(self) -> str:
+    def _secret_key(self, key_needed: str) -> str:
         if self._host_error:
             raise _sdk_error("missing_app_host", self._host_error)
         if not self.secret_key:
-            raise _sdk_error(
-                "missing_secret_key",
-                "Sending email needs secret_key, a project secret API key with the hog_flow:write scope.",
-            )
+            raise _sdk_error("missing_secret_key", key_needed)
         return self.secret_key
 
 
@@ -490,27 +601,68 @@ class Emails(_EmailsBase):
         prepared = _prepare_send(
             to, template_id, template_data, distinct_id, idempotency_key
         )
-        if self._is_disabled():
-            raise _sdk_error(
-                "client_disabled",
-                "The PostHog client is disabled, so no email was sent.",
-            )
-        finish = self._start_send()
+        finish = self._start(_SEND_NOT_DONE)
         try:
-            return self._deliver(prepared)
+            headers = _headers(
+                self._secret_key(_SEND_KEY_NEEDED), prepared.idempotency_key
+            )
+            result = self._call(
+                "POST", prepared.path, prepared.body, headers, _parse_response
+            )
+        finally:
+            finish()
+        _log_warnings(result)
+        return result
+
+    def get(self, message_id: Union[str, UUID]) -> EmailStatus:
+        """Read what happened to an email that :meth:`send` queued.
+
+        Args:
+            message_id: The ``id`` of the :class:`SendEmailResult` that
+                :meth:`send` returned.
+
+        Returns:
+            The email's latest status, for 30 days after the send.
+
+        Raises:
+            EmailError: PostHog did not answer with a status. ``code`` is
+                ``not_found`` for an unknown ID, an email older than 30 days,
+                or for a few seconds after the send.
+            ValueError: ``message_id`` is not a message ID.
+
+        Examples:
+            ```python
+            result = emails.send(to="user@example.com", template_id="...")
+            status = emails.get(result.id)
+            if status.status == "bounced":
+                print(status.reason)
+            ```
+        """
+        path = _status_path(message_id)
+        finish = self._start(_GET_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_GET_KEY_NEEDED), None)
+            return self._call("GET", path, None, headers, _parse_status_response)
         finally:
             finish()
 
-    def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
-        auth = _BearerAuth(self._secret_key(), prepared.idempotency_key)
+    def _call(
+        self,
+        method: str,
+        path: str,
+        body: Optional[bytes],
+        headers: dict[str, str],
+        parse: _Parse[_ResultT],
+    ) -> _ResultT:
+        auth = _BearerAuth(headers)
         session = self._get_session()
-        url = self.host + prepared.path
+        url = self.host + path
         for attempt in range(self.max_retries + 1):
             try:
                 response = session.request(
-                    "POST",
+                    method,
                     url,
-                    data=prepared.body,
+                    data=body,
                     auth=auth,
                     timeout=self.timeout,
                     allow_redirects=False,
@@ -520,15 +672,13 @@ class Emails(_EmailsBase):
                         payload = response.json()
                     except ValueError:
                         payload = None
-                    result = _parse_response(
+                    return parse(
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
                     )
                 finally:
                     response.close()
-                _log_warnings(result)
-                return result
             except requests.exceptions.RequestException as exc:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
                 error.__cause__ = exc
@@ -622,28 +772,51 @@ class AsyncEmails(_EmailsBase):
         prepared = _prepare_send(
             to, template_id, template_data, distinct_id, idempotency_key
         )
-        if self._is_disabled():
-            raise _sdk_error(
-                "client_disabled",
-                "The PostHog client is disabled, so no email was sent.",
-            )
-        finish = self._start_send()
+        finish = self._start(_SEND_NOT_DONE)
         try:
-            return await self._deliver(prepared)
+            headers = _headers(
+                self._secret_key(_SEND_KEY_NEEDED), prepared.idempotency_key
+            )
+            result = await self._call(
+                "POST", prepared.path, prepared.body, headers, _parse_response
+            )
+        finally:
+            finish()
+        _log_warnings(result)
+        return result
+
+    async def get(self, message_id: Union[str, UUID]) -> EmailStatus:
+        """Read what happened to an email that :meth:`send` queued.
+
+        Takes the same argument and raises the same errors as
+        :meth:`Emails.get`.
+        """
+        path = _status_path(message_id)
+        finish = self._start(_GET_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_GET_KEY_NEEDED), None)
+            return await self._call("GET", path, None, headers, _parse_status_response)
         finally:
             finish()
 
-    async def _deliver(self, prepared: _PreparedSend) -> SendEmailResult:
-        headers = _headers(self._secret_key(), prepared.idempotency_key)
+    async def _call(
+        self,
+        method: str,
+        path: str,
+        body: Optional[bytes],
+        headers: dict[str, str],
+        parse: _Parse[_ResultT],
+    ) -> _ResultT:
         httpx, client = self._get_client()
-        url = self.host + prepared.path
+        url = self.host + path
         for attempt in range(self.max_retries + 1):
             try:
                 # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
-                # the secret key's Bearer header, and the send timeout applies whatever the client's default.
-                response = await client.post(
+                # the secret key's Bearer header, and the request timeout applies whatever the client's default.
+                response = await client.request(
+                    method,
                     url,
-                    content=prepared.body,
+                    content=body,
                     headers=headers,
                     auth=None,
                     timeout=self.timeout,
@@ -653,15 +826,13 @@ class AsyncEmails(_EmailsBase):
                         payload = response.json()
                     except ValueError:
                         payload = None
-                    result = _parse_response(
+                    return parse(
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
                     )
                 finally:
                     await response.aclose()
-                _log_warnings(result)
-                return result
             except httpx.RequestError as exc:
                 error = _sdk_error("network_error", "The request to PostHog failed.")
                 error.__cause__ = exc

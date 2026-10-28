@@ -888,6 +888,11 @@ attribute posthog.emails.EmailError.name = name
 attribute posthog.emails.EmailError.retry_after = retry_after
 attribute posthog.emails.EmailError.status_code = status_code
 attribute posthog.emails.EmailError.why = why
+attribute posthog.emails.EmailStatus.created_at: datetime
+attribute posthog.emails.EmailStatus.id: str
+attribute posthog.emails.EmailStatus.reason: Optional[str] = None
+attribute posthog.emails.EmailStatus.status: str
+attribute posthog.emails.EmailStatus.status_at: datetime
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
@@ -1311,6 +1316,7 @@ class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_erro
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None)
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
+class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None)
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
@@ -1810,8 +1816,10 @@ method posthog.contexts.ContextScope.set_device_id(device_id: str)
 method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)
 method posthog.emails.AsyncEmails.aclose() -> None
+method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
 method posthog.emails.AsyncEmails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None) -> SendEmailResult
 method posthog.emails.Emails.close() -> None
+method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
 method posthog.emails.Emails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None) -> SendEmailResult
 method posthog.exception_capture.ExceptionCapture.capture_exception(exception, metadata=None)
 method posthog.exception_capture.ExceptionCapture.close()

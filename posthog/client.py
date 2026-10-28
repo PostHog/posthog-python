@@ -1153,7 +1153,8 @@ class Client(object):
     @property
     def emails(self) -> Emails:
         """
-        Send transactional email from PostHog email templates.
+        Send transactional email from PostHog email templates, and read the
+        status of each email sent with ``get``.
 
         Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
         scope. Sends go to ``app_host``, or to the PostHog Cloud app host of

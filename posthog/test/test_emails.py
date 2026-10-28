@@ -14,12 +14,16 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import AsyncEmails, EmailError, Emails
+from posthog.emails import AsyncEmails, EmailError, Emails, EmailStatus
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
 TEMPLATE_ID = "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b"
 SEND_URL = "https://us.posthog.com/api/projects/@current/messaging/send/email/"
+MESSAGE_ID = "01a18356-c56c-0001-e494-7666bc915188"
+STATUS_URL = (
+    f"https://us.posthog.com/api/projects/@current/messaging/emails/{MESSAGE_ID}/"
+)
 
 Reply = Union[Exception, tuple[int, Optional[dict[str, Any]], dict[str, str]]]
 
@@ -463,3 +467,98 @@ async def test_async_shutdown_waits_for_a_send_in_flight_and_then_refuses_sends(
     with pytest.raises(EmailError) as raised:
         await emails.send(to="user@example.com", template_id=TEMPLATE_ID)
     assert raised.value.code == "client_closed"
+
+
+def status_reply(**fields: Any) -> Reply:
+    body = {
+        "id": MESSAGE_ID,
+        "status": "bounced",
+        "created_at": "2026-10-28T16:27:44.364000Z",
+        "status_at": "2026-10-28T16:30:02.100000Z",
+        "reason": "hard",
+        **fields,
+    }
+    return (200, body, {})
+
+
+def test_get_reads_the_status_of_a_sent_email_from_the_app_host():
+    emails, adapter = emails_with([status_reply()])
+
+    status = emails.get(MESSAGE_ID.upper())
+
+    assert status == EmailStatus(
+        id=MESSAGE_ID,
+        status="bounced",
+        created_at=datetime(2026, 10, 28, 16, 27, 44, 364000, tzinfo=timezone.utc),
+        status_at=datetime(2026, 10, 28, 16, 30, 2, 100000, tzinfo=timezone.utc),
+        reason="hard",
+    )
+    [request] = adapter.requests
+    assert (request.method, request.url, request.body) == ("GET", STATUS_URL, None)
+    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert "Idempotency-Key" not in request.headers
+
+
+@parameterized.expand(
+    [
+        (
+            "unknown_id_without_a_retry",
+            [rejected(404, "not_found")],
+            MESSAGE_ID,
+            "not_found",
+            1,
+        ),
+        (
+            "reply_without_a_status",
+            [status_reply(status=None)],
+            MESSAGE_ID,
+            "api_error",
+            1,
+        ),
+    ]
+)
+def test_get_reports_a_missing_status(_name, replies, message_id, code, requests_made):
+    emails, adapter = emails_with(replies)
+
+    with pytest.raises(EmailError) as raised:
+        emails.get(message_id)
+
+    assert raised.value.code == code
+    assert len(adapter.requests) == requests_made
+
+
+def test_get_rejects_an_id_that_is_not_a_message_id_before_a_request():
+    emails, adapter = emails_with([])
+
+    with pytest.raises(ValueError):
+        emails.get("msg_1")
+
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_async_get_retries_an_unavailable_service():
+    seen: list[httpx.Request] = []
+    replies = [
+        httpx.Response(503, json={"code": "delivery_unavailable"}),
+        httpx.Response(
+            200, json={**status_reply()[1], "status": "sent", "reason": None}
+        ),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
+        status = await emails.get(MESSAGE_ID)
+
+    assert (status.status, status.reason) == ("sent", None)
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("GET", STATUS_URL)
+    ] * 2
