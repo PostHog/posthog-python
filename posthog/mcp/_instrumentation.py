@@ -1449,6 +1449,8 @@ async def record_tools_list(
     protocol_version: Optional[str] = None,
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
+    if not data.options.send_tools_list_event:
+        return
     try:
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_TOOLS_LIST,
