@@ -756,6 +756,76 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
             {"beta-ui": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
         )
 
+    @staticmethod
+    def _target_depending_on(dep_property):
+        """``target`` is ``a`` when ``dep`` is true, and ``b`` for everyone else."""
+        target = _always_on_flag("target")
+        target["filters"] = {
+            "groups": [
+                {
+                    "properties": [_depends_on("dep")],
+                    "rollout_percentage": 100,
+                    "variant": "a",
+                },
+                {"properties": [], "rollout_percentage": 100, "variant": "b"},
+            ],
+            "multivariate": {
+                "variants": [
+                    {"key": "a", "rollout_percentage": 50},
+                    {"key": "b", "rollout_percentage": 50},
+                ]
+            },
+        }
+        return [_flag_with("dep", dep_property), target]
+
+    @parameterized.expand([("all_flags", None), ("target_only", ["target"])])
+    @mock.patch("posthog.client.flags")
+    def test_dependency_that_needs_the_server_falls_back_to_the_server(
+        self, _name, flag_keys, patch_flags
+    ):
+        self.client.feature_flags = self._target_depending_on(
+            {"key": "id", "type": "cohort", "value": 999}
+        )
+        patch_flags.return_value = {
+            "flags": {"target": {"enabled": True, "variant": "a"}}
+        }
+
+        flags = self.client.evaluate_flags("user-123", flag_keys=flag_keys)
+
+        self.assertEqual(flags.get_flag("target"), "a")
+        patch_flags.assert_called_once()
+
+    @mock.patch("posthog.client.flags")
+    def test_dependency_that_needs_the_server_leaves_flag_unresolved_locally(
+        self, patch_flags
+    ):
+        self.client.feature_flags = self._target_depending_on(
+            {"key": "id", "type": "cohort", "value": 999}
+        )
+
+        flags = self.client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertNotIn("target", flags.keys)
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {
+                "dep": UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                "target": UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            },
+        )
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    def test_dependency_resolved_locally_picks_its_condition(self, patch_flags):
+        self.client.feature_flags = self._target_depending_on(_PLAN_IS_PRO)
+
+        flags = self.client.evaluate_flags(
+            "user-123", person_properties={"plan": "pro"}
+        )
+
+        self.assertEqual(flags.get_flag("target"), "a")
+        patch_flags.assert_not_called()
+
     @mock.patch("posthog.client.flags")
     def test_flag_resolved_by_remote_fallback_is_not_unresolved(self, patch_flags):
         patch_flags.return_value = {

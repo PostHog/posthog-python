@@ -6712,13 +6712,18 @@ class TestUnresolvedReasons(unittest.TestCase):
                 [[_depends_on("base")], [UNKNOWN_OPERATOR]],
                 "unsupported_definition",
             ),
+            (
+                "dependency_reused_after_unchecked_filter",
+                [[EMAIL_IS_SET, _depends_on("base")], [_depends_on("base")]],
+                "unresolved_dependency",
+            ),
         ]
     )
-    def test_dependency_requiring_server_is_inconclusive(
+    def test_dependency_requiring_server_requires_server(
         self, _name, conditions, reason
     ):
         self.assert_unresolved(
-            InconclusiveMatchError,
+            RequiresServerEvaluation,
             UnresolvedFlagReason(reason),
             _flag("checkout", *conditions),
             {"plan": "pro"},

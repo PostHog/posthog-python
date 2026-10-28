@@ -120,6 +120,11 @@ class RequiresServerEvaluation(Exception):
 
     reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 
+    def __init__(self, *args, reason: Optional[UnresolvedFlagReason] = None):
+        super().__init__(*args)
+        if reason is not None:
+            self.reason = reason
+
 
 # When several causes apply to one flag, the spec reports the first reason in this
 # order, so every SDK picks the same reason whatever order it inspects filters in.
@@ -369,10 +374,16 @@ def evaluate_flag_dependency(
                 bucketing_value=dep_bucketing_value,
             )
             evaluation_cache[dep_flag_key] = dep_result
-        except (InconclusiveMatchError, RequiresServerEvaluation) as e:
-            # If we can't evaluate a dependency, store None and propagate the error.
-            # A dependency that needs the server is only inconclusive here, so later
-            # conditions of the dependent flag can still resolve it.
+        except RequiresServerEvaluation as e:
+            # The dependent flag needs the server too, so its later conditions must
+            # not resolve it locally. Nothing is cached, so another filter on this
+            # dependency also raises this error.
+            raise RequiresServerEvaluation(
+                f"Cannot evaluate flag dependency '{dep_flag_key}': {e}",
+                reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
+            ) from e
+        except InconclusiveMatchError as e:
+            # If we can't evaluate a dependency, store None and propagate the error
             evaluation_cache[dep_flag_key] = None
             raise InconclusiveMatchError(
                 f"Cannot evaluate flag dependency '{dep_flag_key}': {e}",
@@ -563,8 +574,15 @@ def match_feature_flag_properties(
                 if inconclusive_reason is not None:
                     break
                 return False
-        except RequiresServerEvaluation:
+        except RequiresServerEvaluation as e:
             # Static cohort or other missing server-side data - must fallback to API.
+            # The loop stops here, so a condition it did not reach can still carry a
+            # higher-precedence reason in its definition.
+            definition_reason = _get_definition_unresolved_reason(
+                flag, flags_by_key or {}, cohort_properties, group_type_mapping
+            )
+            if definition_reason is not None:
+                e.reason = _pick_unresolved_reason(e.reason, definition_reason)
             raise
         except InconclusiveMatchError as e:
             # Evaluation error (bad regex, invalid date, missing property, etc.)
