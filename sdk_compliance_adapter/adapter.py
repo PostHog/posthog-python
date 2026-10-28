@@ -90,8 +90,6 @@ class SDKState:
     def reset(self):
         """Reset all state"""
         with self.lock:
-            self.reported_drops = []
-            self.log_lines = []
             clients_to_shutdown = (self.client, self.remote_client)
             self.client = None
             self.remote_client = None
@@ -106,7 +104,10 @@ class SDKState:
                 except Exception as e:
                     logger.warning(f"Error shutting down client: {e}")
 
+        # Cleared after shutdown, which can still report drops and log lines for the old client.
         with self.lock:
+            self.reported_drops = []
+            self.log_lines = []
             self.pending_events = 0
             self.total_events_captured = 0
             self.total_events_sent = 0
@@ -171,7 +172,9 @@ class SDKState:
         names = {event.get("uuid"): event.get("event") for event in batch or []}
         with self.lock:
             for uuid, details in getattr(error, "drops", []):
-                self.reported_drops.append({"uuid": uuid, "event": names.get(uuid), "details": details})
+                self.reported_drops.append(
+                    {"uuid": uuid, "event": names.get(uuid), "details": details}
+                )
 
     def record_log(self, line: str) -> None:
         with self.lock:
@@ -195,13 +198,21 @@ _sdk_logger.setLevel(logging.DEBUG)
 _PADDING_KEY = "$test_padding"
 
 
-def _padded_properties(properties: Optional[Dict[str, Any]], size: int, marker: str) -> Dict[str, Any]:
+def _padded_properties(
+    properties: Optional[Dict[str, Any]], size: int, marker: str
+) -> Dict[str, Any]:
     """Add one ASCII padding property so the properties' compact JSON is exactly ``size`` bytes."""
     padded = {**(properties or {}), _PADDING_KEY: ""}
-    fill = size - len(json.dumps(padded, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    if fill < len(marker):
-        raise ValueError(f"pad_properties_to_bytes {size} is smaller than the properties")
-    padded[_PADDING_KEY] = marker + "x" * (fill - len(marker))
+    fill = size - len(
+        json.dumps(padded, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    # The marker's bytes as written in JSON, escapes included, without its quotes.
+    marker_bytes = len(json.dumps(marker, ensure_ascii=False).encode("utf-8")) - 2
+    if fill < marker_bytes:
+        raise ValueError(
+            f"pad_properties_to_bytes {size} is smaller than the properties"
+        )
+    padded[_PADDING_KEY] = marker + "x" * (fill - marker_bytes)
     return padded
 
 
@@ -363,7 +374,9 @@ def init():
         }
         before_send = data.get("before_send")
         if before_send:
-            client_options["before_send"] = _before_send(before_send.get("set_properties", {}))
+            client_options["before_send"] = _before_send(
+                before_send.get("set_properties", {})
+            )
         personal_api_key = data.get("personal_api_key")
         client = Client(**client_options, secret_key=personal_api_key)
         state.client = client
@@ -410,7 +423,9 @@ def _capture_with(capture_method_name: str):
 
     properties = data.get("properties")
     if data.get("pad_properties_to_bytes") is not None:
-        properties = _padded_properties(properties, data["pad_properties_to_bytes"], data.get("marker") or "")
+        properties = _padded_properties(
+            properties, data["pad_properties_to_bytes"], data.get("marker") or ""
+        )
     kwargs = {
         "distinct_id": distinct_id,
         "properties": properties,
