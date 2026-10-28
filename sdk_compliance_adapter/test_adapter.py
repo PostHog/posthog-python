@@ -88,7 +88,15 @@ def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
         monkeypatch.setenv("COMPRESSION", env_value)
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
-    assert {"capture_v1", "capture_ai_v1", "event_options"} <= set(capabilities)
+    assert {
+        "capture_v1",
+        "capture_ai_v1",
+        "event_options",
+        "event_uuid_override",
+        "bounded_retries",
+        "disable_geoip",
+        "historical_migration",
+    } <= set(capabilities)
     assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
     assert [c for c in capabilities if c.startswith("encoding_")] == [
