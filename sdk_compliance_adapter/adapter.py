@@ -5,6 +5,7 @@ This adapter implements the SDK Test Adapter Interface defined in the PostHog Ca
 It wraps the posthog-python SDK and exposes a REST API for the test harness to exercise.
 """
 
+import json
 import logging
 import os
 import threading
@@ -83,10 +84,14 @@ class SDKState:
         self.client: Optional[Client] = None
         self.remote_client: Client | None = None
         self.reload_thread: threading.Thread | None = None
+        self.reported_drops: List[Dict[str, Any]] = []
+        self.log_lines: List[str] = []
 
     def reset(self):
         """Reset all state"""
         with self.lock:
+            self.reported_drops = []
+            self.log_lines = []
             clients_to_shutdown = (self.client, self.remote_client)
             self.client = None
             self.remote_client = None
@@ -157,11 +162,55 @@ class SDKState:
                 "total_retries": self.total_retries,
                 "last_error": self.last_error,
                 "requests_made": [r.to_dict() for r in self.requests_made],
+                "reported_drops": list(self.reported_drops),
+                "log_lines": list(self.log_lines),
             }
+
+    def record_drops(self, error: Exception, batch: List[Dict[str, Any]]) -> None:
+        """on_error hook: record each event capture dropped, by uuid."""
+        names = {event.get("uuid"): event.get("event") for event in batch or []}
+        with self.lock:
+            for uuid, details in getattr(error, "drops", []):
+                self.reported_drops.append({"uuid": uuid, "event": names.get(uuid), "details": details})
+
+    def record_log(self, line: str) -> None:
+        with self.lock:
+            self.log_lines.append(line)
 
 
 # Global state
 state = SDKState()
+
+
+class _StateLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        state.record_log(self.format(record))
+
+
+# The SDK logs under "posthog"; /state returns those lines (log_capture).
+_sdk_logger = logging.getLogger("posthog")
+_sdk_logger.addHandler(_StateLogHandler())
+_sdk_logger.setLevel(logging.DEBUG)
+
+_PADDING_KEY = "$test_padding"
+
+
+def _padded_properties(properties: Optional[Dict[str, Any]], size: int, marker: str) -> Dict[str, Any]:
+    """Add one ASCII padding property so the properties' compact JSON is exactly ``size`` bytes."""
+    padded = {**(properties or {}), _PADDING_KEY: ""}
+    fill = size - len(json.dumps(padded, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    if fill < len(marker):
+        raise ValueError(f"pad_properties_to_bytes {size} is smaller than the properties")
+    padded[_PADDING_KEY] = marker + "x" * (fill - len(marker))
+    return padded
+
+
+def _before_send(set_properties: Dict[str, Any]):
+    def hook(event: Dict[str, Any]) -> Dict[str, Any]:
+        event.setdefault("properties", {}).update(set_properties)
+        return event
+
+    return hook
 
 
 def patched_post_v1(
@@ -241,6 +290,11 @@ def health():
         "bounded_retries",
         "disable_geoip",
         "historical_migration",
+        "reported_drops",
+        "log_capture",
+        "generated_payloads",
+        "property_layers",
+        "fail_open",
         "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
     ]
@@ -276,7 +330,8 @@ def init():
         disable_geoip = data.get("disable_geoip", False)
         historical_migration = data.get("historical_migration", False)
 
-        if not api_key:
+        # An empty or personal key must reach the SDK, which disables itself (fail_open).
+        if api_key is None:
             return jsonify({"error": "api_key is required"}), 400
         if not host:
             return jsonify({"error": "host is required"}), 400
@@ -303,7 +358,12 @@ def init():
             "disable_geoip": disable_geoip,
             "historical_migration": historical_migration,
             "enable_local_evaluation": False,
+            "on_error": state.record_drops,
+            "super_properties": data.get("super_properties"),
         }
+        before_send = data.get("before_send")
+        if before_send:
+            client_options["before_send"] = _before_send(before_send.get("set_properties", {}))
         personal_api_key = data.get("personal_api_key")
         client = Client(**client_options, secret_key=personal_api_key)
         state.client = client
@@ -314,7 +374,7 @@ def init():
             state.remote_client = Client(**client_options)
 
         logger.info(
-            f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
+            f"Initialized SDK with api_key={api_key[:4]}..., host={host}, "
             f"flush_at={flush_at}, flush_interval={flush_interval}, "
             f"max_retries={max_retries}, compression={enable_compression}, "
             f"disable_geoip={disable_geoip}, "
@@ -348,9 +408,12 @@ def _capture_with(capture_method_name: str):
     if not event:
         return jsonify({"error": "event is required"}), 400
 
+    properties = data.get("properties")
+    if data.get("pad_properties_to_bytes") is not None:
+        properties = _padded_properties(properties, data["pad_properties_to_bytes"], data.get("marker") or "")
     kwargs = {
         "distinct_id": distinct_id,
-        "properties": data.get("properties"),
+        "properties": properties,
         "options": data.get("options"),
     }
     if timestamp:
