@@ -83,6 +83,7 @@ from posthog.types import (
     FeatureFlagEvaluationRuntime as FeatureFlagEvaluationRuntime,
     FlagEvaluationDetails as FlagEvaluationDetails,
     FlagEvaluationErrorCode as FlagEvaluationErrorCode,
+    FlagEvaluationReason as FlagEvaluationReason,
     FlagValue as FlagValue,
     FlagsAndPayloads as FlagsAndPayloads,
 )

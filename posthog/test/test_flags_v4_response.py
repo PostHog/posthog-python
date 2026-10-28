@@ -25,6 +25,7 @@ from posthog.types import (
     FeatureFlagResult,
     FlagEvaluationDetails,
     FlagEvaluationErrorCode,
+    FlagEvaluationReason,
     FlagMetadata,
     normalize_flags_response,
     to_flags_and_payloads,
@@ -95,61 +96,30 @@ def _complete_split(details: FlagEvaluationDetails[Any]) -> bool:
     Exposure events are not emitted yet; this checks that the retained details hold
     everything the exposure predicate needs, and nothing from a partial record.
     """
-    metadata = details.metadata
+    metadata = details.flag_metadata
     return (
         details.error_code is None
-        and metadata is not None
-        and details.reason is not None
-        and metadata.config_version == 2
-        and details.reason.code == "experiment_split"
-        and metadata.rule_type == "experiment"
-        and metadata.rule_id is not None
-        and metadata.variant_key is not None
+        and metadata.get("config_version") == 2
+        and metadata.get("reason_code") == "experiment_split"
+        and metadata.get("rule_type") == "experiment"
+        and metadata.get("rule_id") is not None
+        and metadata.get("variant_key") is not None
     )
-
-
-# The pinned contract still lists `metadata.experiment_id` and `metadata.holdout_id` as
-# known fields. Records no longer carry either: experiments link to rules on the server,
-# and holdouts are rule-local without an ID. The reader ignores both keys like any
-# unknown one. Drop these workarounds when the fixtures are re-pinned to a contract
-# without the fields.
-IGNORED_FIXTURE_METADATA = ("experiment_id", "holdout_id")
-# Cases that depend on `experiment_id`, which now read as a complete split.
-READER_OVERRIDES: Dict[str, Dict[str, Any]] = {
-    "readers.partial_split_missing_experiment_id": {"experiment_exposure": True},
-    "readers.split_wrong_type_experiment_id": {
-        "value": False,
-        "config_version": 2,
-        "experiment_exposure": True,
-        "error_code": None,
-    },
-}
 
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    assert source["release"] == "1.13.1"
-    assert source["contract_version"] == "2.3.1"
+    assert source["release"] == "1.22.0"
+    assert source["contract_version"] == "7.0.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
 
 
-def test_fixture_workarounds_name_vendored_cases_and_fields():
-    assert set(READER_OVERRIDES) <= {case["id"] for case in READERS["cases"]}
-    sent = {
-        field
-        for case in VALID_RESPONSES
-        for record in _build(RESPONSES, case)["flags"].values()
-        for field in record["metadata"]
-    }
-    assert set(IGNORED_FIXTURE_METADATA) <= sent
-
-
 @pytest.mark.parametrize("case", READERS["cases"], ids=lambda case: case["id"])
 def test_reader_fixture(client, case):
     snapshot = _evaluate(client, _build(READERS, case))
-    reader = {**case["reader"], **READER_OVERRIDES.get(case["id"], {})}
+    reader = case["reader"]
     key = reader["requested_key"]
 
     details = _details(snapshot, key, reader["caller_default"], reader["value"])
@@ -160,8 +130,7 @@ def test_reader_fixture(client, case):
     assert details.error_code == (
         FlagEvaluationErrorCode(expected_error) if expected_error else None
     )
-    config_version = details.metadata.config_version if details.metadata else None
-    assert config_version == reader["config_version"]
+    assert details.flag_metadata.get("config_version") == reader["config_version"]
     assert _complete_split(details) is reader["experiment_exposure"]
 
     for sibling, expected in case.get("sibling_expectations", {}).items():
@@ -192,7 +161,8 @@ def test_valid_producer_responses_are_retained_as_sent(case):
         assert flag.reason.condition_index == record["reason"]["condition_index"]
         assert isinstance(flag.metadata, FlagMetadata)
         for field, value in record["metadata"].items():
-            if field != "payload" and field not in IGNORED_FIXTURE_METADATA:
+            # Only config version 1 records carry an experiment ID; it is not kept.
+            if field not in ("payload", "experiment_id"):
                 assert getattr(flag.metadata, field) == value, field
 
 
@@ -243,19 +213,29 @@ ACCESSORS: Dict[str, Callable[[FeatureFlagEvaluations], Callable[..., Any]]] = {
     "boolean": lambda snapshot: snapshot.get_boolean_details,
     "string": lambda snapshot: snapshot.get_string_details,
     "number": lambda snapshot: snapshot.get_number_details,
+    "integer": lambda snapshot: snapshot.get_integer_details,
+    "float": lambda snapshot: snapshot.get_float_details,
     "object": lambda snapshot: snapshot.get_object_details,
 }
-DEFAULTS = {"boolean": True, "string": "default", "number": -1, "object": {"d": 1}}
-TYPE_OF = {
-    "boolean-flag": "boolean",
-    "false-flag": "boolean",
-    "string-flag": "string",
-    "empty-string-flag": "string",
-    "integer-flag": "number",
-    "zero-flag": "number",
-    "float-flag": "number",
-    "object-flag": "object",
-    "empty-object-flag": "object",
+DEFAULTS = {
+    "boolean": True,
+    "string": "default",
+    "number": -1,
+    "integer": -1,
+    "float": -1.0,
+    "object": {"d": 1},
+}
+# The accessors that return each flag's value, and the value they return.
+ACCEPTED = {
+    "boolean-flag": {"boolean": True},
+    "false-flag": {"boolean": False},
+    "string-flag": {"string": "compact"},
+    "empty-string-flag": {"string": ""},
+    "integer-flag": {"number": 7, "integer": 7, "float": 7.0},
+    "zero-flag": {"number": 0, "integer": 0, "float": 0.0},
+    "float-flag": {"number": 12.5, "float": 12.5},
+    "object-flag": {"object": TYPED_VALUES["object-flag"]},
+    "empty-object-flag": {"object": {}},
 }
 
 
@@ -269,19 +249,23 @@ def test_typed_accessors_never_coerce(client, key, value_type):
 
     value = TYPED_VALUES[key]
     assert details.key == key
-    assert details.reason is not None and details.reason.code == "targeting_match"
-    assert details.metadata is not None and details.metadata.config_version == 2
-    if TYPE_OF.get(key) == value_type:
-        assert details.value == value
-        assert type(details.value) is type(value)
+    assert details.flag_metadata["reason_code"] == "targeting_match"
+    assert details.flag_metadata["config_version"] == 2
+    accepted = ACCEPTED.get(key, {})
+    if value_type in accepted:
+        assert details.value == accepted[value_type]
+        assert type(details.value) is type(accepted[value_type])
         assert details.error_code is None
+        assert details.reason is FlagEvaluationReason.TARGETING_MATCH
     elif value is None or value is False:
         # No value, or false read as another type: the default, without an error.
         assert details.value == default
         assert details.error_code is None
+        assert details.reason is FlagEvaluationReason.TARGETING_MATCH
     else:
         assert details.value == default
         assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+        assert details.reason is FlagEvaluationReason.ERROR
 
 
 def test_value_accessors_return_the_details_value(client):
@@ -308,15 +292,277 @@ def test_typed_details_carry_the_variant_key_and_context(client):
 
     assert details.value == "compact"
     assert details.variant == "arm_a"
-    assert details.reason is not None
-    assert (details.reason.code, details.reason.condition_index) == (
-        "experiment_split",
-        0,
+    assert details.reason is FlagEvaluationReason.SPLIT
+    assert details.flag_metadata["reason_code"] == "experiment_split"
+    assert details.flag_metadata["condition_index"] == 0
+    assert details.flag_metadata["rule_type"] == "experiment"
+    assert details.flag_metadata["rule_id"] == "10000000-0000-4000-8000-000000000001"
+    assert details.flag_metadata["variant_key"] == "arm_a"
+
+
+def test_details_of_an_experiment_split(client):
+    response = _build(READERS, {"template": "experiment_split"})
+    response["flags"]["garden-layout"]["value"] = True
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_boolean_details("garden-layout", False)
+
+    assert details == FlagEvaluationDetails(
+        key="garden-layout",
+        value=True,
+        reason=FlagEvaluationReason.SPLIT,
+        variant="arm_a",
+        flag_metadata={
+            "id": 201,
+            "version": 7,
+            "config_version": 2,
+            "reason_code": "experiment_split",
+            "condition_index": 0,
+            "rule_type": "experiment",
+            "rule_id": "10000000-0000-4000-8000-000000000001",
+            "variant_key": "arm_a",
+        },
     )
-    assert details.metadata is not None
-    assert details.metadata.rule_type == "experiment"
-    assert details.metadata.rule_id == "10000000-0000-4000-8000-000000000001"
-    assert details.metadata.variant_key == "arm_a"
+    assert str(details.reason) == "SPLIT"
+
+
+@pytest.mark.parametrize(
+    "template, reason",
+    [
+        ("targeting_match_targeted_release", FlagEvaluationReason.TARGETING_MATCH),
+        ("targeting_match_percentage_rollout", FlagEvaluationReason.TARGETING_MATCH),
+        ("rollout_miss_percentage_rollout", FlagEvaluationReason.DEFAULT),
+        ("rollout_miss_experiment", FlagEvaluationReason.DEFAULT),
+        ("experiment_paused", FlagEvaluationReason.DEFAULT),
+        ("holdout", FlagEvaluationReason.DEFAULT),
+        ("no_rule_match", FlagEvaluationReason.DEFAULT),
+        ("missing_group_key", FlagEvaluationReason.ERROR),
+        ("dependency_error", FlagEvaluationReason.ERROR),
+        ("error", FlagEvaluationReason.ERROR),
+        ("v1", FlagEvaluationReason.TARGETING_MATCH),
+    ],
+)
+def test_reason_is_the_openfeature_reason_of_the_reason_code(client, template, reason):
+    snapshot = _evaluate(client, _build(READERS, {"template": template}))
+    record = _build(READERS, {"template": template})["flags"]["garden-layout"]
+
+    details = snapshot.get_string_details("garden-layout", "default")
+
+    assert details.reason is reason
+    assert details.flag_metadata["reason_code"] == record["reason"]["code"]
+
+
+def test_an_unknown_config_version_2_reason_code_is_unknown(client):
+    response = _typed_response({"string-flag": "compact"})
+    response["flags"]["string-flag"]["reason"]["code"] = "future_reason"
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("string-flag", "default")
+
+    assert (details.value, details.reason) == ("compact", FlagEvaluationReason.UNKNOWN)
+
+
+def test_details_of_a_null_flag_default(client):
+    response = _build(READERS, {"template": "no_rule_match"})
+    response["flags"]["garden-layout"]["value"] = None
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("garden-layout", "Welcome")
+
+    assert details.value == "Welcome"
+    assert details.reason is FlagEvaluationReason.DEFAULT
+    assert details.error_code is None
+    assert details.variant is None
+    assert details.flag_metadata["reason_code"] == "no_rule_match"
+
+
+def test_a_type_mismatch_keeps_the_metadata_and_drops_the_variant(client):
+    snapshot = _evaluate(client, _build(READERS, {"template": "v1"}))
+
+    details = snapshot.get_boolean_details("garden-layout", False)
+
+    assert details.value is False
+    assert details.reason is FlagEvaluationReason.ERROR
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.error_message == (
+        "Flag 'garden-layout' has a string value, not a boolean value."
+    )
+    assert details.variant is None
+    assert details.flag_metadata["config_version"] == 1
+    assert details.flag_metadata["reason_code"] == "condition_match"
+    assert details.flag_metadata["variant_key"] == "compact"
+
+
+def test_an_error_drops_the_variant(client):
+    response = _build(READERS, {"template": "experiment_split"})
+    response["flags"]["garden-layout"]["failed"] = True
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_boolean_details("garden-layout", True)
+
+    assert details.error_code is FlagEvaluationErrorCode.GENERAL
+    assert details.variant is None
+    assert details.flag_metadata["variant_key"] == "arm_a"
+
+
+def test_the_integer_accessor_rejects_a_fractional_number(client):
+    snapshot = _evaluate(client, _typed_response({"ratio": 0.25, "count": 2.0}))
+
+    details = snapshot.get_integer_details("ratio", 1)
+
+    assert details.value == 1
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.error_message == (
+        "Flag 'ratio' has the number 0.25, which is not an integer."
+    )
+    assert snapshot.get_float_value("ratio", 1.0) == 0.25
+    count = snapshot.get_integer_value("count", 0)
+    assert (count, type(count)) == (2, int)
+
+
+def test_a_returned_object_cannot_change_the_snapshot(client):
+    snapshot = _evaluate(client, _typed_response(TYPED_VALUES))
+
+    snapshot.get_object_value("object-flag", {})["nested"]["on"] = False
+
+    assert snapshot.get_object_value("object-flag", {}) == TYPED_VALUES["object-flag"]
+    assert snapshot.get_flag_payload("object-flag") == TYPED_VALUES["object-flag"]
+
+
+def _old_server_response(**records: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "flags": {
+            key: {"key": key, "metadata": {"id": 1, "version": 1}, **record}
+            for key, record in records.items()
+        },
+        "errorsWhileComputingFlags": False,
+    }
+
+
+def test_a_number_flag_on_an_older_server_is_a_type_mismatch_that_names_the_cause(
+    client,
+):
+    response = _old_server_response(
+        **{
+            "upload-limit": {
+                "enabled": True,
+                "variant": None,
+                "metadata": {"id": 1, "version": 1, "payload": "25"},
+            }
+        }
+    )
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_number_details("upload-limit", 10)
+
+    assert details.value == 10
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.flag_metadata["config_version"] == 1
+    assert "server that does not send typed values" in (details.error_message or "")
+    assert snapshot.get_flag_payload("upload-limit") == 25
+
+
+@pytest.mark.parametrize("shape", ["v4", "older"])
+def test_one_log_per_client_for_records_without_typed_values(shape, caplog):
+    if shape == "v4":
+        response = _typed_response({"string-flag": "compact"})
+    else:
+        response = _old_server_response(
+            **{"string-flag": {"enabled": True, "variant": "compact"}}
+        )
+    client = Client(FAKE_TEST_API_KEY, send=False)
+    other_client = Client(FAKE_TEST_API_KEY, send=False)
+    try:
+        with caplog.at_level("INFO", logger="posthog"):
+            for _ in range(2):
+                _evaluate(client, response)
+            _evaluate(other_client, response)
+    finally:
+        client.shutdown()
+        other_client.shutdown()
+
+    logged = [r for r in caplog.records if "no typed flag values" in r.getMessage()]
+    assert len(logged) == (0 if shape == "v4" else 2)
+
+
+async def test_the_async_client_logs_records_without_typed_values_once(caplog):
+    response = _old_server_response(**{"flag": {"enabled": True, "variant": None}})
+    with mock.patch(
+        "posthog.async_client._async_flags",
+        new=mock.AsyncMock(side_effect=lambda *a, **k: copy.deepcopy(response)),
+    ):
+        client = AsyncPosthog("project-key", send=False)
+        with caplog.at_level("INFO", logger="posthog"):
+            await client.evaluate_flags(DISTINCT_ID)
+            snapshot = await client.evaluate_flags(DISTINCT_ID)
+        await client.shutdown()
+
+    assert snapshot.get_boolean_value("flag", False) is True
+    logged = [r for r in caplog.records if "no typed flag values" in r.getMessage()]
+    assert len(logged) == 1
+
+
+def _local_client() -> Client:
+    client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+    groups = [{"properties": [], "rollout_percentage": 100}]
+    client.feature_flags = [
+        {
+            "id": 11,
+            "key": "legacy-layout",
+            "active": True,
+            "filters": {
+                "groups": groups,
+                "multivariate": {
+                    "variants": [{"key": "compact", "rollout_percentage": 100}]
+                },
+            },
+        },
+        {"id": 12, "key": "beta", "active": True, "filters": {"groups": groups}},
+        {"id": 13, "key": "off", "active": False, "filters": {"groups": groups}},
+        {
+            "id": 14,
+            "key": "no-match",
+            "active": True,
+            "filters": {"groups": [{"properties": [], "rollout_percentage": 0}]},
+        },
+    ]
+    return client
+
+
+@mock.patch("posthog.client.flags")
+def test_locally_evaluated_flags_have_a_derived_reason_and_config_version_1(
+    patch_flags,
+):
+    client = _local_client()
+    try:
+        snapshot = client.evaluate_flags("user-123")
+        legacy_layout = snapshot.get_string_details("legacy-layout", "grid")
+        beta = snapshot.get_boolean_details("beta", False)
+        off = snapshot.get_boolean_details("off", True)
+        no_match = snapshot.get_boolean_details("no-match", True)
+        mismatch = snapshot.get_number_details("legacy-layout", 1)
+    finally:
+        client.shutdown()
+
+    patch_flags.assert_not_called()
+    assert legacy_layout == FlagEvaluationDetails(
+        key="legacy-layout",
+        value="compact",
+        reason=FlagEvaluationReason.TARGETING_MATCH,
+        variant="compact",
+        flag_metadata={"id": 11, "config_version": 1, "variant_key": "compact"},
+    )
+    assert (beta.value, beta.reason) == (True, FlagEvaluationReason.TARGETING_MATCH)
+    assert beta.flag_metadata == {"id": 12, "config_version": 1}
+    assert (off.value, off.reason) == (False, FlagEvaluationReason.DISABLED)
+    assert off.flag_metadata == {
+        "id": 13,
+        "config_version": 1,
+        "reason_code": "flag_disabled",
+    }
+    assert (no_match.value, no_match.reason) == (False, FlagEvaluationReason.DEFAULT)
+    assert mismatch.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert "config version 1" in (mismatch.error_message or "")
 
 
 def test_missing_flag_returns_the_default_with_flag_not_found(client):
@@ -327,6 +573,7 @@ def test_missing_flag_returns_the_default_with_flag_not_found(client):
     assert details == FlagEvaluationDetails(
         key="missing-flag",
         value=3,
+        reason=FlagEvaluationReason.ERROR,
         error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
         error_message="Flag 'missing-flag' is not in the evaluation.",
     )
@@ -419,6 +666,7 @@ def _record(**overrides: Any) -> Dict[str, Any]:
         ("metadata.has_experiment", "false"),
         ("metadata.rule_type", 2),
         ("metadata.rule_id", 3),
+        ("metadata.experiment_id", "301"),
         ("metadata.variant_key", True),
         ("metadata.forced_variant", "yes"),
     ],
@@ -477,15 +725,15 @@ def test_unknown_fields_and_null_optional_fields_are_ignored():
     "field, value",
     [
         ("experiment_id", 301),
-        ("experiment_id", "301"),
         ("holdout_id", 401),
         ("holdout_id", "401"),
     ],
 )
 def test_experiment_and_holdout_ids_in_the_metadata_are_ignored(field, value):
-    # Records carry no experiment or holdout ID: experiments link to rules on the
-    # server, and holdouts are rule-local. A record that still sends one reads like a
-    # record with any other unknown key.
+    # Only config version 1 records carry an experiment ID, and no record carries a
+    # holdout ID: experiments link to rules on the server, and holdouts are
+    # rule-local. Neither is kept. An experiment ID of the wrong type is a parse
+    # error, like any known field; a holdout ID is an unknown key.
     record = _record(**{f"metadata.{field}": value})
 
     flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
@@ -896,6 +1144,8 @@ def test_typed_accessors_report_access_like_get_flag(client):
     capture.assert_called_once()
     properties = capture.call_args.kwargs["properties"]
     assert properties["$feature_flag_response"] == "compact"
+    # A type mismatch is not an evaluation error.
+    assert "$feature_flag_error" not in properties
     assert snapshot.only_accessed().keys == ["string-flag"]
 
 

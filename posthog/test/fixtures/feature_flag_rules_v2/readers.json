@@ -1,6 +1,5 @@
 {
-  "fixture_version": "1.0.0",
-  "schema": "schemas/flags_response_v3.schema.json",
+  "schema": "schemas/flags_response_v4.schema.json",
   "templates": {
     "targeting_match_targeted_release": {
       "errorsWhileComputingFlags": false,
@@ -68,7 +67,6 @@
             "payload": null,
             "rule_type": "experiment",
             "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301,
             "variant_key": "arm_a"
           }
         }
@@ -117,8 +115,7 @@
             "has_experiment": true,
             "payload": null,
             "rule_type": "experiment",
-            "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301
+            "rule_id": "10000000-0000-4000-8000-000000000001"
           }
         }
       },
@@ -142,8 +139,7 @@
             "has_experiment": true,
             "payload": null,
             "rule_type": "experiment",
-            "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301
+            "rule_id": "10000000-0000-4000-8000-000000000001"
           }
         }
       },
@@ -167,9 +163,7 @@
             "has_experiment": true,
             "payload": null,
             "rule_type": "experiment",
-            "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301,
-            "holdout_id": 401
+            "rule_id": "10000000-0000-4000-8000-000000000001"
           }
         }
       },
@@ -312,7 +306,6 @@
             "config_version": 2,
             "rule_type": "experiment",
             "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301,
             "variant_key": "arm_a"
           }
         }
@@ -402,29 +395,6 @@
         "keyword": "required",
         "instance_path": "/flags/garden-layout/metadata",
         "message_contains": "rule_id"
-      },
-      "producer_expected": "invalid"
-    },
-    {
-      "id": "readers.partial_split_missing_experiment_id",
-      "template": "experiment_split",
-      "remove": [
-        "/flags/garden-layout/metadata/experiment_id"
-      ],
-      "expected": "reader",
-      "reader": {
-        "requested_key": "garden-layout",
-        "caller_default": true,
-        "value": false,
-        "config_version": 2,
-        "experiment_exposure": false,
-        "error_code": null
-      },
-      "producer_failure": {
-        "layer": "schema",
-        "keyword": "required",
-        "instance_path": "/flags/garden-layout/metadata",
-        "message_contains": "experiment_id"
       },
       "producer_expected": "invalid"
     },
@@ -537,6 +507,28 @@
         "layer": "schema",
         "keyword": "type",
         "instance_path": "/flags/garden-layout/metadata/experiment_id"
+      }
+    },
+    {
+      "id": "readers.split_extra_experiment_id",
+      "template": "experiment_split",
+      "set": {
+        "/flags/garden-layout/metadata/experiment_id": 301
+      },
+      "expected": "reader",
+      "reader": {
+        "requested_key": "garden-layout",
+        "caller_default": true,
+        "value": false,
+        "config_version": 2,
+        "experiment_exposure": true,
+        "error_code": null
+      },
+      "producer_expected": "invalid",
+      "producer_failure": {
+        "layer": "schema",
+        "keyword": "not",
+        "instance_path": "/flags/garden-layout/metadata"
       }
     },
     {
@@ -703,7 +695,7 @@
       }
     },
     {
-      "id": "readers.v3_value_takes_precedence",
+      "id": "readers.v4_value_takes_precedence",
       "template": "experiment_split",
       "set": {
         "/flags/garden-layout/enabled": true,
@@ -991,7 +983,7 @@
       }
     },
     {
-      "id": "readers.v1_at_v3",
+      "id": "readers.v1_at_v4",
       "template": "v1",
       "expected": "reader",
       "reader": {
@@ -1035,7 +1027,7 @@
       "template": "experiment_split",
       "set": {
         "/flags/garden-layout/metadata/config_version": 2.0,
-        "/flags/garden-layout/metadata/experiment_id": 301.0
+        "/flags/garden-layout/metadata/id": 201.0
       },
       "expected": "reader",
       "reader": {
@@ -1067,7 +1059,6 @@
             "payload": null,
             "rule_type": "experiment",
             "rule_id": "10000000-0000-4000-8000-000000000001",
-            "experiment_id": 301,
             "variant_key": "arm_a"
           }
         }

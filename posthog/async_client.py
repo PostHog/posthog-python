@@ -77,7 +77,13 @@ from .feature_flag_evaluations import (
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
-from .types import FlagMetadata, FlagValue, normalize_flags_response
+from .types import (
+    FlagMetadata,
+    FlagValue,
+    _has_untyped_flag_records,
+    _UNTYPED_FLAGS_RESPONSE_MESSAGE,
+    normalize_flags_response,
+)
 from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
 from .version import VERSION
 
@@ -223,6 +229,8 @@ class AsyncClient:
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
+        # Whether this client has logged that /flags sent records without typed values.
+        self._logged_untyped_flags_response = False
 
         if not self.api_key:
             self.log.error(
@@ -876,6 +884,11 @@ class AsyncClient:
             client=self._get_http_client(),
             **request_data,
         )
+        if not self._logged_untyped_flags_response and _has_untyped_flag_records(
+            response
+        ):
+            self._logged_untyped_flags_response = True
+            self.log.info(_UNTYPED_FLAGS_RESPONSE_MESSAGE)
         return normalize_flags_response(response)
 
     async def evaluate_flags(

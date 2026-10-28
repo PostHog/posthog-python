@@ -1,7 +1,8 @@
+import copy
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import (
     Any,
@@ -216,6 +217,33 @@ class FlagEvaluationErrorCode(str, Enum):
     """The flag needs a group the evaluation did not include."""
     GENERAL = "GENERAL"
     """The flag failed to evaluate."""
+
+    def __str__(self) -> str:
+        return self.value
+
+
+class FlagEvaluationReason(str, Enum):
+    """Why a typed flag accessor returned its value.
+
+    The values are the OpenFeature reasons. The PostHog reason code is in
+    ``flag_metadata["reason_code"]``.
+    """
+
+    TARGETING_MATCH = "TARGETING_MATCH"
+    """The flag matched its targeting."""
+    SPLIT = "SPLIT"
+    """The flag assigned an experiment variant."""
+    DEFAULT = "DEFAULT"
+    """No rule produced a value, so the flag returned its default."""
+    DISABLED = "DISABLED"
+    """The flag is disabled."""
+    UNKNOWN = "UNKNOWN"
+    """The server gave a reason this SDK does not know."""
+    ERROR = "ERROR"
+    """The accessor returned the caller default because of ``error_code``."""
+
+    def __str__(self) -> str:
+        return self.value
 
 
 class _DerivedValue:
@@ -450,6 +478,9 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
                     raw_metadata.get("forced_variant"), "metadata.forced_variant", bool
                 ),
             )
+            # Only config version 1 records carry an experiment ID. It is checked,
+            # like every known field, but not kept.
+            _read_int(raw_metadata.get("experiment_id"), "metadata.experiment_id")
     except _MalformedRecord as error:
         return FeatureFlag(
             key=key,
@@ -480,90 +511,261 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
     )
 
 
+FlagMetadataValue = Union[bool, int, float, str]
+
+
 @dataclass(frozen=True)
 class FlagEvaluationDetails(Generic[_T]):
     """The result of a typed flag accessor such as ``get_boolean_details``.
+
+    The fields match OpenFeature's evaluation details, so an OpenFeature provider
+    can pass them through.
 
     Attributes:
         key: Feature flag key.
         value: The flag value, or the caller default when the flag has no value
             of the requested type.
-        variant: Key of the assigned variant, when the server reported one.
-        reason: The reason the server gave for the result, when there is one.
-        metadata: The flag metadata the server returned, when there is any.
+        reason: Why the accessor returned ``value``, as an OpenFeature reason.
+        variant: Key of the assigned variant, when the accessor returned the flag's
+            value and the server reported a variant key.
         error_code: Why the caller default was returned, when it was returned
             because of an error. A flag without a value, or with the value
             ``False`` read as another type, returns the default without an error.
         error_message: Human-readable detail for ``error_code``.
+        flag_metadata: The flag's ``id``, ``version``, ``config_version``,
+            ``reason_code``, ``condition_index``, ``rule_type``, ``rule_id`` and
+            ``variant_key``, each when the flag record has it. A new dict on every
+            call.
     """
 
     key: str
     value: _T
+    reason: FlagEvaluationReason
     variant: Optional[str] = None
-    reason: Optional[FlagReason] = None
-    metadata: Optional[FlagMetadata] = None
     error_code: Optional[FlagEvaluationErrorCode] = None
     error_message: Optional[str] = None
+    flag_metadata: Dict[str, FlagMetadataValue] = field(default_factory=dict)
 
 
-def _is_number(value: Any) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
+def _read_number(value: Any) -> Any:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return value
+    return _NOT_ACCEPTED
 
 
-_FLAG_VALUE_TYPES: Dict[str, Callable[[Any], bool]] = {
-    "boolean": lambda value: isinstance(value, bool),
-    "string": lambda value: isinstance(value, str),
-    "number": _is_number,
-    "object": lambda value: isinstance(value, dict),
+def _read_integer(value: Any) -> Any:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return _NOT_ACCEPTED
+
+
+def _read_float(value: Any) -> Any:
+    if isinstance(value, float):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        try:
+            return float(value)
+        except OverflowError:
+            return _NOT_ACCEPTED
+    return _NOT_ACCEPTED
+
+
+_NOT_ACCEPTED: Any = object()
+
+# Reads a flag value as one accessor type, or returns ``_NOT_ACCEPTED``. A returned
+# object is a copy, so a caller cannot change the evaluated flag.
+_FLAG_VALUE_READERS: Dict[str, Callable[[Any], Any]] = {
+    "boolean": lambda value: value if isinstance(value, bool) else _NOT_ACCEPTED,
+    "string": lambda value: value if isinstance(value, str) else _NOT_ACCEPTED,
+    "number": _read_number,
+    "integer": _read_integer,
+    "float": _read_float,
+    "object": lambda value: (
+        copy.deepcopy(value) if isinstance(value, dict) else _NOT_ACCEPTED
+    ),
 }
+
+# The contract's OpenFeature reasons for config version 2 reason codes that carry
+# no error.
+_V2_REASONS = {
+    "targeting_match": FlagEvaluationReason.TARGETING_MATCH,
+    "experiment_split": FlagEvaluationReason.SPLIT,
+    "rollout_miss": FlagEvaluationReason.DEFAULT,
+    "experiment_paused": FlagEvaluationReason.DEFAULT,
+    "holdout": FlagEvaluationReason.DEFAULT,
+    "no_rule_match": FlagEvaluationReason.DEFAULT,
+}
+
+
+def _flag_reason(
+    value: Any, reason_code: Optional[str], config_version: Optional[int]
+) -> FlagEvaluationReason:
+    """The OpenFeature reason of a flag record that has no error."""
+    if reason_code == "flag_disabled":
+        return FlagEvaluationReason.DISABLED
+    if config_version == 2:
+        return _V2_REASONS.get(reason_code or "", FlagEvaluationReason.UNKNOWN)
+    # The contract maps no config version 1 reason code, so the reason follows the
+    # value, as PostHog's OpenFeature providers report it.
+    if value is True or isinstance(value, str):
+        return FlagEvaluationReason.TARGETING_MATCH
+    return FlagEvaluationReason.DEFAULT
+
+
+def _json_type_name(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    return "number"
+
+
+def _with_article(type_name: str) -> str:
+    return f"an {type_name}" if type_name[0] in "aeiou" else f"a {type_name}"
+
+
+def _type_mismatch_message(
+    key: str, value: Any, value_type: str, config_version: Optional[int]
+) -> str:
+    actual = _json_type_name(value)
+    if actual == "number" and value_type == "integer":
+        return f"Flag '{key}' has the number {value!r}, which is not an integer."
+    message = (
+        f"Flag '{key}' has {_with_article(actual)} value,"
+        f" not {_with_article(value_type)} value."
+    )
+    if config_version != 2 and value_type != "boolean" and value_type != "string":
+        message += (
+            " The flag has config version 1, which has number and object values"
+            " only as a payload. A server that does not send typed values reads"
+            " every flag this way."
+        )
+    return message
+
+
+def _resolve_flag_value(
+    key: str,
+    value: Any,
+    default_value: _T,
+    value_type: str,
+    *,
+    config_version: Optional[int],
+    reason_code: Optional[str],
+    variant: Optional[str],
+    flag_metadata: Dict[str, FlagMetadataValue],
+    error_code: Optional[FlagEvaluationErrorCode] = None,
+    error_message: Optional[str] = None,
+) -> FlagEvaluationDetails[_T]:
+    """Resolve a flag value for a typed accessor without coercing it.
+
+    The caller default is returned for a failed or unreadable record, a ``None``
+    value, ``False`` read as another type, and a value of another type. Only the
+    first and the last carry an error code.
+    """
+
+    def resolved(
+        result: Any,
+        code: Optional[FlagEvaluationErrorCode] = None,
+        message: Optional[str] = None,
+        returned_value: bool = False,
+    ) -> FlagEvaluationDetails[Any]:
+        return FlagEvaluationDetails(
+            key=key,
+            value=result,
+            reason=FlagEvaluationReason.ERROR
+            if code is not None
+            else _flag_reason(value, reason_code, config_version),
+            variant=variant if returned_value else None,
+            error_code=code,
+            error_message=message,
+            flag_metadata=dict(flag_metadata),
+        )
+
+    if error_code is not None:
+        return resolved(default_value, error_code, error_message)
+    result = _FLAG_VALUE_READERS[value_type](value)
+    if result is not _NOT_ACCEPTED:
+        return resolved(result, returned_value=True)
+    if value is None or value is False:
+        return resolved(default_value)
+    return resolved(
+        default_value,
+        FlagEvaluationErrorCode.TYPE_MISMATCH,
+        _type_mismatch_message(key, value, value_type, config_version),
+    )
 
 
 def _resolve_flag_details(
     key: str, flag: Optional[FeatureFlag], default_value: _T, value_type: str
 ) -> FlagEvaluationDetails[_T]:
-    """Resolve a flag record for a typed accessor without coercing its value.
-
-    The caller default is returned for an absent flag, a failed or unreadable record,
-    a ``None`` value, and a value of another type. ``False`` read as another type
-    returns the default without an error.
-    """
+    """Resolve a ``/flags`` record for a typed accessor."""
     if flag is None:
         return FlagEvaluationDetails(
             key=key,
             value=default_value,
+            reason=FlagEvaluationReason.ERROR,
             error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
             error_message=f"Flag '{key}' is not in the evaluation.",
         )
     metadata = flag.metadata if isinstance(flag.metadata, FlagMetadata) else None
-    variant = metadata.variant_key if metadata else None
-
-    def resolved(
-        value: Any,
-        error_code: Optional[FlagEvaluationErrorCode] = None,
-        error_message: Optional[str] = None,
-    ) -> FlagEvaluationDetails[Any]:
-        return FlagEvaluationDetails(
-            key=key,
-            value=value,
-            variant=variant,
-            reason=flag.reason,
-            metadata=metadata,
-            error_code=error_code,
-            error_message=error_message,
+    reason = flag.reason
+    flag_metadata: Dict[str, Any] = {}
+    if metadata is not None:
+        flag_metadata.update(
+            id=metadata.id,
+            version=metadata.version,
+            config_version=metadata.config_version,
         )
-
-    if flag.error_code is not None:
-        return resolved(default_value, flag.error_code, flag.error_message)
-    accepts = _FLAG_VALUE_TYPES[value_type]
-    if accepts(flag.value):
-        return resolved(flag.value)
-    if flag.value is None or flag.value is False:
-        return resolved(default_value)
-    return resolved(
+    if reason is not None:
+        flag_metadata.update(
+            reason_code=reason.code or None, condition_index=reason.condition_index
+        )
+    if metadata is not None:
+        flag_metadata.update(
+            rule_type=metadata.rule_type,
+            rule_id=metadata.rule_id,
+            variant_key=metadata.variant_key,
+        )
+    return _resolve_flag_value(
+        key,
+        flag.value,
         default_value,
-        FlagEvaluationErrorCode.TYPE_MISMATCH,
-        f"Flag '{key}' does not have a {value_type} value.",
+        value_type,
+        config_version=metadata.config_version if metadata else None,
+        reason_code=reason.code if reason else None,
+        variant=metadata.variant_key if metadata else None,
+        flag_metadata={k: v for k, v in flag_metadata.items() if v is not None},
+        error_code=flag.error_code,
+        error_message=flag.error_message,
     )
+
+
+def _has_untyped_flag_records(resp: Any) -> bool:
+    """Whether a raw ``/flags`` response has a record without a typed ``value``.
+
+    Such a record comes from a server that does not send ``/flags?v=4`` records.
+    """
+    if not isinstance(resp, dict):
+        return False
+    flags = resp.get("flags")
+    if isinstance(flags, dict):
+        return any(
+            isinstance(record, dict) and "value" not in record
+            for record in flags.values()
+        )
+    return bool(resp.get("featureFlags"))
+
+
+_UNTYPED_FLAGS_RESPONSE_MESSAGE = (
+    "[FEATURE FLAGS] The /flags response has no typed flag values, so the server"
+    " may not support /flags?v=4. Typed accessors read every flag as config"
+    " version 1: number and object values are only available as payloads, and"
+    " get_number_value and get_object_value return the default."
+)
 
 
 class FlagsResponse(TypedDict, total=False):
