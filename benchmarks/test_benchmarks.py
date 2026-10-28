@@ -1,4 +1,6 @@
+import copy
 import gc
+import io
 import json
 import subprocess
 import sys
@@ -22,7 +24,7 @@ from measurement import (
     time_operations,
 )
 from prepare import prepare
-from run import append_sample, main, run_worker
+from run import append_sample, load_shards, main, run_worker
 from server import BenchmarkServer
 from worker import execute
 from workload import Workload, control
@@ -122,6 +124,179 @@ class BenchmarksTest(unittest.TestCase):
                             if spec["drain_strategy"] == "steady"
                             else spec["operations"],
                         )
+
+    def test_shard_manifest_exactly_partitions_full_and_smoke(self):
+        shards = load_shards()
+        self.assertEqual(
+            list(shards), ["flags-single", "flags-scaling", "flags-memory", "capture"]
+        )
+        assigned = [item for items in shards.values() for item in items]
+        for smoke in (False, True):
+            self.assertEqual(assigned, [spec["id"] for spec in workloads(smoke)])
+        self.assertEqual([len(items) for items in shards.values()], [9, 3, 2, 6])
+        with (
+            patch("run.workloads", side_effect=[workloads(), workloads(True)[:-1]]),
+            self.assertRaisesRegex(ValueError, "partition"),
+        ):
+            load_shards()
+
+    def test_shard_manifest_rejects_invalid_partitions_and_identifiers(self):
+        original = json.loads((ROOT / "benchmarks/shards.json").read_text())
+        for case in (
+            "version",
+            "sdk",
+            "empty",
+            "duplicate-shard",
+            "unsafe-id",
+            "empty-workloads",
+            "duplicate-within",
+            "duplicate-across",
+            "missing",
+            "unknown",
+            "extra-field",
+            "invalid-workload",
+        ):
+            manifest = copy.deepcopy(original)
+            shards = manifest["shards"]
+            if case == "version":
+                manifest["manifest_version"] = True
+            elif case == "sdk":
+                manifest["sdk"] = "posthog-node"
+            elif case == "empty":
+                manifest["shards"] = []
+            elif case == "duplicate-shard":
+                shards[1]["id"] = shards[0]["id"]
+            elif case == "unsafe-id":
+                shards[0]["id"] = "../flags-single"
+            elif case == "empty-workloads":
+                shards[0]["workloads"] = []
+            elif case == "duplicate-within":
+                shards[0]["workloads"].append(shards[0]["workloads"][0])
+            elif case == "duplicate-across":
+                shards[1]["workloads"].append(shards[0]["workloads"][0])
+            elif case == "missing":
+                shards[0]["workloads"].pop()
+            elif case == "unknown":
+                shards[0]["workloads"][0] = "flags.unknown"
+            elif case == "extra-field":
+                manifest["extra"] = 1
+            elif case == "invalid-workload":
+                shards[0]["workloads"][0] = []
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "shards.json"
+                path.write_text(json.dumps(manifest))
+                with self.assertRaises(ValueError):
+                    load_shards(path)
+
+    def test_shard_and_filter_cli_errors_precede_execution(self):
+        for selection in (
+            ["--shard", "unknown"],
+            ["--shard", "capture", "--filter", "capture."],
+            ["--shard", "capture", "--filter", ""],
+            ["--filter", "unknown"],
+        ):
+            with (
+                self.subTest(selection=selection),
+                patch("run.document_for") as describe,
+                patch("sys.stderr", new_callable=io.StringIO),
+                self.assertRaises(SystemExit) as error,
+            ):
+                main(
+                    [
+                        "--base",
+                        str(ROOT),
+                        "--head",
+                        str(ROOT),
+                        "--output",
+                        "/unused",
+                        *selection,
+                    ]
+                )
+            self.assertEqual(error.exception.code, 2)
+            describe.assert_not_called()
+
+    def test_shards_preserve_suite_and_complete_alternating_repetitions(self):
+        suites = []
+        pair_ids = []
+        for shard_id, selected in load_shards().items():
+            with (
+                self.subTest(shard=shard_id),
+                tempfile.TemporaryDirectory() as directory,
+                patch("run.run_worker", return_value={"status": "ok"}) as worker,
+                patch("run.append_sample") as append,
+                patch("sys.stderr", new_callable=io.StringIO),
+            ):
+                self.assertEqual(
+                    main(
+                        [
+                            "--base",
+                            str(ROOT),
+                            "--head",
+                            str(ROOT),
+                            "--output",
+                            directory,
+                            "--smoke",
+                            "--shard",
+                            shard_id,
+                        ]
+                    ),
+                    0,
+                )
+                base = json.loads((Path(directory) / "base.json").read_text())
+                head = json.loads((Path(directory) / "head.json").read_text())
+                self.assertEqual(base["suite"], head["suite"])
+                suites.append(head["suite"])
+                self.assertEqual(head["suite"]["repetitions"], 6)
+                self.assertEqual(
+                    base["execution"]["pair_id"], head["execution"]["pair_id"]
+                )
+                pair_ids.append(head["execution"]["pair_id"])
+                for document in (base, head):
+                    self.assertEqual(document["execution"]["shard_id"], shard_id)
+                    self.assertEqual(
+                        [b["id"] for b in document["benchmarks"]], selected
+                    )
+                specs = [spec for spec in workloads(True) if spec["id"] in selected]
+                self.assertEqual(
+                    [(call.args[1], call.args[2]) for call in worker.call_args_list],
+                    [
+                        (spec, measurement_pass)
+                        for spec in specs
+                        for _ in range(6)
+                        for measurement_pass in spec["passes"]
+                        for _ in range(2)
+                    ],
+                )
+                expected = [
+                    (spec["id"], repetition, role)
+                    for spec in specs
+                    for repetition in range(6)
+                    for _ in spec["passes"]
+                    for role in (
+                        ["head", "base"] if repetition % 2 else ["base", "head"]
+                    )
+                ]
+                # Record identity distinguishes the two sides even for same-revision runs.
+                records = {
+                    id(call.args[0]): call.args[0] for call in append.call_args_list
+                }
+                roles: dict[int, str] = {}
+                for spec in specs:
+                    matching = [
+                        key
+                        for key, record in records.items()
+                        if record["id"] == spec["id"]
+                    ]
+                    roles.update(zip(matching, ("base", "head")))
+                self.assertEqual(
+                    [
+                        (call.args[0]["id"], call.args[2], roles[id(call.args[0])])
+                        for call in append.call_args_list
+                    ],
+                    expected,
+                )
+        self.assertTrue(all(suite == suites[0] for suite in suites))
+        self.assertEqual(len(set(pair_ids)), 4)
 
     def test_capture_phase_reset_flush_schedules_and_fixture_ownership(self):
         for strategy in ("steady", "burst"):
@@ -605,6 +780,11 @@ class BenchmarksTest(unittest.TestCase):
             path.write_text("VALUE = 1")
             before = source_digest(directory)
             path.write_text("VALUE = 2")
+            self.assertNotEqual(source_digest(directory), before)
+            manifest = Path(directory) / "shards.json"
+            manifest.write_text('{"manifest_version": 1}')
+            before = source_digest(directory)
+            manifest.write_text('{"manifest_version": 2}')
             self.assertNotEqual(source_digest(directory), before)
 
     def test_paired_documents(self):

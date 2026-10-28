@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,47 @@ WORKER = HERE / "worker.py"
 TIMEOUT = 120
 MAX_WORKER_TIMEOUTS = 2
 RSS_LIMIT = 512 * 1024 * 1024
+
+
+def load_shards(path=HERE / "shards.json"):
+    manifest = json.loads(path.read_text())
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) != {"manifest_version", "sdk", "shards"}
+        or type(manifest["manifest_version"]) is not int
+        or manifest["manifest_version"] != 1
+        or manifest["sdk"] != "posthog-python"
+        or not isinstance(manifest["shards"], list)
+        or not 1 <= len(manifest["shards"]) <= 16
+    ):
+        raise ValueError("Invalid shard manifest")
+    shards = {}
+    assigned = []
+    for shard in manifest["shards"]:
+        if (
+            not isinstance(shard, dict)
+            or set(shard) != {"id", "workloads"}
+            or not isinstance(shard["id"], str)
+            or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", shard["id"])
+            or shard["id"] in shards
+            or not isinstance(shard["workloads"], list)
+            or not shard["workloads"]
+            or not all(isinstance(item, str) for item in shard["workloads"])
+        ):
+            raise ValueError("Invalid or duplicate shard")
+        shards[shard["id"]] = shard["workloads"]
+        assigned.extend(shard["workloads"])
+    for smoke in (False, True):
+        inventory = [spec["id"] for spec in workloads(smoke)]
+        if (
+            len(set(assigned)) != len(assigned)
+            or len(set(inventory)) != len(inventory)
+            or set(assigned) != set(inventory)
+        ):
+            raise ValueError(
+                "Shard workloads must exactly partition full and smoke inventories"
+            )
+    return shards
 
 
 def worker_env():
@@ -298,12 +340,24 @@ def main(args=None):
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, default=6, choices=range(1, 31))
     parser.add_argument("--smoke", action="store_true")
-    parser.add_argument("--filter", default="")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--filter", default="")
+    selection.add_argument("--shard")
     options = parser.parse_args(args)
+    try:
+        shards = load_shards()
+    except ValueError as error:
+        parser.error(str(error))
+    if options.shard is not None and options.shard not in shards:
+        parser.error(f"Unknown shard: {options.shard}")
     specs = [
         spec
         for spec in workloads(options.smoke)
-        if spec["id"].startswith(options.filter)
+        if (
+            spec["id"] in shards[options.shard]
+            if options.shard is not None
+            else spec["id"].startswith(options.filter)
+        )
     ]
     if not specs:
         parser.error("No matching workloads")
@@ -339,6 +393,9 @@ def main(args=None):
         role: document_for(directory, role, pair_id, suite)
         for role, directory in directories.items()
     }
+    if options.shard is not None:
+        for document in documents.values():
+            document["execution"]["shard_id"] = options.shard
     for key in ("runtime_version", "measurement_tools", "os", "arch"):
         if documents["base"]["execution"][key] != documents["head"]["execution"][key]:
             raise ValueError(f"Base/head {key} differ")
