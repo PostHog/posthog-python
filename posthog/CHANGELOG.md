@@ -1,5 +1,11 @@
 # posthog
 
+## 7.76.1 — 2026-10-28
+
+### Patch changes
+
+- [b0a2b59](https://github.com/posthog/posthog-python/commit/b0a2b59dc09e96903cdf97ea3c8ab5298bdff7bb) The LangChain callback handler now records `$ai_web_search_count` for Anthropic responses that report `server_tool_use.web_search_requests`, as the OpenAI, Anthropic and Gemini wrappers and `posthog-js` already do. — Thanks @pcbeingused333!
+
 ## 7.76.0 — 2026-10-27
 
 ### Minor changes
