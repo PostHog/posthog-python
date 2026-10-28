@@ -249,6 +249,10 @@ class MCPAnalyticsOptions:
     # Send `$mcp_initialize` for each `initialize` handshake. On by default.
     # False sends no `$mcp_initialize`. Nothing else changes.
     send_initialize_event: bool = True
+    # Send `$mcp_tools_list` for each `tools/list`. On by default. False sends
+    # no `$mcp_tools_list`. Nothing else changes: tools keep their injected
+    # arguments, and the virtual tools stay listed.
+    send_tools_list_event: bool = True
 
 
 @dataclass
