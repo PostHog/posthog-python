@@ -288,7 +288,7 @@ class TestPostHogTracingProcessor:
         call_kwargs = mock_client.capture.call_args[1]
         assert call_kwargs["properties"]["$ai_reasoning_tokens"] == 400
 
-    def test_generation_span_reads_nested_cache_and_reasoning_tokens(
+    def test_generation_span_reads_nested_cache_tokens(
         self, processor, mock_client, mock_span
     ):
         """The Agents SDK nests cached and reasoning tokens under the usage
@@ -320,12 +320,11 @@ class TestPostHogTracingProcessor:
         assert props["$ai_input_tokens"] == 100
         assert props["$ai_cache_read_input_tokens"] == 60
         assert props["$ai_output_tokens"] == 50
-        assert props["$ai_reasoning_tokens"] == 40
+        # Inclusive in output_tokens; forwarding it would be counted twice.
+        assert "$ai_reasoning_tokens" not in props
         assert props["$ai_cache_reporting_exclusive"] is False
 
-    def test_response_span_reads_cache_and_reasoning_tokens(
-        self, processor, mock_client, mock_span
-    ):
+    def test_response_span_reads_cache_tokens(self, processor, mock_client, mock_span):
         """Response spans carry the OpenAI Responses usage object, with cached
         and reasoning tokens in its details fields."""
         from openai.types.responses import Response
@@ -362,7 +361,8 @@ class TestPostHogTracingProcessor:
         assert props["$ai_input_tokens"] == 100
         assert props["$ai_cache_read_input_tokens"] == 60
         assert props["$ai_output_tokens"] == 50
-        assert props["$ai_reasoning_tokens"] == 40
+        # Inclusive in output_tokens; forwarding it would be counted twice.
+        assert "$ai_reasoning_tokens" not in props
         assert props["$ai_cache_reporting_exclusive"] is False
 
     def test_cached_compatible_claude_usage_is_declared_inclusive(self):

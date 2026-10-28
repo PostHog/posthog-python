@@ -549,15 +549,12 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
         }
 
-        # Add optional token fields if present. The Agents SDK nests these under
-        # the usage details fields; flat keys are kept for custom models.
-        reasoning_tokens = usage.get("reasoning_tokens") or _usage_detail(
-            usage,
-            ("output_tokens_details", "completion_tokens_details"),
-            "reasoning_tokens",
-        )
-        if reasoning_tokens:
-            properties["$ai_reasoning_tokens"] = reasoning_tokens
+        # Add optional token fields if present. The Agents SDK nests cached
+        # tokens under the usage details fields; flat keys are kept for custom
+        # models. Nested reasoning is not forwarded: compatible providers count
+        # it inside the output total, and the cost backend would add it again.
+        if usage.get("reasoning_tokens"):
+            properties["$ai_reasoning_tokens"] = usage["reasoning_tokens"]
         cache_read_tokens = usage.get("cache_read_input_tokens")
         if not cache_read_tokens:
             cache_read_tokens = _usage_detail(
@@ -749,11 +746,6 @@ class PostHogTracingProcessor(TracingProcessor):
             properties["$ai_total_cost_usd"] = total_cost_usd
 
         if usage:
-            reasoning_tokens = _usage_detail(
-                usage, ("output_tokens_details",), "reasoning_tokens"
-            )
-            if reasoning_tokens:
-                properties["$ai_reasoning_tokens"] = reasoning_tokens
             cache_read_tokens = _usage_detail(
                 usage, ("input_tokens_details",), "cached_tokens"
             )
