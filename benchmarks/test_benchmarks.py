@@ -24,6 +24,7 @@ from measurement import (
 from prepare import prepare
 from run import append_sample, main, run_worker
 from server import BenchmarkServer
+from worker import execute
 from workload import Workload, control
 
 from posthog import Posthog
@@ -33,6 +34,276 @@ PYTHON = ROOT / ".venv-benchmark/bin/python"
 
 
 class BenchmarksTest(unittest.TestCase):
+    def test_specification_inventory_and_parameters(self):
+        single_cases = (
+            "boolean",
+            "rollout",
+            "variant",
+            "property",
+            "regex",
+            "cohort",
+            "early",
+            "late",
+            "no-match",
+        )
+        for smoke in (False, True):
+            expected = {
+                **{
+                    f"flags.single.{case}": (
+                        160 if smoke else 16000,
+                        ["timing", "allocation"],
+                    )
+                    for case in single_cases
+                },
+                **{
+                    f"flags.all.{count}": (
+                        16 if smoke else operations,
+                        ["timing", "allocation"],
+                    )
+                    for count, operations in ((10, 1600), (100, 160), (1000, 160))
+                },
+                "flags.load.1000": (32 if smoke else 1600, ["memory"]),
+                "flags.refresh.1000": (4 if smoke else 40, ["memory"]),
+                **{
+                    f"capture.enqueue.{size}": (200 if smoke else 1000, ["timing"])
+                    for size in (32, 4096)
+                },
+                **{
+                    f"capture.drain.{strategy}.{size}": (
+                        200 if smoke else 1000,
+                        ["timing", "allocation", "memory"],
+                    )
+                    for strategy in ("steady", "burst")
+                    for size in (32, 4096)
+                },
+            }
+            specs = workloads(smoke)
+            self.assertEqual(len(specs), 20)
+            self.assertEqual(
+                {s["id"]: (s["operations"], s["passes"]) for s in specs}, expected
+            )
+            for spec in specs:
+                self.assertEqual(
+                    spec["concurrency"], 8 if spec["id"] == "flags.load.1000" else 1
+                )
+                if spec["mode"] == "single":
+                    self.assertEqual(spec["flag_count"], 10)
+                    self.assertEqual(
+                        spec["flag_index"],
+                        single_cases.index(spec["id"].split(".")[-1]),
+                    )
+                    self.assertEqual(
+                        spec["allocation_operations"], 160 if smoke else 2000
+                    )
+                elif "flag_count" in spec:
+                    self.assertEqual(spec["flag_count"], int(spec["id"].split(".")[-1]))
+                    if "allocation_operations" in spec:
+                        self.assertEqual(
+                            spec["allocation_operations"],
+                            16 if smoke else max(16, 1600 // spec["flag_count"]),
+                        )
+                else:
+                    self.assertEqual(
+                        spec["payload_bytes"], int(spec["id"].split(".")[-1])
+                    )
+                    self.assertEqual(
+                        spec["completion_boundary"],
+                        "api_return"
+                        if spec["mode"] == "capture"
+                        else "completed_delivery",
+                    )
+                    if spec["mode"] == "drain":
+                        self.assertEqual(
+                            spec["drain_strategy"], spec["id"].split(".")[2]
+                        )
+                        self.assertEqual(
+                            spec["flush_every"],
+                            100
+                            if spec["drain_strategy"] == "steady"
+                            else spec["operations"],
+                        )
+
+    def test_capture_phase_reset_flush_schedules_and_fixture_ownership(self):
+        for strategy in ("steady", "burst"):
+            calls: list[int] = []
+            submitted: list[dict[str, Any]] = []
+
+            class Observed(Posthog):
+                def capture(self, event, _submitted=submitted, **kwargs):
+                    _submitted.append(kwargs["properties"])
+                    return super().capture(event, **kwargs)
+
+                def flush(self, timeout_seconds=10, _calls=calls, _submitted=submitted):
+                    _calls.append(len(_submitted))
+                    return super().flush(timeout_seconds=timeout_seconds)
+
+            spec = next(
+                s for s in workloads(True) if s["id"] == f"capture.drain.{strategy}.32"
+            )
+            with self.subTest(strategy=strategy), BenchmarkServer(spec) as server:
+                workload = Workload(spec, server.url, client_class=Observed)
+                try:
+                    workload.prepare_phase(160)
+                    workload.run(160)
+                    workload.verify()
+                    old_properties = list(submitted)
+                    workload.prepare_phase(spec["operations"])
+                    self.assertEqual(workload.state()["delivered"], 0)
+                    calls.clear()
+                    submitted.clear()
+                    checkpoints: list[tuple[int, list[int]]] = []
+                    with patch(
+                        "gc.collect",
+                        side_effect=AssertionError("GC inside measured work"),
+                    ):
+                        workload.run(
+                            checkpoint=lambda n, points=checkpoints, flushes=calls: (
+                                points.append((n, list(flushes)))
+                            )
+                        )
+                    self.assertEqual(
+                        calls, [100, 200] if strategy == "steady" else [200]
+                    )
+                    self.assertEqual(
+                        checkpoints,
+                        [(100, [100]), (200, [100, 200])]
+                        if strategy == "steady"
+                        else [(100, []), (200, [])],
+                    )
+                    count = len(calls)
+                    state = workload.verify()
+                    self.assertEqual(len(calls), count)
+                    self.assertEqual(state["unique_sequences"], 200)
+                    self.assertEqual(state["missing_sequences"], 0)
+                    self.assertEqual(
+                        [p["sequence"] for p in submitted], list(range(200))
+                    )
+                    self.assertEqual(
+                        len({id(p) for p in submitted + old_properties}), 360
+                    )
+                    self.assertEqual(
+                        [p["sequence"] for p in old_properties], list(range(160))
+                    )
+                finally:
+                    workload.close()
+
+    def test_balanced_duplicate_loss_fails_and_delivery_order_is_not_required(self):
+        spec = next(s for s in workloads(True) if s["id"] == "capture.drain.burst.32")
+        for duplicate in (False, True):
+            with self.subTest(duplicate=duplicate), BenchmarkServer(spec) as server:
+                workload = Workload(spec, server.url)
+                try:
+                    events = workload.events
+                    if duplicate:
+                        # Replace the final 16 events with the preceding 16: total and
+                        # per-identity counts stay identical, but sequences do not.
+                        events = events[:-16] + events[-32:-16]
+                    control(server.url, "/batch", {"batch": list(reversed(events))})
+                    workload.captured = spec["operations"]
+                    for event in workload.events:
+                        workload.captured_by_user[event["distinct_id"]] += 1
+                    self.assertEqual(
+                        workload.state()["delivered_by_user"], workload.captured_by_user
+                    )
+                    if duplicate:
+                        with self.assertRaises(AssertionError):
+                            workload.verify()
+                        self.assertEqual(workload.state()["missing_sequences"], 16)
+                    else:
+                        workload.verify()
+                finally:
+                    workload.close()
+
+    def test_incomplete_delivery_is_not_rescued_by_verification(self):
+        calls = []
+
+        class Incomplete(Posthog):
+            def flush(self, timeout_seconds=10):
+                calls.append(timeout_seconds)
+
+        spec = next(s for s in workloads(True) if s["id"] == "capture.drain.burst.32")
+        with BenchmarkServer(spec) as server:
+            workload = Workload(spec, server.url, client_class=Incomplete)
+            try:
+                workload.run()
+                with self.assertRaises(AssertionError):
+                    workload.verify()
+                self.assertEqual(calls, [None])
+            finally:
+                Posthog.flush(workload.client, timeout_seconds=None)
+                workload.close()
+
+    def test_refresh_generation_reset_and_full_sweeps_outside_measurement(self):
+        spec = next(s for s in workloads(True) if s["mode"] == "refresh")
+        with BenchmarkServer(spec) as server:
+            workload = Workload(spec, server.url)
+            try:
+                workload.run(2)
+                workload.verify()
+                workload.prepare_phase(spec["operations"])
+                self.assertEqual(workload.generation, 0)
+                for generation in range(1, 5):
+                    workload.run(1)
+                    self.assertEqual(workload.generation, generation)
+                    workload.verify()
+                workload.prepare_phase(spec["operations"])
+                checks = workload.checks
+                checkpoints: list[int] = []
+                with patch(
+                    "gc.collect", side_effect=AssertionError("GC inside measured work")
+                ):
+                    workload.run(checkpoint=checkpoints.append)
+                self.assertEqual(workload.checks, checks)
+                self.assertEqual(checkpoints, [1, 2, 3, 4])
+                workload.verify()
+                self.assertEqual(workload.checks, checks + 16)
+            finally:
+                workload.close()
+
+    def test_memory_checkpoint_positions_and_settling_order(self):
+        for workload_id, operations, positions in (
+            ("flags.load.1000", 70, [32, 64, 70]),
+            ("flags.refresh.1000", 4, [1, 2, 3, 4]),
+            ("capture.drain.steady.32", 250, [100, 200, 250]),
+            ("capture.drain.burst.32", 250, [100, 200, 250]),
+        ):
+            spec = {
+                **next(s for s in workloads(True) if s["id"] == workload_id),
+                "operations": operations,
+                "pass": "memory",
+            }
+            events: list[str] = []
+
+            class Observed(Workload):
+                def run(self, *args, _events=events, **kwargs):
+                    _events.append("run")
+                    with patch(
+                        "gc.collect",
+                        side_effect=AssertionError("GC inside measured work"),
+                    ):
+                        return super().run(*args, **kwargs)
+
+                def verify(self, _events=events):
+                    _events.append("verify")
+                    return super().verify()
+
+            with (
+                self.subTest(workload=workload_id),
+                BenchmarkServer(spec) as server,
+                patch("worker.Workload", Observed),
+                patch(
+                    "worker.settle", side_effect=lambda log=events: log.append("settle")
+                ),
+                patch(
+                    "worker.memory",
+                    side_effect=lambda log=events: log.append("memory") or memory(),
+                ),
+            ):
+                raw = execute(spec, server.url)
+            self.assertEqual([p["operations"] for p in raw["checkpoints"]], positions)
+            self.assertEqual(events[-4:], ["memory", "settle", "memory", "verify"])
+            self.assertEqual(events.count("settle"), 2)
+
     def test_deterministic_and_changing_fixtures(self):
         self.assertEqual(digest(definitions(1000)), digest(definitions(1000)))
         self.assertNotEqual(digest(definitions(1000)), digest(definitions(1000, 1)))
@@ -102,7 +373,7 @@ class BenchmarksTest(unittest.TestCase):
                 )
 
         spec = {
-            **next(s for s in workloads(True) if s["id"] == "capture.drain.32"),
+            **next(s for s in workloads(True) if s["id"] == "capture.drain.steady.32"),
             "operations": 100,
         }
         with BenchmarkServer(spec, batch_delay=0.05) as server:
@@ -211,7 +482,6 @@ class BenchmarksTest(unittest.TestCase):
                 checkpoints = []
 
                 def checkpoint(completed):
-                    settle()
                     checkpoints.append((completed, memory()["rss"]))
 
                 workload.run(checkpoint=checkpoint)
@@ -367,6 +637,8 @@ class BenchmarksTest(unittest.TestCase):
                 base["benchmarks"][0]["fixture_digest"],
                 head["benchmarks"][0]["fixture_digest"],
             )
+            self.assertEqual(base["suite"]["version"], 2)
+            self.assertEqual(base["suite"]["specification"], "sdk-benchmarks/v1")
             self.assertEqual(base["revision"]["role"], "base")
             self.assertEqual(head["revision"]["role"], "head")
             for metric in head["benchmarks"][0]["metrics"]:

@@ -136,6 +136,7 @@ def document_for(directory, role, pair_id, suite):
                 cwd=cwd,
                 env=worker_env(),
                 text=True,
+                timeout=TIMEOUT,
             )
         )
     execution.update(
@@ -309,7 +310,8 @@ def main(args=None):
     pair_id = str(uuid.uuid4())
     suite = {
         "id": "python-sdk-performance",
-        "version": 1,
+        "version": 2,
+        "specification": "sdk-benchmarks/v1",
         "source_commit": git(HERE, "rev-parse", "HEAD"),
         "source_digest": source_digest(HERE),
         "profile": "smoke" if options.smoke else "full",
@@ -320,13 +322,15 @@ def main(args=None):
             "scope": "PYMALLOC_MALLOC/CALLOC/REALLOC requests; all worker threads",
         },
         "transport": "loopback HTTP receiver in coordinator process; uncompressed v0",
+        "warmup": "two refreshes; otherwise min(operations, 32 for 1000 flags or 160); verified phase reset before measurement",
         "settling": "two gc.collect calls separated by sleep(0)",
         "memory_sampling": "operation checkpoints; lifetime high-water mark includes setup and warmup",
         "capture": {
             "flush_at": 100000,
             "flush_interval_seconds": 3600,
             "consumer_threads": 1,
-            "drain_every": 100,
+            "max_queue_size": 100001,
+            "compression": "none",
         },
         "flag_poll_interval_seconds": 3600,
     }

@@ -1,6 +1,6 @@
 # Python SDK benchmarks
 
-PR-only, paired measurements of independently installed Python SDK revisions. Each workload/pass/repetition runs in a fresh process against the target's non-editable wheel. Benchmark code comes from one checkout and emits `base.json` and `head.json` in the Node pilot's result structure.
+PR-only, paired measurements of independently installed Python SDK revisions. Each workload/pass/repetition runs in a fresh process against the target's non-editable wheel. Benchmark code comes from one checkout and emits `base.json` and `head.json` using the shared reporting contract. Suite version 2 implements [sdk-benchmarks/v1](https://github.com/PostHog/.github/blob/main/.github/workflows/sdk-benchmark-specification.md).
 
 ## Setup and local execution
 
@@ -44,37 +44,40 @@ uv pip compile benchmarks/requirements.in --python-version 3.12 --universal \
 | Nine single-flag cases | `get_feature_flag` | Elapsed time/op, process CPU/op, Python allocator bytes/calls per op |
 | All flags: 10, 100, 1,000 | `get_all_flags` | Same metrics per complete all-flags call |
 | Sustained 1,000-flag evaluation | Eight threads calling `get_all_flags` | RSS observations and post-settling RSS |
-| Forty definition refreshes | `load_feature_flags`, then validated `get_all_flags` | Memory checkpoints every five cycles and at the end |
+| Forty definition refreshes | `load_feature_flags` | Memory checkpoints after every refresh |
 | Capture: 32-byte and 4,096-byte string properties | `capture` | Foreground elapsed time and caller-thread CPU per event |
-| Capture and drain: both payload sizes | `capture`, `flush` every 100 events | Full-pipeline time, process CPU, allocator bytes/calls, and memory |
+| Steady delivery: both payload sizes | `capture`, `flush` every 100 events | Full-pipeline time, process CPU, allocator bytes/calls, and memory |
+| Burst delivery: both payload sizes | `capture`, one final `flush` | Full-pipeline time, process CPU, allocator bytes/calls, and memory |
 
-The flag mix and sixteen identities match the Node pilot conceptually: boolean, percentage rollout, multivariate assignment, person properties, regex, cohort, early/late/no-match, and inactive flags. Expected values are computed independently of the SDK. Every identity is validated before and after measurement. Refresh generations alter actual boolean/cohort results and regex patterns so a fetch without a state update fails validation.
+The 20 workload IDs and operation counts follow the specification. Full single-flag workloads use 16,000 evaluations; all-flags workloads use 1,600/160/160 for 10/100/1,000 definitions. Allocation passes use 2,000 single-flag and 160/16/16 all-flags evaluations, with the actual denominator recorded. Load uses 1,600 evaluations; refresh uses 40 reloads. Every capture workload and pass uses 1,000 events. Smoke uses 160 single-flag, 16 all-flags, 32 load evaluations, four refreshes, and 200 captures.
+
+The flag mix and sixteen identities follow the shared fixtures: boolean, percentage rollout, multivariate assignment, person properties, regex, cohort, early/late/no-match, and inactive flags. Expected values are computed independently of the SDK. Every identity is validated before and after measurement. All measured flag phases start at generation 0, restored through public reload after warmup. Refreshes load generations 1–40 (1–4 for smoke), checking each definitions request. Full result sweeps occur before and after measurement, not inside the refresh loop. Controls separately check every changing generation and reload result.
 
 The suite covers the supported legacy flag getters, not `evaluate_flags` snapshots. Deprecation warnings are encountered during setup. Eight threads are **GIL-constrained concurrency**, not a claim of eight-way parallel Python execution.
 
 ### Transport and lifecycle
 
-Python has no public fetch adapter. A bounded loopback HTTP server runs in the coordinator process, outside the measured worker, and serves definitions and accepts uncompressed v0 batches. Its routes are limited to the fixture protocol and a control/inspection interface. It retains counters and per-identity counts, not event history. Remote flag fallback is unexpected and fails verification.
+Python has no public fetch adapter. A bounded loopback HTTP server runs in the coordinator process, outside the measured worker, and serves definitions and accepts uncompressed v0 batches. Its routes are limited to the fixture protocol and a control/inspection interface. It retains bounded counters, per-identity counts, and a preallocated sequence bitmap, not event history. Remote flag fallback is unexpected and fails verification.
 
 The SDK uses real requests, JSON parsing/serialization, background consumers, flag loading, flush, and shutdown. No private queue, evaluator, or poller is replaced. Automatic polling and partial-batch deadlines are set to one hour, longer than the worker timeout. Refreshes and draining use public methods. Worker shutdown must stop SDK threads.
 
-Capture checks require the correct event name, exact payload, identity distribution, and total delivered count. Rejected captures, timeouts that leave undelivered events, malformed payloads, and remote fallback cannot appear as successful low-cost work.
+Capture fixtures are preconstructed outside measurement: event `benchmark`, identity `benchmark-user-<sequence modulo 16>`, and separate caller-owned property dictionaries containing exactly 32 or 4,096 ASCII `x` characters as `payload`, `plan=pro`, and integer `sequence`. Warmup delivery is flushed and verified before receiver/capture state is reset; measured sequences restart at zero. Capture checks require the correct event name, exact payload and plan, sequence-to-identity mapping, and exactly one delivery of each expected sequence. Balanced loss/duplication fails even with matching totals and per-user counts; arrival order is unrestricted. Rejected captures, timeouts that leave undelivered events, malformed payloads, and remote fallback cannot appear as successful low-cost work.
 
 ### Capture measurement boundaries
 
 `capture()` returns after foreground preparation/enqueue, while a consumer can concurrently prepare its batch. There is no public completion boundary for that background preparation short of flushing. Therefore:
 
-- `capture.enqueue.*` reports foreground elapsed time and **caller-thread CPU**, not process-wide CPU or allocation totals.
-- `capture.drain.*` includes `flush(timeout_seconds=None)` and reports the complete delivery path's process CPU and allocations, including requests/serialization. The external worker timeout bounds this wait. Verification does not flush again: unfinished measured work cannot be rescued outside the measurement. Server CPU and server allocations are excluded; elapsed time includes loopback transport.
+- `capture.enqueue.*` records `completion_boundary=api_return` and reports foreground elapsed time and **caller-thread CPU**, not process-wide CPU or allocation totals. Its explicit flush and delivery checks occur afterward, outside measurement.
+- `capture.drain.steady.*` and `capture.drain.burst.*` record `completion_boundary=completed_delivery`. Steady flushes every 100 captures; burst flushes once after all captures. Parameters record `drain_strategy` and `flush_every`. Both include `flush(timeout_seconds=None)` and reports the complete delivery path's process CPU and allocations, including requests/serialization. The external worker timeout bounds this wait. Verification does not flush again: unfinished measured work cannot be rescued outside the measurement. Server CPU and server allocations are excluded; elapsed time includes loopback transport.
 - Enqueue-only allocation metrics are explicitly unavailable and direct readers to the drain workload.
 
-The enqueue workload uses 1,000 events, below queue/batch-count limits; partial batches can still be prepared by the consumer. These metrics describe their named paths rather than pretending Python and Node have identical asynchronous lifecycles.
+Capture uses public options `gzip=False`, `capture_mode="v0"`, `max_queue_size=100001`, `flush_at=100000`, and one-hour flush/poll intervals. The native consumer and size-driven batching remain active: burst describes the caller flush schedule, not retained queue size or a guaranteed HTTP request count. These metrics describe their named paths rather than pretending Python and Node have identical asynchronous lifecycles.
 
 ## Measurement methods
 
 Base/head alternate first position between independent repetitions and never benchmark concurrently. The same head-side fixtures and measurement code run against both installations. The runner verifies matching Python, profiler, psutil, OS, and architecture versions. Both workers use a fixed hash seed and a clean Python configuration environment.
 
-Warmup and correctness checks happen outside timing. Timing, allocation profiling, and memory observation are separate passes. Allocation passes use smaller fixed operation counts where tracing every Python allocation would otherwise produce excessive profiler files; the actual count is included in each result and used as its denominator. These counts are identical for base and head.
+Warmup and correctness checks happen outside measurement. Warmup uses two refreshes, otherwise the smaller of the operation count and 32 (1,000-flag workloads) or 160 (other workloads); both revisions use the same policy. Timing, allocation profiling, and memory observation are separate passes. Allocation passes use smaller fixed operation counts where tracing every Python allocation would otherwise produce excessive profiler files; the actual count is included in each result and used as its denominator. These counts are identical for base and head.
 
 ### Time and CPU
 
@@ -95,18 +98,18 @@ Memray runs with `trace_python_allocators=True` and `FileFormat.ALL_ALLOCATIONS`
 
 Profiler capture and aggregation do not contribute to reported timing. Profiles are streamed and removed after aggregation so repeated runs do not retain large binary captures. Raw counters and profiler versions remain in the JSON.
 
-The control suite demonstrates that this configuration records freed small allocations that default Memray tracking does not expose as Python allocator requests. Other controls preserve SDK outputs while adding CPU work and allocation churn; both must be detected. See [Memray's allocator documentation](https://bloomberg.github.io/memray/python_allocators.html) and [API documentation](https://bloomberg.github.io/memray/api.html).
+The controls also cover full/smoke inventory, flush schedules, phase reset and input ownership, reordered delivery, balanced duplicates/loss, failed delivery without a rescuing flush, refresh resets, and deterministic memory checkpoints. The control suite demonstrates that this configuration records freed small allocations that default Memray tracking does not expose as Python allocator requests. Other controls preserve SDK outputs while adding CPU work and allocation churn; both must be detected. See [Memray's allocator documentation](https://bloomberg.github.io/memray/python_allocators.html) and [API documentation](https://bloomberg.github.io/memray/api.html).
 
 ### Memory
 
 - Idle RSS: after imports, definitions, validation, warmup, and settling.
-- Observed workload peak RSS: operation checkpoints and end-of-work observation; can miss intervening spikes.
+- Observed workload peak RSS: maximum of before-work, operation checkpoints, and end-of-work observations; can miss intervening spikes. Checkpoints follow each 32 completed load evaluations, each refresh, or each 100 captures, including a final partial interval. Steady checkpoints follow scheduled flushes; burst checkpoints precede its final flush. A separate after-work snapshot includes completed delivery.
 - Lifetime peak RSS: `resource.getrusage`, normalized from platform-specific units. Includes setup and warmup, not just measured work.
 - Post-settling RSS: after two `gc.collect()` calls separated by a scheduler yield. Python reference counting also frees objects during ordinary execution.
 
-CPython has no uninstrumented total managed-heap byte counter equivalent to Node's `heapUsed`. `post_settling_heap_used` is explicitly unsupported; enabling tracing in the RSS pass would change the measurement. Retained RSS alone does not prove a leak because allocators can keep arenas resident. A public-entry control deliberately retains 8 MiB on each refresh and verifies that post-GC checkpoints expose the growth.
+CPython has no uninstrumented total managed-heap byte counter equivalent to Node's `heapUsed`. `post_settling_heap_used` is explicitly unsupported; enabling tracing in the RSS pass would change the measurement. Retained RSS alone does not prove a leak because allocators can keep arenas resident. Natural GC stays enabled, but no forced GC runs during work or checkpoint callbacks. Explicit settling occurs before and after memory measurement; final correctness sweeps follow the post-settling snapshot. A public-entry control deliberately retains 8 MiB on each refresh and verifies that checkpoint RSS exposes the growth.
 
-Each worker has a two-minute timeout and an externally monitored **512 MiB RSS ceiling**, checked approximately every 20 ms. This is a safety bound, not an exact OS-enforced limit: short spikes can exceed it between observations. A ceiling violation is reported as `error` with `rss_limit_exceeded`, not falsely described as a confirmed OS OOM. An explicit Python `MemoryError` is classified as OOM; a generic kill is not. The suite stops after two worker timeouts, after completing the current base/head pair, and preserves partial results for upload. Worker temporary files, including profiler traces, are owned and removed by the coordinator even when a worker is killed.
+SDK identity subprocesses have a two-minute deadline. Each worker has a two-minute timeout and an externally monitored **512 MiB RSS ceiling**, checked approximately every 20 ms. This is a safety bound, not an exact OS-enforced limit: short spikes can exceed it between observations. A ceiling violation is reported as `error` with `rss_limit_exceeded`, not falsely described as a confirmed OS OOM. An explicit Python `MemoryError` is classified as OOM; a generic kill is not. The suite stops after two worker timeouts, after completing the current base/head pair, and preserves partial results for upload. Worker temporary files, including profiler traces, are owned and removed by the coordinator even when a worker is killed.
 
 ## Results and CI
 
