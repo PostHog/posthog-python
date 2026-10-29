@@ -168,7 +168,21 @@ class WrappedResponses(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         state = _ResponsesStreamState()
-        response = await self._original.create(**kwargs)
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as exc:
+            await self._capture_streaming_event(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+                kwargs,
+                state,
+                time.time() - start_time,
+                error=exc,
+            )
+            raise
 
         async def async_generator():
             stream_error: Optional[BaseException] = None
@@ -396,7 +410,21 @@ class WrappedCompletions(_OpenAIWrapperResource):
         if "stream_options" not in kwargs:
             kwargs["stream_options"] = {}
         kwargs["stream_options"]["include_usage"] = True
-        response = await self._original.create(**kwargs)
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as exc:
+            await self._capture_streaming_event(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+                kwargs,
+                state,
+                time.time() - start_time,
+                error=exc,
+            )
+            raise
 
         async def async_generator():
             stream_error: Optional[BaseException] = None
