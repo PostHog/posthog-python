@@ -499,7 +499,23 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         )
 
         start_time = time.time()
-        response = await self._original.create(**kwargs)
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as exc:
+            _capture_embedding_event(
+                posthog_client=self._client._ph_client,
+                base_url=self._client.base_url,
+                response=None,
+                request_kwargs=kwargs,
+                latency=time.time() - start_time,
+                distinct_id=posthog_distinct_id,
+                trace_id=posthog_trace_id,
+                properties=posthog_properties,
+                privacy_mode=posthog_privacy_mode,
+                groups=posthog_groups,
+                error=exc,
+            )
+            raise
         end_time = time.time()
 
         _capture_embedding_event(
