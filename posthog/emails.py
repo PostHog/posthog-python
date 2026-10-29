@@ -122,8 +122,8 @@ _QUOTA_CODES = frozenset({"quota_limited"})
 class EmailError(Exception):
     """PostHog did not queue the email, or the client could not tell whether it did.
 
-    Branch on ``code``, PostHog's stable error code, or on ``name``, which uses
-    Resend's error names. The message never contains the secret key or the
+    Branch on ``code``, PostHog's stable error code, or on ``name``, a coarse
+    category of the failure. The message never contains the secret key or the
     request body.
     """
 
