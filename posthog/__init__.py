@@ -345,7 +345,10 @@ Attributes:
         ``True`` or ``{"http": ..., "db": ..., "runtime": ...}``) starts HTTP,
         database and runtime metrics from the OpenTelemetry instrumentations
         when ``setup()`` runs with it; call ``setup()`` before the web app is
-        created, because apps created earlier are not measured.
+        created, because apps created earlier are not measured. For Flask,
+        use ``flask.Flask(...)`` after setup, or import the ``Flask`` class only
+        after setup. Already-served Flask apps are not re-instrumented after
+        shutdown; create a new app for a replacement client.
     traces: Config dict for distributed tracing: ``service_name``,
         ``service_version``, ``environment``, ``resource_attributes``,
         ``flush_interval`` (5 s), ``max_queue_size`` (2048),

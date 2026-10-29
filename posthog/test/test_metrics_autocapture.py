@@ -802,23 +802,79 @@ class TestStartMetricsAutocapture:
         assert app_server.port in ports
         assert posthog_host.port not in ports
 
-    def test_measures_an_existing_flask_app_again_after_a_restart(
+    async def test_keeps_aiohttp_exclusions_for_sessions_created_after_start(
+        self, posthog_host, app_server, started, monkeypatch
+    ):
+        monkeypatch.setenv("OTEL_PYTHON_AIOHTTP_CLIENT_EXCLUDED_URLS", "healthz")
+        reader = InMemoryMetricReader()
+        _start(posthog_host, started, reader, areas={"http": True})
+
+        for _ in range(2):
+            async with aiohttp.ClientSession() as session:
+                for url in (
+                    f"{posthog_host.url}/batch/",
+                    f"{app_server.url}/healthz",
+                    f"{app_server.url}/orders",
+                ):
+                    async with session.get(url) as response:
+                        assert response.status == 200
+                        await response.read()
+
+        points = _points(reader, "http.client.request.duration")
+        assert {point.attributes["server.port"] for point in points} == {
+            app_server.port
+        }
+        assert sum(point.count for point in points) == 2
+        assert os.environ["OTEL_PYTHON_AIOHTTP_CLIENT_EXCLUDED_URLS"] == "healthz"
+
+    def test_flask_restart_does_not_partially_instrument_a_served_app(
         self, posthog_host, started
     ):
-        first_reader = InMemoryMetricReader()
-        first = _start(posthog_host, started, first_reader, areas={"http": True})
+        reader = InMemoryMetricReader()
+        first = _start(posthog_host, started, reader, areas={"http": True})
         app = flask.Flask(__name__)
-        app.add_url_rule("/health", "health", lambda: "ok")
-        app.test_client().get("/health")
-        assert _points(first_reader, "http.server.request.duration")
+        app.add_url_rule("/health", "health", lambda: ("unavailable", 503))
+        client = app.test_client()
+        assert client.get("/health").status_code == 503
+        [point] = _points(reader, "http.server.request.duration")
+        assert point.attributes["http.response.status_code"] == 503
+        first.shutdown()
+        original_wsgi = app.wsgi_app
+        before_request = list(app.before_request_funcs.get(None, []))
+        teardown_request = list(app.teardown_request_funcs.get(None, []))
+
+        for _ in range(3):
+            reader = InMemoryMetricReader()
+            handle = _start(posthog_host, started, reader, areas={"http": True})
+            assert app.wsgi_app is original_wsgi
+            assert not app._is_instrumented_by_opentelemetry
+            assert client.get("/health").status_code == 503
+            assert not _points(reader, "http.server.request.duration")
+            handle.shutdown()
+            assert app.wsgi_app is original_wsgi
+            assert app.before_request_funcs.get(None, []) == before_request
+            assert app.teardown_request_funcs.get(None, []) == teardown_request
+
+        with pytest.raises(AssertionError):
+            app.before_request(lambda: None)
+
+    def test_measures_an_existing_flask_app_restarted_before_its_first_request(
+        self, posthog_host, started
+    ):
+        first = _start(
+            posthog_host, started, InMemoryMetricReader(), areas={"http": True}
+        )
+        app = flask.Flask(__name__)
+        app.add_url_rule("/health", "health", lambda: ("unavailable", 503))
 
         first.shutdown()
         reader = InMemoryMetricReader()
         _start(posthog_host, started, reader, areas={"http": True})
-        app.test_client().get("/health")
+        assert app.test_client().get("/health").status_code == 503
 
         [point] = _points(reader, "http.server.request.duration")
         assert point.count == 1
+        assert point.attributes["http.response.status_code"] == 503
 
     def test_shutdown_keeps_middleware_that_the_app_added(self, posthog_host, started):
         samples = []
@@ -1437,6 +1493,36 @@ class TestClientOption:
             server.close()
 
         assert elapsed < 6
+
+    def test_sync_client_is_collectable_after_shutdown(self, posthog_host):
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                textwrap.dedent(
+                    f"""
+                    import gc
+                    import weakref
+                    from posthog.client import Client
+
+                    client = Client(
+                        "{FAKE_API_KEY}", host="{posthog_host.url}", sync_mode=True,
+                        metrics={{"autocapture": {{"db": True, "http": False, "runtime": False}}}},
+                    )
+                    assert client._metrics_autocapture is not None
+                    client.shutdown()
+                    ref = weakref.ref(client)
+                    del client
+                    gc.collect()
+                    assert ref() is None, "The exit callback retains the closed client"
+                    """
+                ),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert result.returncode == 0, result.stderr
 
     def test_sync_mode_exports_the_last_window_at_exit(self, posthog_host):
         script = textwrap.dedent(

@@ -3126,6 +3126,7 @@ class Client(object):
                 errors,
             )
             self._metrics_autocapture = None
+            atexit.unregister(self._atexit_metrics_autocapture)
         with self._traces_lock:
             traces = self._traces
         if traces is not None:

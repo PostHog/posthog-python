@@ -9,8 +9,11 @@ imported only when autocapture starts. Library instrumentors (requests, Django,
 psycopg, ...) are found through the ``opentelemetry_instrumentor`` entry points,
 the same way ``opentelemetry-instrument`` finds them. An instrumentor changes the
 library classes when it starts, so objects created before that, such as a Flask
-or FastAPI app, are not measured: create the client before the web app. Django
-is instrumented only when its settings are configured, as in ``AppConfig.ready()``.
+or FastAPI app, are not measured: create the client before the web app. For Flask,
+use ``import flask`` and construct ``flask.Flask(...)`` after starting the client,
+or import the ``Flask`` class only afterward. An already-served Flask app is not
+instrumented again after shutdown; create a new app for a replacement client.
+Django is instrumented only when its settings are configured, as in ``AppConfig.ready()``.
 
 The meter and tracer providers are private: nothing is set on the OpenTelemetry
 globals, and the app's ``OTEL_EXPORTER_OTLP_*`` settings are not used. The
@@ -156,8 +159,8 @@ _lock = threading.Lock()
 _active: Optional["MetricsAutocapture"] = None
 _warned_about_missing_packages = False
 # Flask apps created while autocapture runs. FlaskInstrumentor.uninstrument()
-# restores only the Flask class, so shutdown uninstruments these apps and the
-# next autocapture instruments them again.
+# restores only the Flask class, so shutdown uninstruments these apps. A later
+# autocapture can instrument them again only before their first request.
 _flask_apps: "weakref.WeakSet[Any]" = weakref.WeakSet()
 # The `inject` functions that autocapture replaced in instrumentor modules,
 # by module name.
@@ -589,6 +592,12 @@ def _track_flask_apps(instrumentor_class: Any, providers: Dict[str, Any]) -> Non
     flask.Flask = _TrackedFlask
     for app in list(_flask_apps):
         if not getattr(app, "_is_instrumented_by_opentelemetry", False):
+            if app._got_first_request:
+                log.warning(
+                    "Metrics autocapture skipped Flask app %r: it has already handled a request",
+                    app,
+                )
+                continue
             instrumentor_class.instrument_app(app, **providers)
             app._posthog_wsgi_app = app.wsgi_app
 
@@ -641,10 +650,13 @@ def _disable_propagation(instrumentor_class: Any) -> None:
             setattr(module, "inject", _no_inject)
 
 
-def _gate_aiohttp_trace_configs(meter_provider: Any, stopped: threading.Event) -> None:
+def _gate_aiohttp_trace_configs(
+    meter_provider: Any, stopped: threading.Event, posthog_url_pattern: str
+) -> None:
     global _replaced_aiohttp_trace_config
     module = _import_module("opentelemetry.instrumentation.aiohttp_client")
     original = module.create_trace_config
+    posthog_urls = re.compile(posthog_url_pattern)
 
     def create_trace_config(*args, **kwargs):
         config = original(*args, **kwargs)
@@ -652,7 +664,7 @@ def _gate_aiohttp_trace_configs(meter_provider: Any, stopped: threading.Event) -
             on_start = config.on_request_start[0]
 
             async def on_request_start(session, trace_config_ctx, params):
-                if stopped.is_set():
+                if stopped.is_set() or posthog_urls.search(str(params.url)):
                     trace_config_ctx.span = None
                     return
                 await on_start(session, trace_config_ctx, params)
@@ -1270,7 +1282,7 @@ def start_metrics_autocapture(
                             _disable_propagation(instrumentor_class)
                             if entry_point.name == "aiohttp-client":
                                 _gate_aiohttp_trace_configs(
-                                    bounded_meter_provider, stopped
+                                    bounded_meter_provider, stopped, posthog_url_pattern
                                 )
                             if entry_point.name == "flask":
                                 _track_flask_apps(
