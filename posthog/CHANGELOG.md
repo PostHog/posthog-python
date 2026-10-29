@@ -1,5 +1,11 @@
 # posthog
 
+## 7.80.3 — 2026-10-29
+
+### Patch changes
+
+- [4d6e447](https://github.com/posthog/posthog-python/commit/4d6e44766175f80fbbf538ab4369b1f3916f05f7) Report cached input tokens from OpenAI Agents generation and response spans, which nest them under the usage details fields, and declare them inclusive. — Thanks @mosafariuk!
+
 ## 7.80.2 — 2026-10-29
 
 ### Patch changes
