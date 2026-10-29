@@ -565,6 +565,43 @@ def test_a_server_failed_record_is_not_marked_unreadable():
         assert flag._malformed_field is None
 
 
+@pytest.mark.parametrize("make_record", [_record, _older_record])
+def test_absent_flag_id_and_version_stay_absent(make_record, client):
+    record = make_record()
+    record["key"] = "garden-layout"
+    del record["metadata"]["id"]
+    del record["metadata"]["version"]
+    response = {
+        "flags": {"garden-layout": record},
+        "errorsWhileComputingFlags": False,
+        "requestId": "60000000-0000-4000-8000-000000000000",
+    }
+
+    flag = normalize_flags_response(copy.deepcopy(response))["flags"]["garden-layout"]
+    assert isinstance(flag.metadata, FlagMetadata)
+    assert (flag.metadata.id, flag.metadata.version) == (None, None)
+
+    with (
+        mock.patch("posthog.client.flags", return_value=copy.deepcopy(response)),
+        mock.patch.object(client, "capture") as capture,
+    ):
+        client.get_feature_flag_result("garden-layout", DISTINCT_ID)
+    properties = capture.call_args.kwargs["properties"]
+    assert "$feature_flag_id" not in properties
+    assert "$feature_flag_version" not in properties
+
+    # A new client, so the event is not deduplicated against the one above.
+    snapshot_client = Client(FAKE_TEST_API_KEY, send=False)
+    try:
+        with mock.patch.object(snapshot_client, "capture") as capture:
+            _evaluate(snapshot_client, response).get_flag("garden-layout")
+    finally:
+        snapshot_client.shutdown()
+    properties = capture.call_args.kwargs["properties"]
+    assert "$feature_flag_id" not in properties
+    assert "$feature_flag_version" not in properties
+
+
 def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", "control", None).value == "control"
     assert FeatureFlag.from_value_and_payload("a", True, None).value is True

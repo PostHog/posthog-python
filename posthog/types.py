@@ -163,11 +163,11 @@ class FlagMetadata:
     """Feature flag metadata returned by the feature flag API.
 
     Attributes:
-        id: Numeric feature flag ID.
+        id: Numeric feature flag ID, or ``None`` when the record has none.
         payload: Payload configured for the matched flag value, if any. For a
             number or object value it is the value encoded as JSON, the way
             servers before ``/flags?v=4`` sent it.
-        version: Feature flag version.
+        version: Feature flag version, or ``None`` when the record has none.
         description: Feature flag description.
         has_experiment: Whether the flag has a linked experiment. ``None`` when
             the server does not report the field (older deployments).
@@ -180,9 +180,9 @@ class FlagMetadata:
             result.
     """
 
-    id: int
+    id: Optional[int]
     payload: Optional[str]
-    version: int
+    version: Optional[int]
     description: str
     has_experiment: Optional[bool] = None
     config_version: Optional[int] = None
@@ -202,9 +202,9 @@ class FlagMetadata:
             return LegacyFlagMetadata(payload=None)
         raw_has_experiment = resp.get("has_experiment")
         return cls(
-            id=resp.get("id", 0),
+            id=resp.get("id"),
             payload=resp.get("payload"),
-            version=resp.get("version", 0),
+            version=resp.get("version"),
             description=resp.get("description", ""),
             has_experiment=raw_has_experiment
             if isinstance(raw_has_experiment, bool)
@@ -377,9 +377,9 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
         else:
             payload = raw_metadata.get("payload")
             metadata = FlagMetadata(
-                id=_read_int(raw_metadata.get("id"), "metadata.id") or 0,
+                id=_read_int(raw_metadata.get("id"), "metadata.id"),
                 payload=payload if payload is not None else encoded_payload,
-                version=_read_int(raw_metadata.get("version"), "metadata.version") or 0,
+                version=_read_int(raw_metadata.get("version"), "metadata.version"),
                 description=_read_typed(
                     raw_metadata.get("description", ""), "metadata.description", str
                 ),

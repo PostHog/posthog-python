@@ -1154,12 +1154,12 @@ attribute posthog.types.FlagMetadata.config_version: Optional[int] = None
 attribute posthog.types.FlagMetadata.description: str
 attribute posthog.types.FlagMetadata.forced_variant: Optional[bool] = None
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
-attribute posthog.types.FlagMetadata.id: int
+attribute posthog.types.FlagMetadata.id: Optional[int]
 attribute posthog.types.FlagMetadata.payload: Optional[str]
 attribute posthog.types.FlagMetadata.rule_id: Optional[str] = None
 attribute posthog.types.FlagMetadata.rule_type: Optional[str] = None
 attribute posthog.types.FlagMetadata.variant_key: Optional[str] = None
-attribute posthog.types.FlagMetadata.version: int
+attribute posthog.types.FlagMetadata.version: Optional[int]
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
 attribute posthog.types.FlagReason.description: str
@@ -1347,7 +1347,7 @@ class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str],
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, variant_key: Optional[str] = None, forced_variant: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, variant_key: Optional[str] = None, forced_variant: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
