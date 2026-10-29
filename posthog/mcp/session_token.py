@@ -6,8 +6,9 @@ The one value clients replay on every request is the ``Mcp-Session-Id`` header.
 So at ``initialize`` we mint that header as a token carrying the session id and
 client identity -- any pod can read them back from the header alone.
 
-The token is unsigned: it holds only what the client already self-reports. It is
-wire-compatible with the TypeScript SDK (same short keys ``sid``/``cn``/``cv``/``pv``),
+The token is unsigned, so clients can change its contents. Use decoded values
+for analytics, not authentication or authorization. It is wire-compatible with
+the TypeScript SDK (same short keys ``sid``/``cn``/``cv``/``pv``),
 so a token minted by one SDK decodes in the other.
 """
 
