@@ -11,7 +11,7 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union, cast
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -77,6 +77,7 @@ from posthog.feature_flag_evaluations import (
 from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
+    _get_definition_unresolved_reason,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -115,6 +116,7 @@ from .types import (
     FlagsResponse,
     FlagValue,
     SendFeatureFlagsOptions,
+    UnresolvedFlagReason,
     _has_untyped_flag_records,
     _UNTYPED_FLAGS_RESPONSE_MESSAGE,
     normalize_flags_response,
@@ -928,6 +930,11 @@ class Client(object):
         self._flag_definition_cache_generation = 0
         self._flag_definition_publication_lock = threading.RLock()
         self._flag_definition_cache_write_lock = threading.RLock()
+        # Flag key -> definition fingerprint of flags already warned about as never
+        # resolvable locally, so each warning fires once until the definition changes.
+        self._warned_unresolvable_flags: Dict[str, str] = {}
+        # Definitions fingerprint of the last scan for never-resolvable flags.
+        self._unresolvable_flags_fingerprint: Optional[str] = None
         self._flag_definition_cache_provider = flag_definition_cache_provider
         self._flag_definition_cache_provider_async_runner: Optional[
             _BackgroundEventLoopRunner
@@ -3271,6 +3278,101 @@ class Client(object):
                 return old_fingerprint
         return None
 
+    def _warn_unresolvable_flags(self) -> None:
+        """Log flags the published definitions can never resolve locally.
+
+        Call it after publication, outside the publication lock: classifying every
+        flag walks its cohorts, and log handlers can be slow."""
+        with self._flag_definition_publication_lock:
+            definitions_fingerprint = self._flag_definition_fingerprint
+            if definitions_fingerprint == self._unresolvable_flags_fingerprint:
+                return
+            snapshot = self._local_evaluation_snapshot()
+
+        unresolvable = self._classify_unresolvable_flags(snapshot)
+
+        with self._flag_definition_publication_lock:
+            # Newer definitions or another caller own the warning for this state.
+            if (
+                definitions_fingerprint != self._flag_definition_fingerprint
+                or definitions_fingerprint == self._unresolvable_flags_fingerprint
+            ):
+                return
+            self._unresolvable_flags_fingerprint = definitions_fingerprint
+            new_keys_by_reason: Dict[UnresolvedFlagReason, List[str]] = {}
+            for key, (reason, fingerprint) in unresolvable.items():
+                if self._warned_unresolvable_flags.get(key) != fingerprint:
+                    new_keys_by_reason.setdefault(reason, []).append(key)
+            # Rebuilt from the current definitions, so a flag that is deleted or
+            # becomes resolvable is forgotten and warns again if it later becomes
+            # unresolvable.
+            self._warned_unresolvable_flags = {
+                key: fingerprint for key, (_, fingerprint) in unresolvable.items()
+            }
+
+        self._log_unresolvable_flags(new_keys_by_reason)
+
+    @staticmethod
+    def _classify_unresolvable_flags(
+        snapshot: _LocalEvaluationSnapshot,
+    ) -> Dict[str, Tuple[UnresolvedFlagReason, str]]:
+        """Map each never-resolvable flag key to its reason and a fingerprint of its
+        definition."""
+        unresolvable: Dict[str, Tuple[UnresolvedFlagReason, str]] = {}
+        for flag in snapshot["flags"]:
+            try:
+                key = flag["key"]
+                reason = _get_definition_unresolved_reason(
+                    flag,
+                    snapshot["flags_by_key"],
+                    snapshot["cohorts"],
+                    snapshot["group_type_mapping"],
+                )
+            except Exception:
+                # Evaluation reports a definition this malformed when the flag is used.
+                continue
+            if reason is None:
+                continue
+            fingerprint = _hashlib.sha256(
+                json.dumps([reason.value, flag], sort_keys=True, default=str).encode(
+                    "utf-8"
+                )
+            ).hexdigest()
+            unresolvable[str(key)] = (reason, fingerprint)
+        return unresolvable
+
+    def _log_unresolvable_flags(
+        self, new_keys_by_reason: Dict[UnresolvedFlagReason, List[str]]
+    ) -> None:
+        experience_continuity_keys = new_keys_by_reason.get(
+            UnresolvedFlagReason.EXPERIENCE_CONTINUITY
+        )
+        if experience_continuity_keys:
+            self.log.warning(
+                f"[FEATURE FLAGS] {len(experience_continuity_keys)} flag(s) have "
+                "experience continuity enabled and can't be evaluated locally "
+                f"(reason: {UnresolvedFlagReason.EXPERIENCE_CONTINUITY.value}): "
+                f"{', '.join(experience_continuity_keys)}. Evaluating them makes a "
+                "remote request, or leaves them unresolved with "
+                "only_evaluate_locally=True. To evaluate them locally, disable "
+                "experience continuity on these flags in PostHog."
+            )
+        unsupported_definition_keys = new_keys_by_reason.get(
+            UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
+        if unsupported_definition_keys:
+            self.log.warning(
+                f"[FEATURE FLAGS] {len(unsupported_definition_keys)} flag(s) use "
+                "something local evaluation doesn't support, such as a static "
+                "cohort, an unknown operator, a malformed value, or a missing or "
+                "circular flag dependency "
+                f"(reason: {UnresolvedFlagReason.UNSUPPORTED_DEFINITION.value}): "
+                f"{', '.join(unsupported_definition_keys)}. Evaluating them makes a "
+                "remote request when evaluation reaches that part, or leaves them "
+                "unresolved with only_evaluate_locally=True. To evaluate them "
+                "locally, change these flags in PostHog or upgrade posthog."
+            )
+
     def _local_evaluation_snapshot(self) -> _LocalEvaluationSnapshot:
         # Capture references together. Publication replaces these collections, so
         # recursive and multi-flag evaluations can finish on their original rules.
@@ -3310,6 +3412,7 @@ class Client(object):
                         "[FEATURE FLAGS] Using cached flag definitions from external cache"
                     )
                     old_fingerprint = self._update_flag_state(cached_data)
+                    self._warn_unresolvable_flags()
                     if isinstance(self.flag_cache, RedisFlagCache):
                         self.flag_cache._invalidate_snapshot(old_fingerprint)
                     self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
@@ -3414,6 +3517,8 @@ class Client(object):
                 self._flags_etag = response.etag
                 self._flag_definition_published_generation = fetch_generation
                 self._flag_definition_cache_generation = fetch_generation
+
+            self._warn_unresolvable_flags()
 
             if cache_data_to_store and self._flag_definition_cache_provider:
                 # Keep provider I/O out of the publication lock. The separate lock
@@ -3576,11 +3681,14 @@ class Client(object):
         # Create evaluation cache for flag dependencies
         evaluation_cache: dict[str, Optional[FlagValue]] = {}
 
-        if feature_flag.get("ensure_experience_continuity", False):
-            raise InconclusiveMatchError("Flag has experience continuity enabled")
-
         if not feature_flag.get("active"):
             return False
+
+        if feature_flag.get("ensure_experience_continuity", False):
+            raise InconclusiveMatchError(
+                "Flag has experience continuity enabled",
+                reason=UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+            )
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
@@ -3594,7 +3702,10 @@ class Client(object):
                     f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
                 )
                 # failover to `/flags`
-                raise InconclusiveMatchError("Flag has unknown group type index")
+                raise InconclusiveMatchError(
+                    "Flag has unknown group type index",
+                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+                )
 
             if group_name not in groups:
                 # Group flags are never enabled in `groups` aren't passed in
@@ -3611,7 +3722,8 @@ class Client(object):
 
             if group_name not in group_properties:
                 raise InconclusiveMatchError(
-                    f"Flag has no group properties for group '{group_name}'"
+                    f"Flag has no group properties for group '{group_name}'",
+                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
                 )
             focused_group_properties = group_properties[group_name]
             group_key = groups[group_name]
@@ -3630,9 +3742,23 @@ class Client(object):
                 group_properties=group_properties,
             )
         else:
-            bucketing_value = resolve_bucketing_value(
-                feature_flag, distinct_id, device_id
-            )
+            try:
+                bucketing_value = resolve_bucketing_value(
+                    feature_flag, distinct_id, device_id
+                )
+            except InconclusiveMatchError as e:
+                # No condition is checked without a bucketing value, so a cause in
+                # the definition also applies and outranks missing_context.
+                e.reason = (
+                    _get_definition_unresolved_reason(
+                        feature_flag,
+                        flags_by_key,
+                        snapshot["cohorts"],
+                        group_type_mapping,
+                    )
+                    or e.reason
+                )
+                raise
             return match_feature_flag_properties(
                 feature_flag,
                 distinct_id,
@@ -4548,7 +4674,8 @@ class Client(object):
             person_properties: Person properties to use for evaluation.
             group_properties: Group properties keyed by group type.
             only_evaluate_locally: If True, never fall back to remote evaluation —
-                flags that can't be evaluated locally are simply omitted from the snapshot.
+                flags that can't be evaluated locally are omitted from the snapshot and
+                listed with a reason in its ``unresolved_flags``.
             disable_geoip: Whether to disable GeoIP lookup.
             flag_keys: Optional list that scopes local evaluation, the underlying
                 ``/flags`` request, and the returned snapshot. When omitted or ``None``, all
@@ -4619,6 +4746,7 @@ class Client(object):
         errors_while_computing = False
         quota_limited = False
         locally_evaluated_keys: set[str] = set()
+        unresolved: Dict[str, UnresolvedFlagReason] = {}
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
             distinct_id, person_properties
@@ -4631,6 +4759,7 @@ class Client(object):
                 group_properties=group_properties,
                 flag_keys_to_evaluate=flag_keys,
                 device_id=device_id,
+                unresolved=unresolved,
             )
         )
 
@@ -4743,6 +4872,9 @@ class Client(object):
             errors_while_computing=errors_while_computing,
             quota_limited=quota_limited,
             minimal_flag_called_events=minimal_flag_called_events,
+            unresolved_flags={
+                key: reason for key, reason in unresolved.items() if key not in records
+            },
         )
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
@@ -4765,6 +4897,7 @@ class Client(object):
         warn_on_unknown_groups=False,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        unresolved: Optional[Dict[str, UnresolvedFlagReason]] = None,
     ) -> tuple[FlagsAndPayloads, bool, _LocalEvaluationSnapshot]:
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -4805,9 +4938,11 @@ class Client(object):
                     )
                     if matched_payload is not None:
                         payloads[flag["key"]] = matched_payload
-                except InconclusiveMatchError:
+                except (InconclusiveMatchError, RequiresServerEvaluation) as e:
                     # No need to log this, since it's just telling us to fall back to `/flags`
                     fallback_to_flags = True
+                    if unresolved is not None:
+                        unresolved[flag["key"]] = e.reason
                 except Exception as e:
                     self.log.exception(
                         f"[FEATURE FLAGS] Error while computing variant and payload: {e}"

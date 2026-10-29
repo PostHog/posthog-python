@@ -906,6 +906,8 @@ class AsyncClient:
 
         The returned snapshot has synchronous in-memory accessors. Pass it to
         ``capture(flags=...)`` to attach the exact values used for branching.
+        This client does not evaluate flags locally, so the snapshot's
+        ``unresolved_flags`` is always empty.
         """
         host = self._get_feature_flag_evaluations_host()
         if distinct_id is None:

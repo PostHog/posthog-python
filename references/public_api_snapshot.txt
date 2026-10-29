@@ -33,6 +33,7 @@ alias posthog.OptionalSetArgs -> posthog.args.OptionalSetArgs
 alias posthog.RequiresServerEvaluation -> posthog.feature_flags.RequiresServerEvaluation
 alias posthog.SocketOptions -> posthog.request.SocketOptions
 alias posthog.Span -> posthog.tracing.span.Span
+alias posthog.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.VERSION -> posthog.version.VERSION
 alias posthog.ai.PromptResult -> posthog.ai.prompts.PromptResult
 alias posthog.ai.PromptSource -> posthog.ai.prompts.PromptSource
@@ -277,6 +278,7 @@ alias posthog.client.RequiresServerEvaluation -> posthog.feature_flags.RequiresS
 alias posthog.client.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
 alias posthog.client.SizeLimitedDict -> posthog.utils.SizeLimitedDict
 alias posthog.client.Span -> posthog.tracing.span.Span
+alias posthog.client.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.client.VERSION -> posthog.version.VERSION
 alias posthog.client.batch_post -> posthog.request.batch_post
 alias posthog.client.clean -> posthog.utils.clean
@@ -325,7 +327,9 @@ alias posthog.exception_utils.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.feature_flag_evaluations.FeatureFlag -> posthog.types.FeatureFlag
 alias posthog.feature_flag_evaluations.FlagEvaluationDetails -> posthog.types.FlagEvaluationDetails
 alias posthog.feature_flag_evaluations.FlagValue -> posthog.types.FlagValue
+alias posthog.feature_flag_evaluations.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.feature_flags.FlagValue -> posthog.types.FlagValue
+alias posthog.feature_flags.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.feature_flags.convert_to_datetime_aware -> posthog.utils.convert_to_datetime_aware
 alias posthog.feature_flags.is_valid_regex -> posthog.utils.is_valid_regex
 alias posthog.feature_flags.utils -> posthog.utils
@@ -910,14 +914,17 @@ attribute posthog.exception_utils.VariableSizeLimiter.current_size = 0
 attribute posthog.exception_utils.VariableSizeLimiter.max_size = max_size
 attribute posthog.exception_utils.epoch = datetime(1970, 1, 1)
 attribute posthog.feature_flag_evaluations.FeatureFlagEvaluations.keys: List[str]
+attribute posthog.feature_flag_evaluations.FeatureFlagEvaluations.unresolved_flags: Mapping[str, UnresolvedFlagReason]
 attribute posthog.feature_flags.ConditionMatch.MATCH = 'match'
 attribute posthog.feature_flags.ConditionMatch.NO_MATCH = 'no_match'
 attribute posthog.feature_flags.ConditionMatch.OUT_OF_ROLLOUT_BOUND = 'out_of_rollout_bound'
 attribute posthog.feature_flags.DATE_OPERATORS = ('is_date_before', 'is_date_after')
 attribute posthog.feature_flags.EQUALITY_OPERATORS = ('exact', 'is_not', 'is_set', 'is_not_set')
+attribute posthog.feature_flags.InconclusiveMatchError.reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 attribute posthog.feature_flags.NONE_VALUES_ALLOWED_OPERATORS = ['is_not']
 attribute posthog.feature_flags.NUMERIC_OPERATORS = ('gt', 'gte', 'lt', 'lte')
 attribute posthog.feature_flags.PROPERTY_OPERATORS = EQUALITY_OPERATORS + STRING_OPERATORS + NUMERIC_OPERATORS + DATE_OPERATORS + SEMVER_OPERATORS
+attribute posthog.feature_flags.RequiresServerEvaluation.reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 attribute posthog.feature_flags.SEMVER_COMPARISON_OPERATORS = ('semver_eq', 'semver_neq', 'semver_gt', 'semver_gte', 'semver_lt', 'semver_lte')
 attribute posthog.feature_flags.SEMVER_OPERATORS = SEMVER_COMPARISON_OPERATORS + SEMVER_RANGE_OPERATORS
 attribute posthog.feature_flags.SEMVER_RANGE_OPERATORS = ('semver_tilde', 'semver_caret', 'semver_wildcard')
@@ -1061,6 +1068,7 @@ attribute posthog.mcp.types.MCPAnalyticsOptions.report_missing: bool = False
 attribute posthog.mcp.types.MCPAnalyticsOptions.resolve_input_aliases: Optional[ResolveInputAliasesFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.resolve_original_tool: Optional[Callable[[str], Any]] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.send_initialize_event: bool = True
+attribute posthog.mcp.types.MCPAnalyticsOptions.send_tools_list_event: bool = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.server_build: Optional[str] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.should_record_input_key: Optional[ShouldRecordInputKeyFn] = None
 attribute posthog.mcp.types.PreparedToolCall.args: Optional[JsonRecord] = None
@@ -1136,6 +1144,7 @@ attribute posthog.types.FeatureFlag.variant: Optional[str]
 attribute posthog.types.FeatureFlagError.CONNECTION_ERROR = 'connection_error'
 attribute posthog.types.FeatureFlagError.ERRORS_WHILE_COMPUTING = 'errors_while_computing_flags'
 attribute posthog.types.FeatureFlagError.FLAG_MISSING = 'flag_missing'
+attribute posthog.types.FeatureFlagError.LOCAL_EVALUATION_INCONCLUSIVE = 'local_evaluation_inconclusive'
 attribute posthog.types.FeatureFlagError.QUOTA_LIMITED = 'quota_limited'
 attribute posthog.types.FeatureFlagError.TIMEOUT = 'timeout'
 attribute posthog.types.FeatureFlagError.UNKNOWN_ERROR = 'unknown_error'
@@ -1194,6 +1203,10 @@ attribute posthog.types.SendFeatureFlagsOptions.group_properties: Optional[dict[
 attribute posthog.types.SendFeatureFlagsOptions.only_evaluate_locally: Optional[bool]
 attribute posthog.types.SendFeatureFlagsOptions.person_properties: Optional[dict[str, Any]]
 attribute posthog.types.SendFeatureFlagsOptions.should_send: bool
+attribute posthog.types.UnresolvedFlagReason.EXPERIENCE_CONTINUITY = 'experience_continuity'
+attribute posthog.types.UnresolvedFlagReason.MISSING_CONTEXT = 'missing_context'
+attribute posthog.types.UnresolvedFlagReason.UNRESOLVED_DEPENDENCY = 'unresolved_dependency'
+attribute posthog.types.UnresolvedFlagReason.UNSUPPORTED_DEFINITION = 'unsupported_definition'
 attribute posthog.utils.CACHE_KEY_PREFIX = 'posthog:flags:'
 attribute posthog.utils.CACHE_MAX_SIZE = 10000
 attribute posthog.utils.CACHE_STALE_TTL = 3600
@@ -1321,10 +1334,10 @@ class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_ex
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
-class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None)
+class posthog.feature_flag_evaluations.FeatureFlagEvaluations(host: _FeatureFlagEvaluationsHost, distinct_id: str, flags: Dict[str, _EvaluatedFlagRecord], groups: Optional[Mapping[str, Union[str, int]]] = None, disable_geoip: Optional[bool] = None, request_id: Optional[str] = None, evaluated_at: Optional[int] = None, errors_while_computing: bool = False, quota_limited: bool = False, minimal_flag_called_events: bool = False, accessed: Optional[Set[str]] = None, unresolved_flags: Optional[Mapping[str, UnresolvedFlagReason]] = None)
 class posthog.feature_flags.ConditionMatch 
-class posthog.feature_flags.InconclusiveMatchError 
-class posthog.feature_flags.RequiresServerEvaluation 
+class posthog.feature_flags.InconclusiveMatchError(*args, reason: Optional[UnresolvedFlagReason] = None)
+class posthog.feature_flags.RequiresServerEvaluation(*args, reason: Optional[UnresolvedFlagReason] = None)
 class posthog.flag_definition_cache.FlagDefinitionCacheData 
 class posthog.flag_definition_cache.FlagDefinitionCacheProvider 
 class posthog.integrations.asgi.PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, request_filter: Optional[_RequestFilter] = None, extra_properties: Optional[_ExtraProperties] = None, trust_tracing_headers: Optional[bool] = None, *, capture_tracing_headers: Optional[bool] = None)
@@ -1343,7 +1356,7 @@ class posthog.mcp.types.CollectFeedbackOptions(tool_name: Optional[str] = None, 
 class posthog.mcp.types.FeedbackReport(feedback_type: str = 'other', summary: str = '', sentiment: Optional[str] = None, friction_points: Optional[str] = None, suggested_improvement: Optional[str] = None, details: Optional[str] = None, tool_name: Optional[str] = None, task_completed: Optional[bool] = None, extras: JsonRecord = dict(), raw: JsonRecord = dict())
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = None)
-class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None, resolve_original_tool: Optional[Callable[[str], Any]] = None, send_initialize_event: bool = True)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None, resolve_original_tool: Optional[Callable[[str], Any]] = None, send_initialize_event: bool = True, send_tools_list_event: bool = True)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, _conversation_state: Optional[PreparedConversationState] = None)
 class posthog.mcp.types.ToolInputOptions(should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, input_aliases: Optional[InputAliasMap] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
@@ -1368,6 +1381,7 @@ class posthog.types.FlagsAndPayloads
 class posthog.types.FlagsResponse 
 class posthog.types.LegacyFlagMetadata(payload: Any)
 class posthog.types.SendFeatureFlagsOptions 
+class posthog.types.UnresolvedFlagReason 
 class posthog.utils.FlagCache(max_size=CACHE_MAX_SIZE, default_ttl=CACHE_TTL)
 class posthog.utils.FlagCacheEntry(flag_result, flag_definition_version, timestamp=None)
 class posthog.utils.RedisFlagCache(redis_client, default_ttl=CACHE_TTL, stale_ttl=CACHE_STALE_TTL, key_prefix=CACHE_KEY_PREFIX)

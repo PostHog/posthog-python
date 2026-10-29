@@ -1,5 +1,31 @@
 # posthog
 
+## 7.79.0 — 2026-10-28
+
+### Minor changes
+
+- [bb2b9d6](https://github.com/posthog/posthog-python/commit/bb2b9d6bddd250f6dcf03be565af8ba94694e5db) Report flags that local evaluation could not resolve on `evaluate_flags()` snapshots. `FeatureFlagEvaluations.unresolved_flags` maps each such flag to an `UnresolvedFlagReason` (`experience_continuity`, `unsupported_definition`, `unresolved_dependency` or `missing_context`), and reading one reports the `local_evaluation_inconclusive` error instead of `flag_missing`. When definitions load, log one warning per flag that local evaluation can never resolve (experience continuity, a static cohort, an unknown operator, a malformed value, or a missing or circular flag dependency), and again only when its definition changes. `AsyncClient` evaluates only remotely, so its snapshots have no unresolved flags.
+  
+  Behavior changes:
+  
+  - A condition with a filter that local evaluation can't check and a filter that does not match now resolves locally as no match. Before, such a flag fell back to a remote request, or stayed unresolved with `only_evaluate_locally=True`.
+  - An inactive flag with experience continuity enabled now resolves to `false` locally instead of falling back to a remote request.
+  - A flag that depends on a flag with experience continuity enabled is no longer evaluated locally. It falls back to a remote request, or stays unresolved with `only_evaluate_locally=True`.
+  - On `$feature_flag_called` events from an `evaluate_flags()` snapshot, `$feature_flag_error` is now `local_evaluation_inconclusive` instead of `flag_missing` for a flag that has a loaded definition but that local evaluation could not resolve.
+  - `get_all_flags()`, `get_all_flags_and_payloads()` and `evaluate_flags()` no longer log an error with a traceback when a flag needs the server (for example, a static cohort). They fall back to a remote request without logging, as `get_feature_flag()` already did. — Thanks @gustavohstrassburger!
+
+## 7.78.0 — 2026-10-28
+
+### Minor changes
+
+- [351da59](https://github.com/posthog/posthog-python/commit/351da59c252afb7bffed79d21c23aa7e2539a38e) Add a `send_tools_list_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_tools_list`. — Thanks @gesh!
+
+## 7.77.0 — 2026-10-28
+
+### Minor changes
+
+- [d8a1b97](https://github.com/posthog/posthog-python/commit/d8a1b976d665d9f7b3249ac788ef253bb21eed50) Add a `send_initialize_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_initialize`. — Thanks @gesh!
+
 ## 7.76.1 — 2026-10-28
 
 ### Patch changes

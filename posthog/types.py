@@ -114,6 +114,32 @@ class FeatureFlagEvaluationRuntime(str, Enum):
         return self is other or FeatureFlagEvaluationRuntime.ALL in (self, other)
 
 
+class UnresolvedFlagReason(str, Enum):
+    """Why local evaluation left a flag without a value.
+
+    Reported by :attr:`FeatureFlagEvaluations.unresolved_flags`. Inheriting from
+    ``str`` keeps the members directly comparable to their string values. When more
+    than one cause applies, the first reason in the order below is reported.
+
+    Values:
+        EXPERIENCE_CONTINUITY: The flag has experience continuity enabled, which
+            local evaluation never resolves. Change the flag to fix it.
+        UNSUPPORTED_DEFINITION: The flag uses something the local evaluator does not
+            support, such as a static cohort, an unknown operator, a malformed value,
+            a dependency with no loaded definition or a circular dependency. Change
+            the flag or upgrade the SDK to fix it.
+        UNRESOLVED_DEPENDENCY: A flag this flag depends on has a loaded definition
+            but was unresolved.
+        MISSING_CONTEXT: The call did not pass a property, group property or device
+            id the flag needs, or passed it in an unusable form. Pass it to fix it.
+    """
+
+    EXPERIENCE_CONTINUITY = "experience_continuity"
+    UNSUPPORTED_DEFINITION = "unsupported_definition"
+    UNRESOLVED_DEPENDENCY = "unresolved_dependency"
+    MISSING_CONTEXT = "missing_context"
+
+
 @dataclass(frozen=True)
 class FlagReason:
     """Reason metadata returned by the feature flag API.
@@ -970,6 +996,8 @@ class FeatureFlagError:
     Error values:
         ERRORS_WHILE_COMPUTING: Server returned errorsWhileComputingFlags=true
         FLAG_MISSING: Requested flag not in API response
+        LOCAL_EVALUATION_INCONCLUSIVE: Requested flag has a loaded definition but
+            local evaluation was inconclusive and no remote value filled the gap
         QUOTA_LIMITED: Rate/quota limit exceeded
         TIMEOUT: Request timed out
         CONNECTION_ERROR: Network connectivity issue
@@ -981,6 +1009,7 @@ class FeatureFlagError:
 
     ERRORS_WHILE_COMPUTING = "errors_while_computing_flags"
     FLAG_MISSING = "flag_missing"
+    LOCAL_EVALUATION_INCONCLUSIVE = "local_evaluation_inconclusive"
     QUOTA_LIMITED = "quota_limited"
     TIMEOUT = "timeout"
     CONNECTION_ERROR = "connection_error"
