@@ -497,7 +497,9 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
         return _malformed_record(key, str(error))
     except RecursionError:
         # A value nested too deeply to encode as a payload fails only this record.
-        return _malformed_record(key, "value")
+        return _malformed_record(
+            key, "value", "The flag record's value is nested too deeply to read."
+        )
 
     config_version = (
         metadata.config_version if isinstance(metadata, FlagMetadata) else None
@@ -833,7 +835,9 @@ def _read_record_key(resp: Dict[str, Any]) -> None:
     _read_typed(resp.get("key"), "key", str)
 
 
-def _malformed_record(key: str, malformed_field: str) -> FeatureFlag:
+def _malformed_record(
+    key: str, malformed_field: str, message: Optional[str] = None
+) -> FeatureFlag:
     """A record with a known field of the wrong JSON type: failed, and disabled."""
     flag = FeatureFlag(
         key=key,
@@ -844,8 +848,8 @@ def _malformed_record(key: str, malformed_field: str) -> FeatureFlag:
         value=None,
         failed=True,
         error_code=FlagEvaluationErrorCode.PARSE_ERROR,
-        error_message=f"The flag record's {malformed_field} field has the wrong"
-        " JSON type.",
+        error_message=message
+        or f"The flag record's {malformed_field} field has the wrong JSON type.",
     )
     object.__setattr__(flag, "_malformed_field", malformed_field)
     return flag

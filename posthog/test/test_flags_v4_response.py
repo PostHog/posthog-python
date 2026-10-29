@@ -948,6 +948,10 @@ def test_a_value_too_deeply_nested_to_encode_fails_only_that_record():
 
     assert flags["deep"].failed is True
     assert flags["deep"]._malformed_field == "value"
+    assert flags["deep"].error_code is FlagEvaluationErrorCode.PARSE_ERROR
+    assert flags["deep"].error_message == (
+        "The flag record's value is nested too deeply to read."
+    )
     assert flags["sibling"].get_value() == "compact"
 
 
