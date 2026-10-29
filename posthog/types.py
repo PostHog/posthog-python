@@ -375,10 +375,13 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
         if raw_metadata is None:
             metadata = LegacyFlagMetadata(payload=encoded_payload)
         else:
-            payload = raw_metadata.get("payload")
             metadata = FlagMetadata(
                 id=_read_int(raw_metadata.get("id"), "metadata.id"),
-                payload=payload if payload is not None else encoded_payload,
+                # A number or object value is its own payload; a payload the record
+                # also carries is ignored.
+                payload=encoded_payload
+                if encoded_payload is not None
+                else raw_metadata.get("payload"),
                 version=_read_int(raw_metadata.get("version"), "metadata.version"),
                 description=_read_typed(
                     raw_metadata.get("description", ""), "metadata.description", str

@@ -602,6 +602,33 @@ def test_absent_flag_id_and_version_stay_absent(make_record, client):
     assert "$feature_flag_version" not in properties
 
 
+@pytest.mark.parametrize(
+    "value, encoded", [(25, "25"), ({"columns": 2}, '{"columns":2}')]
+)
+def test_a_number_or_object_value_is_its_own_payload(value, encoded, client):
+    # A config version 2 number or object value is its payload; a payload the
+    # record also sends is ignored.
+    response = _typed_response({"upload-limit": value})
+    response["flags"]["upload-limit"]["metadata"]["payload"] = "999"
+
+    flag = normalize_flags_response(copy.deepcopy(response))["flags"]["upload-limit"]
+    assert flag.metadata.payload == encoded
+
+    snapshot = _evaluate(client, response)
+    assert snapshot.get_flag_payload("upload-limit") == value
+
+
+def test_a_config_version_1_payload_is_kept():
+    response = _typed_response({"bool-flag": True, "string-flag": "compact"})
+    for record in response["flags"].values():
+        record["metadata"].update(config_version=1, payload='{"columns": 2}')
+
+    flags = normalize_flags_response(response)["flags"]
+
+    assert flags["bool-flag"].metadata.payload == '{"columns": 2}'
+    assert flags["string-flag"].metadata.payload == '{"columns": 2}'
+
+
 def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", "control", None).value == "control"
     assert FeatureFlag.from_value_and_payload("a", True, None).value is True
