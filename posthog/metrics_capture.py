@@ -272,6 +272,28 @@ class _SeriesState:
         self.exemplar: Optional[dict] = None
 
 
+def _validated_flush_interval(flush_interval: Any) -> float:
+    # Shared with metrics autocapture, which reads the same option.
+    if (
+        not isinstance(flush_interval, (int, float))
+        or isinstance(flush_interval, bool)
+        or not flush_interval > 0
+    ):
+        log.warning(
+            "Ignoring metrics flush_interval %r: expected a positive number of seconds",
+            flush_interval,
+        )
+        return _DEFAULT_FLUSH_INTERVAL_SECONDS
+    return float(flush_interval)
+
+
+def _validated_before_send(before_send: Any) -> Optional[Callable]:
+    if before_send is not None and not callable(before_send):
+        log.warning("Ignoring metrics before_send: expected a callable")
+        return None
+    return before_send
+
+
 class PostHogMetrics:
     """The ``client.metrics`` API: ``count``, ``gauge``, ``histogram``, ``flush``.
 
@@ -318,18 +340,9 @@ class PostHogMetrics:
             "deployment.environment"
         ) or config.get("environment")
         self._resource_attributes: dict = resource_attributes
-        flush_interval = config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
-        if (
-            not isinstance(flush_interval, (int, float))
-            or isinstance(flush_interval, bool)
-            or not flush_interval > 0
-        ):
-            log.warning(
-                "Ignoring metrics flush_interval %r: expected a positive number of seconds",
-                flush_interval,
-            )
-            flush_interval = _DEFAULT_FLUSH_INTERVAL_SECONDS
-        self._flush_interval: float = float(flush_interval)
+        self._flush_interval: float = _validated_flush_interval(
+            config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
+        )
         max_series = config.get("max_series_per_flush", _DEFAULT_MAX_SERIES_PER_FLUSH)
         if (
             not isinstance(max_series, int)
@@ -342,11 +355,9 @@ class PostHogMetrics:
             )
             max_series = _DEFAULT_MAX_SERIES_PER_FLUSH
         self._max_series_per_flush: int = max_series
-        before_send = config.get("before_send")
-        if before_send is not None and not callable(before_send):
-            log.warning("Ignoring metrics before_send: expected a callable")
-            before_send = None
-        self._before_send: Optional[Callable] = before_send
+        self._before_send: Optional[Callable] = _validated_before_send(
+            config.get("before_send")
+        )
 
         self._lock = threading.Lock()
         self._pid = os.getpid()
