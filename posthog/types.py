@@ -579,11 +579,20 @@ def _read_number(value: Any) -> Any:
     return _NOT_ACCEPTED
 
 
+# Every SDK reads numbers as IEEE-754 doubles, which hold every integer up to this
+# magnitude exactly. Larger integers are not accepted, so all SDKs agree.
+_MAX_SAFE_INTEGER = 2**53 - 1
+
+
 def _read_integer(value: Any) -> Any:
-    if isinstance(value, int) and not isinstance(value, bool):
-        return value
     if isinstance(value, float) and value.is_integer():
-        return int(value)
+        value = int(value)
+    if (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and abs(value) <= _MAX_SAFE_INTEGER
+    ):
+        return value
     return _NOT_ACCEPTED
 
 
@@ -659,7 +668,12 @@ def _type_mismatch_message(
 ) -> str:
     actual = _json_type_name(value)
     if actual == "number" and value_type == "integer":
-        return f"Flag '{key}' has the number {value!r}, which is not an integer."
+        if isinstance(value, float) and not value.is_integer():
+            return f"Flag '{key}' has the number {value!r}, which is not an integer."
+        return (
+            f"Flag '{key}' has the number {value!r}, which is outside the integer"
+            f" range of -{_MAX_SAFE_INTEGER} to {_MAX_SAFE_INTEGER}."
+        )
     message = (
         f"Flag '{key}' has {_with_article(actual)} value,"
         f" not {_with_article(value_type)} value."

@@ -421,6 +421,34 @@ def test_the_integer_accessor_rejects_a_fractional_number(client):
     assert (count, type(count)) == (2, int)
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (3, 3),
+        (3.0, 3),
+        (-0.0, 0),
+        (2**53 - 1, 2**53 - 1),
+        (-(2**53 - 1), -(2**53 - 1)),
+        (2**53 + 1, None),
+        (1e21, None),
+    ],
+)
+def test_the_integer_accessor_accepts_only_exact_integers(client, value, expected):
+    snapshot = _evaluate(client, _typed_response({"n": value}))
+
+    details = snapshot.get_integer_details("n", 7)
+
+    if expected is None:
+        assert details.value == 7
+        assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+        assert "outside the integer range" in details.error_message
+        # The number accessor still returns it.
+        assert snapshot.get_number_value("n", 7) == value
+    else:
+        assert (details.value, type(details.value)) == (expected, int)
+        assert details.error_code is None
+
+
 def test_a_returned_object_cannot_change_the_snapshot(client):
     snapshot = _evaluate(client, _typed_response(TYPED_VALUES))
 
@@ -1170,6 +1198,20 @@ def test_typed_accessors_report_access_like_get_flag(client):
     # A type mismatch is not an evaluation error.
     assert "$feature_flag_error" not in properties
     assert snapshot.only_accessed().keys == ["string-flag"]
+
+
+def test_a_throwing_before_send_does_not_break_a_typed_read():
+    calls = []
+
+    def before_send(event):
+        calls.append(event["event"])
+        raise ValueError("boom")
+
+    client = Client(FAKE_TEST_API_KEY, before_send=before_send, send=False)
+    snapshot = _evaluate(client, _typed_response({"string-flag": "compact"}))
+
+    assert snapshot.get_string_value("string-flag", "default") == "compact"
+    assert calls == ["$feature_flag_called"]
 
 
 async def test_async_client_reads_the_v4_response():

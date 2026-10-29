@@ -219,8 +219,9 @@ class FeatureFlagEvaluations:
         """Return the flag's number value as an ``int`` with its evaluation details.
 
         Like :meth:`get_number_details`, but a number with a fractional part, such
-        as ``0.25``, is a ``TYPE_MISMATCH``. An integral number such as ``2.0`` is
-        returned as ``2``.
+        as ``0.25``, or beyond ``2**53 - 1`` in magnitude is a ``TYPE_MISMATCH``, so
+        every PostHog SDK returns the same result. An integral number such as
+        ``2.0`` is returned as ``2``.
         """
         return self._get_typed_details(key, default_value, "integer")
 
