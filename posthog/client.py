@@ -4782,6 +4782,7 @@ class Client(object):
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
+                inactive=value is False and not flag_def.get("active"),
                 payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
                 # The local-evaluation flag definition does not carry a version field;

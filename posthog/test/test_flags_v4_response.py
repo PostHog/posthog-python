@@ -11,7 +11,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from unittest import mock
 
 import pytest
@@ -23,7 +23,11 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
+    FlagEvaluationDetails,
+    FlagEvaluationErrorCode,
+    FlagEvaluationReason,
     FlagMetadata,
+    UnresolvedFlagReason,
     normalize_flags_response,
     to_flags_and_payloads,
 )
@@ -78,6 +82,32 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
         return client.evaluate_flags(DISTINCT_ID)
 
 
+def _details(
+    snapshot: FeatureFlagEvaluations, key: str, default: Any, expected: Any = None
+) -> FlagEvaluationDetails[Any]:
+    """Read through the typed accessor that matches the expected value's type."""
+    if isinstance(expected, str):
+        return snapshot.get_string_details(key, default)
+    return snapshot.get_boolean_details(key, default)
+
+
+def _complete_split(details: FlagEvaluationDetails[Any]) -> bool:
+    """Whether the retained details carry a complete experiment split.
+
+    Exposure events are not emitted yet; this checks that the retained details hold
+    everything the exposure predicate needs, and nothing from a partial record.
+    """
+    metadata = details.flag_metadata
+    return (
+        details.error_code is None
+        and metadata.get("config_version") == 2
+        and metadata.get("reason_code") == "experiment_split"
+        and metadata.get("rule_type") == "experiment"
+        and metadata.get("rule_id") is not None
+        and metadata.get("variant_key") is not None
+    )
+
+
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
     assert source["release"] == "1.22.0"
@@ -85,6 +115,31 @@ def test_vendored_fixtures_match_the_recorded_release_digests():
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
+
+
+@pytest.mark.parametrize("case", READERS["cases"], ids=lambda case: case["id"])
+def test_reader_fixture(client, case):
+    snapshot = _evaluate(client, _build(READERS, case))
+    reader = case["reader"]
+    key = reader["requested_key"]
+
+    details = _details(snapshot, key, reader["caller_default"], reader["value"])
+
+    assert details.value == reader["value"]
+    assert type(details.value) is type(reader["value"])
+    expected_error = reader["error_code"]
+    assert details.error_code == (
+        FlagEvaluationErrorCode(expected_error) if expected_error else None
+    )
+    assert details.flag_metadata.get("config_version") == reader["config_version"]
+    assert _complete_split(details) is reader["experiment_exposure"]
+
+    for sibling, expected in case.get("sibling_expectations", {}).items():
+        sibling_details = snapshot.get_boolean_details(sibling, False)
+        assert sibling_details.error_code == FlagEvaluationErrorCode(
+            expected["error_code"]
+        )
+        assert _complete_split(sibling_details) is expected["experiment_exposure"]
 
 
 VALID_RESPONSES = [case for case in RESPONSES["cases"] if case["expected"] == "valid"]
@@ -99,6 +154,7 @@ def test_valid_producer_responses_are_retained_as_sent(case):
     assert set(flags) == set(records)
     for key, record in records.items():
         flag = flags[key]
+        assert flag.error_code is not FlagEvaluationErrorCode.PARSE_ERROR
         assert flag.value == record["value"]
         assert flag.failed is record.get("failed", False)
         assert flag.reason is not None
@@ -141,6 +197,239 @@ def _typed_response(values: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+TYPED_VALUES = {
+    "boolean-flag": True,
+    "false-flag": False,
+    "null-flag": None,
+    "string-flag": "compact",
+    "empty-string-flag": "",
+    "integer-flag": 7,
+    "zero-flag": 0,
+    "float-flag": 12.5,
+    "object-flag": {"layout": "compact", "columns": [1, 2], "nested": {"on": True}},
+    "empty-object-flag": {},
+}
+
+ACCESSORS: Dict[str, Callable[[FeatureFlagEvaluations], Callable[..., Any]]] = {
+    "boolean": lambda snapshot: snapshot.get_boolean_details,
+    "string": lambda snapshot: snapshot.get_string_details,
+    "number": lambda snapshot: snapshot.get_number_details,
+    "integer": lambda snapshot: snapshot.get_integer_details,
+    "float": lambda snapshot: snapshot.get_float_details,
+    "object": lambda snapshot: snapshot.get_object_details,
+}
+DEFAULTS = {
+    "boolean": True,
+    "string": "default",
+    "number": -1,
+    "integer": -1,
+    "float": -1.0,
+    "object": {"d": 1},
+}
+# The accessors that return each flag's value, and the value they return.
+ACCEPTED = {
+    "boolean-flag": {"boolean": True},
+    "false-flag": {"boolean": False},
+    "string-flag": {"string": "compact"},
+    "empty-string-flag": {"string": ""},
+    "integer-flag": {"number": 7, "integer": 7, "float": 7.0},
+    "zero-flag": {"number": 0, "integer": 0, "float": 0.0},
+    "float-flag": {"number": 12.5, "float": 12.5},
+    "object-flag": {"object": TYPED_VALUES["object-flag"]},
+    "empty-object-flag": {"object": {}},
+}
+
+
+@pytest.mark.parametrize("key", list(TYPED_VALUES))
+@pytest.mark.parametrize("value_type", list(ACCESSORS))
+def test_typed_accessors_never_coerce(client, key, value_type):
+    snapshot = _evaluate(client, _typed_response(TYPED_VALUES))
+    default = DEFAULTS[value_type]
+
+    details = ACCESSORS[value_type](snapshot)(key, default)
+
+    value = TYPED_VALUES[key]
+    assert details.key == key
+    assert details.flag_metadata["reason_code"] == "targeting_match"
+    assert details.flag_metadata["config_version"] == 2
+    accepted = ACCEPTED.get(key, {})
+    if value_type in accepted:
+        assert details.value == accepted[value_type]
+        assert type(details.value) is type(accepted[value_type])
+        assert details.error_code is None
+        assert details.reason is FlagEvaluationReason.TARGETING_MATCH
+    elif value is None or value is False:
+        # No value, or false read as another type: the default, without an error.
+        assert details.value == default
+        assert details.error_code is None
+        assert details.reason is FlagEvaluationReason.TARGETING_MATCH
+    else:
+        assert details.value == default
+        assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+        assert details.reason is FlagEvaluationReason.ERROR
+
+
+def test_value_accessors_return_the_details_value(client):
+    snapshot = _evaluate(client, _typed_response(TYPED_VALUES))
+
+    assert snapshot.get_boolean_value("boolean-flag", False) is True
+    assert snapshot.get_boolean_value("false-flag", True) is False
+    assert snapshot.get_boolean_value("null-flag", True) is True
+    assert snapshot.get_boolean_value("string-flag", True) is True
+    assert snapshot.get_string_value("string-flag", "x") == "compact"
+    assert snapshot.get_string_value("false-flag", "x") == "x"
+    assert snapshot.get_number_value("integer-flag", 0) == 7
+    assert snapshot.get_number_value("boolean-flag", 0) == 0
+    assert snapshot.get_object_value("object-flag", {}) == TYPED_VALUES["object-flag"]
+    assert snapshot.get_object_value("missing-flag", {"a": 1}) == {"a": 1}
+
+
+def test_typed_details_carry_the_variant_key_and_context(client):
+    response = _build(READERS, {"template": "experiment_split"})
+    response["flags"]["garden-layout"]["value"] = "compact"
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("garden-layout", "default")
+
+    assert details.value == "compact"
+    assert details.variant == "arm_a"
+    assert details.reason is FlagEvaluationReason.SPLIT
+    assert details.flag_metadata["reason_code"] == "experiment_split"
+    assert details.flag_metadata["condition_index"] == 0
+    assert details.flag_metadata["rule_type"] == "experiment"
+    assert details.flag_metadata["rule_id"] == "10000000-0000-4000-8000-000000000001"
+    assert details.flag_metadata["variant_key"] == "arm_a"
+
+
+def test_details_of_an_experiment_split(client):
+    response = _build(READERS, {"template": "experiment_split"})
+    response["flags"]["garden-layout"]["value"] = True
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_boolean_details("garden-layout", False)
+
+    assert details == FlagEvaluationDetails(
+        key="garden-layout",
+        value=True,
+        reason=FlagEvaluationReason.SPLIT,
+        variant="arm_a",
+        flag_metadata={
+            "id": 201,
+            "version": 7,
+            "config_version": 2,
+            "reason_code": "experiment_split",
+            "condition_index": 0,
+            "rule_type": "experiment",
+            "rule_id": "10000000-0000-4000-8000-000000000001",
+            "variant_key": "arm_a",
+        },
+    )
+    assert str(details.reason) == "SPLIT"
+
+
+@pytest.mark.parametrize(
+    "template, reason",
+    [
+        ("targeting_match_targeted_release", FlagEvaluationReason.TARGETING_MATCH),
+        ("targeting_match_percentage_rollout", FlagEvaluationReason.TARGETING_MATCH),
+        ("rollout_miss_percentage_rollout", FlagEvaluationReason.DEFAULT),
+        ("rollout_miss_experiment", FlagEvaluationReason.DEFAULT),
+        ("experiment_paused", FlagEvaluationReason.DEFAULT),
+        ("holdout", FlagEvaluationReason.DEFAULT),
+        ("no_rule_match", FlagEvaluationReason.DEFAULT),
+        ("missing_group_key", FlagEvaluationReason.ERROR),
+        ("dependency_error", FlagEvaluationReason.ERROR),
+        ("error", FlagEvaluationReason.ERROR),
+        ("v1", FlagEvaluationReason.TARGETING_MATCH),
+    ],
+)
+def test_reason_is_the_openfeature_reason_of_the_reason_code(client, template, reason):
+    snapshot = _evaluate(client, _build(READERS, {"template": template}))
+    record = _build(READERS, {"template": template})["flags"]["garden-layout"]
+
+    details = snapshot.get_string_details("garden-layout", "default")
+
+    assert details.reason is reason
+    assert details.flag_metadata["reason_code"] == record["reason"]["code"]
+
+
+def test_an_unknown_config_version_2_reason_code_is_unknown(client):
+    response = _typed_response({"string-flag": "compact"})
+    response["flags"]["string-flag"]["reason"]["code"] = "future_reason"
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("string-flag", "default")
+
+    assert (details.value, details.reason) == ("compact", FlagEvaluationReason.UNKNOWN)
+
+
+def test_details_of_a_null_flag_default(client):
+    response = _build(READERS, {"template": "no_rule_match"})
+    response["flags"]["garden-layout"]["value"] = None
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("garden-layout", "Welcome")
+
+    assert details.value == "Welcome"
+    assert details.reason is FlagEvaluationReason.DEFAULT
+    assert details.error_code is None
+    assert details.variant is None
+    assert details.flag_metadata["reason_code"] == "no_rule_match"
+
+
+def test_a_type_mismatch_keeps_the_metadata_and_drops_the_variant(client):
+    snapshot = _evaluate(client, _build(READERS, {"template": "v1"}))
+
+    details = snapshot.get_boolean_details("garden-layout", False)
+
+    assert details.value is False
+    assert details.reason is FlagEvaluationReason.ERROR
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.error_message == (
+        "Flag 'garden-layout' has a string value, not a boolean value."
+    )
+    assert details.variant is None
+    assert details.flag_metadata["config_version"] == 1
+    assert details.flag_metadata["reason_code"] == "condition_match"
+    assert details.flag_metadata["variant_key"] == "compact"
+
+
+def test_an_error_drops_the_variant(client):
+    response = _build(READERS, {"template": "experiment_split"})
+    response["flags"]["garden-layout"]["failed"] = True
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_boolean_details("garden-layout", True)
+
+    assert details.error_code is FlagEvaluationErrorCode.GENERAL
+    assert details.variant is None
+    assert details.flag_metadata["variant_key"] == "arm_a"
+
+
+def test_the_integer_accessor_rejects_a_fractional_number(client):
+    snapshot = _evaluate(client, _typed_response({"ratio": 0.25, "count": 2.0}))
+
+    details = snapshot.get_integer_details("ratio", 1)
+
+    assert details.value == 1
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.error_message == (
+        "Flag 'ratio' has the number 0.25, which is not an integer."
+    )
+    assert snapshot.get_float_value("ratio", 1.0) == 0.25
+    count = snapshot.get_integer_value("count", 0)
+    assert (count, type(count)) == (2, int)
+
+
+def test_a_returned_object_cannot_change_the_snapshot(client):
+    snapshot = _evaluate(client, _typed_response(TYPED_VALUES))
+
+    snapshot.get_object_value("object-flag", {})["nested"]["on"] = False
+
+    assert snapshot.get_object_value("object-flag", {}) == TYPED_VALUES["object-flag"]
+    assert snapshot.get_flag_payload("object-flag") == TYPED_VALUES["object-flag"]
+
+
 def _old_server_response(**records: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "flags": {
@@ -149,6 +438,29 @@ def _old_server_response(**records: Dict[str, Any]) -> Dict[str, Any]:
         },
         "errorsWhileComputingFlags": False,
     }
+
+
+def test_a_number_flag_on_an_older_server_is_a_type_mismatch_that_names_the_cause(
+    client,
+):
+    response = _old_server_response(
+        **{
+            "upload-limit": {
+                "enabled": True,
+                "variant": None,
+                "metadata": {"id": 1, "version": 1, "payload": "25"},
+            }
+        }
+    )
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_number_details("upload-limit", 10)
+
+    assert details.value == 10
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.flag_metadata["config_version"] == 1
+    assert "server that does not send typed values" in (details.error_message or "")
+    assert snapshot.get_flag_payload("upload-limit") == 25
 
 
 @pytest.mark.parametrize("shape", ["v4", "older"])
@@ -186,9 +498,142 @@ async def test_the_async_client_logs_records_without_typed_values_once(caplog):
             snapshot = await client.evaluate_flags(DISTINCT_ID)
         await client.shutdown()
 
-    assert snapshot.get_flag("flag") is True
+    assert snapshot.get_boolean_value("flag", False) is True
     logged = [r for r in caplog.records if "no typed flag values" in r.getMessage()]
     assert len(logged) == 1
+
+
+def _local_client() -> Client:
+    client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+    groups = [{"properties": [], "rollout_percentage": 100}]
+    client.feature_flags = [
+        {
+            "id": 11,
+            "key": "legacy-layout",
+            "active": True,
+            "filters": {
+                "groups": groups,
+                "multivariate": {
+                    "variants": [{"key": "compact", "rollout_percentage": 100}]
+                },
+            },
+        },
+        {"id": 12, "key": "beta", "active": True, "filters": {"groups": groups}},
+        {"id": 13, "key": "off", "active": False, "filters": {"groups": groups}},
+        {
+            "id": 14,
+            "key": "no-match",
+            "active": True,
+            "filters": {"groups": [{"properties": [], "rollout_percentage": 0}]},
+        },
+    ]
+    return client
+
+
+@mock.patch("posthog.client.flags")
+def test_locally_evaluated_flags_have_a_derived_reason_and_config_version_1(
+    patch_flags,
+):
+    client = _local_client()
+    try:
+        snapshot = client.evaluate_flags("user-123")
+        legacy_layout = snapshot.get_string_details("legacy-layout", "grid")
+        beta = snapshot.get_boolean_details("beta", False)
+        off = snapshot.get_boolean_details("off", True)
+        no_match = snapshot.get_boolean_details("no-match", True)
+        mismatch = snapshot.get_number_details("legacy-layout", 1)
+    finally:
+        client.shutdown()
+
+    patch_flags.assert_not_called()
+    assert legacy_layout == FlagEvaluationDetails(
+        key="legacy-layout",
+        value="compact",
+        reason=FlagEvaluationReason.TARGETING_MATCH,
+        variant="compact",
+        flag_metadata={"id": 11, "config_version": 1, "variant_key": "compact"},
+    )
+    assert (beta.value, beta.reason) == (True, FlagEvaluationReason.TARGETING_MATCH)
+    assert beta.flag_metadata == {"id": 12, "config_version": 1}
+    assert (off.value, off.reason) == (False, FlagEvaluationReason.DISABLED)
+    assert off.flag_metadata == {
+        "id": 13,
+        "config_version": 1,
+        "reason_code": "flag_disabled",
+    }
+    assert (no_match.value, no_match.reason) == (False, FlagEvaluationReason.DEFAULT)
+    assert mismatch.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert "config version 1" in (mismatch.error_message or "")
+
+
+def test_missing_flag_returns_the_default_with_flag_not_found(client):
+    snapshot = _evaluate(client, _typed_response({"boolean-flag": True}))
+
+    details = snapshot.get_number_details("missing-flag", 3)
+
+    assert details == FlagEvaluationDetails(
+        key="missing-flag",
+        value=3,
+        reason=FlagEvaluationReason.ERROR,
+        error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
+        error_message="Flag 'missing-flag' is not in the evaluation.",
+    )
+
+
+def test_an_unresolved_flag_is_not_found_and_names_the_cause():
+    snapshot = FeatureFlagEvaluations(
+        host=mock.MagicMock(),
+        distinct_id="user-123",
+        flags={},
+        unresolved_flags={"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+    )
+
+    details = snapshot.get_string_details("checkout", "x")
+
+    assert details == FlagEvaluationDetails(
+        key="checkout",
+        value="x",
+        reason=FlagEvaluationReason.ERROR,
+        error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
+        error_message=(
+            "Local evaluation could not resolve flag 'checkout' "
+            "(experience_continuity)."
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "template, error_code, message",
+    [
+        ("dependency_error", FlagEvaluationErrorCode.GENERAL, None),
+        ("error", FlagEvaluationErrorCode.GENERAL, None),
+        ("missing_group_key", FlagEvaluationErrorCode.INVALID_CONTEXT, None),
+    ],
+)
+def test_error_records_return_the_default(client, template, error_code, message):
+    snapshot = _evaluate(client, _build(RESPONSES, {"template": template}))
+
+    details = snapshot.get_boolean_details("garden-layout", True)
+
+    assert details.value is True
+    assert details.error_code is error_code
+    assert details.error_message == message
+
+
+def test_failed_record_uses_the_reason_description_as_the_error_message(client):
+    response = _build(RESPONSES, {"template": "dependency_error"})
+    response["flags"]["garden-layout"]["reason"]["description"] = (
+        "Dependency 'garden-root' could not be resolved"
+    )
+    snapshot = _evaluate(client, response)
+
+    details = snapshot.get_string_details("garden-layout", "default")
+
+    assert details.value == "default"
+    assert details.error_code is FlagEvaluationErrorCode.GENERAL
+    assert details.error_message == "Dependency 'garden-root' could not be resolved"
+    # The legacy rendering of a failed record is unchanged: disabled.
+    assert snapshot.get_flag("garden-layout") is False
 
 
 def test_a_failed_record_never_renders_its_value(client):
@@ -196,6 +641,7 @@ def test_a_failed_record_never_renders_its_value(client):
     response["flags"]["garden-layout"]["value"] = "compact"
     snapshot = _evaluate(client, response)
 
+    assert snapshot.get_string_value("garden-layout", "default") == "default"
     assert snapshot.get_flag("garden-layout") is False
     assert snapshot.is_enabled("garden-layout", True) is False
 
@@ -259,6 +705,7 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_record(path, value):
     flags = normalize_flags_response(response)["flags"]
 
     malformed = flags["garden-layout"]
+    assert malformed.error_code is FlagEvaluationErrorCode.PARSE_ERROR
     assert malformed.failed is True
     assert malformed.value is None
     assert (malformed.enabled, malformed.variant, malformed.get_value()) == (
@@ -266,8 +713,9 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_record(path, value):
         None,
         False,
     )
+    assert path.split(".")[0] in (malformed.error_message or "")
     sibling = flags["sibling"]
-    assert sibling.failed is False
+    assert sibling.error_code is None
     assert sibling.value == "compact"
 
 
@@ -276,8 +724,7 @@ def test_a_record_that_is_not_an_object_fails_only_that_record():
 
     flags = normalize_flags_response(response)["flags"]
 
-    assert flags["broken"].failed is True
-    assert flags["broken"].get_value() is False
+    assert flags["broken"].error_code is FlagEvaluationErrorCode.PARSE_ERROR
     assert flags["sibling"].value == "compact"
 
 
@@ -291,7 +738,7 @@ def test_unknown_fields_and_null_optional_fields_are_ignored():
         "garden-layout"
     ]
 
-    assert flag.failed is False
+    assert flag.error_code is None
     assert flag.value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
     assert flag.metadata.variant_key is None
@@ -316,7 +763,7 @@ def test_experiment_and_holdout_ids_in_the_metadata_are_ignored(field, value):
         "garden-layout"
     ]
 
-    assert flag.failed is False
+    assert flag.error_code is None
     assert flag.value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
     assert not hasattr(flag.metadata, field)
@@ -353,7 +800,7 @@ def test_a_record_without_value_is_read_as_an_older_server_record():
     assert flag.metadata.variant_key is None
 
 
-def test_a_failed_older_server_record_is_kept_as_failed():
+def test_a_failed_older_server_record_returns_the_default():
     record = {
         "key": "garden-layout",
         "enabled": False,
@@ -371,9 +818,8 @@ def test_a_failed_older_server_record_is_kept_as_failed():
         "garden-layout"
     ]
 
-    assert flag.failed is True
-    assert flag.value is False
-    assert flag.reason is not None and flag.reason.description == "Timed out"
+    assert flag.error_code is FlagEvaluationErrorCode.GENERAL
+    assert flag.error_message == "Timed out"
 
 
 def test_feature_flag_value_defaults_to_the_legacy_value():
@@ -712,20 +1158,30 @@ def test_feature_flag_called_properties_are_unchanged_for_a_v1_flag(client):
     )
 
 
+def test_typed_accessors_report_access_like_get_flag(client):
+    with mock.patch.object(client, "capture") as capture:
+        snapshot = _evaluate(client, _typed_response({"string-flag": "compact"}))
+        snapshot.get_number_details("string-flag", 0)
+        snapshot.get_flag("string-flag")
+
+    capture.assert_called_once()
+    properties = capture.call_args.kwargs["properties"]
+    assert properties["$feature_flag_response"] == "compact"
+    # A type mismatch is not an evaluation error.
+    assert "$feature_flag_error" not in properties
+    assert snapshot.only_accessed().keys == ["string-flag"]
+
+
 async def test_async_client_reads_the_v4_response():
     with mock.patch(
         "posthog.async_client._async_flags",
-        new=mock.AsyncMock(
-            return_value=_typed_response(
-                {"float-flag": 12.5, "object-flag": {"layout": "compact"}}
-            )
-        ),
+        new=mock.AsyncMock(return_value=_typed_response(TYPED_VALUES)),
     ):
         client = AsyncPosthog("project-key", send=False)
         snapshot = await client.evaluate_flags(DISTINCT_ID)
         await client.shutdown()
 
-    assert snapshot.get_flag("object-flag") is True
-    assert snapshot.get_flag_payload("object-flag") == {"layout": "compact"}
+    assert snapshot.get_object_value("object-flag", {}) == TYPED_VALUES["object-flag"]
+    assert snapshot.get_number_value("float-flag", 0) == 12.5
     assert snapshot.get_flag("float-flag") is True
     assert snapshot.get_flag_payload("float-flag") == 12.5
