@@ -410,6 +410,9 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
             _read_int(raw_metadata.get("experiment_id"), "metadata.experiment_id")
     except _MalformedRecord as error:
         return _malformed_record(key, str(error))
+    except RecursionError:
+        # A value nested too deeply to encode as a payload fails only this record.
+        return _malformed_record(key, "value")
 
     return FeatureFlag(
         key=key,
