@@ -1103,6 +1103,63 @@ def test_a_config_version_1_payload_is_kept():
     assert flags["string-flag"].metadata.payload == '{"columns": 2}'
 
 
+def test_typed_details_of_unreadable_and_failed_older_server_records(client):
+    response = {
+        "flags": {
+            "unreadable": _older_record(key="unreadable", reason="oops"),
+            "failed": _older_record(
+                key="failed",
+                enabled=False,
+                variant=None,
+                failed=True,
+                **{"reason.description": "Timed out"},
+            ),
+            "healthy": _older_record(key="healthy"),
+        },
+        "errorsWhileComputingFlags": True,
+    }
+    snapshot = _evaluate(client, response)
+
+    unreadable = snapshot.get_string_details("unreadable", "x")
+    assert (unreadable.value, unreadable.error_code) == (
+        "x",
+        FlagEvaluationErrorCode.PARSE_ERROR,
+    )
+    assert unreadable.error_message is not None
+    assert "reason" in unreadable.error_message
+    failed = snapshot.get_string_details("failed", "x")
+    assert (failed.value, failed.error_code, failed.error_message) == (
+        "x",
+        FlagEvaluationErrorCode.GENERAL,
+        "Timed out",
+    )
+    healthy = snapshot.get_string_details("healthy", "x")
+    assert (healthy.value, healthy.error_code) == ("compact", None)
+
+
+@pytest.mark.parametrize("make_record", [_record, _older_record])
+def test_typed_details_leave_out_an_absent_flag_id_and_version(make_record, client):
+    record = make_record()
+    del record["metadata"]["id"]
+    del record["metadata"]["version"]
+    snapshot = _evaluate(client, {"flags": {"garden-layout": record}})
+
+    details = snapshot.get_string_details("garden-layout", "x")
+
+    assert details.value == "compact"
+    assert "id" not in details.flag_metadata
+    assert "version" not in details.flag_metadata
+
+
+def test_a_number_value_wins_over_a_payload_the_record_sends(client):
+    response = _typed_response({"upload-limit": 25})
+    response["flags"]["upload-limit"]["metadata"]["payload"] = "999"
+    snapshot = _evaluate(client, response)
+
+    assert snapshot.get_number_value("upload-limit", 10) == 25
+    assert snapshot.get_flag_payload("upload-limit") == 25
+
+
 def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", "control", None).value == "control"
     assert FeatureFlag.from_value_and_payload("a", True, None).value is True
