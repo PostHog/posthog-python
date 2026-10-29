@@ -7181,6 +7181,41 @@ class TestRelativeDateParsing(unittest.TestCase):
 
 
 class TestCaptureCalls(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("get_feature_flag", lambda c: c.get_feature_flag),
+            ("feature_enabled", lambda c: c.feature_enabled),
+            ("get_feature_flag_result", lambda c: c.get_feature_flag_result),
+        ]
+    )
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_locally_evaluated_flag_called_event_carries_definition_id_and_version(
+        self, _name, getter, patch_flags, patch_capture
+    ):
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 4211,
+                "version": 7,
+                "name": "Local Feature",
+                "key": "local-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        self.assertTrue(getter(client)("local-flag", "some-distinct-id"))
+
+        patch_flags.assert_not_called()
+        patch_capture.assert_called_once()
+        properties = patch_capture.call_args[1]["properties"]
+        self.assertTrue(properties["locally_evaluated"])
+        self.assertEqual(properties["$feature_flag_id"], 4211)
+        self.assertEqual(properties["$feature_flag_version"], 7)
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_is_called(self, patch_flags, patch_capture):
@@ -7219,6 +7254,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=None,
@@ -7253,6 +7289,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=None,
@@ -7591,6 +7628,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=False,
@@ -7713,6 +7751,7 @@ class TestCaptureCalls(unittest.TestCase):
                         "$feature_flag_response": True,
                         "locally_evaluated": True,
                         "$feature/complex-flag": True,
+                        "$feature_flag_id": 1,
                     },
                     groups={},
                     disable_geoip=None,
