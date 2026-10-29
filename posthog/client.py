@@ -19,7 +19,12 @@ from typing_extensions import Unpack
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
 from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
-from posthog.metrics_capture import PostHogMetrics
+from posthog.metrics_capture import (
+    _DEFAULT_FLUSH_INTERVAL_SECONDS,
+    PostHogMetrics,
+    _validated_before_send,
+    _validated_flush_interval,
+)
 from posthog.tracing._config import resolve_traces_config
 from posthog.tracing._drops import DropLog
 from posthog.tracing._export import SpanExporter
@@ -886,10 +891,16 @@ class Client(object):
         self._lifecycle_callback_context: ContextVar[bool] = ContextVar(
             "posthog_lifecycle_callback", default=False
         )
+        # Set while a metrics `before_send` hook runs: a flush it calls does not
+        # start another autocapture export, which would run the hook again.
+        self._skip_metrics_autocapture_flush: ContextVar[bool] = ContextVar(
+            "posthog_skip_metrics_autocapture_flush", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
         self._deferred_flush_followup_timeout: Optional[float] = None
+        self._deferred_flush_followup_metrics = False
         # Used for session replay URL generation - we don't want the server host here.
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
@@ -1117,6 +1128,10 @@ class Client(object):
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
 
+        self._metrics_autocapture: Optional[Any] = None
+        self._metrics_autocapture_tried = False
+        self._start_metrics_autocapture_once(metrics)
+
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
             os.register_at_fork(
@@ -1124,6 +1139,81 @@ class Client(object):
             )
 
         self._warn_if_duplicate_async_client()
+
+    def _start_metrics_autocapture_once(self, metrics_config: Any) -> None:
+        """Starts metrics autocapture when the ``metrics`` option asks for it. A
+        client tries once, so a module-level ``setup()`` on each call does not
+        start it again or repeat a warning."""
+        autocapture = (
+            metrics_config.get("autocapture")
+            if isinstance(metrics_config, dict)
+            else None
+        )
+        if not autocapture or self.disabled or self._metrics_autocapture_tried:
+            return
+        self._metrics_autocapture_tried = True
+        self._metrics_autocapture = self._start_metrics_autocapture(
+            metrics_config, autocapture if isinstance(autocapture, dict) else {}
+        )
+        # Sync mode has no exit hook for events; the window needs its own.
+        if self._metrics_autocapture is not None and self.sync_mode and self.send:
+            atexit.register(self._atexit_metrics_autocapture)
+
+    def _start_metrics_autocapture(self, metrics_config: dict, areas: dict):
+        # Imported here, so a client without autocapture never loads OpenTelemetry.
+        from ._metrics_autocapture import start_metrics_autocapture
+
+        resource_attributes = metrics_config.get("resource_attributes")
+        resource_attributes = (
+            dict(resource_attributes) if isinstance(resource_attributes, dict) else {}
+        )
+        for key, attribute in (
+            ("service_version", "service.version"),
+            ("environment", "deployment.environment"),
+        ):
+            if metrics_config.get(key) and attribute not in resource_attributes:
+                resource_attributes[attribute] = metrics_config[key]
+        weak_self = weakref.ref(self)
+        before_send = _validated_before_send(metrics_config.get("before_send"))
+        if before_send is not None:
+            hook = before_send
+
+            def run_as_callback(sample):
+                # The hook runs while OpenTelemetry collects or records. As an
+                # SDK callback, a flush() or shutdown() it calls is deferred, so
+                # it does not wait for that same collection.
+                client = weak_self()
+                if client is None:
+                    return hook(sample)
+                callback_token = client._lifecycle_callback_context.set(True)
+                skip_token = client._skip_metrics_autocapture_flush.set(True)
+                try:
+                    return hook(sample)
+                finally:
+                    client._skip_metrics_autocapture_flush.reset(skip_token)
+                    client._lifecycle_callback_context.reset(callback_token)
+
+            before_send = run_as_callback
+
+        return start_metrics_autocapture(
+            host=self.host,
+            api_key=self.api_key,
+            areas={
+                "http": areas.get("http", True),
+                "db": areas.get("db", True),
+                "runtime": areas.get("runtime", True),
+            },
+            service_name=resource_attributes.get("service.name")
+            or metrics_config.get("service_name"),
+            resource_attributes=resource_attributes,
+            is_enabled=lambda: (client := weak_self()) is not None
+            and not client.disabled
+            and client.send,
+            export_interval_seconds=_validated_flush_interval(
+                metrics_config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
+            ),
+            before_send=before_send,
+        )
 
     def _set_library_identity(self, library_id: str, library_version: str) -> None:
         """Override the SDK identity stamped on events and outbound requests."""
@@ -2332,10 +2422,14 @@ class Client(object):
         self._lifecycle_callback_context = ContextVar(
             "posthog_lifecycle_callback", default=False
         )
+        self._skip_metrics_autocapture_flush = ContextVar(
+            "posthog_skip_metrics_autocapture_flush", default=False
+        )
         self._deferred_flush_lock = threading.Lock()
         self._deferred_flush_pending = False
         self._deferred_flush_followup = False
         self._deferred_flush_followup_timeout = None
+        self._deferred_flush_followup_metrics = False
 
         # Async runner threads do not survive fork(); recreate lazily on next async cache call.
         self._flag_definition_cache_provider_async_runner = None
@@ -2720,7 +2814,7 @@ class Client(object):
 
     def flush(self, timeout_seconds: Optional[float] = 10) -> None:
         """
-        Attempt immediate delivery of queued events and ended spans, keeping the client reusable.
+        Attempt immediate delivery of queued events, ended spans and autocaptured metrics, keeping the client reusable.
 
         For a client shared across requests or serverless invocations (including
         the module-level client), call ``flush()`` before a short-lived invocation
@@ -2757,12 +2851,22 @@ class Client(object):
             posthog.flush(timeout_seconds=10)
             ```
         """
-        if self._defer_flush_from_callback(timeout_seconds):
+        include_metrics_autocapture = not self._skip_metrics_autocapture_flush.get()
+        if self._defer_flush_from_callback(
+            timeout_seconds, include_metrics_autocapture
+        ):
             return
         try:
             # Spans drain with events: serverless handlers call flush(), not
             # shutdown(), and leaving spans on their own timer would lose them.
             span_flush = self._start_span_flush(timeout_seconds)
+            # Autocaptured metrics would otherwise wait for their export timer.
+            metrics_flush = (
+                self._start_metrics_autocapture_flush()
+                if include_metrics_autocapture
+                else None
+            )
+            deadline: Optional[float] = None
             if timeout_seconds is None:
                 for lane in self._lanes:
                     lane.flush(None)
@@ -2770,6 +2874,10 @@ class Client(object):
                 deadline = time.monotonic() + timeout_seconds
                 for lane in self._lanes:
                     lane.flush(max(0.0, deadline - time.monotonic()))
+            if metrics_flush is not None:
+                metrics_flush(
+                    None if deadline is None else max(0.0, deadline - time.monotonic())
+                )
             if span_flush is not None:
                 # The last span request is bounded only by the request
                 # timeout, so the wait is not.
@@ -2777,6 +2885,12 @@ class Client(object):
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
+
+    def _start_metrics_autocapture_flush(
+        self,
+    ) -> Optional[Callable[[Optional[float]], None]]:
+        autocapture = self._metrics_autocapture
+        return autocapture.start_flush() if autocapture is not None else None
 
     def _start_span_flush(
         self, timeout_seconds: Optional[float]
@@ -2857,7 +2971,9 @@ class Client(object):
         self._start_lifecycle_thread(run, "lifecycle")
         return True
 
-    def _defer_flush_from_callback(self, timeout_seconds: Optional[float]) -> bool:
+    def _defer_flush_from_callback(
+        self, timeout_seconds: Optional[float], include_metrics_autocapture: bool = True
+    ) -> bool:
         if not self._is_lifecycle_callback_thread():
             return False
         with self._deferred_flush_lock:
@@ -2865,7 +2981,12 @@ class Client(object):
                 if not self._deferred_flush_followup:
                     self._deferred_flush_followup = True
                     self._deferred_flush_followup_timeout = timeout_seconds
-                elif (
+                    self._deferred_flush_followup_metrics = include_metrics_autocapture
+                    return True
+                self._deferred_flush_followup_metrics = (
+                    self._deferred_flush_followup_metrics or include_metrics_autocapture
+                )
+                if (
                     self._deferred_flush_followup_timeout is not None
                     and timeout_seconds is not None
                 ):
@@ -2879,13 +3000,20 @@ class Client(object):
 
         def run() -> None:
             next_timeout = timeout_seconds
+            next_metrics = include_metrics_autocapture
             while True:
-                self.flush(next_timeout)
+                skip_token = self._skip_metrics_autocapture_flush.set(not next_metrics)
+                try:
+                    self.flush(next_timeout)
+                finally:
+                    self._skip_metrics_autocapture_flush.reset(skip_token)
                 with self._deferred_flush_lock:
                     if self._deferred_flush_followup:
                         next_timeout = self._deferred_flush_followup_timeout
+                        next_metrics = self._deferred_flush_followup_metrics
                         self._deferred_flush_followup = False
                         self._deferred_flush_followup_timeout = None
+                        self._deferred_flush_followup_metrics = False
                         continue
                     self._deferred_flush_pending = False
                     return
@@ -2997,6 +3125,15 @@ class Client(object):
             self._run_lifecycle_cleanup(
                 "Failed to reset metrics on shutdown", self._metrics.reset, errors
             )
+        if self._metrics_autocapture is not None:
+            # Exports the last window, then removes the instrumentation.
+            self._run_lifecycle_cleanup(
+                "Failed to shut down metrics autocapture",
+                self._metrics_autocapture.shutdown,
+                errors,
+            )
+            self._metrics_autocapture = None
+            atexit.unregister(self._atexit_metrics_autocapture)
         with self._traces_lock:
             traces = self._traces
         if traces is not None:
@@ -3098,8 +3235,11 @@ class Client(object):
                 span_flush = self._start_span_flush(
                     max(0.0, deadline - time.monotonic())
                 )
+                metrics_flush = self._start_metrics_autocapture_flush()
                 for lane in self._lanes:
                     lane.flush(max(0.0, deadline - time.monotonic()))
+                if metrics_flush is not None:
+                    metrics_flush(max(0.0, deadline - time.monotonic()))
                 self._join_span_flush(span_flush, deadline)
             finally:
                 # Consumers are daemon threads. Publish a non-draining stop to
@@ -3111,6 +3251,12 @@ class Client(object):
             with self._lifecycle_condition:
                 self._lifecycle_owner = None
                 self._lifecycle_condition.notify_all()
+
+    @no_throw()
+    def _atexit_metrics_autocapture(self) -> None:
+        waiter = self._start_metrics_autocapture_flush()
+        if waiter is not None:
+            waiter(max(0.0, _get_atexit_deadline() - time.monotonic()))
 
     @no_throw()
     def _atexit_spans(self) -> None:
