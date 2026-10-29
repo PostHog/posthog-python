@@ -931,6 +931,26 @@ def test_one_unreadable_older_server_record_keeps_its_siblings():
     assert flags["good"].get_value() is True
 
 
+def test_a_value_too_deeply_nested_to_encode_fails_only_that_record():
+    deep: Dict[str, Any] = {}
+    inner = deep
+    for _ in range(200_000):
+        inner["a"] = {}
+        inner = inner["a"]
+    response = {
+        "flags": {
+            "deep": _record(key="deep", value=deep),
+            "sibling": _record(key="sibling"),
+        }
+    }
+
+    flags = normalize_flags_response(response)["flags"]
+
+    assert flags["deep"].failed is True
+    assert flags["deep"]._malformed_field == "value"
+    assert flags["sibling"].get_value() == "compact"
+
+
 @pytest.mark.parametrize(
     "path, value",
     [
@@ -939,6 +959,7 @@ def test_one_unreadable_older_server_record_keeps_its_siblings():
         ("variant", 3),
         ("failed", "yes"),
         ("reason", "condition_match"),
+        ("reason", ""),
         ("reason.code", 3),
         ("reason.condition_index", "0"),
         ("reason.condition_index", 0.5),
@@ -1544,6 +1565,39 @@ def test_a_throwing_before_send_does_not_break_a_typed_read():
 
     assert snapshot.get_string_value("string-flag", "default") == "compact"
     assert calls == ["$feature_flag_called"]
+
+
+async def test_async_client_keeps_healthy_flags_beside_unreadable_and_sparse_ones():
+    sparse = _record(key="sparse")
+    del sparse["metadata"]["id"], sparse["metadata"]["version"]
+    response = {
+        "flags": {
+            "bad-older": _older_record(key="bad-older", reason="oops"),
+            "bad-v4": _record(key="bad-v4", **{"metadata.id": "202"}),
+            "sparse": sparse,
+            "healthy": _older_record(key="healthy"),
+        },
+        "requestId": "x",
+    }
+    with mock.patch(
+        "posthog.async_client._async_flags", new=mock.AsyncMock(return_value=response)
+    ):
+        client = AsyncPosthog("project-key", send=False)
+        with mock.patch.object(client, "capture") as capture:
+            snapshot = await client.evaluate_flags(DISTINCT_ID)
+            assert snapshot.get_flag("bad-older") is False
+            assert snapshot.get_flag("bad-v4") is False
+            assert snapshot.get_flag("sparse") == "compact"
+            assert snapshot.get_flag("healthy") == "compact"
+        await client.shutdown()
+
+    sparse_event = next(
+        call.kwargs["properties"]
+        for call in capture.call_args_list
+        if call.kwargs["properties"]["$feature_flag"] == "sparse"
+    )
+    assert "$feature_flag_id" not in sparse_event
+    assert "$feature_flag_version" not in sparse_event
 
 
 async def test_async_client_reads_the_v4_response():
