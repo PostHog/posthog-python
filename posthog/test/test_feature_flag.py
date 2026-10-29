@@ -128,7 +128,7 @@ class TestFeatureFlag(unittest.TestCase):
         metadata = FlagMetadata.from_json(resp)
         self.assertEqual(metadata.id, 123)
         self.assertIsNone(metadata.payload)
-        self.assertEqual(metadata.version, 0)  # default value
+        self.assertIsNone(metadata.version)  # absent, not invented
         self.assertEqual(metadata.description, "")  # default value
 
         # Test with None
