@@ -5,18 +5,11 @@ the same snapshot to capture() via the `flags` option so events carry the exact 
 values the code branched on, with no additional /flags request.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import (
-    FeatureFlag,
-    FlagEvaluationDetails,
-    FlagValue,
-    UnresolvedFlagReason,
-    _resolve_flag_details,
-    _resolve_flag_value,
-)
+from posthog.types import FeatureFlag, FlagValue, UnresolvedFlagReason
 
 
 @dataclass(frozen=True)
@@ -37,8 +30,6 @@ class _EvaluatedFlagRecord:
     # The parsed /flags record, with its typed value, reason and metadata.
     # ``None`` for a locally evaluated flag.
     details: Optional[FeatureFlag] = None
-    # Whether a locally evaluated flag is off because its definition is inactive.
-    inactive: bool = False
 
 
 @dataclass
@@ -140,132 +131,6 @@ class FeatureFlagEvaluations:
             return False
         return flag.variant if flag.variant is not None else True
 
-    def get_boolean_value(self, key: str, default_value: bool) -> bool:
-        """Return the flag's boolean value, or ``default_value``.
-
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_boolean_details` for when the default is returned.
-        """
-        return self.get_boolean_details(key, default_value).value
-
-    def get_boolean_details(
-        self, key: str, default_value: bool
-    ) -> FlagEvaluationDetails[bool]:
-        """Return the flag's boolean value with its evaluation details.
-
-        The value is never coerced: a variant string is not ``True``.
-        ``default_value`` is returned when the flag is not in the evaluation,
-        failed, has no value, or has a value of another type; ``error_code`` says
-        which, except for a flag without a value. A flag whose value is ``False``
-        returns ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "boolean")
-
-    def get_string_value(self, key: str, default_value: str) -> str:
-        """Return the flag's string value, or ``default_value``.
-
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_string_details` for when the default is returned.
-        """
-        return self.get_string_details(key, default_value).value
-
-    def get_string_details(
-        self, key: str, default_value: str
-    ) -> FlagEvaluationDetails[str]:
-        """Return the flag's string value with its evaluation details.
-
-        The value is never coerced. ``default_value`` is returned when the flag is
-        not in the evaluation, failed, has no value, or has a value of another
-        type; ``error_code`` says which, except for a flag without a value or with
-        the value ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "string")
-
-    def get_number_value(self, key: str, default_value: float) -> float:
-        """Return the flag's number value, or ``default_value``.
-
-        An integer value is returned as an ``int``. Like :meth:`get_flag`, fires
-        ``$feature_flag_called`` on first access. See :meth:`get_number_details` for
-        when the default is returned.
-        """
-        return self.get_number_details(key, default_value).value
-
-    def get_number_details(
-        self, key: str, default_value: float
-    ) -> FlagEvaluationDetails[float]:
-        """Return the flag's number value with its evaluation details.
-
-        The value is never coerced: a boolean or a numeric string is not a number.
-        ``default_value`` is returned when the flag is not in the evaluation,
-        failed, has no value, or has a value of another type; ``error_code`` says
-        which, except for a flag without a value or with the value ``False``. Fires
-        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "number")
-
-    def get_integer_value(self, key: str, default_value: int) -> int:
-        """Return the flag's number value as an ``int``, or ``default_value``.
-
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_integer_details` for when the default is returned.
-        """
-        return self.get_integer_details(key, default_value).value
-
-    def get_integer_details(
-        self, key: str, default_value: int
-    ) -> FlagEvaluationDetails[int]:
-        """Return the flag's number value as an ``int`` with its evaluation details.
-
-        Like :meth:`get_number_details`, but a number with a fractional part, such
-        as ``0.25``, is a ``TYPE_MISMATCH``. An integral number such as ``2.0`` is
-        returned as ``2``.
-        """
-        return self._get_typed_details(key, default_value, "integer")
-
-    def get_float_value(self, key: str, default_value: float) -> float:
-        """Return the flag's number value as a ``float``, or ``default_value``.
-
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_float_details` for when the default is returned.
-        """
-        return self.get_float_details(key, default_value).value
-
-    def get_float_details(
-        self, key: str, default_value: float
-    ) -> FlagEvaluationDetails[float]:
-        """Return the flag's number value as a ``float`` with its evaluation details.
-
-        Like :meth:`get_number_details`, but an integer value is returned as a
-        ``float``.
-        """
-        return self._get_typed_details(key, default_value, "float")
-
-    def get_object_value(
-        self, key: str, default_value: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Return the flag's object value, or ``default_value``.
-
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_object_details` for when the default is returned.
-        """
-        return self.get_object_details(key, default_value).value
-
-    def get_object_details(
-        self, key: str, default_value: Dict[str, Any]
-    ) -> FlagEvaluationDetails[Dict[str, Any]]:
-        """Return the flag's object value with its evaluation details.
-
-        The value is never coerced: a payload is not an object value. The returned
-        object is a copy. ``default_value`` is returned when the flag is not in the
-        evaluation, failed, has no value, or has a value of another type;
-        ``error_code`` says which, except for a flag without a value or with the
-        value ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "object")
-
     def get_flag_payload(self, key: str) -> Optional[Any]:
         """Return the payload associated with a flag.
 
@@ -275,8 +140,8 @@ class FeatureFlagEvaluations:
         return flag.payload if flag else None
 
     def only_accessed(self) -> "FeatureFlagEvaluations":
-        """Return a filtered copy containing only flags accessed via :meth:`is_enabled`,
-        :meth:`get_flag` or a typed accessor before this call.
+        """Return a filtered copy containing only flags accessed via :meth:`is_enabled`
+        or :meth:`get_flag` before this call.
 
         Order-dependent: if nothing has been accessed yet, the returned snapshot is
         empty. The method honors its name — pre-access if you want a populated result.
@@ -372,43 +237,6 @@ class FeatureFlagEvaluations:
             # of the parent. Callers expect ``only_accessed()`` on the parent to reflect
             # only what the parent saw, not what happened on filtered views.
             accessed=set(self._accessed),
-        )
-
-    def _get_typed_details(
-        self, key: str, default_value: Any, value_type: str
-    ) -> FlagEvaluationDetails[Any]:
-        flag = self._flags.get(key)
-        self._record_access(key)
-        if flag is None and key in self._unresolved_flags:
-            # The flag exists, so say why it has no value.
-            return replace(
-                _resolve_flag_details(key, None, default_value, value_type),
-                error_message=f"Local evaluation could not resolve flag '{key}' "
-                f"({self._unresolved_flags[key].value}).",
-            )
-        if flag is None or flag.details is not None:
-            return _resolve_flag_details(
-                key, flag.details if flag else None, default_value, value_type
-            )
-        # A locally evaluated flag has config version 1: its value is the variant,
-        # or whether it is enabled.
-        value = flag.variant if flag.variant is not None else flag.enabled
-        reason_code = "flag_disabled" if flag.inactive else None
-        flag_metadata = {
-            "id": flag.id,
-            "config_version": 1,
-            "reason_code": reason_code,
-            "variant_key": flag.variant,
-        }
-        return _resolve_flag_value(
-            key,
-            value,
-            default_value,
-            value_type,
-            config_version=1,
-            reason_code=reason_code,
-            variant=flag.variant,
-            flag_metadata={k: v for k, v in flag_metadata.items() if v is not None},
         )
 
     def _record_access(self, key: str) -> None:
