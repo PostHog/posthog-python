@@ -488,6 +488,33 @@ def test_streaming_stream_options_are_not_mutated(
         assert stream_options == {"foo": "bar"}
 
 
+def test_embeddings_error(mock_client):
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=Exception("Test error"),
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception, match="Test error"):
+            client.embeddings.create(
+                model="text-embedding-3-small",
+                input="Hello world",
+                posthog_distinct_id="test-id",
+            )
+
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_model"] == "text-embedding-3-small"
+    assert props["$ai_input"] == "Hello world"
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Test error"
+    assert props["$ai_http_status"] == 0
+    assert "$ai_input_tokens" not in props
+
+
 def test_groups(mock_client, mock_openai_response):
     with patch(
         "openai.resources.chat.completions.Completions.create",
@@ -1447,6 +1474,29 @@ async def test_async_responses_streaming_with_tokens(mock_client):
     assert props["$ai_output_tokens"] == 30
     assert props["test"] == "streaming"
     assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.asyncio
+async def test_async_embeddings_error(mock_client):
+    mock_create = AsyncMock(side_effect=Exception("Test error"))
+
+    with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception, match="Test error"):
+            await client.embeddings.create(
+                model="text-embedding-3-small",
+                input="Hello world",
+                posthog_distinct_id="test-id",
+            )
+
+    assert mock_client.capture.call_count == 1
+
+    call_args = mock_client.capture.call_args[1]
+    props = call_args["properties"]
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Test error"
+    assert props["$ai_http_status"] == 0
 
 
 @pytest.mark.asyncio

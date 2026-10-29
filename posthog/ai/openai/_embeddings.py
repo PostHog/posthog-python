@@ -1,6 +1,12 @@
 from typing import Any, Dict, Optional
 
-from ..utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
+from ..utils import (
+    _capture_ai_event,
+    _format_ai_error,
+    _get_http_status,
+    finalize_ai_content,
+    with_privacy_mode,
+)
 
 
 def _capture_embedding_event(
@@ -15,6 +21,7 @@ def _capture_embedding_event(
     properties: Optional[Dict[str, Any]],
     privacy_mode: bool,
     groups: Optional[Dict[str, Any]],
+    error: Optional[BaseException] = None,
 ) -> None:
     """Build and capture telemetry shared by sync and async embedding wrappers."""
     usage = getattr(response, "usage", None)
@@ -28,7 +35,7 @@ def _capture_embedding_event(
             privacy_mode,
             finalize_ai_content(request_kwargs.get("input"), posthog_client),
         ),
-        "$ai_http_status": 200,
+        "$ai_http_status": _get_http_status(error) if error is not None else 200,
         # Omitted when the provider never reported a count: absent means
         # unknown, 0 is a report of nothing.
         **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
@@ -36,6 +43,14 @@ def _capture_embedding_event(
         "$ai_trace_id": trace_id,
         "$ai_base_url": str(base_url),
         **(properties or {}),
+        **(
+            {
+                "$ai_is_error": True,
+                "$ai_error": _format_ai_error(posthog_client, privacy_mode, error),
+            }
+            if error is not None
+            else {}
+        ),
     }
 
     if distinct_id is None:
