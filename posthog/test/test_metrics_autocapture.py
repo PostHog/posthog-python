@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
+import aiohttp
 import flask
 import httpx
 import opentelemetry.propagate
@@ -533,12 +534,32 @@ class TestStartMetricsAutocapture:
         os.close(write_fd)
         assert _child_result(pid, read_fd, timeout=15) == b"ok"
 
+    @pytest.mark.parametrize("signal", ["", "METRICS_"])
     def test_does_not_send_the_apps_otlp_settings_to_posthog(
-        self, posthog_host, app_server, started, monkeypatch
+        self, posthog_host, app_server, started, monkeypatch, signal
     ):
         # These configure the app's own collector, not PostHog.
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-key=vendor-secret")
-        monkeypatch.setenv("OTEL_EXPORTER_OTLP_COMPRESSION", "gzip")
+        prefix = f"OTEL_EXPORTER_OTLP_{signal}"
+        for key, value in {
+            "HEADERS": "x-vendor-key=vendor-secret",
+            "COMPRESSION": "gzip",
+            "ENDPOINT": "http://127.0.0.1:1/other-collector",
+            "CERTIFICATE": "/other-collector/ca.pem",
+            "CLIENT_CERTIFICATE": "/other-collector/client.pem",
+            "CLIENT_KEY": "/other-collector/client.key",
+            "TIMEOUT": "invalid",
+        }.items():
+            monkeypatch.setenv(prefix + key, value)
+        monkeypatch.setenv(
+            "OTEL_PYTHON_EXPORTER_OTLP_HTTP_METRICS_CREDENTIAL_PROVIDER", "missing"
+        )
+        monkeypatch.setenv(
+            "OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION",
+            "base2_exponential_bucket_histogram",
+        )
+        monkeypatch.setenv(
+            "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "CUMULATIVE"
+        )
         handle = _start(posthog_host, started)
         requests.get(f"{app_server.url}/health")
 
@@ -549,7 +570,100 @@ class TestStartMetricsAutocapture:
         headers = {k.lower(): v for k, v in exports[0]["headers"].items()}
         assert "x-vendor-key" not in headers
         assert "content-encoding" not in headers
-        assert os.environ["OTEL_EXPORTER_OTLP_HEADERS"] == "x-vendor-key=vendor-secret"
+        assert headers["authorization"] == f"Bearer {FAKE_API_KEY}"
+        assert os.environ[prefix + "HEADERS"] == "x-vendor-key=vendor-secret"
+
+        from opentelemetry.proto.collector.metrics.v1.metrics_service_pb2 import (
+            ExportMetricsServiceRequest,
+        )
+
+        data = ExportMetricsServiceRequest.FromString(exports[0]["body"])
+        [duration] = [
+            metric
+            for resource in data.resource_metrics
+            for scope in resource.scope_metrics
+            for metric in scope.metrics
+            if metric.name == "http.client.request.duration"
+        ]
+        assert duration.WhichOneof("data") == "histogram"
+        assert (
+            duration.histogram.aggregation_temporality == AggregationTemporality.DELTA
+        )
+
+    def test_does_not_change_a_concurrent_application_exporter(
+        self, posthog_host, app_server, started, monkeypatch
+    ):
+        from opentelemetry.exporter.otlp.proto.http._log_exporter import OTLPLogExporter
+        from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
+            OTLPMetricExporter,
+        )
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", app_server.url)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_HEADERS", "x-vendor-key=vendor-secret")
+        entered, release = threading.Event(), threading.Event()
+        original_init = OTLPMetricExporter.__init__
+
+        def paused_init(exporter, *args, **kwargs):
+            entered.set()
+            assert release.wait(10)
+            original_init(exporter, *args, **kwargs)
+
+        with mock.patch.object(OTLPMetricExporter, "__init__", paused_init):
+            thread = threading.Thread(
+                target=lambda: _start(
+                    posthog_host, started, areas={}, export_interval_seconds=3600
+                )
+            )
+            thread.start()
+            try:
+                assert entered.wait(10)
+                exporter = OTLPLogExporter()
+                try:
+                    assert exporter._endpoint == f"{app_server.url}/v1/logs"
+                    exporter.export(())
+                    assert app_server.received[-1]["headers"]["x-vendor-key"] == (
+                        "vendor-secret"
+                    )
+                finally:
+                    exporter.shutdown()
+            finally:
+                release.set()
+                thread.join(10)
+        assert not thread.is_alive()
+        assert started
+
+    async def test_retained_aiohttp_session_is_inert_after_shutdown(
+        self, posthog_host, app_server, started
+    ):
+        reader = InMemoryMetricReader()
+        handle = _start(posthog_host, started, reader, areas={"http": True})
+        callbacks = []
+        app_config = aiohttp.TraceConfig()
+
+        async def on_start(session, ctx, params):
+            callbacks.append(str(params.url))
+
+        app_config.on_request_start.append(on_start)
+        token = context.attach(baggage.set_baggage("tenant", "synthetic-canary"))
+        try:
+            async with aiohttp.ClientSession(trace_configs=[app_config]) as session:
+                async with session.get(f"{app_server.url}/active") as response:
+                    assert response.status == 200
+                    await response.read()
+                [point] = _points(reader, "http.client.request.duration")
+                assert point.count == 1
+                handle.shutdown()
+                async with session.get(f"{app_server.url}/stopped") as response:
+                    assert response.status == 200
+                    await response.read()
+                assert not session.closed
+                assert baggage.get_baggage("tenant") == "synthetic-canary"
+        finally:
+            context.detach(token)
+        assert callbacks == [f"{app_server.url}/active", f"{app_server.url}/stopped"]
+        for request in app_server.received:
+            headers = {key.lower() for key in request["headers"]}
+            assert not headers.intersection({"baggage", "traceparent", "tracestate"})
 
     def test_does_not_add_trace_context_to_app_requests(
         self, posthog_host, app_server, started
@@ -1031,6 +1145,26 @@ class TestBoundedMeterProvider:
                 raise TypeError("broken")
 
         _BoundedInstrument(BrokenInstrument(), 10).record(1.0, {"a": "b"})
+
+    def test_shares_the_limit_across_wrappers_of_the_same_instrument(self):
+        reader = InMemoryMetricReader(
+            preferred_temporality={Histogram: AggregationTemporality.DELTA}
+        )
+        native = MeterProvider(metric_readers=[reader], shutdown_on_exit=False)
+        provider = _BoundedMeterProvider(native, 2)
+        try:
+            for batch in (("a", "b"), ("c", "d")):
+                for host in batch:
+                    histogram = provider.get_meter("test").create_histogram("duration")
+                    histogram.record(1, {"server.address": host})
+                points = _points(reader, "duration")
+                assert sum(point.count for point in points) == 2
+                if batch == ("c", "d"):
+                    assert [dict(point.attributes) for point in points] == [
+                        {"otel.metric.overflow": True}
+                    ]
+        finally:
+            native.shutdown()
 
     def test_sends_new_attribute_sets_to_an_overflow_series(self):
         # Delta, as autocapture exports: the SDK still keeps each attribute set.

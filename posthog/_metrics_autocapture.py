@@ -138,9 +138,6 @@ _UNSAFE_ATTRIBUTE_PREFIXES = ("http.request.header.", "http.response.header.")
 _ATTRIBUTE_VALUE_TYPES = (str, bool, int, float)
 
 _SEMCONV_OPT_IN = "OTEL_SEMCONV_STABILITY_OPT_IN"
-# The app's OTLP settings (headers with other vendors' keys, endpoint, TLS files)
-# are for its own collector. The exporter reads them when it is created.
-_OTLP_ENVIRONMENT_PREFIXES = ("OTEL_EXPORTER_OTLP_", "OTEL_PYTHON_EXPORTER_OTLP_")
 _EXPORT_TIMEOUT_SECONDS = 10.0
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -165,6 +162,7 @@ _flask_apps: "weakref.WeakSet[Any]" = weakref.WeakSet()
 # The `inject` functions that autocapture replaced in instrumentor modules,
 # by module name.
 _replaced_injects: Dict[str, Any] = {}
+_replaced_aiohttp_trace_config: Optional[Tuple[Callable, Callable]] = None
 
 
 def _always_enabled() -> bool:
@@ -340,27 +338,35 @@ class _BoundedMeter:
         self,
         meter: Any,
         limit: int,
+        instruments: Dict[Any, _BoundedInstrument],
         is_enabled: Callable[[], bool] = _always_enabled,
         before_send: Optional[Callable] = None,
         stopped: Optional[threading.Event] = None,
     ):
         self._meter = meter
         self._limit = limit
+        self._instruments = instruments
         self._is_enabled = is_enabled
         self._before_send = before_send
         self._stopped = stopped
 
     def _bounded(self, factory: str, args, kwargs) -> _BoundedInstrument:
         name, unit = _instrument_name_and_unit(args, kwargs, unit_index=1)
-        return _BoundedInstrument(
-            getattr(self._meter, factory)(*args, **kwargs),
-            self._limit,
-            self._is_enabled,
-            self._before_send,
-            name,
-            _SAMPLE_TYPES[factory],
-            unit,
-            self._stopped,
+        instrument = getattr(self._meter, factory)(*args, **kwargs)
+        if instrument in self._instruments:
+            return self._instruments[instrument]
+        return self._instruments.setdefault(
+            instrument,
+            _BoundedInstrument(
+                instrument,
+                self._limit,
+                self._is_enabled,
+                self._before_send,
+                name,
+                _SAMPLE_TYPES[factory],
+                unit,
+                self._stopped,
+            ),
         )
 
     def _observable(self, factory: str, args, kwargs):
@@ -454,6 +460,7 @@ class _BoundedMeterProvider:
         stopped: Optional[threading.Event] = None,
     ):
         self._meter_provider = meter_provider
+        self._instruments: Dict[Any, _BoundedInstrument] = {}
         self._limit = limit
         self._is_enabled = is_enabled
         self._before_send = before_send
@@ -463,6 +470,7 @@ class _BoundedMeterProvider:
         return _BoundedMeter(
             self._meter_provider.get_meter(*args, **kwargs),
             self._limit,
+            self._instruments,
             self._is_enabled,
             self._before_send,
             self._stopped,
@@ -631,6 +639,31 @@ def _disable_propagation(instrumentor_class: Any) -> None:
         if getattr(module, "inject", None) is inject:
             _replaced_injects[name] = inject
             setattr(module, "inject", _no_inject)
+
+
+def _gate_aiohttp_trace_configs(meter_provider: Any, stopped: threading.Event) -> None:
+    global _replaced_aiohttp_trace_config
+    module = _import_module("opentelemetry.instrumentation.aiohttp_client")
+    original = module.create_trace_config
+
+    def create_trace_config(*args, **kwargs):
+        config = original(*args, **kwargs)
+        if kwargs.get("meter_provider") is meter_provider:
+            on_start = config.on_request_start[0]
+
+            async def on_request_start(session, trace_config_ctx, params):
+                if stopped.is_set():
+                    trace_config_ctx.span = None
+                    return
+                await on_start(session, trace_config_ctx, params)
+
+            # Existing sessions retain these callbacks after uninstrumentation.
+            # Keep them inert before the module's real inject function is restored.
+            config.on_request_start[0] = on_request_start
+        return config
+
+    setattr(module, "create_trace_config", create_trace_config)
+    _replaced_aiohttp_trace_config = original, create_trace_config
 
 
 def _restore_propagation() -> None:
@@ -876,6 +909,7 @@ class MetricsAutocapture:
 
 
 def _uninstrument(instrumentors: List[Any]) -> None:
+    global _replaced_aiohttp_trace_config
     for instrumentor in instrumentors:
         try:
             instrumentor.uninstrument()
@@ -891,6 +925,12 @@ def _uninstrument(instrumentors: List[Any]) -> None:
         log.debug(
             "Metrics autocapture failed to uninstrument Flask apps", exc_info=True
         )
+    if _replaced_aiohttp_trace_config is not None:
+        original, replacement = _replaced_aiohttp_trace_config
+        module = sys.modules.get("opentelemetry.instrumentation.aiohttp_client")
+        if module is not None and module.create_trace_config is replacement:
+            setattr(module, "create_trace_config", original)
+        _replaced_aiohttp_trace_config = None
     _restore_propagation()
 
 
@@ -956,6 +996,28 @@ def _reinit_after_fork() -> None:
 
 if hasattr(os, "register_at_fork"):
     os.register_at_fork(after_in_child=_reinit_after_fork)
+
+
+def _metrics_export_session(api_key: str) -> Any:
+    session_base: Any = _import_module("requests").Session
+
+    class _MetricsSession(session_base):
+        def request(self, method, url, **kwargs):
+            # Exporters merge application OTLP headers and TLS settings even with
+            # explicit constructor arguments. Isolate them at the private transport.
+            self.headers.clear()
+            self.cert = None
+            kwargs.update(
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/x-protobuf",
+                },
+                verify=True,
+                cert=None,
+            )
+            return super().request(method, url, **kwargs)
+
+    return _MetricsSession()
 
 
 def _is_default_provider(provider: Any) -> bool:
@@ -1027,6 +1089,7 @@ def start_metrics_autocapture(
         meter_provider: Any = None
         tracer_provider: Any = None
         instrumentors: List[Any] = []
+        stopped = threading.Event()
         try:
             if not _is_default_provider(
                 metrics_api.get_meter_provider()
@@ -1068,28 +1131,30 @@ def start_metrics_autocapture(
                             metrics_data, timeout_millis=timeout_millis, **kwargs
                         )
 
-                with _patched_environ(
-                    {
-                        key: None
-                        for key in os.environ
-                        if key.startswith(_OTLP_ENVIRONMENT_PREFIXES)
-                    }
-                ):
-                    exporter = _GatedExporter(
-                        endpoint=f"{host}/i/v1/metrics",
-                        headers={"Authorization": f"Bearer {api_key}"},
-                        timeout=_EXPORT_TIMEOUT_SECONDS,
-                        # Delta, like the `posthog.metrics` wire shape; values that go
-                        # up and down stay cumulative.
-                        preferred_temporality={
-                            sdk_metrics.Counter: delta,
-                            sdk_metrics.Histogram: delta,
-                            sdk_metrics.ObservableCounter: delta,
-                            sdk_metrics.UpDownCounter: cumulative,
-                            sdk_metrics.ObservableUpDownCounter: cumulative,
-                            sdk_metrics.ObservableGauge: cumulative,
-                        },
-                    )
+                exporter = _GatedExporter(
+                    endpoint=f"{host}/i/v1/metrics",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=_EXPORT_TIMEOUT_SECONDS,
+                    compression=_import_module(
+                        "opentelemetry.exporter.otlp.proto.http"
+                    ).Compression.NoCompression,
+                    session=_metrics_export_session(api_key),
+                    # Delta, like the `posthog.metrics` wire shape; values that go
+                    # up and down stay cumulative.
+                    preferred_temporality={
+                        sdk_metrics.Counter: delta,
+                        sdk_metrics.Histogram: delta,
+                        sdk_metrics.ObservableCounter: delta,
+                        sdk_metrics.UpDownCounter: cumulative,
+                        sdk_metrics.ObservableUpDownCounter: cumulative,
+                        sdk_metrics.ObservableGauge: cumulative,
+                    },
+                    preferred_aggregation={
+                        sdk_metrics.Histogram: _import_module(
+                            "opentelemetry.sdk.metrics.view"
+                        ).ExplicitBucketHistogramAggregation(),
+                    },
+                )
                 reader = sdk_metrics_export.PeriodicExportingMetricReader(
                     exporter,
                     export_interval_millis=(export_interval_seconds or 10.0) * 1000,
@@ -1128,7 +1193,6 @@ def start_metrics_autocapture(
                 def get_description(self):
                     return "PostHogClientSpansOnly"
 
-            stopped = threading.Event()
             bounded_meter_provider = _BoundedMeterProvider(
                 meter_provider, _MAX_ATTRIBUTE_SETS, is_enabled, before_send, stopped
             )
@@ -1204,6 +1268,10 @@ def start_metrics_autocapture(
                         if instrumentor.is_instrumented_by_opentelemetry:
                             instrumentors.append(instrumentor)
                             _disable_propagation(instrumentor_class)
+                            if entry_point.name == "aiohttp-client":
+                                _gate_aiohttp_trace_configs(
+                                    bounded_meter_provider, stopped
+                                )
                             if entry_point.name == "flask":
                                 _track_flask_apps(
                                     instrumentor_class,
@@ -1226,6 +1294,7 @@ def start_metrics_autocapture(
         except Exception:
             log.exception("Metrics autocapture failed to start")
             # Each start attempt would otherwise leave an export thread behind.
+            stopped.set()
             _uninstrument(instrumentors)
             _shut_down(tracer_provider, meter_provider or reader)
             return None
