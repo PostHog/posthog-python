@@ -199,6 +199,7 @@ class _PreparedSend:
     path: str
     body: bytes
     idempotency_key: str
+    max_retries: Optional[int] = None
 
 
 def _prepare_send(
@@ -207,6 +208,7 @@ def _prepare_send(
     template_data: Optional[Mapping[str, Any]],
     distinct_id: Optional[str],
     idempotency_key: Optional[str],
+    max_retries: Optional[int] = None,
 ) -> _PreparedSend:
     if not isinstance(to, str):
         raise TypeError("to must be one email address as a string.")
@@ -232,6 +234,12 @@ def _prepare_send(
         raise ValueError(
             "idempotency_key must be 1 to 255 visible ASCII characters without spaces."
         )
+    if max_retries is not None and (
+        isinstance(max_retries, bool)
+        or not isinstance(max_retries, int)
+        or max_retries < 0
+    ):
+        raise ValueError("max_retries must be a nonnegative integer.")
 
     payload: dict[str, Any] = {
         "template": {"id": str(template_uuid)},
@@ -244,6 +252,7 @@ def _prepare_send(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
+        max_retries=max_retries,
     )
 
 
@@ -559,6 +568,7 @@ class Emails(_EmailsBase):
         template_data: Optional[Mapping[str, Any]] = None,
         distinct_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
     ) -> SendEmailResult:
         """Queue one email from a transactional email template.
 
@@ -577,6 +587,8 @@ class Emails(_EmailsBase):
                 that covers its own retries. Pass a key derived from what the
                 email is for, such as ``welcome:user_123``, to cover retries
                 outside this call, too.
+            max_retries: Overrides the client's maximum number of retries for
+                this send. ``0`` turns retries off.
 
         Returns:
             The queued email. A result means PostHog queued the email, not that
@@ -599,7 +611,7 @@ class Emails(_EmailsBase):
             ```
         """
         prepared = _prepare_send(
-            to, template_id, template_data, distinct_id, idempotency_key
+            to, template_id, template_data, distinct_id, idempotency_key, max_retries
         )
         finish = self._start(_SEND_NOT_DONE)
         try:
@@ -607,7 +619,12 @@ class Emails(_EmailsBase):
                 self._secret_key(_SEND_KEY_NEEDED), prepared.idempotency_key
             )
             result = self._call(
-                "POST", prepared.path, prepared.body, headers, _parse_response
+                "POST",
+                prepared.path,
+                prepared.body,
+                headers,
+                _parse_response,
+                prepared.max_retries,
             )
         finally:
             finish()
@@ -653,11 +670,13 @@ class Emails(_EmailsBase):
         body: Optional[bytes],
         headers: dict[str, str],
         parse: _Parse[_ResultT],
+        max_retries: Optional[int] = None,
     ) -> _ResultT:
         auth = _BearerAuth(headers)
         session = self._get_session()
         url = self.host + path
-        for attempt in range(self.max_retries + 1):
+        retries = self.max_retries if max_retries is None else max_retries
+        for attempt in range(retries + 1):
             try:
                 response = session.request(
                     method,
@@ -684,7 +703,7 @@ class Emails(_EmailsBase):
                 error.__cause__ = exc
             except EmailError as exc:
                 error = exc
-            delay = _retry_delay(error, attempt, self.max_retries)
+            delay = _retry_delay(error, attempt, retries)
             if delay is None:
                 raise error
             time.sleep(delay)
@@ -753,6 +772,7 @@ class AsyncEmails(_EmailsBase):
         template_data: Optional[Mapping[str, Any]] = None,
         distinct_id: Optional[str] = None,
         idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
     ) -> SendEmailResult:
         """Queue one email from a transactional email template.
 
@@ -770,7 +790,7 @@ class AsyncEmails(_EmailsBase):
             ```
         """
         prepared = _prepare_send(
-            to, template_id, template_data, distinct_id, idempotency_key
+            to, template_id, template_data, distinct_id, idempotency_key, max_retries
         )
         finish = self._start(_SEND_NOT_DONE)
         try:
@@ -778,7 +798,12 @@ class AsyncEmails(_EmailsBase):
                 self._secret_key(_SEND_KEY_NEEDED), prepared.idempotency_key
             )
             result = await self._call(
-                "POST", prepared.path, prepared.body, headers, _parse_response
+                "POST",
+                prepared.path,
+                prepared.body,
+                headers,
+                _parse_response,
+                prepared.max_retries,
             )
         finally:
             finish()
@@ -806,10 +831,12 @@ class AsyncEmails(_EmailsBase):
         body: Optional[bytes],
         headers: dict[str, str],
         parse: _Parse[_ResultT],
+        max_retries: Optional[int] = None,
     ) -> _ResultT:
         httpx, client = self._get_client()
         url = self.host + path
-        for attempt in range(self.max_retries + 1):
+        retries = self.max_retries if max_retries is None else max_retries
+        for attempt in range(retries + 1):
             try:
                 # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
                 # the secret key's Bearer header, and the request timeout applies whatever the client's default.
@@ -838,7 +865,7 @@ class AsyncEmails(_EmailsBase):
                 error.__cause__ = exc
             except EmailError as exc:
                 error = exc
-            delay = _retry_delay(error, attempt, self.max_retries)
+            delay = _retry_delay(error, attempt, retries)
             if delay is None:
                 raise error
             await asyncio.sleep(delay)

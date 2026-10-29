@@ -1817,10 +1817,10 @@ method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)
 method posthog.emails.AsyncEmails.aclose() -> None
 method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
-method posthog.emails.AsyncEmails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None) -> SendEmailResult
+method posthog.emails.AsyncEmails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendEmailResult
 method posthog.emails.Emails.close() -> None
 method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
-method posthog.emails.Emails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None) -> SendEmailResult
+method posthog.emails.Emails.send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendEmailResult
 method posthog.exception_capture.ExceptionCapture.capture_exception(exception, metadata=None)
 method posthog.exception_capture.ExceptionCapture.close()
 method posthog.exception_capture.ExceptionCapture.exception_handler(exc_type, exc_value, exc_traceback)

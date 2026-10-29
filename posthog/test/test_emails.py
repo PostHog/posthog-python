@@ -277,15 +277,24 @@ def test_waits_for_retry_after_and_gives_up_on_a_longer_one(no_sleep):
     assert len(adapter.requests) == 1
 
 
-def test_max_retries_zero_leaves_retries_to_the_caller():
+@parameterized.expand(
+    [
+        ("client_option", {"max_retries": 0}, {}, 1),
+        ("per_send_override", {}, {"max_retries": 0}, 1),
+        ("per_send_override_above_client", {"max_retries": 0}, {"max_retries": 1}, 2),
+    ]
+)
+def test_max_retries_zero_leaves_retries_to_the_caller(
+    _name, client_options, send_options, requests_made
+):
     emails, adapter = emails_with(
-        [rejected(503, "delivery_unavailable")], max_retries=0
+        [rejected(503, "delivery_unavailable")] * 3, **client_options
     )
 
     with pytest.raises(EmailError):
-        send(emails)
+        send(emails, **send_options)
 
-    assert len(adapter.requests) == 1
+    assert len(adapter.requests) == requests_made
 
 
 def test_an_acceptance_without_a_message_id_is_not_retried():
@@ -369,6 +378,7 @@ def test_a_shut_down_client_sends_no_email():
         ("template_data_list", {"template_data": [1, 2]}, TypeError),
         ("key_with_space", {"idempotency_key": "welcome user"}, ValueError),
         ("key_too_long", {"idempotency_key": "k" * 256}, ValueError),
+        ("negative_retries", {"max_retries": -1}, ValueError),
     ]
 )
 def test_rejects_invalid_arguments_before_sending(_name, overrides, error):
