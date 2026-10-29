@@ -24,6 +24,7 @@ from posthog.types import (
     FeatureFlag,
     FeatureFlagResult,
     FlagMetadata,
+    FlagReason,
     normalize_flags_response,
     to_flags_and_payloads,
 )
@@ -266,9 +267,12 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_record(path, value):
         None,
         False,
     )
+    # The record keeps that it could not be read, apart from a server failure.
+    assert malformed._malformed_field == path
     sibling = flags["sibling"]
     assert sibling.failed is False
     assert sibling.value == "compact"
+    assert sibling._malformed_field is None
 
 
 def test_a_record_that_is_not_an_object_fails_only_that_record():
@@ -374,6 +378,191 @@ def test_a_failed_older_server_record_is_kept_as_failed():
     assert flag.failed is True
     assert flag.value is False
     assert flag.reason is not None and flag.reason.description == "Timed out"
+
+
+def _older_record(**overrides: Any) -> Dict[str, Any]:
+    record: Dict[str, Any] = {
+        "key": "garden-layout",
+        "enabled": True,
+        "variant": "compact",
+        "failed": False,
+        "reason": {
+            "code": "condition_match",
+            "condition_index": 0,
+            "description": "Matched condition set 1",
+        },
+        "metadata": {
+            "id": 202,
+            "version": 9,
+            "description": "Garden layout",
+            "payload": None,
+            "has_experiment": False,
+        },
+    }
+    for path, value in overrides.items():
+        *parents, last = path.split(".")
+        target = record
+        for token in parents:
+            target = target[token]
+        target[last] = value
+    return record
+
+
+def test_one_unreadable_older_server_record_keeps_its_siblings():
+    response = {
+        "flags": {
+            "bad": {
+                "enabled": True,
+                "variant": None,
+                "reason": "oops",
+                "metadata": {"id": 1, "version": 1, "payload": None},
+            },
+            "good": {
+                "enabled": True,
+                "variant": None,
+                "reason": None,
+                "metadata": {"id": 2, "version": 1, "payload": None},
+            },
+        },
+        "requestId": "x",
+    }
+
+    flags = normalize_flags_response(response)["flags"]
+
+    assert flags["bad"].failed is True
+    assert flags["bad"]._malformed_field == "reason"
+    assert flags["good"].failed is False
+    assert flags["good"].get_value() is True
+
+
+@pytest.mark.parametrize(
+    "path, value",
+    [
+        ("key", 123),
+        ("enabled", "true"),
+        ("variant", 3),
+        ("failed", "yes"),
+        ("reason", "condition_match"),
+        ("reason.code", 3),
+        ("reason.condition_index", "0"),
+        ("reason.condition_index", 0.5),
+        ("reason.description", ["Matched"]),
+        ("metadata", []),
+        ("metadata.id", "202"),
+        ("metadata.version", True),
+        ("metadata.description", 1),
+        ("metadata.has_experiment", "false"),
+    ],
+)
+def test_a_known_field_with_the_wrong_type_fails_only_that_older_server_record(
+    path, value
+):
+    response = {
+        "flags": {
+            "garden-layout": _older_record(**{path: value}),
+            "sibling": _older_record(key="sibling"),
+        }
+    }
+
+    flags = normalize_flags_response(response)["flags"]
+
+    malformed = flags["garden-layout"]
+    assert malformed.key == "garden-layout"
+    assert malformed.failed is True
+    assert malformed._malformed_field == path
+    assert malformed.value is None
+    assert (malformed.enabled, malformed.variant, malformed.get_value()) == (
+        False,
+        None,
+        False,
+    )
+    sibling = flags["sibling"]
+    assert (
+        sibling
+        == normalize_flags_response(
+            {"flags": {"sibling": _older_record(key="sibling")}}
+        )["flags"]["sibling"]
+    )
+    assert (sibling.failed, sibling.value, sibling._malformed_field) == (
+        False,
+        "compact",
+        None,
+    )
+
+
+def test_a_valid_older_server_record_renders_as_before():
+    flag = normalize_flags_response({"flags": {"garden-layout": _older_record()}})[
+        "flags"
+    ]["garden-layout"]
+
+    assert flag == FeatureFlag(
+        key="garden-layout",
+        enabled=True,
+        variant="compact",
+        reason=FlagReason(
+            code="condition_match",
+            condition_index=0,
+            description="Matched condition set 1",
+        ),
+        metadata=FlagMetadata(
+            id=202,
+            payload=None,
+            version=9,
+            description="Garden layout",
+            has_experiment=False,
+            config_version=1,
+        ),
+    )
+
+
+@pytest.mark.parametrize("make_record", [_record, _older_record])
+def test_a_record_key_of_the_wrong_type_fails_only_that_record(make_record):
+    flags = normalize_flags_response(
+        {
+            "flags": {
+                "garden-layout": make_record(key=123),
+                "sibling": make_record(key="sibling"),
+            }
+        }
+    )["flags"]
+
+    assert flags["garden-layout"].key == "garden-layout"
+    assert flags["garden-layout"].failed is True
+    assert flags["garden-layout"]._malformed_field == "key"
+    assert flags["sibling"].failed is False
+
+
+@pytest.mark.parametrize("make_record", [_record, _older_record])
+@pytest.mark.parametrize("key", ["other-flag", None])
+def test_a_record_is_read_under_its_map_key(make_record, key):
+    # Reader rules fail a record only for a field of the wrong JSON type. A string
+    # key that differs from the map key is a producer error, so the map key wins.
+    record = make_record(key=key)
+
+    flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
+        "garden-layout"
+    ]
+
+    assert flag.key == "garden-layout"
+    assert flag.failed is False
+    assert flag.value == "compact"
+
+
+def test_a_server_failed_record_is_not_marked_unreadable():
+    flags = normalize_flags_response(
+        {
+            "flags": {
+                "v4": _build(RESPONSES, {"template": "error"})["flags"][
+                    "garden-layout"
+                ],
+                "older": _older_record(failed=True, enabled=False, variant=None),
+            }
+        }
+    )["flags"]
+
+    for flag in flags.values():
+        assert flag.failed is True
+        assert flag._malformed_field is None
 
 
 def test_feature_flag_value_defaults_to_the_legacy_value():

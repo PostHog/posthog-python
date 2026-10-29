@@ -1,9 +1,9 @@
 import json
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, List, Optional, TypedDict, Union, cast
+from typing import Any, Callable, Dict, List, Optional, TypedDict, Union, cast
 
 FlagValue = Union[bool, str]
 
@@ -251,6 +251,12 @@ class FeatureFlag:
     metadata: Union[FlagMetadata, LegacyFlagMetadata]
     value: Any = _DERIVED_VALUE
     failed: bool = False
+    # The wire path of the field that made the record unreadable, such as
+    # ``"metadata.id"``. ``None`` unless the record could not be read; a record the
+    # server marks failed has ``failed`` set and this ``None``.
+    _malformed_field: Optional[str] = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         if self.value is _DERIVED_VALUE:
@@ -271,27 +277,7 @@ class FeatureFlag:
         without one comes from an older server: its value is ``variant``, or
         ``enabled`` when there is no variant, and its config version is ``1``.
         """
-        if "value" in resp:
-            return _parse_typed_record(resp.get("key"), resp)
-
-        reason = None
-        if resp.get("reason"):
-            reason = FlagReason.from_json(resp.get("reason"))
-
-        metadata = None
-        if resp.get("metadata"):
-            metadata = FlagMetadata.from_json(resp.get("metadata"))
-        else:
-            metadata = LegacyFlagMetadata(payload=None)
-
-        return cls(
-            key=resp.get("key"),
-            enabled=resp.get("enabled"),
-            variant=resp.get("variant"),
-            reason=reason,
-            metadata=metadata,
-            failed=resp.get("failed") is True,
-        )
+        return _parse_record(resp.get("key"), resp)
 
     @classmethod
     def from_value_and_payload(
@@ -361,6 +347,7 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
     try:
         if not isinstance(resp, dict):
             raise _MalformedRecord("record")
+        _read_record_key(resp)
         value = _read_value(resp.get("value"))
         failed = _read_typed(resp.get("failed"), "failed", bool) is True
 
@@ -418,16 +405,8 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
             # Only config version 1 records carry an experiment ID. It is checked,
             # like every known field, but not kept.
             _read_int(raw_metadata.get("experiment_id"), "metadata.experiment_id")
-    except _MalformedRecord:
-        return FeatureFlag(
-            key=key,
-            enabled=False,
-            variant=None,
-            reason=None,
-            metadata=LegacyFlagMetadata(payload=None),
-            value=None,
-            failed=True,
-        )
+    except _MalformedRecord as error:
+        return _malformed_record(key, str(error))
 
     return FeatureFlag(
         key=key,
@@ -438,6 +417,74 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
         value=value,
         failed=failed,
     )
+
+
+def _parse_older_record(key: str, resp: Dict[str, Any]) -> FeatureFlag:
+    """Parse a record without a typed ``value``, from a server before ``/flags?v=4``.
+
+    Its value is ``variant``, or ``enabled`` when there is no variant, and its config
+    version is ``1``. As for a ``/flags?v=4`` record, a known field with the wrong
+    JSON type fails only this record.
+    """
+    try:
+        _read_record_key(resp)
+        _read_typed(resp.get("enabled"), "enabled", bool)
+        _read_typed(resp.get("variant"), "variant", str)
+        _read_typed(resp.get("failed"), "failed", bool)
+        raw_reason = _read_typed(resp.get("reason"), "reason", dict)
+        if raw_reason:
+            _read_typed(raw_reason.get("code"), "reason.code", str)
+            _read_int(raw_reason.get("condition_index"), "reason.condition_index")
+            _read_typed(raw_reason.get("description"), "reason.description", str)
+        raw_metadata = _read_typed(resp.get("metadata"), "metadata", dict)
+        if raw_metadata:
+            _read_int(raw_metadata.get("id"), "metadata.id")
+            _read_int(raw_metadata.get("version"), "metadata.version")
+            _read_typed(raw_metadata.get("description"), "metadata.description", str)
+            _read_typed(
+                raw_metadata.get("has_experiment"), "metadata.has_experiment", bool
+            )
+    except _MalformedRecord as error:
+        return _malformed_record(key, str(error))
+
+    return FeatureFlag(
+        key=key,
+        # An older server always sends ``enabled``; a record without it keeps
+        # ``None``, as before.
+        enabled=cast(bool, resp.get("enabled")),
+        variant=resp.get("variant"),
+        reason=FlagReason.from_json(raw_reason),
+        metadata=FlagMetadata.from_json(raw_metadata),
+        failed=resp.get("failed") is True,
+    )
+
+
+def _read_record_key(resp: Dict[str, Any]) -> None:
+    # The flag key is the record's map key. A ``key`` member of the wrong type fails
+    # the record, like any known field; a string that differs is ignored.
+    _read_typed(resp.get("key"), "key", str)
+
+
+def _malformed_record(key: str, malformed_field: str) -> FeatureFlag:
+    """A record with a known field of the wrong JSON type: failed, and disabled."""
+    flag = FeatureFlag(
+        key=key,
+        enabled=False,
+        variant=None,
+        reason=None,
+        metadata=LegacyFlagMetadata(payload=None),
+        value=None,
+        failed=True,
+    )
+    object.__setattr__(flag, "_malformed_field", malformed_field)
+    return flag
+
+
+def _parse_record(key: str, resp: Any) -> FeatureFlag:
+    """Parse one record of a ``/flags`` response, stored under ``key``."""
+    if isinstance(resp, dict) and "value" not in resp:
+        return _parse_older_record(key, resp)
+    return _parse_typed_record(key, resp)
 
 
 def _has_untyped_flag_records(resp: Any) -> bool:
@@ -592,11 +639,7 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
         for key, value in flags.items():
             if isinstance(value, FeatureFlag):
                 continue
-            if not isinstance(value, dict):
-                flags[key] = _parse_typed_record(key, value)
-                continue
-            value["key"] = key
-            flags[key] = FeatureFlag.from_json(value)
+            flags[key] = _parse_record(key, value)
     else:
         # Handle legacy format
         featureFlags = resp.get("featureFlags", {})
