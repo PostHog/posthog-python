@@ -5,7 +5,7 @@ the same snapshot to capture() via the `flags` option so events carry the exact 
 values the code branched on, with no additional /flags request.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
@@ -379,6 +379,13 @@ class FeatureFlagEvaluations:
     ) -> FlagEvaluationDetails[Any]:
         flag = self._flags.get(key)
         self._record_access(key)
+        if flag is None and key in self._unresolved_flags:
+            # The flag exists, so say why it has no value.
+            return replace(
+                _resolve_flag_details(key, None, default_value, value_type),
+                error_message=f"Local evaluation could not resolve flag '{key}' "
+                f"({self._unresolved_flags[key].value}).",
+            )
         if flag is None or flag.details is not None:
             return _resolve_flag_details(
                 key, flag.details if flag else None, default_value, value_type

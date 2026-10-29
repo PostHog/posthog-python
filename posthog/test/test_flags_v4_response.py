@@ -27,6 +27,7 @@ from posthog.types import (
     FlagEvaluationErrorCode,
     FlagEvaluationReason,
     FlagMetadata,
+    UnresolvedFlagReason,
     normalize_flags_response,
     to_flags_and_payloads,
 )
@@ -576,6 +577,28 @@ def test_missing_flag_returns_the_default_with_flag_not_found(client):
         reason=FlagEvaluationReason.ERROR,
         error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
         error_message="Flag 'missing-flag' is not in the evaluation.",
+    )
+
+
+def test_an_unresolved_flag_is_not_found_and_names_the_cause():
+    snapshot = FeatureFlagEvaluations(
+        host=mock.MagicMock(),
+        distinct_id="user-123",
+        flags={},
+        unresolved_flags={"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+    )
+
+    details = snapshot.get_string_details("checkout", "x")
+
+    assert details == FlagEvaluationDetails(
+        key="checkout",
+        value="x",
+        reason=FlagEvaluationReason.ERROR,
+        error_code=FlagEvaluationErrorCode.FLAG_NOT_FOUND,
+        error_message=(
+            "Local evaluation could not resolve flag 'checkout' "
+            "(experience_continuity)."
+        ),
     )
 
 
