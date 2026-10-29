@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.79.0",
+    "version": "7.80.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -1001,7 +1001,7 @@
         {
           "id": "flush",
           "title": "flush",
-          "description": "Attempt immediate delivery of queued events and ended spans, keeping the client reusable.  For a client shared across requests or serverless invocations (including the module-level client), call ``flush()`` before a short-lived invocation returns. Use ``shutdown()`` instead only for final process cleanup or when disposing of a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.  Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by the consumers. Calls made directly from SDK callbacks such as ``on_error`` are deferred rather than blocking the worker that invoked the callback.",
+          "description": "Attempt immediate delivery of queued events, ended spans and autocaptured metrics, keeping the client reusable.  For a client shared across requests or serverless invocations (including the module-level client), call ``flush()`` before a short-lived invocation returns. Use ``shutdown()`` instead only for final process cleanup or when disposing of a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.  Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by the consumers. Calls made directly from SDK callbacks such as ``on_error`` are deferred rather than blocking the worker that invoked the callback.",
           "details": "",
           "category": null,
           "params": [
