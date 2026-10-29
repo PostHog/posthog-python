@@ -1,5 +1,11 @@
 # posthog
 
+## 7.80.1 — 2026-10-29
+
+### Patch changes
+
+- [1625f4f](https://github.com/posthog/posthog-python/commit/1625f4fbc1809d7a19b34354ad2df2a0e016928f) Fix streaming OpenAI chat completions when `stream_options` is `None` or `NOT_GIVEN` (it raised a `TypeError`), and stop adding `include_usage` to the `stream_options` dict the caller passed in. — Thanks @pcbeingused333!
+
 ## 7.80.0 — 2026-10-29
 
 ### Minor changes
