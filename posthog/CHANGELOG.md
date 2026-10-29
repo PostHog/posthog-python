@@ -1,5 +1,11 @@
 # posthog
 
+## 7.80.2 — 2026-10-29
+
+### Patch changes
+
+- [ad1b1cb](https://github.com/posthog/posthog-python/commit/ad1b1cb1e2052621d979cfdccb4870d6b4b31613) Capture an `$ai_embedding` event with `$ai_is_error` and `$ai_error` when an OpenAI `embeddings.create()` call fails, in the sync and async wrappers. Before, a failed embeddings call left no event. — Thanks @pcbeingused333!
+
 ## 7.80.1 — 2026-10-29
 
 ### Patch changes
