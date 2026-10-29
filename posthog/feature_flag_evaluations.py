@@ -260,10 +260,10 @@ class FeatureFlagEvaluations:
 
         The value is never coerced: a payload is not an object value. The returned
         object is a copy. ``default_value`` is returned when the flag is not in the
-        evaluation, failed, has no value, or has a value of another type;
-        ``error_code`` says which, except for a flag without a value or with the
-        value ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
+        evaluation, failed, has no value, has a value of another type, or has an
+        object too deeply nested to copy; ``error_code`` says which, except for a
+        flag without a value or with the value ``False``. Fires
+        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
         """
         return self._get_typed_details(key, default_value, "object")
 

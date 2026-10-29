@@ -459,6 +459,28 @@ def test_a_returned_object_cannot_change_the_snapshot(client):
     assert snapshot.get_flag_payload("object-flag") == TYPED_VALUES["object-flag"]
 
 
+def test_an_object_too_deeply_nested_to_copy_reads_as_the_default(client):
+    # Deep enough that copying it exceeds the recursion limit, but shallow enough
+    # that every supported Python can decode and encode it as JSON.
+    value: Dict[str, Any] = {}
+    deep = value
+    for _ in range(700):
+        deep["nested"] = {}
+        deep = deep["nested"]
+    response = _typed_response({"deep-flag": value, "object-flag": {"on": True}})
+    # Not through _evaluate, which copies the response.
+    with mock.patch("posthog.client.flags", return_value=response):
+        snapshot = client.evaluate_flags(DISTINCT_ID)
+
+    details = snapshot.get_object_details("deep-flag", {"fallback": True})
+
+    assert details.value == {"fallback": True}
+    assert details.error_code is FlagEvaluationErrorCode.PARSE_ERROR
+    assert details.reason is FlagEvaluationReason.ERROR
+    assert snapshot.get_object_value("deep-flag", {}) == {}
+    assert snapshot.get_object_value("object-flag", {}) == {"on": True}
+
+
 def _old_server_response(**records: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "flags": {

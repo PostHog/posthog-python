@@ -584,18 +584,31 @@ def _read_float(value: Any) -> Any:
 
 
 _NOT_ACCEPTED: Any = object()
+# Returned by a reader for a value of the right type that it cannot read.
+_UNREADABLE: Any = object()
 
-# Reads a flag value as one accessor type, or returns ``_NOT_ACCEPTED``. A returned
-# object is a copy, so a caller cannot change the evaluated flag.
+
+def _read_object(value: Any) -> Any:
+    if not isinstance(value, dict):
+        return _NOT_ACCEPTED
+    try:
+        return copy.deepcopy(value)
+    except RecursionError:
+        # Too deeply nested to copy. A typed read never throws, so the flag reads
+        # as unreadable instead.
+        return _UNREADABLE
+
+
+# Reads a flag value as one accessor type, or returns ``_NOT_ACCEPTED`` or
+# ``_UNREADABLE``. A returned object is a copy, so a caller cannot change the
+# evaluated flag.
 _FLAG_VALUE_READERS: Dict[str, Callable[[Any], Any]] = {
     "boolean": lambda value: value if isinstance(value, bool) else _NOT_ACCEPTED,
     "string": lambda value: value if isinstance(value, str) else _NOT_ACCEPTED,
     "number": _read_number,
     "integer": _read_integer,
     "float": _read_float,
-    "object": lambda value: (
-        copy.deepcopy(value) if isinstance(value, dict) else _NOT_ACCEPTED
-    ),
+    "object": _read_object,
 }
 
 # The contract's OpenFeature reasons for config version 2 reason codes that carry
@@ -704,6 +717,12 @@ def _resolve_flag_value(
     if error_code is not None:
         return resolved(default_value, error_code, error_message)
     result = _FLAG_VALUE_READERS[value_type](value)
+    if result is _UNREADABLE:
+        return resolved(
+            default_value,
+            FlagEvaluationErrorCode.PARSE_ERROR,
+            f"Flag '{key}' has an object value nested too deeply to read.",
+        )
     if result is not _NOT_ACCEPTED:
         return resolved(result, returned_value=True)
     if value is None or value is False:
