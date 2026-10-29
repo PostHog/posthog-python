@@ -389,9 +389,12 @@ class WrappedCompletions(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         state = _ChatCompletionsStreamState()
-        if "stream_options" not in kwargs:
-            kwargs["stream_options"] = {}
-        kwargs["stream_options"]["include_usage"] = True
+        # The caller's dict is left alone, and None / NOT_GIVEN mean "no options"
+        stream_options = kwargs.get("stream_options")
+        kwargs["stream_options"] = {
+            **(stream_options if isinstance(stream_options, dict) else {}),
+            "include_usage": True,
+        }
         response = self._original.create(**kwargs)
 
         def generator():
