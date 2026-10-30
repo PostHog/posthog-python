@@ -11,7 +11,18 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -330,6 +341,12 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$feature_flag_evaluated_at",
         "$feature_flag_error",
         "locally_evaluated",
+        # Config version 2 attribution, which minimal events must keep
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant",
         # Correctness-required
         "$groups",
         "$process_person_profile",
@@ -360,6 +377,219 @@ def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
     """Server-reported experiment linkage from flag metadata; ``None`` when absent
     (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
     return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
+# The reason code and rule type of the one outcome that sends ``$experiment_exposure``:
+# a variant assigned by an experiment rule.
+_EXPERIMENT_SPLIT_REASON = "experiment_split"
+_EXPERIMENT_RULE_TYPE = "experiment"
+
+# ``$experiment_exposure`` copies these from the ``$feature_flag_called`` of the same
+# read, when it has them.
+_EXPOSURE_PROPERTIES_FROM_FLAG_CALLED = (
+    "$feature_flag_id",
+    "$feature_flag_version",
+    "$feature_flag_request_id",
+    "$feature_flag_evaluated_at",
+)
+
+
+def _flag_record_metadata(metadata: FlagMetadata, name: str) -> Any:
+    """Read a ``/flags?v=4`` metadata field of a flag record, such as ``config_version``.
+
+    These fields stay private, as ``_config_version`` and so on, until the typed flag
+    accessors make them public under their wire names. Either spelling is read, so
+    the two changes can land in either order.
+    """
+    return getattr(metadata, name, getattr(metadata, f"_{name}", None))
+
+
+class _RuleAttribution(NamedTuple):
+    """What a config version 2 flag record reports on its flag events."""
+
+    reason_code: Optional[str]
+    rule_id: Optional[str]
+    rule_type: Optional[str]
+    # Set only for a complete experiment split, the outcome that sends an exposure.
+    variant_key: Optional[str]
+
+    def flag_called_properties(self) -> Dict[str, Any]:
+        properties: Dict[str, Any] = {"$feature_flag_config_version": 2}
+        if self.reason_code is not None:
+            properties["$feature_flag_reason_code"] = self.reason_code
+        if self.rule_id is not None:
+            properties["$feature_flag_rule_id"] = self.rule_id
+        if self.rule_type is not None:
+            properties["$feature_flag_rule_type"] = self.rule_type
+        if self.variant_key is not None:
+            properties["$feature_flag_variant"] = self.variant_key
+        return properties
+
+
+def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttribution]:
+    """Read the event attribution of a config version 2 flag record.
+
+    Returns ``None`` for anything else: no record, a config version 1 record, or a
+    record from a server without typed values. Only the evaluation details are read,
+    never the value a getter returned.
+
+    The rule ID and rule type are reported when the record has them. The variant key
+    is reported only for an experiment split, and only when the split is complete:
+    reason ``experiment_split``, rule type ``experiment``, a rule ID and a variant
+    key. A split without all of them is malformed. It keeps its reason but reports no
+    rule ID, rule type or variant, and sends no exposure. Its identity is never
+    guessed from the value, the key or an earlier result.
+    """
+    if details is None or not isinstance(details.metadata, FlagMetadata):
+        return None
+    metadata = details.metadata
+    if _flag_record_metadata(metadata, "config_version") != 2:
+        return None
+    reason_code = (details.reason.code if details.reason else None) or None
+    rule_id = _flag_record_metadata(metadata, "rule_id") or None
+    rule_type = _flag_record_metadata(metadata, "rule_type") or None
+    variant_key = _flag_record_metadata(metadata, "variant_key") or None
+    if reason_code != _EXPERIMENT_SPLIT_REASON:
+        # Only an experiment split assigns a variant.
+        return _RuleAttribution(reason_code, rule_id, rule_type, None)
+    if rule_type != _EXPERIMENT_RULE_TYPE or rule_id is None or variant_key is None:
+        return _RuleAttribution(reason_code, None, None, None)
+    return _RuleAttribution(reason_code, rule_id, rule_type, variant_key)
+
+
+def _capture_flag_events(
+    capture: Callable[..., Any],
+    flag_calls_reported: Dict[Any, Any],
+    exposures_reported: Dict[Any, Any],
+    *,
+    distinct_id: ID_TYPES,
+    key: str,
+    response: Optional[FlagValue],
+    properties: Dict[str, Any],
+    groups: Optional[Mapping[str, Union[str, int]]],
+    capture_groups: Mapping[str, Any],
+    disable_geoip: Optional[bool],
+    has_experiment: Optional[bool],
+    minimal_flag_called_events: bool,
+    details: Optional[FeatureFlag],
+    value_from_details: bool,
+) -> None:
+    """Send the flag events of one flag read: ``$feature_flag_called`` and, for an
+    experiment split, ``$experiment_exposure``.
+
+    Every read that sends flag events comes here, on both clients: the single-flag
+    getters and the reads of an ``evaluate_flags()`` snapshot. Both events are built
+    from ``details``, the parsed ``/flags`` record that supplied the value, and the
+    call's ``properties``; the flag is never evaluated again.
+
+    ``$feature_flag_called`` is sent if the (distinct_id, flag, response, groups)
+    tuple hasn't already been reported on this client. Group context is included so
+    that group-scoped flags fire a separate event for each group a user is evaluated
+    under. A config version 2 record adds its attribution to the event and to that
+    tuple, so equal-valued A/A arms, successive experiments of one flag, and
+    holdouts are each reported. A config version 1 tuple is unchanged.
+
+    ``has_experiment`` is the server-reported signal for whether the flag is linked
+    to an experiment (``None`` when the server did not report it). When the
+    server-controlled gate is on and the flag is known non-experiment, the event is
+    trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+    and experiment-linked flags keep the full set for exposure analysis.
+
+    ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+    produced ``response``, not a fresh read of client-wide state: both callers
+    resolve it themselves (the snapshot pins it at construction; the single-flag
+    path reads it from the specific local/remote source that produced the value) so
+    a concurrent poller refresh or another ``/flags`` call can't reshape an event
+    after the fact.
+
+    ``$experiment_exposure`` is sent for a complete config version 2 experiment
+    split whose record supplied the reported value (``value_from_details``), once
+    per distinct ID, groups, flag, rule and variant. It has its own dedupe, so a
+    ``$feature_flag_called`` already reported never suppresses it.
+    """
+    groups_key = (
+        tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+    )
+    attribution = _rule_attribution(details)
+    feature_flag_reported_key: Tuple[Any, ...] = (key, response, groups_key)
+    if attribution is not None:
+        feature_flag_reported_key += (2, *attribution)
+
+    reported_flags = flag_calls_reported.get(distinct_id)
+    if reported_flags is None:
+        reported_flags = set()
+        flag_calls_reported[distinct_id] = reported_flags
+
+    if feature_flag_reported_key not in reported_flags:
+        if attribution is not None:
+            properties.update(attribution.flag_called_properties())
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: Dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
+        capture(
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups=capture_groups,
+            disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
+        )
+        reported_flags.add(feature_flag_reported_key)
+
+    if attribution is None or attribution.variant_key is None or not value_from_details:
+        return
+
+    # The value, request ID, evaluation time and evaluation source are left out, so
+    # one assignment is one exposure however often it is read.
+    exposure_key = (key, groups_key, 2, attribution.rule_id, attribution.variant_key)
+    normalized_distinct_id = str(distinct_id)
+    reported_exposures = exposures_reported.get(normalized_distinct_id)
+    if reported_exposures is None:
+        reported_exposures = set()
+        exposures_reported[normalized_distinct_id] = reported_exposures
+    if exposure_key in reported_exposures:
+        return
+
+    exposure_properties: Dict[str, Any] = {
+        name: properties[name]
+        for name in _EXPOSURE_PROPERTIES_FROM_FLAG_CALLED
+        if name in properties
+    }
+    exposure_properties.update(
+        {
+            "$feature_flag": key,
+            "$feature_flag_response": response,
+            "$feature_flag_config_version": 2,
+            "$feature_flag_variant": attribution.variant_key,
+            "$feature_flag_rule_id": attribution.rule_id,
+            "$feature_flag_rule_type": attribution.rule_type,
+            "$feature_flag_reason_code": attribution.reason_code,
+            "$experiment_exposure_source": "sdk",
+            "locally_evaluated": properties.get("locally_evaluated") is True,
+        }
+    )
+    capture(
+        "$experiment_exposure",
+        distinct_id=distinct_id,
+        properties=exposure_properties,
+        groups=capture_groups,
+        disable_geoip=disable_geoip,
+    )
+    reported_exposures.add(exposure_key)
 
 
 class _Lane:
@@ -926,6 +1156,9 @@ class Client(object):
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
@@ -3162,6 +3395,11 @@ class Client(object):
             self.distinct_ids_feature_flags_reported.clear,
             errors,
         )
+        self._run_lifecycle_cleanup(
+            "Failed to clear experiment exposure deduplication state on shutdown",
+            self._experiment_exposures_reported.clear,
+            errors,
+        )
 
         if self.exception_capture:
             self._run_lifecycle_cleanup(
@@ -4202,7 +4440,9 @@ class Client(object):
         """
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be locally evaluated.
-        This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+        This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`,
+        and, when a remotely evaluated config version 2 flag assigns an experiment variant, the
+        `$experiment_exposure` event.
 
         Examples:
             ```python
@@ -4507,6 +4747,11 @@ class Client(object):
             disable_geoip=disable_geoip,
             has_experiment=has_experiment,
             minimal_flag_called_events=minimal_flag_called_events,
+            details=flag_details,
+            # A payload lookup for a caller's ``match_value``, or a stale cached value,
+            # reports a value this record did not supply, so it sends no exposure.
+            value_from_details=isinstance(flag_details, FeatureFlag)
+            and response == flag_details.get_value(),
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -4520,66 +4765,33 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[FeatureFlag] = None,
+        value_from_details: bool = True,
     ) -> None:
-        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
-        groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a user
-        is evaluated under. Shared by the single-flag evaluation path and
-        ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
-        identically.
+        """Send the flag events of a flag read: ``$feature_flag_called`` and, for an
+        experiment split, ``$experiment_exposure``. See ``_capture_flag_events``.
 
-        ``has_experiment`` is the server-reported signal for whether the flag is linked
-        to an experiment (``None`` when the server did not report it). When the
-        server-controlled gate is on and the flag is known non-experiment, the event is
-        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
-        and experiment-linked flags keep the full set for exposure analysis.
-
-        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
-        produced ``response``, not a fresh read of client-wide state: both callers
-        resolve it themselves (the snapshot pins it at construction; the single-flag
-        path reads it from the specific local/remote source that produced the value)
-        so a concurrent poller refresh or another ``/flags`` call can't reshape an
-        event after the fact.
+        Shared by the single-flag evaluation path and the reads of a
+        ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
+        identically. ``details`` is the parsed ``/flags`` record of the read, or
+        ``None`` for a locally evaluated flag.
         """
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        feature_flag_reported_key = (key, response, groups_key)
-
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-
-        if feature_flag_reported_key in reported_flags:
-            return
-
-        # Record the server's experiment signal when known, so minimization's impact
-        # can be measured by segmenting on it.
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-
-        # Minimize iff the server-controlled gate is on AND the flag is known to have
-        # no linked experiment. Any missing signal (gate absent, has_experiment
-        # missing) fails safe to the full legacy shape.
-        should_minimize = minimal_flag_called_events and has_experiment is False
-        # Only thread the internal allowlist through when minimizing, so the
-        # full-property path's capture() call signature stays unchanged.
-        extra_capture_kwargs: dict[str, Any] = {}
-        if should_minimize:
-            extra_capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
-
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=groups or {},
+            groups=groups,
+            capture_groups=groups or {},
             disable_geoip=disable_geoip,
-            **extra_capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         """

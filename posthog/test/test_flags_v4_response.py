@@ -875,11 +875,25 @@ def _parity_response(shape: str) -> Dict[str, Any]:
     }
 
 
+# A config version 2 record adds these to its flag events. A v2-shaped response has no
+# config version 2 records, so they are left out of the comparison and checked in
+# test_experiment_exposure.py.
+_CONFIG_VERSION_2_EVENT_PROPERTIES = {
+    "$feature_flag_config_version",
+    "$feature_flag_reason_code",
+    "$feature_flag_rule_id",
+    "$feature_flag_rule_type",
+    "$feature_flag_variant",
+}
+
+
 def _flag_event_properties(message: Dict[str, Any]) -> Dict[str, Any]:
     return {
         key: value
         for key, value in message["properties"].items()
-        if key.startswith("$feature")
+        if (
+            key.startswith("$feature") and key not in _CONFIG_VERSION_2_EVENT_PROPERTIES
+        )
         or key in ("$active_feature_flags", "locally_evaluated")
     }
 

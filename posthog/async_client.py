@@ -38,8 +38,8 @@ from .capture_compression import (
 from .capture_mode import CaptureMode, _resolve_capture_mode
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
-    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
+    _capture_flag_events,
     _metadata_has_experiment,
     _parse_flag_payload,
     add_context_tags as _add_context_tags,
@@ -78,6 +78,7 @@ from .feature_flag_evaluations import (
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
 from .types import (
+    FeatureFlag,
     FlagMetadata,
     FlagValue,
     _has_untyped_flag_records,
@@ -186,6 +187,9 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -1054,38 +1058,29 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[FeatureFlag] = None,
+        value_from_details: bool = True,
     ) -> None:
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        reported_key = (key, response, groups_key)
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-        if reported_key in reported_flags:
-            return
-
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-        capture_kwargs: dict[str, Any] = {}
-        if minimal_flag_called_events and has_experiment is False:
-            capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
         capture_groups = {
             str(group_type): _stringify_id(group_key)
             for group_type, group_key in (groups or {}).items()
         }
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=capture_groups,
+            groups=groups,
+            capture_groups=capture_groups,
             disable_geoip=disable_geoip,
-            **capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(reported_key)
 
     def _pending_queue_items(self) -> int:
         return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
@@ -1240,6 +1235,7 @@ class AsyncClient:
                 errors.append(error)
 
             self.distinct_ids_feature_flags_reported.clear()
+            self._experiment_exposures_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]

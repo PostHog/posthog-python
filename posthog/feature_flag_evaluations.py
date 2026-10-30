@@ -62,6 +62,11 @@ class FeatureFlagEvaluations:
     To narrow the set of flags that get attached to a captured event, use the in-memory
     helpers :meth:`only` and :meth:`only_accessed`. To narrow the set of flags requested
     from the server in the first place, pass ``flag_keys`` to :meth:`Client.evaluate_flags`.
+
+    Reading a flag sends ``$feature_flag_called``, deduplicated as :meth:`is_enabled`
+    describes. When the flag was evaluated remotely and its config version 2 record
+    assigns an experiment variant, the read also sends ``$experiment_exposure``, once
+    per assignment.
     """
 
     def __init__(
@@ -305,4 +310,7 @@ class FeatureFlagEvaluations:
             properties=properties,
             has_experiment=flag.has_experiment if flag else None,
             minimal_flag_called_events=self._minimal_flag_called_events,
+            # The record that supplied the value. A remotely evaluated experiment
+            # split also sends $experiment_exposure, whatever this read returned.
+            details=flag.details if flag else None,
         )
