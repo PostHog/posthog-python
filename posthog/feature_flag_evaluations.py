@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 from posthog.types import (
     FeatureFlag,
     FlagEvaluationDetails,
+    FlagEvaluationErrorCode,
     FlagValue,
     UnresolvedFlagReason,
     _resolve_flag_details,
@@ -51,6 +52,9 @@ class _FeatureFlagEvaluationsHost:
 
     capture_flag_called_event_if_needed: Callable[..., None]
     log_warning: Callable[[str], None]
+    # Logs a typed read of the wrong type as an error, once per flag key and
+    # requested type: ``(key, value_type, message)``.
+    log_type_mismatch: Callable[[str, str, str], None]
 
 
 class FeatureFlagEvaluations:
@@ -177,7 +181,8 @@ class FeatureFlagEvaluations:
         failed, has no value, or has a value of another type; ``error_code`` says
         which, except for a flag without a value. A flag whose value is ``False``
         returns ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
+        :meth:`get_flag`, except for a value of another type, which sends no event
+        and logs an error once per client.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`. The key still counts as accessed for
@@ -209,7 +214,8 @@ class FeatureFlagEvaluations:
         not in the evaluation, failed, has no value, or has a value of another
         type; ``error_code`` says which, except for a flag without a value or with
         the value ``False``. Fires ``$feature_flag_called`` on first access, like
-        :meth:`get_flag`.
+        :meth:`get_flag`, except for a value of another type, which sends no event
+        and logs an error once per client.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`. The key still counts as accessed for
@@ -245,7 +251,9 @@ class FeatureFlagEvaluations:
         it. ``default_value`` is returned when the flag is not in the evaluation,
         failed, has no value, or has a value of another type; ``error_code`` says
         which, except for a flag without a value or with the value ``False``. Fires
-        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
+        ``$feature_flag_called`` on first access, like :meth:`get_flag`, except for
+        a value of another type, which sends no event and logs an error once per
+        client.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`. The key still counts as accessed for
@@ -338,7 +346,9 @@ class FeatureFlagEvaluations:
         evaluation, failed, has no value, has a value of another type, or has an
         object too deeply nested to copy; ``error_code`` says which, except for a
         flag without a value or with the value ``False``. Fires
-        ``$feature_flag_called`` on first access, like :meth:`get_flag`.
+        ``$feature_flag_called`` on first access, like :meth:`get_flag`, except for
+        a value of another type, which sends no event and logs an error once per
+        client.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`. The key still counts as accessed for
@@ -463,8 +473,21 @@ class FeatureFlagEvaluations:
         value_type: str,
         send_feature_flag_events: bool,
     ) -> FlagEvaluationDetails[Any]:
+        details = self._resolve_typed_details(key, default_value, value_type)
+        if details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH:
+            # A read of the wrong type is a bug in the calling code, not a use of the
+            # flag. It sends no event and takes no dedupe slot, so the next read of
+            # the right type reports the flag. It still counts as an access.
+            self._accessed.add(key)
+            self._host.log_type_mismatch(key, value_type, details.error_message or "")
+        else:
+            self._record_access(key, send_feature_flag_events)
+        return details
+
+    def _resolve_typed_details(
+        self, key: str, default_value: Any, value_type: str
+    ) -> FlagEvaluationDetails[Any]:
         flag = self._flags.get(key)
-        self._record_access(key, send_feature_flag_events)
         if flag is None and key in self._unresolved_flags:
             # The flag exists, so say why it has no value.
             return replace(

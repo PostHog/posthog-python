@@ -1623,10 +1623,14 @@ def test_feature_flag_called_properties_are_unchanged_for_a_v1_flag(client):
     )
 
 
-def test_typed_accessors_report_access_like_get_flag(client):
+def test_a_type_mismatch_is_an_access_that_sends_no_event(client):
     with mock.patch.object(client, "capture") as capture:
         snapshot = _evaluate(client, _typed_response({"string-flag": "compact"}))
         snapshot.get_number_details("string-flag", 0)
+
+        capture.assert_not_called()
+        assert snapshot.only_accessed().keys == ["string-flag"]
+
         snapshot.get_flag("string-flag")
 
     capture.assert_called_once()
@@ -1634,7 +1638,6 @@ def test_typed_accessors_report_access_like_get_flag(client):
     assert properties["$feature_flag_response"] == "compact"
     # A type mismatch is not an evaluation error.
     assert "$feature_flag_error" not in properties
-    assert snapshot.only_accessed().keys == ["string-flag"]
 
 
 # The flag each typed accessor reads in the per-read event option tests, and the
@@ -1729,6 +1732,136 @@ async def test_a_typed_read_sends_one_event_by_default(method, client_kind):
 
     assert first == again == expected
     assert _flag_called_keys(capture) == [key]
+
+
+# A flag of another type for each typed accessor.
+MISMATCHED_READS: Dict[str, str] = {
+    "boolean": "string-flag",
+    "string": "boolean-flag",
+    "number": "object-flag",
+    "integer": "float-flag",
+    "float": "string-flag",
+    "object": "integer-flag",
+}
+
+
+def _error_logs(caplog: pytest.LogCaptureFixture) -> List[str]:
+    """The SDK's error logs, without the prefix the SDK adds to each."""
+    return [
+        record.getMessage().removeprefix("[PostHog] ")
+        for record in caplog.records
+        if record.name == "posthog" and record.levelname == "ERROR"
+    ]
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+@pytest.mark.parametrize("method", TYPED_METHODS)
+async def test_a_typed_read_of_the_wrong_type_sends_no_event_and_logs_once(
+    method, client_kind, caplog
+):
+    value_type = method.split("_")[1]
+    key = MISMATCHED_READS[value_type]
+    default = DEFAULTS[value_type]
+    async with _typed_snapshot(client_kind) as (snapshot, capture):
+        with caplog.at_level("ERROR", logger="posthog"):
+            results = [getattr(snapshot, method)(key, default) for _ in range(2)]
+            details = getattr(snapshot, f"get_{value_type}_details")(key, default)
+
+        assert _flag_called_keys(capture) == []
+        # The read still counts as an access.
+        assert snapshot.only_accessed().keys == [key]
+
+    values = [r.value if method.endswith("_details") else r for r in results]
+    assert values == [default, default]
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert _error_logs(caplog) == [details.error_message]
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+@pytest.mark.parametrize(
+    "later_read",
+    [
+        lambda snapshot: snapshot.get_string_value("string-flag", "default"),
+        lambda snapshot: snapshot.get_string_details("string-flag", "default"),
+        lambda snapshot: snapshot.get_flag("string-flag"),
+        lambda snapshot: snapshot.is_enabled("string-flag"),
+    ],
+    ids=["get_string_value", "get_string_details", "get_flag", "is_enabled"],
+)
+async def test_a_read_after_a_type_mismatch_reports_the_flag_once(
+    later_read, client_kind
+):
+    async with _typed_snapshot(client_kind) as (snapshot, capture):
+        snapshot.get_boolean_value("string-flag", False)
+        snapshot.get_number_details("string-flag", 0)
+        assert _flag_called_keys(capture) == []
+
+        later_read(snapshot)
+        later_read(snapshot)
+
+    assert _flag_called_keys(capture) == ["string-flag"]
+    properties = capture.call_args.kwargs["properties"]
+    assert properties["$feature_flag_response"] == "compact"
+    assert "$feature_flag_error" not in properties
+
+
+def test_each_wrong_type_of_a_flag_is_logged_once_per_client(caplog):
+    response = _typed_response({"string-flag": "compact"})
+    client = Client(FAKE_TEST_API_KEY, send=False)
+    other_client = Client(FAKE_TEST_API_KEY, send=False)
+    try:
+        with caplog.at_level("ERROR", logger="posthog"):
+            for _ in range(2):
+                snapshot = _evaluate(client, response)
+                snapshot.get_boolean_value("string-flag", False)
+                snapshot.get_number_details("string-flag", 0)
+                snapshot.get_boolean_details(
+                    "string-flag", False, send_feature_flag_events=False
+                )
+            _evaluate(other_client, response).get_boolean_value("string-flag", False)
+    finally:
+        client.shutdown()
+        other_client.shutdown()
+
+    assert _error_logs(caplog) == [
+        "Flag 'string-flag' has a string value, not a boolean value.",
+        "Flag 'string-flag' has a string value, not a number value.",
+        "Flag 'string-flag' has a string value, not a boolean value.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "key, value_type, flag_error",
+    [
+        # No value, or false read as another type: the default without an error.
+        ("null-flag", "number", None),
+        ("false-flag", "string", None),
+        ("missing-flag", "boolean", "flag_missing"),
+        ("failed-flag", "string", None),
+        ("unreadable-flag", "object", None),
+    ],
+)
+def test_a_default_without_a_type_mismatch_still_reports_the_flag(
+    client, caplog, key, value_type, flag_error
+):
+    response = _typed_response(TYPED_VALUES)
+    response["flags"]["failed-flag"] = _record(
+        key="failed-flag", value=None, failed=True
+    )
+    response["flags"]["unreadable-flag"] = _record(
+        key="unreadable-flag", **{"metadata.id": "202"}
+    )
+    with mock.patch.object(client, "capture") as capture:
+        snapshot = _evaluate(client, response)
+        with caplog.at_level("ERROR", logger="posthog"):
+            details = ACCESSORS[value_type](snapshot)(key, DEFAULTS[value_type])
+
+    assert details.value == DEFAULTS[value_type]
+    assert details.error_code is not FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert _flag_called_keys(capture) == [key]
+    properties = capture.call_args.kwargs["properties"]
+    assert properties.get("$feature_flag_error") == flag_error
+    assert _error_logs(caplog) == []
 
 
 def test_a_throwing_before_send_does_not_break_a_typed_read():

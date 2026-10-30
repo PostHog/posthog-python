@@ -326,6 +326,7 @@ alias posthog.exception_utils.ExcInfo -> posthog.args.ExcInfo
 alias posthog.exception_utils.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.feature_flag_evaluations.FeatureFlag -> posthog.types.FeatureFlag
 alias posthog.feature_flag_evaluations.FlagEvaluationDetails -> posthog.types.FlagEvaluationDetails
+alias posthog.feature_flag_evaluations.FlagEvaluationErrorCode -> posthog.types.FlagEvaluationErrorCode
 alias posthog.feature_flag_evaluations.FlagValue -> posthog.types.FlagValue
 alias posthog.feature_flag_evaluations.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.feature_flags.FlagValue -> posthog.types.FlagValue

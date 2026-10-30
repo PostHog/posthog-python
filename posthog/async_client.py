@@ -186,6 +186,9 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        # The (flag key, requested type) pairs of typed reads of the wrong type that
+        # this client has logged. Same bound and eviction as the flag-event dedupe.
+        self._logged_flag_type_mismatches = SizeLimitedDict(_MAX_DICT_SIZE)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -850,8 +853,17 @@ class AsyncClient:
             self._feature_flag_evaluations_host_cache = _FeatureFlagEvaluationsHost(
                 capture_flag_called_event_if_needed=self._capture_feature_flag_called_if_needed,
                 log_warning=lambda message: self.log.warning(message),
+                log_type_mismatch=self._log_flag_type_mismatch,
             )
         return self._feature_flag_evaluations_host_cache
+
+    def _log_flag_type_mismatch(self, key: str, value_type: str, message: str) -> None:
+        """Log a typed flag read of the wrong type, once per flag key and type."""
+        logged_key = (key, value_type)
+        if logged_key in self._logged_flag_type_mismatches:
+            return
+        self._logged_flag_type_mismatches[logged_key] = True
+        self.log.error(message)
 
     async def _get_flags_decision(
         self,
