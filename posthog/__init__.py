@@ -342,7 +342,14 @@ Attributes:
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
-        call if the metrics API hasn't been used yet.
+        call if the metrics API hasn't been used yet. ``autocapture`` (alpha,
+        ``True`` or ``{"http": ..., "db": ..., "runtime": ...}``) starts HTTP,
+        database and runtime metrics from the OpenTelemetry instrumentations
+        when ``setup()`` runs with it; call ``setup()`` before the web app is
+        created, because apps created earlier are not measured. For Flask,
+        use ``flask.Flask(...)`` after setup, or import the ``Flask`` class only
+        after setup. Already-served Flask apps are not re-instrumented after
+        shutdown; create a new app for a replacement client.
     traces: Config dict for distributed tracing: ``service_name``,
         ``service_version``, ``environment``, ``resource_attributes``,
         ``flush_interval`` (5 s), ``max_queue_size`` (2048),
@@ -1479,6 +1486,8 @@ def setup() -> Client:
     # already forced setup()) still applies until the metrics API is first used.
     if default_client._metrics is None:
         default_client._metrics_config = metrics
+    # Autocapture is not lazy, so a late `metrics` option starts it here.
+    default_client._start_metrics_autocapture_once(metrics)
     # traces=None means off, so the module option applies only where the client
     # has none; False is the latch of an init that failed and stays off.
     if traces is not None and default_client._traces_config is None:
