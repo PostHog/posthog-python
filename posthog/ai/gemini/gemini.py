@@ -256,11 +256,31 @@ class Models(_GeminiModelsPolicy):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        accumulated_content = []
+        accumulated_content: list[Any] = []
         stop_reason: Optional[str] = None
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
-        response = self._client.models.generate_content_stream(**kwargs_without_stream)
+        try:
+            response = self._client.models.generate_content_stream(
+                **kwargs_without_stream
+            )
+        except Exception as exc:
+            self._capture_streaming_event(
+                model,
+                contents,
+                distinct_id,
+                trace_id,
+                properties,
+                privacy_mode,
+                groups,
+                kwargs,
+                usage_stats,
+                time.time() - start_time,
+                accumulated_content,
+                stop_reason=stop_reason,
+                error=exc,
+            )
+            raise
 
         def generator():
             nonlocal usage_stats

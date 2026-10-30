@@ -267,3 +267,165 @@ async def test_gemini_stream_error_async(mock_client):
     props = _props(mock_client)
     assert props["$ai_is_error"] is True
     assert props["$ai_http_status"] == 0
+
+
+class _ConnectError(RuntimeError):
+    status_code = 401
+
+
+def test_openai_chat_stream_connect_error(mock_client):
+    from posthog.ai.openai import OpenAI
+
+    with patch("openai.resources.chat.completions.Completions.create") as create:
+        create.side_effect = _ConnectError("bad key")
+        client = OpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_stream_connect_error_async(mock_client):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async def create(**kwargs):
+        raise _ConnectError("bad key")
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", side_effect=create
+    ):
+        client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.chat.completions.create(
+                model="gpt-4",
+                messages=[{"role": "user", "content": "hi"}],
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+def test_openai_responses_stream_connect_error(mock_client):
+    from posthog.ai.openai import OpenAI
+
+    with patch("openai.resources.responses.Responses.create") as create:
+        create.side_effect = _ConnectError("bad key")
+        client = OpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.responses.create(model="gpt-4", input="hi", stream=True)
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_stream_connect_error_async(mock_client):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async def create(**kwargs):
+        raise _ConnectError("bad key")
+
+    with patch("openai.resources.responses.AsyncResponses.create", side_effect=create):
+        client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.responses.create(model="gpt-4", input="hi", stream=True)
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+def test_anthropic_stream_connect_error(mock_client):
+    from posthog.ai.anthropic import Anthropic
+
+    with patch("anthropic.resources.messages.Messages.create") as create:
+        create.side_effect = _ConnectError("bad key")
+        client = Anthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_connect_error_async(mock_client):
+    from posthog.ai.anthropic import AsyncAnthropic
+
+    async def create(**kwargs):
+        raise _ConnectError("bad key")
+
+    with patch("anthropic.resources.messages.AsyncMessages.create", side_effect=create):
+        client = AsyncAnthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+def test_gemini_stream_connect_error(mock_client):
+    pytest.importorskip("google.genai")
+    from google import genai as google_genai
+
+    from posthog.ai.gemini import Client
+
+    with patch.object(google_genai, "Client") as cls:
+        inst = MagicMock()
+        cls.return_value = inst
+        inst.models.generate_content_stream.side_effect = _ConnectError("bad key")
+        client = Client(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.models.generate_content_stream(
+                model="gemini-2.0-flash", contents=["hi"]
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+
+
+@pytest.mark.asyncio
+async def test_gemini_stream_connect_error_async(mock_client):
+    pytest.importorskip("google.genai")
+    from google import genai as google_genai
+
+    from posthog.ai.gemini import AsyncClient
+
+    with patch.object(google_genai, "Client") as cls:
+        inst = MagicMock()
+        cls.return_value = inst
+        inst.aio.models.generate_content_stream = AsyncMock(
+            side_effect=_ConnectError("bad key")
+        )
+        client = AsyncClient(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.models.generate_content_stream(
+                model="gemini-2.0-flash", contents=["hi"]
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401

@@ -162,7 +162,24 @@ class AsyncWrappedMessages(AsyncMessages):
         **kwargs: Any,
     ):
         start_time = time.time()
-        response = await super().create(**kwargs)
+        try:
+            response = await super().create(**kwargs)
+        except Exception as exc:
+            accumulator = _AnthropicStreamAccumulator()
+            await self._capture_streaming_event(
+                posthog_distinct_id,
+                posthog_trace_id,
+                posthog_properties,
+                posthog_privacy_mode,
+                posthog_groups,
+                kwargs,
+                accumulator.usage_stats,
+                time.time() - start_time,
+                accumulator.content_blocks,
+                accumulator.accumulated_content,
+                error=exc,
+            )
+            raise
         return self._track_streaming_response(
             response,
             posthog_distinct_id,
