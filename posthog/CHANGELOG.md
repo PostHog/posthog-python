@@ -1,5 +1,12 @@
 # posthog
 
+## 7.81.1 — 2026-10-30
+
+### Patch changes
+
+- [be77b83](https://github.com/posthog/posthog-python/commit/be77b83462a690c8c303f5676a28207a9c17f68a) Keep the choices of a streamed OpenAI chat completion with `n > 1` apart in `$ai_output_choices`, as a non-streamed one already does. Their text and tool calls were interleaved into one choice. — Thanks @jaeminbird for your first contribution 🎉!
+- [a61e64d](https://github.com/posthog/posthog-python/commit/a61e64d1a40be337af3e09925d53f56c78d0baba) Preserve Gemini tool call IDs in captured generations, on output tool calls and on tool calls and results in the input history. — Thanks @mosafariuk!
+
 ## 7.81.0 — 2026-10-30
 
 ### Minor changes
