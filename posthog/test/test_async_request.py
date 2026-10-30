@@ -6,6 +6,7 @@ import logging
 import subprocess
 import sys
 from unittest import mock
+from uuid import UUID
 
 import httpx
 import pytest
@@ -250,6 +251,28 @@ async def test_async_flags_sends_v2_request_payload():
     assert payload["groups"] == {"company": "company-1"}
     assert "sent_at" in payload
     assert "Authorization" not in kwargs["headers"]
+
+
+@pytest.mark.asyncio
+async def test_async_flags_sends_uuid_inputs_as_strings():
+    client = FakeAsyncClient(FakeResponse(200, {"flags": {}}))
+    user_id = UUID("12345678-1234-5678-1234-567812345678")
+    company_id = UUID("87654321-4321-8765-4321-876543218765")
+
+    await async_flags(
+        "project-key",
+        "https://example.com",
+        timeout=3,
+        max_retries=0,
+        client=client,
+        distinct_id=user_id,
+        groups={"company": company_id},
+    )
+
+    _, _, kwargs = client.calls[0]
+    payload = json.loads(kwargs["content"])
+    assert payload["distinct_id"] == str(user_id)
+    assert payload["groups"] == {"company": str(company_id)}
 
 
 @pytest.mark.asyncio

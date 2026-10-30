@@ -4,6 +4,7 @@ import unittest
 import zlib
 from datetime import date, datetime, timedelta
 from unittest import mock
+from uuid import UUID
 
 import pytest
 import requests
@@ -264,6 +265,11 @@ class TestRequests(unittest.TestCase):
         result = json.dumps(data, cls=DatetimeSerializer)
         expected = '{"created": "%s"}' % today.isoformat()
         self.assertEqual(result, expected)
+
+    def test_uuid_serialization(self):
+        data = {"id": UUID("12345678-1234-5678-1234-567812345678")}
+        result = json.dumps(data, cls=DatetimeSerializer)
+        self.assertEqual(result, '{"id": "12345678-1234-5678-1234-567812345678"}')
 
     def test_should_not_timeout(self):
         response = requests.Response()
@@ -613,6 +619,32 @@ class TestFlagsSession(unittest.TestCase):
         self.assertEqual(result["featureFlags"]["test-flag"], True)
         mock_get_flags_session.assert_called_once()
         mock_session.post.assert_called_once()
+
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_sends_uuid_inputs_as_strings(self, mock_get_flags_session):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {"flags": {}, "errorsWhileComputingFlags": False}
+        ).encode("utf-8")
+        mock_session = mock.MagicMock()
+        mock_session.post.return_value = mock_response
+        mock_get_flags_session.return_value = mock_session
+        user_id = UUID("12345678-1234-5678-1234-567812345678")
+        company_id = UUID("87654321-4321-8765-4321-876543218765")
+
+        flags(
+            "test-key",
+            "https://test.posthog.com",
+            distinct_id=user_id,
+            groups={"company": company_id},
+            person_properties={"account_id": user_id},
+        )
+
+        body = json.loads(mock_session.post.call_args.kwargs["data"])
+        self.assertEqual(body["distinct_id"], str(user_id))
+        self.assertEqual(body["groups"], {"company": str(company_id)})
+        self.assertEqual(body["person_properties"], {"account_id": str(user_id)})
 
     @mock.patch("posthog.request._get_flags_session")
     def test_flags_no_retry_on_quota_limit(self, mock_get_flags_session):
