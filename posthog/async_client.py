@@ -186,9 +186,6 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
-        # The (flag key, requested type) pairs of typed reads of the wrong type that
-        # this client has logged. Same bound and eviction as the flag-event dedupe.
-        self._logged_flag_type_mismatches = SizeLimitedDict(_MAX_DICT_SIZE)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -234,6 +231,9 @@ class AsyncClient:
             self.log.setLevel(logging.WARNING)
         # Whether this client has logged that /flags sent records without typed values.
         self._logged_untyped_flags_response = False
+        # The (flag key, requested type) pairs of typed reads of the wrong type that
+        # this client has logged. Same bound and eviction as the flag-event dedupe.
+        self._logged_flag_type_mismatches = SizeLimitedDict(_MAX_DICT_SIZE)
 
         if not self.api_key:
             self.log.error(

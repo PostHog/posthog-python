@@ -926,9 +926,6 @@ class Client(object):
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
-        # The (flag key, requested type) pairs of typed reads of the wrong type that
-        # this client has logged. Same bound and eviction as the flag-event dedupe.
-        self._logged_flag_type_mismatches = SizeLimitedDict(MAX_DICT_SIZE)
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
@@ -1010,6 +1007,9 @@ class Client(object):
         self._minimal_flag_called_events: bool = False
         # Whether this client has logged that /flags sent records without typed values.
         self._logged_untyped_flags_response = False
+        # The (flag key, requested type) pairs of typed reads of the wrong type that
+        # this client has logged. Same bound and eviction as the flag-event dedupe.
+        self._logged_flag_type_mismatches = SizeLimitedDict(MAX_DICT_SIZE)
 
         self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
