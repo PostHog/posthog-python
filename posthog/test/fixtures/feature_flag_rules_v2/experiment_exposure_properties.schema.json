@@ -1,18 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://posthog.com/contracts/feature_flag_rules_v2/experiment_exposure_properties.schema.json",
-  "title": "SDK-origin $experiment_exposure required properties",
+  "title": "SDK-sent $experiment_exposure properties",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "$feature_flag",
     "$feature_flag_response",
-    "$feature_flag_config_version",
     "$feature_flag_variant",
     "$feature_flag_rule_id",
-    "$feature_flag_rule_type",
-    "$feature_flag_reason_code",
-    "$experiment_exposure_source",
     "locally_evaluated"
   ],
   "properties": {
@@ -31,24 +27,12 @@
         }
       ]
     },
-    "$feature_flag_config_version": {
-      "const": 2
-    },
     "$feature_flag_variant": {
       "type": "string"
     },
     "$feature_flag_rule_id": {
       "type": "string",
       "format": "uuid"
-    },
-    "$feature_flag_rule_type": {
-      "const": "experiment"
-    },
-    "$feature_flag_reason_code": {
-      "const": "experiment_split"
-    },
-    "$experiment_exposure_source": {
-      "const": "sdk"
     },
     "locally_evaluated": {
       "type": "boolean"
@@ -57,7 +41,7 @@
       "const": true
     }
   },
-  "description": "Closed projection of required SDK-origin exposure properties; forced-variant context is forbidden. Capture identity and existing optional transport properties are outside this projection. Scan the entire event recursively for assignment seeds.",
+  "description": "Closed projection of the properties of an SDK-sent exposure. The SDK sends it only for a config version 2 experiment split, so it carries no config version, rule type, reason code or source marker; the rule ID marks it as SDK-sent. Experiment ID and forced-variant context are forbidden. Capture identity and existing optional transport properties are outside this projection. Scan the entire event recursively for assignment seeds.",
   "not": {
     "required": [
       "$feature_flag_forced_variant"

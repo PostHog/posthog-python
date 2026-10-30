@@ -51,11 +51,12 @@
       "type": "string",
       "minLength": 1
     },
+    "$feature_flag_reason": {},
     "$feature_flag_forced_variant": {
       "const": true
     }
   },
-  "description": "Closed projection of the flag-access context properties. Existing capture fields are outside this projection. Complete v2 producer context follows the terminal outcome; tolerant-reader diagnostics may omit an incomplete attribution tuple.",
+  "description": "Closed projection of the flag-access context properties. Other existing capture fields are outside this projection. Complete v2 producer context follows the terminal outcome; tolerant-reader diagnostics may omit an incomplete attribution tuple. A config version 2 call carries $feature_flag_reason_code and never $feature_flag_reason, the reason description that only version 1 calls carry.",
   "allOf": [
     {
       "if": {
@@ -73,8 +74,17 @@
           "$feature_flag_reason_code"
         ],
         "not": {
-          "required": [
-            "$feature_flag_forced_variant"
+          "anyOf": [
+            {
+              "required": [
+                "$feature_flag_forced_variant"
+              ]
+            },
+            {
+              "required": [
+                "$feature_flag_reason"
+              ]
+            }
           ]
         },
         "oneOf": [

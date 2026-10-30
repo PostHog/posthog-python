@@ -4,9 +4,7 @@ A remotely evaluated config version 2 record that assigns an experiment variant 
 ``$experiment_exposure`` next to its ``$feature_flag_called``, and every config version
 2 record adds its rule attribution to ``$feature_flag_called``. The reader fixtures and
 event schemas are copied unchanged from a released ``PostHog/posthog-sdk-test-harness``
-contract; ``fixtures/feature_flag_rules_v2/SOURCE.json`` records which. The SDK sends a
-smaller ``$experiment_exposure`` than that contract's schema requires, so exposures are
-checked against the schema without the properties the SDK leaves out.
+contract; ``fixtures/feature_flag_rules_v2/SOURCE.json`` records which.
 """
 
 from __future__ import annotations
@@ -15,7 +13,7 @@ import copy
 import json
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
 from unittest import mock
 
 import jsonschema
@@ -47,7 +45,8 @@ ATTRIBUTION_PROPERTIES = (
 
 
 # $experiment_exposure leaves these out. The config version, rule type and reason code
-# stay on the $feature_flag_called of the same read.
+# stay on the $feature_flag_called of the same read. The schema projection drops
+# undeclared properties, so their absence is asserted separately.
 EXPOSURE_LEAVES_OUT = (
     "$feature_flag_config_version",
     "$feature_flag_rule_type",
@@ -56,20 +55,13 @@ EXPOSURE_LEAVES_OUT = (
 )
 
 
-def _schema(
-    name: str, leave_out: Tuple[str, ...] = ()
-) -> jsonschema.Draft202012Validator:
+def _schema(name: str) -> jsonschema.Draft202012Validator:
     schema = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
-    for property_name in leave_out:
-        del schema["properties"][property_name]
-        schema["required"].remove(property_name)
     return jsonschema.Draft202012Validator(schema)
 
 
 FLAG_CALLED_SCHEMA = _schema("feature_flag_called_context.schema.json")
-EXPOSURE_SCHEMA = _schema(
-    "experiment_exposure_properties.schema.json", leave_out=EXPOSURE_LEAVES_OUT
-)
+EXPOSURE_SCHEMA = _schema("experiment_exposure_properties.schema.json")
 
 
 def _projection(
