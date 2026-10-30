@@ -82,8 +82,8 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    assert source["release"] == "1.22.0"
-    assert source["contract_version"] == "7.0.0"
+    assert source["release"] == "1.27.0"
+    assert source["contract_version"] == "8.0.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
@@ -875,11 +875,27 @@ def _parity_response(shape: str) -> Dict[str, Any]:
     }
 
 
+# A config version 2 record adds these to its flag events, and leaves out
+# $feature_flag_reason. A v2-shaped response has no config version 2 records, so they
+# are left out of the comparison of the v2-* flags and checked in
+# test_experiment_exposure.py.
+_CONFIG_VERSION_2_EVENT_PROPERTIES = {
+    "$feature_flag_config_version",
+    "$feature_flag_reason_code",
+    "$feature_flag_rule_id",
+    "$feature_flag_rule_type",
+    "$feature_flag_variant",
+}
+
+
 def _flag_event_properties(message: Dict[str, Any]) -> Dict[str, Any]:
+    left_out = set(_CONFIG_VERSION_2_EVENT_PROPERTIES)
+    if str(message["properties"].get("$feature_flag", "")).startswith("v2-"):
+        left_out.add("$feature_flag_reason")
     return {
         key: value
         for key, value in message["properties"].items()
-        if key.startswith("$feature")
+        if (key.startswith("$feature") and key not in left_out)
         or key in ("$active_feature_flags", "locally_evaluated")
     }
 
