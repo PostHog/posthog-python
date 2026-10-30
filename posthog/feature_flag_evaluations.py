@@ -154,16 +154,21 @@ class FeatureFlagEvaluations:
             return False
         return flag.variant if flag.variant is not None else True
 
-    def get_boolean_value(self, key: str, default_value: bool) -> bool:
+    def get_boolean_value(
+        self, key: str, default_value: bool, *, send_feature_flag_events: bool = True
+    ) -> bool:
         """Return the flag's boolean value, or ``default_value``.
 
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_boolean_details` for when the default is returned.
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access unless
+        ``send_feature_flag_events`` is ``False``. See :meth:`get_boolean_details` for
+        when the default is returned.
         """
-        return self.get_boolean_details(key, default_value).value
+        return self.get_boolean_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_boolean_details(
-        self, key: str, default_value: bool
+        self, key: str, default_value: bool, *, send_feature_flag_events: bool = True
     ) -> FlagEvaluationDetails[bool]:
         """Return the flag's boolean value with its evaluation details.
 
@@ -173,19 +178,30 @@ class FeatureFlagEvaluations:
         which, except for a flag without a value. A flag whose value is ``False``
         returns ``False``. Fires ``$feature_flag_called`` on first access, like
         :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "boolean")
 
-    def get_string_value(self, key: str, default_value: str) -> str:
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`. The key still counts as accessed for
+        :meth:`only_accessed`.
+        """
+        return self._get_typed_details(
+            key, default_value, "boolean", send_feature_flag_events
+        )
+
+    def get_string_value(
+        self, key: str, default_value: str, *, send_feature_flag_events: bool = True
+    ) -> str:
         """Return the flag's string value, or ``default_value``.
 
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_string_details` for when the default is returned.
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access unless
+        ``send_feature_flag_events`` is ``False``. See :meth:`get_string_details` for
+        when the default is returned.
         """
-        return self.get_string_details(key, default_value).value
+        return self.get_string_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_string_details(
-        self, key: str, default_value: str
+        self, key: str, default_value: str, *, send_feature_flag_events: bool = True
     ) -> FlagEvaluationDetails[str]:
         """Return the flag's string value with its evaluation details.
 
@@ -194,20 +210,31 @@ class FeatureFlagEvaluations:
         type; ``error_code`` says which, except for a flag without a value or with
         the value ``False``. Fires ``$feature_flag_called`` on first access, like
         :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "string")
 
-    def get_number_value(self, key: str, default_value: float) -> float:
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`. The key still counts as accessed for
+        :meth:`only_accessed`.
+        """
+        return self._get_typed_details(
+            key, default_value, "string", send_feature_flag_events
+        )
+
+    def get_number_value(
+        self, key: str, default_value: float, *, send_feature_flag_events: bool = True
+    ) -> float:
         """Return the flag's number value, or ``default_value``.
 
         An integer value is returned as an ``int``. Like :meth:`get_flag`, fires
-        ``$feature_flag_called`` on first access. See :meth:`get_number_details` for
-        when the default is returned.
+        ``$feature_flag_called`` on first access unless ``send_feature_flag_events``
+        is ``False``. See :meth:`get_number_details` for when the default is
+        returned.
         """
-        return self.get_number_details(key, default_value).value
+        return self.get_number_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_number_details(
-        self, key: str, default_value: float
+        self, key: str, default_value: float, *, send_feature_flag_events: bool = True
     ) -> FlagEvaluationDetails[float]:
         """Return the flag's number value with its evaluation details.
 
@@ -216,19 +243,30 @@ class FeatureFlagEvaluations:
         failed, has no value, or has a value of another type; ``error_code`` says
         which, except for a flag without a value or with the value ``False``. Fires
         ``$feature_flag_called`` on first access, like :meth:`get_flag`.
-        """
-        return self._get_typed_details(key, default_value, "number")
 
-    def get_integer_value(self, key: str, default_value: int) -> int:
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`. The key still counts as accessed for
+        :meth:`only_accessed`.
+        """
+        return self._get_typed_details(
+            key, default_value, "number", send_feature_flag_events
+        )
+
+    def get_integer_value(
+        self, key: str, default_value: int, *, send_feature_flag_events: bool = True
+    ) -> int:
         """Return the flag's number value as an ``int``, or ``default_value``.
 
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_integer_details` for when the default is returned.
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access unless
+        ``send_feature_flag_events`` is ``False``. See :meth:`get_integer_details` for
+        when the default is returned.
         """
-        return self.get_integer_details(key, default_value).value
+        return self.get_integer_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_integer_details(
-        self, key: str, default_value: int
+        self, key: str, default_value: int, *, send_feature_flag_events: bool = True
     ) -> FlagEvaluationDetails[int]:
         """Return the flag's number value as an ``int`` with its evaluation details.
 
@@ -237,38 +275,58 @@ class FeatureFlagEvaluations:
         every PostHog SDK returns the same result. An integral number such as
         ``2.0`` is returned as ``2``.
         """
-        return self._get_typed_details(key, default_value, "integer")
+        return self._get_typed_details(
+            key, default_value, "integer", send_feature_flag_events
+        )
 
-    def get_float_value(self, key: str, default_value: float) -> float:
+    def get_float_value(
+        self, key: str, default_value: float, *, send_feature_flag_events: bool = True
+    ) -> float:
         """Return the flag's number value as a ``float``, or ``default_value``.
 
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_float_details` for when the default is returned.
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access unless
+        ``send_feature_flag_events`` is ``False``. See :meth:`get_float_details` for
+        when the default is returned.
         """
-        return self.get_float_details(key, default_value).value
+        return self.get_float_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_float_details(
-        self, key: str, default_value: float
+        self, key: str, default_value: float, *, send_feature_flag_events: bool = True
     ) -> FlagEvaluationDetails[float]:
         """Return the flag's number value as a ``float`` with its evaluation details.
 
         Like :meth:`get_number_details`, but an integer value is returned as a
         ``float``.
         """
-        return self._get_typed_details(key, default_value, "float")
+        return self._get_typed_details(
+            key, default_value, "float", send_feature_flag_events
+        )
 
     def get_object_value(
-        self, key: str, default_value: Dict[str, Any]
+        self,
+        key: str,
+        default_value: Dict[str, Any],
+        *,
+        send_feature_flag_events: bool = True,
     ) -> Dict[str, Any]:
         """Return the flag's object value, or ``default_value``.
 
-        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access. See
-        :meth:`get_object_details` for when the default is returned.
+        Like :meth:`get_flag`, fires ``$feature_flag_called`` on first access unless
+        ``send_feature_flag_events`` is ``False``. See :meth:`get_object_details` for
+        when the default is returned.
         """
-        return self.get_object_details(key, default_value).value
+        return self.get_object_details(
+            key, default_value, send_feature_flag_events=send_feature_flag_events
+        ).value
 
     def get_object_details(
-        self, key: str, default_value: Dict[str, Any]
+        self,
+        key: str,
+        default_value: Dict[str, Any],
+        *,
+        send_feature_flag_events: bool = True,
     ) -> FlagEvaluationDetails[Dict[str, Any]]:
         """Return the flag's object value with its evaluation details.
 
@@ -278,8 +336,14 @@ class FeatureFlagEvaluations:
         object too deeply nested to copy; ``error_code`` says which, except for a
         flag without a value or with the value ``False``. Fires
         ``$feature_flag_called`` on first access, like :meth:`get_flag`.
+
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`. The key still counts as accessed for
+        :meth:`only_accessed`.
         """
-        return self._get_typed_details(key, default_value, "object")
+        return self._get_typed_details(
+            key, default_value, "object", send_feature_flag_events
+        )
 
     def get_flag_payload(self, key: str) -> Optional[Any]:
         """Return the payload associated with a flag.
@@ -390,10 +454,14 @@ class FeatureFlagEvaluations:
         )
 
     def _get_typed_details(
-        self, key: str, default_value: Any, value_type: str
+        self,
+        key: str,
+        default_value: Any,
+        value_type: str,
+        send_feature_flag_events: bool,
     ) -> FlagEvaluationDetails[Any]:
         flag = self._flags.get(key)
-        self._record_access(key, True)
+        self._record_access(key, send_feature_flag_events)
         if flag is None and key in self._unresolved_flags:
             # The flag exists, so say why it has no value.
             return replace(

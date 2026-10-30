@@ -1840,20 +1840,20 @@ method posthog.exception_utils.AnnotatedValue.substituted_because_contains_sensi
 method posthog.exception_utils.VariableSizeLimiter.add(size)
 method posthog.exception_utils.VariableSizeLimiter.can_add(size)
 method posthog.exception_utils.VariableSizeLimiter.get_remaining_space()
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_details(key: str, default_value: bool) -> FlagEvaluationDetails[bool]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_value(key: str, default_value: bool) -> bool
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_details(key: str, default_value: bool, *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[bool]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_boolean_value(key: str, default_value: bool, *, send_feature_flag_events: bool = True) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str, *, send_feature_flag_events: bool = True) -> Optional[FlagValue]
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload(key: str) -> Optional[Any]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_float_details(key: str, default_value: float) -> FlagEvaluationDetails[float]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_float_value(key: str, default_value: float) -> float
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_integer_details(key: str, default_value: int) -> FlagEvaluationDetails[int]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_integer_value(key: str, default_value: int) -> int
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_details(key: str, default_value: float) -> FlagEvaluationDetails[float]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_value(key: str, default_value: float) -> float
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_details(key: str, default_value: Dict[str, Any]) -> FlagEvaluationDetails[Dict[str, Any]]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_value(key: str, default_value: Dict[str, Any]) -> Dict[str, Any]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_details(key: str, default_value: str) -> FlagEvaluationDetails[str]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_value(key: str, default_value: str) -> str
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_float_details(key: str, default_value: float, *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[float]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_float_value(key: str, default_value: float, *, send_feature_flag_events: bool = True) -> float
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_integer_details(key: str, default_value: int, *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[int]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_integer_value(key: str, default_value: int, *, send_feature_flag_events: bool = True) -> int
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_details(key: str, default_value: float, *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[float]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_number_value(key: str, default_value: float, *, send_feature_flag_events: bool = True) -> float
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_details(key: str, default_value: Dict[str, Any], *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[Dict[str, Any]]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_object_value(key: str, default_value: Dict[str, Any], *, send_feature_flag_events: bool = True) -> Dict[str, Any]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_details(key: str, default_value: str, *, send_feature_flag_events: bool = True) -> FlagEvaluationDetails[str]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_string_value(key: str, default_value: str, *, send_feature_flag_events: bool = True) -> str
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False, *, send_feature_flag_events: bool = True) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only(keys: List[str]) -> FeatureFlagEvaluations
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed() -> FeatureFlagEvaluations

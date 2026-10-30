@@ -7,11 +7,12 @@ the digest of each file.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from unittest import mock
 
 import pytest
@@ -1555,6 +1556,100 @@ def test_typed_accessors_report_access_like_get_flag(client):
     # A type mismatch is not an evaluation error.
     assert "$feature_flag_error" not in properties
     assert snapshot.only_accessed().keys == ["string-flag"]
+
+
+# The flag each typed accessor reads in the per-read event option tests, and the
+# value it returns.
+TYPED_READS: Dict[str, Tuple[str, Any]] = {
+    "boolean": ("boolean-flag", True),
+    "string": ("string-flag", "compact"),
+    "number": ("float-flag", 12.5),
+    "integer": ("integer-flag", 7),
+    "float": ("float-flag", 12.5),
+    "object": ("object-flag", TYPED_VALUES["object-flag"]),
+}
+TYPED_METHODS = [
+    f"get_{value_type}_{form}"
+    for value_type in TYPED_READS
+    for form in ("value", "details")
+]
+
+
+@contextlib.asynccontextmanager
+async def _typed_snapshot(
+    client_kind: str,
+) -> AsyncIterator[Tuple[FeatureFlagEvaluations, mock.MagicMock]]:
+    """Yield a snapshot of ``TYPED_VALUES`` from the sync or async client, and the
+    mocked ``capture`` of that client."""
+    response = _typed_response(TYPED_VALUES)
+    if client_kind == "sync":
+        client = Client(FAKE_TEST_API_KEY, send=False)
+        try:
+            with mock.patch.object(client, "capture") as capture:
+                yield _evaluate(client, response), capture
+        finally:
+            client.shutdown()
+        return
+    async_client = AsyncPosthog("project-key", send=False)
+    try:
+        with (
+            mock.patch(
+                "posthog.async_client._async_flags",
+                new=mock.AsyncMock(return_value=response),
+            ),
+            mock.patch.object(async_client, "capture") as capture,
+        ):
+            yield await async_client.evaluate_flags(DISTINCT_ID), capture
+    finally:
+        await async_client.shutdown()
+
+
+def _typed_read(snapshot: FeatureFlagEvaluations, method: str, **options: Any) -> Any:
+    """Read ``method``'s flag from ``TYPED_READS`` and return the value it resolved."""
+    value_type = method.split("_")[1]
+    key, _ = TYPED_READS[value_type]
+    result = getattr(snapshot, method)(key, DEFAULTS[value_type], **options)
+    return result.value if method.endswith("_details") else result
+
+
+def _flag_called_keys(capture: mock.MagicMock) -> List[str]:
+    return [
+        call.kwargs["properties"]["$feature_flag"]
+        for call in capture.call_args_list
+        if call.args == ("$feature_flag_called",)
+    ]
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+@pytest.mark.parametrize("method", TYPED_METHODS)
+async def test_a_typed_read_with_events_off_sends_no_event_and_reserves_no_dedupe_key(
+    method, client_kind
+):
+    key, expected = TYPED_READS[method.split("_")[1]]
+    async with _typed_snapshot(client_kind) as (snapshot, capture):
+        suppressed = _typed_read(snapshot, method, send_feature_flag_events=False)
+        assert suppressed == expected
+        assert _flag_called_keys(capture) == []
+        # A suppressed read is still an access.
+        assert snapshot.only_accessed().keys == [key]
+
+        later = _typed_read(snapshot, method)
+
+    assert later == expected
+    assert _flag_called_keys(capture) == [key]
+
+
+@pytest.mark.parametrize("client_kind", ["sync", "async"])
+@pytest.mark.parametrize("method", TYPED_METHODS)
+async def test_a_typed_read_sends_one_event_by_default(method, client_kind):
+    key, expected = TYPED_READS[method.split("_")[1]]
+    async with _typed_snapshot(client_kind) as (snapshot, capture):
+        first = _typed_read(snapshot, method)
+        assert _flag_called_keys(capture) == [key]
+        again = _typed_read(snapshot, method, send_feature_flag_events=True)
+
+    assert first == again == expected
+    assert _flag_called_keys(capture) == [key]
 
 
 def test_a_throwing_before_send_does_not_break_a_typed_read():
