@@ -21,6 +21,14 @@
     "v2_value_evaluation.json": {
       "source_path": "corpus/v2_value_evaluation.json",
       "sha256": "aaddd05e47fc5a4ae07ea42ada5a659798f4b5fc8d0c0827f6a68e4daf68c128"
+    },
+    "feature_flag_called_context.schema.json": {
+      "source_path": "schemas/feature_flag_called_context.schema.json",
+      "sha256": "56ca931f58ce41f22f5bdf63da99f1ad543e78d32de08f1762c3c10b07fcabc5"
+    },
+    "experiment_exposure_properties.schema.json": {
+      "source_path": "schemas/experiment_exposure_properties.schema.json",
+      "sha256": "0cd39571ef19749ae380a1e88384f97916e5d0ba126f9e461026785a6d3f0aad"
     }
   }
 }
