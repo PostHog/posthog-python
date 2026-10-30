@@ -10,7 +10,7 @@ import threading
 import warnings
 import weakref
 from datetime import datetime, timezone
-from typing import Any, Dict, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -70,6 +70,7 @@ from .exception_utils import (
     try_attach_code_variables_to_frames,
 )
 from .consumer import MAX_MSG_SIZE
+from .emails import AsyncEmails, _client_emails, _validate_options
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -129,6 +130,9 @@ class AsyncClient:
         personal_api_key: Optional[str] = None,
         feature_flags_request_timeout_seconds: float = 3,
         feature_flags_request_max_retries: int = 1,
+        app_host: Optional[str] = None,
+        email_request_timeout_seconds: float = 15,
+        email_request_max_retries: int = 2,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -173,6 +177,10 @@ class AsyncClient:
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
+        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        self.app_host = app_host
+        self.email_request_timeout_seconds = email_request_timeout_seconds
+        self.email_request_max_retries = email_request_max_retries
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
         )
@@ -246,6 +254,49 @@ class AsyncClient:
         self._deferred_lifecycle_tasks: set[asyncio.Task[Any]] = set()
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self._register_duplicate_client()
+
+    _emails: Optional[AsyncEmails] = None
+
+    @property
+    def emails(self) -> AsyncEmails:
+        """
+        Send transactional email from PostHog email templates, and read the
+        status of each email sent with ``get``.
+
+        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
+        Cloud app host of ``host``. ``email_request_timeout_seconds`` and
+        ``email_request_max_retries`` configure each send. A disabled or shut-down
+        client sends nothing. See ``posthog.emails`` for setup.
+
+        Examples:
+            ```python
+            await client.emails.send(
+                to="user@example.com",
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                distinct_id="user_123",
+            )
+            ```
+        """
+        if self._emails is None:
+            self._emails = _client_emails(
+                AsyncEmails,
+                self.secret_key,
+                self.host,
+                lambda: self.disabled,
+                self._admit_email_send,
+                app_host=self.app_host,
+                timeout=self.email_request_timeout_seconds,
+                max_retries=self.email_request_max_retries,
+            )
+        return self._emails
+
+    def _admit_email_send(self) -> Optional[Callable[[], None]]:
+        # Shutdown waits for in-flight operations before it closes the email transport.
+        if not self._accepting or self._closed:
+            return None
+        completion = self._start_inflight_operation()
+        return lambda: self._finish_inflight_operation(completion)
 
     async def __aenter__(self) -> AsyncClient:
         self._ensure_workers_started()
@@ -1218,6 +1269,13 @@ class AsyncClient:
             except Exception as error:
                 self.log.exception("Failed to close async capture transport")
                 errors.append(error)
+
+            if self._emails is not None:
+                try:
+                    await self._emails.aclose()
+                except Exception as error:
+                    self.log.exception("Failed to close the async email transport")
+                    errors.append(error)
 
             try:
                 self._unregister_duplicate_client()
