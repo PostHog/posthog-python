@@ -1007,6 +1007,9 @@ class Client(object):
         self._minimal_flag_called_events: bool = False
         # Whether this client has logged that /flags sent records without typed values.
         self._logged_untyped_flags_response = False
+        # The (flag key, requested type) pairs of typed reads of the wrong type that
+        # this client has logged. Same bound and eviction as the flag-event dedupe.
+        self._logged_flag_type_mismatches = SizeLimitedDict(MAX_DICT_SIZE)
 
         self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
@@ -4928,11 +4931,10 @@ class Client(object):
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
+                inactive=value is False and not flag_def.get("active"),
                 payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
-                # The local-evaluation flag definition does not carry a version field;
-                # only the remote ``/flags`` response does via ``metadata.version``.
-                version=None,
+                version=flag_def.get("version"),
                 reason="Evaluated locally",
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
@@ -5029,8 +5031,17 @@ class Client(object):
             self._feature_flag_evaluations_host_cache = _FeatureFlagEvaluationsHost(
                 capture_flag_called_event_if_needed=self._capture_feature_flag_called_if_needed,
                 log_warning=lambda message: self.log.warning(message),
+                log_type_mismatch=self._log_flag_type_mismatch,
             )
         return self._feature_flag_evaluations_host_cache
+
+    def _log_flag_type_mismatch(self, key: str, value_type: str, message: str) -> None:
+        """Log a typed flag read of the wrong type, once per flag key and type."""
+        logged_key = (key, value_type)
+        if logged_key in self._logged_flag_type_mismatches:
+            return
+        self._logged_flag_type_mismatches[logged_key] = True
+        self.log.error(message)
 
     def _get_all_flags_and_payloads_locally(
         self,

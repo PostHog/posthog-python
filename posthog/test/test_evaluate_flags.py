@@ -1301,6 +1301,126 @@ class TestEvaluateFlagsFiltering(unittest.TestCase):
         self.assertEqual(flags.only_accessed().keys, ["boolean-flag"])
 
 
+class TestEvaluateFlagsPerReadEventOption(unittest.TestCase):
+    """Per-read ``send_feature_flag_events`` on snapshot reads (sdk-specs
+    evaluate-flags "Snapshot feature flag event control")."""
+
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY)
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @staticmethod
+    def _flag_called(patch_capture):
+        return [
+            (c[1]["properties"]["$feature_flag"], c[1]["properties"])
+            for c in patch_capture.call_args_list
+            if c[0] and c[0][0] == "$feature_flag_called"
+        ]
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_option_false_silences_one_read(self, patch_capture, patch_flags):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        enabled = flags.is_enabled("boolean-flag", send_feature_flag_events=False)
+        value = flags.get_flag("variant-flag")
+
+        self.assertEqual((enabled, value), (True, "variant-value"))
+        self.assertEqual(patch_flags.call_count, 1)
+        events = self._flag_called(patch_capture)
+        self.assertEqual([key for key, _ in events], ["variant-flag"])
+        self.assertEqual(events[0][1]["$feature_flag_response"], "variant-value")
+        self.assertEqual(patch_capture.call_args[1]["distinct_id"], "user-1")
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_option_true_sends_events(self, patch_capture, patch_flags):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        flags.is_enabled("boolean-flag", send_feature_flag_events=True)
+        flags.get_flag("variant-flag", send_feature_flag_events=True)
+
+        self.assertEqual(
+            [key for key, _ in self._flag_called(patch_capture)],
+            ["boolean-flag", "variant-flag"],
+        )
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_suppressed_read_leaves_dedupe_untouched(self, patch_capture, patch_flags):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        results = [
+            flags.is_enabled("boolean-flag", send_feature_flag_events=False),
+            flags.get_flag("boolean-flag"),
+            flags.is_enabled("boolean-flag"),
+        ]
+
+        self.assertEqual(results, [True, True, True])
+        self.assertEqual(patch_flags.call_count, 1)
+        events = self._flag_called(patch_capture)
+        self.assertEqual([key for key, _ in events], ["boolean-flag"])
+        self.assertIs(events[0][1]["$feature_flag_response"], True)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_suppressed_read_leaves_single_flag_getter_exposure_intact(
+        self, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        snapshot_value = flags.is_enabled(
+            "boolean-flag", send_feature_flag_events=False
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            getter_value = self.client.get_feature_flag("boolean-flag", "user-1")
+
+        self.assertEqual((snapshot_value, getter_value), (True, True))
+        events = self._flag_called(patch_capture)
+        self.assertEqual([key for key, _ in events], ["boolean-flag"])
+        self.assertIs(events[0][1]["$feature_flag_response"], True)
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_suppressed_reads_still_count_for_only_accessed(
+        self, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        enabled = flags.is_enabled("boolean-flag", send_feature_flag_events=False)
+        value = flags.get_flag("disabled-flag", send_feature_flag_events=False)
+
+        self.assertEqual((enabled, value), (True, False))
+        self.assertEqual(
+            sorted(flags.only_accessed().keys), ["boolean-flag", "disabled-flag"]
+        )
+        self.assertEqual(patch_flags.call_count, 1)
+        self.assertEqual(self._flag_called(patch_capture), [])
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_suppressed_missing_key_reports_no_missing_flag(
+        self, patch_capture, patch_flags
+    ):
+        patch_flags.return_value = _flags_response_fixture()
+        flags = self.client.evaluate_flags("user-1")
+
+        enabled = flags.is_enabled("missing-flag", send_feature_flag_events=False)
+        value = flags.get_flag("missing-flag", send_feature_flag_events=False)
+
+        self.assertEqual((enabled, value), (False, None))
+        self.assertEqual(patch_flags.call_count, 1)
+        self.assertEqual(self._flag_called(patch_capture), [])
+
+
 class TestCaptureWithFlagsSnapshot(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY)
