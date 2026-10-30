@@ -592,12 +592,8 @@ def _capture_flag_events(
         {
             "$feature_flag": key,
             "$feature_flag_response": response,
-            "$feature_flag_config_version": 2,
             "$feature_flag_variant": attribution.variant_key,
             "$feature_flag_rule_id": attribution.rule_id,
-            "$feature_flag_rule_type": attribution.rule_type,
-            "$feature_flag_reason_code": attribution.reason_code,
-            "$experiment_exposure_source": "sdk",
             "locally_evaluated": properties.get("locally_evaluated") is True,
         }
     )

@@ -4,7 +4,9 @@ A remotely evaluated config version 2 record that assigns an experiment variant 
 ``$experiment_exposure`` next to its ``$feature_flag_called``, and every config version
 2 record adds its rule attribution to ``$feature_flag_called``. The reader fixtures and
 event schemas are copied unchanged from a released ``PostHog/posthog-sdk-test-harness``
-contract; ``fixtures/feature_flag_rules_v2/SOURCE.json`` records which.
+contract; ``fixtures/feature_flag_rules_v2/SOURCE.json`` records which. The SDK sends a
+smaller ``$experiment_exposure`` than that contract's schema requires, so exposures are
+checked against the schema without the properties the SDK leaves out.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import copy
 import json
 import warnings
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
+from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional, Tuple
 from unittest import mock
 
 import jsonschema
@@ -44,13 +46,30 @@ ATTRIBUTION_PROPERTIES = (
 )
 
 
-def _schema(name: str) -> jsonschema.Draft202012Validator:
+# $experiment_exposure leaves these out. The config version, rule type and reason code
+# stay on the $feature_flag_called of the same read.
+EXPOSURE_LEAVES_OUT = (
+    "$feature_flag_config_version",
+    "$feature_flag_rule_type",
+    "$feature_flag_reason_code",
+    "$experiment_exposure_source",
+)
+
+
+def _schema(
+    name: str, leave_out: Tuple[str, ...] = ()
+) -> jsonschema.Draft202012Validator:
     schema = json.loads((FIXTURES / name).read_text(encoding="utf-8"))
+    for property_name in leave_out:
+        del schema["properties"][property_name]
+        schema["required"].remove(property_name)
     return jsonschema.Draft202012Validator(schema)
 
 
 FLAG_CALLED_SCHEMA = _schema("feature_flag_called_context.schema.json")
-EXPOSURE_SCHEMA = _schema("experiment_exposure_properties.schema.json")
+EXPOSURE_SCHEMA = _schema(
+    "experiment_exposure_properties.schema.json", leave_out=EXPOSURE_LEAVES_OUT
+)
 
 
 def _projection(
@@ -309,6 +328,7 @@ def _check_reader_events(case: Dict[str, Any], events: List[_Event]) -> None:
             )
         for exposure in exposures:
             EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure.properties))
+            assert not set(EXPOSURE_LEAVES_OUT) & set(exposure.properties), key
             assert (
                 exposure.properties["$feature_flag_response"]
                 == (called.properties["$feature_flag_response"])
@@ -610,15 +630,19 @@ def test_an_older_server_record_reports_no_attribution():
 # --- The exact events of a split ---------------------------------------------------------
 
 
+# The attribution of a split's $feature_flag_called.
+EXPECTED_ATTRIBUTION = {
+    "$feature_flag_config_version": 2,
+    "$feature_flag_reason_code": "experiment_split",
+    "$feature_flag_rule_id": RULE,
+    "$feature_flag_rule_type": "experiment",
+    "$feature_flag_variant": "annual-first",
+}
 EXPECTED_EXPOSURE = {
     "$feature_flag": FLAG,
     "$feature_flag_response": "annual",
-    "$feature_flag_config_version": 2,
     "$feature_flag_variant": "annual-first",
     "$feature_flag_rule_id": RULE,
-    "$feature_flag_rule_type": "experiment",
-    "$feature_flag_reason_code": "experiment_split",
-    "$experiment_exposure_source": "sdk",
     "locally_evaluated": False,
     "$feature_flag_id": 77,
     "$feature_flag_version": 3,
@@ -646,11 +670,7 @@ def test_a_split_sends_both_events_with_exact_properties(path):
         "$feature_flag_version": 3,
         "$feature_flag_id": 77,
         "$feature_flag_has_experiment": True,
-        "$feature_flag_config_version": 2,
-        "$feature_flag_reason_code": "experiment_split",
-        "$feature_flag_rule_id": RULE,
-        "$feature_flag_rule_type": "experiment",
-        "$feature_flag_variant": "annual-first",
+        **EXPECTED_ATTRIBUTION,
     }
     assert exposure.properties == EXPECTED_EXPOSURE
     assert exposure.distinct_id == called.distinct_id == DISTINCT_ID
@@ -670,7 +690,7 @@ async def test_async_split_sends_both_events_with_exact_properties():
     assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
     called, exposure = events
     assert exposure.properties == EXPECTED_EXPOSURE
-    assert _attribution(called.properties) == _attribution(EXPECTED_EXPOSURE)
+    assert _attribution(called.properties) == EXPECTED_ATTRIBUTION
     # The async client sends group keys as strings.
     assert exposure.groups == called.groups == {"company": "7"}
     assert exposure.distinct_id == called.distinct_id == DISTINCT_ID
@@ -780,7 +800,7 @@ def test_a_payload_lookup_for_a_match_value_sends_no_exposure(
         assert called.name == FLAG_CALLED
         assert called.properties["$feature_flag_response"] == match_value
         # The call still carries the record's attribution.
-        assert _attribution(called.properties) == _attribution(EXPECTED_EXPOSURE)
+        assert _attribution(called.properties) == EXPECTED_ATTRIBUTION
 
         _read(client, later_read)
 
@@ -1105,7 +1125,7 @@ def test_minimal_flag_called_events_keep_the_attribution():
     called, exposure = messages
     assert set(called["properties"]) <= _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
     assert "plan" not in called["properties"]
-    assert _attribution(called["properties"]) == _attribution(EXPECTED_EXPOSURE)
+    assert _attribution(called["properties"]) == EXPECTED_ATTRIBUTION
     # The exposure is a full event.
     assert exposure["event"] == EXPOSURE
     assert exposure["properties"]["plan"] == "team"
