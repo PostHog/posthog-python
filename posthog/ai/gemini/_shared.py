@@ -12,6 +12,7 @@ except ImportError:
 from ...client import Client as PostHogClient
 from ..types import StreamingEventData, TokenUsage
 from ..utils import (
+    _user_distinct_id,
     _capture_ai_event,
     _resolve_ai_client,
     capture_streaming_event,
@@ -262,8 +263,8 @@ class _GeminiModelsPolicy:
         _capture_ai_event(
             self._ph_client,
             "$ai_embedding",
-            distinct_id=distinct_id or trace_id,
+            distinct_id=_user_distinct_id(distinct_id) or trace_id,
             properties=event_properties,
             groups=groups,
-            personless=distinct_id is None,
+            personless=_user_distinct_id(distinct_id) is None,
         )
