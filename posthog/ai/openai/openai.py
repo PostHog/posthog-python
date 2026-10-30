@@ -439,9 +439,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             base_url=self._client.base_url,
             kwargs=kwargs,
             formatted_input=_format_openai_streaming_input(kwargs, "chat"),
-            formatted_output=_format_openai_streaming_output(
-                state.output, "chat", state.tool_calls
-            ),
+            formatted_output=state.formatted_output(),
             usage_stats=state.usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,

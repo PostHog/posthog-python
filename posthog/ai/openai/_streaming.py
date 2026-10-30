@@ -3,13 +3,14 @@
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Union
 
-from ..types import StreamingEventData, TokenUsage
+from ..types import FormattedMessage, StreamingEventData, TokenUsage
 from ..utils import merge_usage_stats, _responses_stop_reason
 from .openai_converter import (
     accumulate_openai_tool_calls,
     extract_openai_content_from_chunk,
     extract_openai_tool_calls_from_chunk,
     extract_openai_usage_from_chunk,
+    format_openai_streaming_output,
 )
 
 
@@ -47,12 +48,25 @@ class _ResponsesStreamState:
 
 
 @dataclass
+class _ChoiceStream:
+    """One choice's view of a chunk, so the per-chunk helpers read that choice."""
+
+    choices: List[Any]
+
+
+@dataclass
 class _ChatCompletionsStreamState:
-    """Accumulates state specific to a Chat Completions stream."""
+    """Accumulates state specific to a Chat Completions stream.
+
+    With ``n > 1`` each chunk carries the delta of one choice, named by its
+    ``index``, so content and tool calls are kept per choice.
+    """
 
     usage_stats: TokenUsage = field(default_factory=lambda: TokenUsage())
-    output: List[Any] = field(default_factory=list)
-    _tool_calls: Dict[Union[int, str], Dict[str, Any]] = field(default_factory=dict)
+    _outputs: Dict[int, List[Any]] = field(default_factory=dict)
+    _tool_calls: Dict[int, Dict[Union[int, str], Dict[str, Any]]] = field(
+        default_factory=dict
+    )
     model: Optional[str] = None
     stop_reason: Optional[str] = None
     service_tier: Optional[str] = None
@@ -67,23 +81,53 @@ class _ChatCompletionsStreamState:
         if chunk_usage:
             merge_usage_stats(self.usage_stats, chunk_usage)
 
-        content = extract_openai_content_from_chunk(chunk, "chat")
-        if content is not None:
-            self.output.append(content)
+        for choice in getattr(chunk, "choices", None) or []:
+            index = getattr(choice, "index", None)
+            if not isinstance(index, int):
+                index = 0
+            view = _ChoiceStream([choice])
 
-        chunk_tool_calls = extract_openai_tool_calls_from_chunk(chunk)
-        if chunk_tool_calls:
-            accumulate_openai_tool_calls(self._tool_calls, chunk_tool_calls)
+            content = extract_openai_content_from_chunk(view, "chat")
+            if content is not None:
+                self._outputs.setdefault(index, []).append(content)
 
-        choices = getattr(chunk, "choices", None)
-        if choices:
-            finish_reason = getattr(choices[0], "finish_reason", None)
-            if finish_reason is not None:
+            chunk_tool_calls = extract_openai_tool_calls_from_chunk(view)
+            if chunk_tool_calls:
+                accumulate_openai_tool_calls(
+                    self._tool_calls.setdefault(index, {}), chunk_tool_calls
+                )
+
+            # Like a non-streamed completion, the stop reason is the first choice's.
+            finish_reason = getattr(choice, "finish_reason", None)
+            if finish_reason is not None and index == 0:
                 self.stop_reason = finish_reason
 
     @property
     def tool_calls(self) -> Optional[List[Dict[str, Any]]]:
-        return list(self._tool_calls.values()) if self._tool_calls else None
+        calls = [
+            call
+            for index in sorted(self._tool_calls)
+            for call in self._tool_calls[index].values()
+        ]
+        return calls or None
+
+    def _indexes(self) -> List[int]:
+        return sorted(set(self._outputs) | set(self._tool_calls))
+
+    def formatted_output(self) -> List[FormattedMessage]:
+        """One assistant message with each choice's content in index order, the
+        shape a non-streamed completion is captured with."""
+        content: List[Any] = []
+        for index in self._indexes():
+            tool_calls = self._tool_calls.get(index)
+            content.extend(
+                format_openai_streaming_output(
+                    self._outputs.get(index, []),
+                    "chat",
+                    list(tool_calls.values()) if tool_calls else None,
+                )[0]["content"]
+            )
+        return [{"role": "assistant", "content": content}]
 
 
 def _build_streaming_event_data(
