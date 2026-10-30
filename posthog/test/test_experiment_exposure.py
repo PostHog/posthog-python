@@ -23,6 +23,7 @@ from posthog import AsyncPosthog
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.test.test_flags_v4_response import FIXTURES, READERS, _build
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import FeatureFlagResult
 
 FLAG = "pricing-page"
 DISTINCT_ID = "visitor-42"
@@ -748,19 +749,61 @@ def test_a_payload_read_that_sends_flag_events_also_sends_the_exposure(client):
     assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
 
 
-def test_a_payload_lookup_for_another_value_sends_no_exposure(client):
-    # The event reports the caller's match_value, which the record did not supply.
+MATCH_VALUE_CASES = [
+    ("another value", _split(value="annual"), "monthly"),
+    ("the record's own value", _split(value="annual"), "annual"),
+    # Object and number arms both read as True, so equal values prove nothing about
+    # where a value came from.
+    ("an object arm", _split(value={"layout": "grid"}), True),
+    ("a number arm", _split(value=12.5), True),
+]
+
+
+@pytest.mark.parametrize("later_read", list(SYNC_READS))
+@pytest.mark.parametrize(
+    "record, match_value",
+    [case[1:] for case in MATCH_VALUE_CASES],
+    ids=[case[0] for case in MATCH_VALUE_CASES],
+)
+def test_a_payload_lookup_for_a_match_value_sends_no_exposure(
+    client, record, match_value, later_read
+):
+    # The lookup reports the caller's match_value, not the record's value, so it
+    # sends no exposure, whatever the value. A later read of the record does.
     recording, events = _record_events(client)
-    with _serving(_response(_split())), recording, warnings.catch_warnings():
+    with _serving(_response(record)), recording, warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         client.get_feature_flag_payload(
-            FLAG, DISTINCT_ID, match_value="monthly", send_feature_flag_events=True
+            FLAG, DISTINCT_ID, match_value=match_value, send_feature_flag_events=True
         )
+        [called] = events
+        assert called.name == FLAG_CALLED
+        assert called.properties["$feature_flag_response"] == match_value
+        # The call still carries the record's attribution.
+        assert _attribution(called.properties) == _attribution(EXPECTED_EXPOSURE)
 
-    [called] = events
-    assert called.name == FLAG_CALLED
-    assert called.properties["$feature_flag_response"] == "monthly"
-    assert called.properties["$feature_flag_config_version"] == 2
+        _read(client, later_read)
+
+    [exposure] = _named(events, EXPOSURE)
+    assert exposure.properties["$feature_flag_variant"] == "annual-first"
+
+
+def test_a_stale_cached_value_sends_no_exposure(client):
+    # The record arrived, but caching it failed, so the read reports the stale cached
+    # value instead. That value did not come from the record, even though it is equal.
+    cache = mock.Mock()
+    cache._set_cached_remote_flag.side_effect = RuntimeError("cache unavailable")
+    cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+        key=FLAG, enabled=True, variant="annual", payload=None, reason=None
+    )
+    client.flag_cache = cache
+    recording, events = _record_events(client)
+    with _serving(_response(_split())), recording:
+        result = client.get_feature_flag_result(FLAG, DISTINCT_ID)
+
+    assert result is not None and result.get_value() == "annual"
+    cache.get_stale_cached_flag.assert_called_once()
+    assert [event.name for event in events] == [FLAG_CALLED]
 
 
 @pytest.mark.parametrize("path", list(SYNC_READS))

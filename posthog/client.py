@@ -4287,6 +4287,9 @@ class Client(object):
 
         flag_result = None
         flag_details = None
+        # Whether flag_details supplied the value this read reports. Only then may the
+        # read send $experiment_exposure.
+        value_from_details = False
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
@@ -4386,6 +4389,11 @@ class Client(object):
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
+                # A payload lookup for a caller's match_value reports that value, not
+                # the record's. A failure above falls back to a stale cached value.
+                value_from_details = (
+                    flag_details is not None and override_match_value is None
+                )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 feature_flag_error = FeatureFlagError.QUOTA_LIMITED
@@ -4436,6 +4444,7 @@ class Client(object):
                 request_id,
                 evaluated_at,
                 flag_details,
+                value_from_details,
                 feature_flag_error,
                 has_experiment,
                 minimal_flag_called_events,
@@ -4727,6 +4736,7 @@ class Client(object):
         request_id: Optional[str],
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
+        value_from_details: bool,
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
@@ -4767,10 +4777,7 @@ class Client(object):
             has_experiment=has_experiment,
             minimal_flag_called_events=minimal_flag_called_events,
             details=flag_details,
-            # A payload lookup for a caller's ``match_value``, or a stale cached value,
-            # reports a value this record did not supply, so it sends no exposure.
-            value_from_details=isinstance(flag_details, FeatureFlag)
-            and response == flag_details.get_value(),
+            value_from_details=value_from_details,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -4785,7 +4792,7 @@ class Client(object):
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
         details: Optional[FeatureFlag] = None,
-        value_from_details: bool = True,
+        value_from_details: bool = False,
     ) -> None:
         """Send the flag events of a flag read: ``$feature_flag_called`` and, for an
         experiment split, ``$experiment_exposure``. See ``_capture_flag_events``.
@@ -4793,7 +4800,8 @@ class Client(object):
         Shared by the single-flag evaluation path and the reads of a
         ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
         identically. ``details`` is the parsed ``/flags`` record of the read, or
-        ``None`` for a locally evaluated flag.
+        ``None`` for a locally evaluated flag. ``value_from_details`` says whether that
+        record supplied the reported value; only then can the read send an exposure.
         """
         _capture_flag_events(
             self.capture,

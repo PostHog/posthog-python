@@ -313,4 +313,5 @@ class FeatureFlagEvaluations:
             # The record that supplied the value. A remotely evaluated experiment
             # split also sends $experiment_exposure, whatever this read returned.
             details=flag.details if flag else None,
+            value_from_details=True,
         )

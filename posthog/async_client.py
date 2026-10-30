@@ -1059,7 +1059,7 @@ class AsyncClient:
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
         details: Optional[FeatureFlag] = None,
-        value_from_details: bool = True,
+        value_from_details: bool = False,
     ) -> None:
         capture_groups = {
             str(group_type): _stringify_id(group_key)
