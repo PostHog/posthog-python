@@ -11,6 +11,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from unittest import mock
@@ -479,15 +480,16 @@ def test_the_number_accessor_reads_integers_beyond_the_safe_range_as_doubles(
     assert snapshot.get_float_value("n", 7.0) == float(value)
 
 
-def test_the_number_accessor_rejects_an_integer_too_large_for_a_double(client):
-    snapshot = _evaluate(client, _typed_response({"n": 10**400}))
+@pytest.mark.parametrize("sign", [1, -1])
+def test_an_integer_beyond_the_range_of_a_double_reads_as_an_infinity(client, sign):
+    snapshot = _evaluate(client, _typed_response({"n": sign * 10**400}))
 
-    details = snapshot.get_number_details("n", 7)
-
-    assert details.value == 7
-    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
-    assert details.error_message == (
-        f"Flag 'n' has the number {10**400}, which is outside the range of a double."
+    for method in ("get_number_details", "get_float_details"):
+        details = getattr(snapshot, method)("n", 7.0)
+        assert details.error_code is None, method
+        assert details.value == sign * math.inf, method
+    assert snapshot.get_integer_details("n", 7).error_code is (
+        FlagEvaluationErrorCode.TYPE_MISMATCH
     )
 
 

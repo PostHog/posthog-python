@@ -587,7 +587,8 @@ def _read_float(value: Any) -> Any:
         try:
             return float(value)
         except OverflowError:
-            return _NOT_ACCEPTED
+            # The nearest double is an infinity, as JavaScript parses the number.
+            return math.inf if value > 0 else -math.inf
     return _NOT_ACCEPTED
 
 
@@ -664,11 +665,6 @@ def _type_mismatch_message(
     key: str, value: Any, value_type: str, config_version: Optional[int]
 ) -> str:
     actual = _json_type_name(value)
-    if actual == "number" and value_type == "number":
-        return (
-            f"Flag '{key}' has the number {value!r}, which is outside the range of"
-            " a double."
-        )
     if actual == "number" and value_type == "integer":
         if isinstance(value, float) and not value.is_integer():
             return f"Flag '{key}' has the number {value!r}, which is not an integer."
