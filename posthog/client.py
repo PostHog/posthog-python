@@ -384,6 +384,19 @@ def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
 _EXPERIMENT_SPLIT_REASON = "experiment_split"
 _EXPERIMENT_RULE_TYPE = "experiment"
 
+# The reason codes of a config version 2 record that report the rule that produced
+# the result. Any other reason code, and any failed record, reports no rule, even if
+# the record names one.
+_RULE_REASON_CODES = frozenset(
+    {
+        "targeting_match",
+        _EXPERIMENT_SPLIT_REASON,
+        "rollout_miss",
+        "experiment_paused",
+        "holdout",
+    }
+)
+
 # ``$experiment_exposure`` copies these from the ``$feature_flag_called`` of the same
 # read, when it has them.
 _EXPOSURE_PROPERTIES_FROM_FLAG_CALLED = (
@@ -394,14 +407,15 @@ _EXPOSURE_PROPERTIES_FROM_FLAG_CALLED = (
 )
 
 
-def _flag_record_metadata(metadata: FlagMetadata, name: str) -> Any:
-    """Read a ``/flags?v=4`` metadata field of a flag record, such as ``config_version``.
+def _v4_field(record: Any, name: str) -> Any:
+    """Read a ``/flags?v=4`` field of a parsed flag record or its metadata, such as
+    ``failed`` or ``config_version``.
 
-    These fields stay private, as ``_config_version`` and so on, until the typed flag
-    accessors make them public under their wire names. Either spelling is read, so
-    the two changes can land in either order.
+    These fields stay private, as ``_failed``, ``_config_version`` and so on, until
+    the typed flag accessors make them public under their wire names. Either spelling
+    is read, so the two changes can land in either order.
     """
-    return getattr(metadata, name, getattr(metadata, f"_{name}", None))
+    return getattr(record, name, getattr(record, f"_{name}", None))
 
 
 class _RuleAttribution(NamedTuple):
@@ -429,29 +443,34 @@ class _RuleAttribution(NamedTuple):
 def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttribution]:
     """Read the event attribution of a config version 2 flag record.
 
-    Returns ``None`` for anything else: no record, a config version 1 record, or a
-    record from a server without typed values. Only the evaluation details are read,
-    never the value a getter returned.
+    Returns ``None`` for anything else: no record, an unreadable record, a config
+    version 1 record, or a record from a server without typed values. Only the
+    evaluation details are read, never the value a getter returned.
 
-    The rule ID and rule type are reported when the record has them. The variant key
-    is reported only for an experiment split, and only when the split is complete:
-    reason ``experiment_split``, rule type ``experiment``, a rule ID and a variant
-    key. A split without all of them is malformed. It keeps its reason but reports no
-    rule ID, rule type or variant, and sends no exposure. Its identity is never
-    guessed from the value, the key or an earlier result.
+    The config version and reason code are always reported. The rule ID and rule
+    type are reported, when the record has them, only for a targeting match, a
+    rollout miss, a paused experiment, a holdout and a complete experiment split. A
+    failed record, or any other reason code, reports neither. The variant key is
+    reported only for a complete experiment split: reason ``experiment_split``, rule
+    type ``experiment``, a rule ID and a variant key. A split without all of them is
+    malformed. It keeps its reason but reports no rule ID, rule type or variant, and
+    sends no exposure. Its identity is never guessed from the value, the key or an
+    earlier result.
     """
     if details is None or not isinstance(details.metadata, FlagMetadata):
         return None
     metadata = details.metadata
-    if _flag_record_metadata(metadata, "config_version") != 2:
+    if _v4_field(metadata, "config_version") != 2:
         return None
     reason_code = (details.reason.code if details.reason else None) or None
-    rule_id = _flag_record_metadata(metadata, "rule_id") or None
-    rule_type = _flag_record_metadata(metadata, "rule_type") or None
-    variant_key = _flag_record_metadata(metadata, "variant_key") or None
+    if _v4_field(details, "failed") is True or reason_code not in _RULE_REASON_CODES:
+        return _RuleAttribution(reason_code, None, None, None)
+    rule_id = _v4_field(metadata, "rule_id") or None
+    rule_type = _v4_field(metadata, "rule_type") or None
     if reason_code != _EXPERIMENT_SPLIT_REASON:
         # Only an experiment split assigns a variant.
         return _RuleAttribution(reason_code, rule_id, rule_type, None)
+    variant_key = _v4_field(metadata, "variant_key") or None
     if rule_type != _EXPERIMENT_RULE_TYPE or rule_id is None or variant_key is None:
         return _RuleAttribution(reason_code, None, None, None)
     return _RuleAttribution(reason_code, rule_id, rule_type, variant_key)

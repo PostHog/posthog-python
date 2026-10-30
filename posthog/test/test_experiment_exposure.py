@@ -74,6 +74,7 @@ def _record(
     config_version: int = 2,
     has_experiment: bool = False,
     description: Optional[str] = None,
+    failed: bool = False,
 ) -> Dict[str, Any]:
     metadata: Dict[str, Any] = {
         "id": 77,
@@ -96,7 +97,10 @@ def _record(
     }
     if description is not None:
         reason["description"] = description
-    return {"key": key, "value": value, "reason": reason, "metadata": metadata}
+    record = {"key": key, "value": value, "reason": reason, "metadata": metadata}
+    if failed:
+        record["failed"] = True
+    return record
 
 
 def _split(
@@ -496,8 +500,84 @@ def test_flag_called_attribution_follows_the_record(source, expected, path):
 
     [called] = _named(events, FLAG_CALLED, "garden-layout")
     assert _attribution(called.properties) == expected
+    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
     exposures = _named(events, EXPOSURE, "garden-layout")
     assert len(exposures) == (1 if "$feature_flag_variant" in expected else 0)
+
+
+# A record whose reason names no rule, or that failed, reports no rule even when it
+# carries one. Neither sends an exposure. The last element says whether the record is
+# a valid server outcome, which the contract's event schema then accepts.
+STRAY_RULE_CASES = [
+    ("no_rule_match", {}, True),
+    ("missing_group_key", {}, True),
+    ("flag_disabled", {}, True),
+    ("dependency_error", {"failed": True, "value": None}, True),
+    ("error", {"failed": True, "value": None}, True),
+    # A failed record reports no rule, whatever its reason code.
+    (
+        "experiment_split",
+        {"failed": True, "value": None, "variant_key": "annual-first"},
+        True,
+    ),
+    ("holdout", {"failed": True, "value": None}, False),
+    # A reason code this SDK does not know.
+    ("future_reason", {}, False),
+]
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
+@pytest.mark.parametrize(
+    "code, fields, valid_outcome",
+    STRAY_RULE_CASES,
+    ids=[f"{c}-{sorted(f)}" for c, f, _ in STRAY_RULE_CASES],
+)
+def test_rule_fields_are_sent_only_for_reasons_that_name_a_rule(
+    code, fields, valid_outcome, path
+):
+    fields = {"value": False, **fields}
+    record = _record(
+        code, rule_type="experiment", rule_id=RULE, has_experiment=True, **fields
+    )
+
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert _attribution(called.properties) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": code,
+    }
+    assert _named(events, EXPOSURE) == []
+    if valid_outcome:
+        FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
+@pytest.mark.parametrize(
+    "code, rule_type",
+    [
+        ("targeting_match", "targeted_release"),
+        ("targeting_match", "percentage_rollout"),
+        ("rollout_miss", "percentage_rollout"),
+        ("rollout_miss", "experiment"),
+        ("experiment_paused", "experiment"),
+        ("holdout", "experiment"),
+    ],
+)
+def test_rule_matches_misses_pauses_and_holdouts_name_their_rule(code, rule_type, path):
+    record = _record(code, False, rule_type=rule_type, rule_id=RULE)
+
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert _attribution(called.properties) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": code,
+        "$feature_flag_rule_id": RULE,
+        "$feature_flag_rule_type": rule_type,
+    }
+    assert _named(events, EXPOSURE) == []
+    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
 def test_an_older_server_record_reports_no_attribution():
