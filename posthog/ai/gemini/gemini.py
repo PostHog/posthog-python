@@ -256,7 +256,7 @@ class Models(_GeminiModelsPolicy):
     ):
         start_time = time.time()
         usage_stats: TokenUsage = TokenUsage()
-        accumulated_content = []
+        accumulated_content: list[Any] = []
         stop_reason: Optional[str] = None
 
         kwargs_without_stream = {"model": model, "contents": contents, **kwargs}
