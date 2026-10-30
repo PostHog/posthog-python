@@ -797,6 +797,128 @@ def test_function_calls_only_no_content(
     assert props["$ai_http_status"] == 200
 
 
+def _function_call_response(call_id):
+    from google.genai import types
+
+    return types.GenerateContentResponse(
+        candidates=[
+            types.Candidate(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part(
+                            function_call=types.FunctionCall(
+                                id=call_id, name="describe_shape", args={"sides": 3}
+                            )
+                        )
+                    ],
+                ),
+                finish_reason="STOP",
+            )
+        ],
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=10, candidates_token_count=5, total_token_count=15
+        ),
+    )
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("call_id", ["call_649034", None])
+def test_function_call_ids_in_output_choices(
+    mock_client, mock_google_genai_client, stream, call_id
+):
+    """Gemini's function-call ID is kept in $ai_output_choices when present."""
+    response = _function_call_response(call_id)
+    client = Client(api_key="test-key", posthog_client=mock_client)
+
+    if stream:
+        mock_google_genai_client.models.generate_content_stream.return_value = iter(
+            [response]
+        )
+        list(
+            client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents="Describe a triangle",
+                posthog_distinct_id="test-id",
+            )
+        )
+    else:
+        mock_google_genai_client.models.generate_content.return_value = response
+        client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents="Describe a triangle",
+            posthog_distinct_id="test-id",
+        )
+
+    expected_call = {
+        "type": "function",
+        "function": {"name": "describe_shape", "arguments": {"sides": 3}},
+    }
+    if call_id is not None:
+        expected_call["id"] = call_id
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_output_choices"] == [
+        {"role": "assistant", "content": [expected_call]}
+    ]
+
+
+def test_function_call_ids_in_input_history(
+    mock_client, mock_google_genai_client, mock_gemini_response
+):
+    """IDs on function_call and function_response parts in the input history are
+    kept, so a tool result can be matched to its call."""
+    from google.genai import types
+
+    mock_google_genai_client.models.generate_content.return_value = mock_gemini_response
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=[
+            types.Content(role="user", parts=[types.Part(text="Describe a triangle")]),
+            types.Content(
+                role="model",
+                parts=[
+                    types.Part(
+                        function_call=types.FunctionCall(
+                            id="call_649034", name="describe_shape", args={"sides": 3}
+                        )
+                    )
+                ],
+            ),
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        function_response=types.FunctionResponse(
+                            id="call_649034",
+                            name="describe_shape",
+                            response={"shape": "triangle"},
+                        )
+                    )
+                ],
+            ),
+        ],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    call_block, result_block = [
+        block
+        for message in props["$ai_input"]
+        for block in (
+            message["content"] if isinstance(message["content"], list) else []
+        )
+        if block.get("type") == "function"
+    ]
+    assert call_block["id"] == "call_649034"
+    assert call_block["function"] == {
+        "name": "describe_shape",
+        "arguments": {"sides": 3},
+    }
+    assert result_block["tool_use_id"] == "call_649034"
+    assert result_block["tool_name"] == "describe_shape"
+
+
 def test_cache_and_reasoning_tokens(mock_client, mock_google_genai_client):
     """Test that cache and reasoning tokens are properly extracted"""
     # Create a mock response with cache and reasoning tokens
