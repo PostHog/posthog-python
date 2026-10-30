@@ -4931,9 +4931,7 @@ class Client(object):
                 inactive=value is False and not flag_def.get("active"),
                 payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
-                # The local-evaluation flag definition does not carry a version field;
-                # only the remote ``/flags`` response does via ``metadata.version``.
-                version=None,
+                version=flag_def.get("version"),
                 reason="Evaluated locally",
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),

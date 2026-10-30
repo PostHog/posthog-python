@@ -555,10 +555,11 @@ async def test_the_async_client_logs_records_without_typed_values_once(caplog):
     assert len(logged) == 1
 
 
-def _local_client() -> Client:
+def _local_client(versions: Optional[Dict[str, int]] = None) -> Client:
+    """A client with local definitions; ``versions`` sets a definition's version."""
     client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
     groups = [{"properties": [], "rollout_percentage": 100}]
-    client.feature_flags = [
+    definitions: List[Dict[str, Any]] = [
         {
             "id": 11,
             "key": "legacy-layout",
@@ -579,6 +580,10 @@ def _local_client() -> Client:
             "filters": {"groups": [{"properties": [], "rollout_percentage": 0}]},
         },
     ]
+    for definition in definitions:
+        if versions and definition["key"] in versions:
+            definition["version"] = versions[definition["key"]]
+    client.feature_flags = definitions
     return client
 
 
@@ -616,6 +621,40 @@ def test_locally_evaluated_flags_have_a_derived_reason_and_config_version_1(
     assert (no_match.value, no_match.reason) == (False, FlagEvaluationReason.DEFAULT)
     assert mismatch.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
     assert "config version 1" in (mismatch.error_message or "")
+
+
+@mock.patch("posthog.client.flags")
+def test_locally_evaluated_details_carry_the_definition_version(patch_flags):
+    client = _local_client(versions={"legacy-layout": 4, "beta": 6})
+    try:
+        with mock.patch.object(client, "capture") as capture:
+            snapshot = client.evaluate_flags("user-123")
+            legacy_layout = snapshot.get_string_details("legacy-layout", "grid")
+            beta = snapshot.get_boolean_details("beta", False)
+            beta_value = snapshot.get_boolean_value("beta", False)
+            off = snapshot.get_boolean_details("off", True)
+    finally:
+        client.shutdown()
+
+    patch_flags.assert_not_called()
+    assert (legacy_layout.value, beta.value, beta_value) == ("compact", True, True)
+    assert legacy_layout.flag_metadata == {
+        "id": 11,
+        "version": 4,
+        "config_version": 1,
+        "variant_key": "compact",
+    }
+    assert beta.flag_metadata == {"id": 12, "version": 6, "config_version": 1}
+    # A definition without a version leaves it out.
+    assert "version" not in off.flag_metadata
+    # The flag-called event of the same read reports the same version.
+    event_versions = {
+        call.kwargs["properties"]["$feature_flag"]: call.kwargs["properties"].get(
+            "$feature_flag_version"
+        )
+        for call in capture.call_args_list
+    }
+    assert event_versions == {"legacy-layout": 4, "beta": 6, "off": None}
 
 
 def test_missing_flag_returns_the_default_with_flag_not_found(client):

@@ -479,6 +479,7 @@ class FeatureFlagEvaluations:
         reason_code = "flag_disabled" if flag.inactive else None
         flag_metadata = {
             "id": flag.id,
+            "version": flag.version,
             "config_version": 1,
             "reason_code": reason_code,
             "variant_key": flag.variant,
