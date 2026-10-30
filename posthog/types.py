@@ -554,15 +554,18 @@ class FlagEvaluationDetails(Generic[_T]):
     flag_metadata: Dict[str, FlagMetadataValue] = field(default_factory=dict)
 
 
-def _read_number(value: Any) -> Any:
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value
-    return _NOT_ACCEPTED
-
-
 # Every SDK reads numbers as IEEE-754 doubles, which hold every integer up to this
-# magnitude exactly. Larger integers are not accepted, so all SDKs agree.
+# magnitude exactly. The integer accessor does not accept larger integers, and the
+# number accessor reads them as the nearest double, so all SDKs agree.
 _MAX_SAFE_INTEGER = 2**53 - 1
+
+
+def _read_number(value: Any) -> Any:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return _NOT_ACCEPTED
+    if isinstance(value, int) and abs(value) > _MAX_SAFE_INTEGER:
+        return _read_float(value)
+    return value
 
 
 def _read_integer(value: Any) -> Any:
@@ -661,6 +664,11 @@ def _type_mismatch_message(
     key: str, value: Any, value_type: str, config_version: Optional[int]
 ) -> str:
     actual = _json_type_name(value)
+    if actual == "number" and value_type == "number":
+        return (
+            f"Flag '{key}' has the number {value!r}, which is outside the range of"
+            " a double."
+        )
     if actual == "number" and value_type == "integer":
         if isinstance(value, float) and not value.is_integer():
             return f"Flag '{key}' has the number {value!r}, which is not an integer."

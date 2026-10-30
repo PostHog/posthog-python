@@ -431,7 +431,10 @@ def test_the_integer_accessor_rejects_a_fractional_number(client):
         (-0.0, 0),
         (2**53 - 1, 2**53 - 1),
         (-(2**53 - 1), -(2**53 - 1)),
+        (2**53, None),
+        (-(2**53), None),
         (2**53 + 1, None),
+        (-(2**53 + 1), None),
         (1e21, None),
     ],
 )
@@ -444,11 +447,48 @@ def test_the_integer_accessor_accepts_only_exact_integers(client, value, expecte
         assert details.value == 7
         assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
         assert "outside the integer range" in details.error_message
-        # The number accessor still returns it.
-        assert snapshot.get_number_value("n", 7) == value
+        # The number accessor still returns it, as the nearest double.
+        assert snapshot.get_number_value("n", 7) == float(value)
     else:
         assert (details.value, type(details.value)) == (expected, int)
         assert details.error_code is None
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+@pytest.mark.parametrize(
+    "magnitude, number",
+    [
+        (2**53 - 1, 2**53 - 1),
+        (2**53, 2.0**53),
+        # 2**53 + 1 has no double. The nearest one is 2**53.
+        (2**53 + 1, 2.0**53),
+    ],
+)
+def test_the_number_accessor_reads_integers_beyond_the_safe_range_as_doubles(
+    client, sign, magnitude, number
+):
+    value = sign * magnitude
+    snapshot = _evaluate(client, _typed_response({"n": value}))
+
+    details = snapshot.get_number_details("n", 7)
+
+    assert details.error_code is None
+    assert (details.value, type(details.value)) == (sign * number, type(number))
+    assert snapshot.get_number_value("n", 7) == sign * number
+    # The float accessor reads every integer as a double.
+    assert snapshot.get_float_value("n", 7.0) == float(value)
+
+
+def test_the_number_accessor_rejects_an_integer_too_large_for_a_double(client):
+    snapshot = _evaluate(client, _typed_response({"n": 10**400}))
+
+    details = snapshot.get_number_details("n", 7)
+
+    assert details.value == 7
+    assert details.error_code is FlagEvaluationErrorCode.TYPE_MISMATCH
+    assert details.error_message == (
+        f"Flag 'n' has the number {10**400}, which is outside the range of a double."
+    )
 
 
 def test_a_returned_object_cannot_change_the_snapshot(client):

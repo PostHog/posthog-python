@@ -224,7 +224,8 @@ class FeatureFlagEvaluations:
     ) -> float:
         """Return the flag's number value, or ``default_value``.
 
-        An integer value is returned as an ``int``. Like :meth:`get_flag`, fires
+        An integer value is returned as an ``int``, or as a ``float`` beyond
+        ``2**53 - 1`` in magnitude. Like :meth:`get_flag`, fires
         ``$feature_flag_called`` on first access unless ``send_feature_flag_events``
         is ``False``. See :meth:`get_number_details` for when the default is
         returned.
@@ -239,7 +240,9 @@ class FeatureFlagEvaluations:
         """Return the flag's number value with its evaluation details.
 
         The value is never coerced: a boolean or a numeric string is not a number.
-        ``default_value`` is returned when the flag is not in the evaluation,
+        Numbers are IEEE-754 doubles, so an integer beyond ``2**53 - 1`` in
+        magnitude is returned as the nearest ``float``, as every PostHog SDK reads
+        it. ``default_value`` is returned when the flag is not in the evaluation,
         failed, has no value, or has a value of another type; ``error_code`` says
         which, except for a flag without a value or with the value ``False``. Fires
         ``$feature_flag_called`` on first access, like :meth:`get_flag`.
