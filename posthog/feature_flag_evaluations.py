@@ -107,7 +107,13 @@ class FeatureFlagEvaluations:
             unresolved_flags or {}
         )
 
-    def is_enabled(self, key: str, default_value: bool = False) -> bool:
+    def is_enabled(
+        self,
+        key: str,
+        default_value: bool = False,
+        *,
+        send_feature_flag_events: bool = True,
+    ) -> bool:
         """Return whether the flag is enabled. Fires ``$feature_flag_called`` on the
         first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
 
@@ -117,23 +123,31 @@ class FeatureFlagEvaluations:
                 the key was not part of the evaluated set, or the evaluation itself
                 came back empty (failed ``/flags`` request, quota limit, or no
                 resolvable ``distinct_id``). Defaults to ``False``.
+            send_feature_flag_events: Whether this read sends ``$feature_flag_called``.
+                When ``False``, no event is sent and the dedupe cache is left alone,
+                but the key still counts as accessed for :meth:`only_accessed`.
 
         A flag that has a value always wins over ``default_value``, including a
         disabled flag, which returns ``False`` even when ``default_value=True``.
         """
         flag = self._flags.get(key)
-        self._record_access(key)
+        self._record_access(key, send_feature_flag_events)
         return bool(flag.enabled) if flag else default_value
 
-    def get_flag(self, key: str) -> Optional[FlagValue]:
+    def get_flag(
+        self, key: str, *, send_feature_flag_events: bool = True
+    ) -> Optional[FlagValue]:
         """Return the flag value. Fires ``$feature_flag_called`` on first access.
 
         Returns the variant string for multivariate flags, ``True`` for enabled flags
         without a variant, ``False`` for disabled flags, and ``None`` for flags that
         were not returned by the evaluation.
+
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`.
         """
         flag = self._flags.get(key)
-        self._record_access(key)
+        self._record_access(key, send_feature_flag_events)
         if not flag:
             return None
         if not flag.enabled:
@@ -379,7 +393,7 @@ class FeatureFlagEvaluations:
         self, key: str, default_value: Any, value_type: str
     ) -> FlagEvaluationDetails[Any]:
         flag = self._flags.get(key)
-        self._record_access(key)
+        self._record_access(key, True)
         if flag is None and key in self._unresolved_flags:
             # The flag exists, so say why it has no value.
             return replace(
@@ -412,8 +426,13 @@ class FeatureFlagEvaluations:
             flag_metadata={k: v for k, v in flag_metadata.items() if v is not None},
         )
 
-    def _record_access(self, key: str) -> None:
+    def _record_access(self, key: str, send_feature_flag_events: bool) -> None:
         self._accessed.add(key)
+
+        # A suppressed read skips the dedupe cache too, so a later read that sends
+        # events still reports this flag.
+        if not send_feature_flag_events:
+            return
 
         # Empty snapshots (no resolvable distinct_id) are returned by ``evaluate_flags()``
         # as a safety fallback. Firing $feature_flag_called for them would emit events
