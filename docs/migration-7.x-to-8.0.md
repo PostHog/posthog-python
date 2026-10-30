@@ -221,7 +221,7 @@ These changes follow from this order:
 - The `groups` argument merges into a `$groups` property of the call, and wins key by key. In 7.x it replaced the property. MCP events merge their identity's groups into a custom `$groups` property the same way.
 - A `$set`, `$set_once`, `$groups` or `$group_set` in `super_properties` no longer replaces the whole value of the call. The two merge, and the call wins key by key.
 - An event without a distinct ID gets `options.process_person_profile = false`. A `$process_person_profile: true` property no longer turns person processing back on. Set the option instead.
-- To change an option in `before_send`, edit `options`. A legacy property that `before_send` adds does not replace an option that is already set.
+- Review your `before_send` hooks for the new event shape. To change an option, edit `options`: a legacy property that `before_send` adds does not replace an option that is already set. A hook that returns a new dict must copy `options`, or the event is sent without them. That includes the `process_person_profile = false` the SDK sets for an event without a distinct ID, so PostHog would create a person for its generated ID.
 - When the server enables minimal `$feature_flag_called` events, those events now keep `$window_id` and the legacy option properties, so their options still apply.
 
 ## AI capture
