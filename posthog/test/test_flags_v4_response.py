@@ -25,6 +25,7 @@ from posthog.types import (
     FeatureFlagResult,
     FlagMetadata,
     FlagReason,
+    _set_private_fields,
     normalize_flags_response,
     to_flags_and_payloads,
 )
@@ -88,6 +89,15 @@ def test_vendored_fixtures_match_the_recorded_release_digests():
         assert digest == entry["sha256"], name
 
 
+# The /flags?v=4 metadata fields that stay private until the typed accessors ship.
+_PRIVATE_METADATA_FIELDS = {
+    "config_version",
+    "rule_type",
+    "rule_id",
+    "variant_key",
+    "forced_variant",
+}
+
 VALID_RESPONSES = [case for case in RESPONSES["cases"] if case["expected"] == "valid"]
 
 
@@ -100,8 +110,8 @@ def test_valid_producer_responses_are_retained_as_sent(case):
     assert set(flags) == set(records)
     for key, record in records.items():
         flag = flags[key]
-        assert flag.value == record["value"]
-        assert flag.failed is record.get("failed", False)
+        assert flag._value == record["value"]
+        assert flag._failed is record.get("failed", False)
         assert flag.reason is not None
         assert flag.reason.code == record["reason"]["code"]
         assert flag.reason.condition_index == record["reason"]["condition_index"]
@@ -109,6 +119,8 @@ def test_valid_producer_responses_are_retained_as_sent(case):
         for field, value in record["metadata"].items():
             # Only config version 1 records carry an experiment ID; it is not kept.
             if field not in ("payload", "experiment_id"):
+                if field in _PRIVATE_METADATA_FIELDS:
+                    field = f"_{field}"
                 assert getattr(flag.metadata, field) == value, field
 
 
@@ -260,8 +272,8 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_record(path, value):
     flags = normalize_flags_response(response)["flags"]
 
     malformed = flags["garden-layout"]
-    assert malformed.failed is True
-    assert malformed.value is None
+    assert malformed._failed is True
+    assert malformed._value is None
     assert (malformed.enabled, malformed.variant, malformed.get_value()) == (
         False,
         None,
@@ -270,8 +282,8 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_record(path, value):
     # The record keeps that it could not be read, apart from a server failure.
     assert malformed._malformed_field == path
     sibling = flags["sibling"]
-    assert sibling.failed is False
-    assert sibling.value == "compact"
+    assert sibling._failed is False
+    assert sibling._value == "compact"
     assert sibling._malformed_field is None
 
 
@@ -280,9 +292,9 @@ def test_a_record_that_is_not_an_object_fails_only_that_record():
 
     flags = normalize_flags_response(response)["flags"]
 
-    assert flags["broken"].failed is True
+    assert flags["broken"]._failed is True
     assert flags["broken"].get_value() is False
-    assert flags["sibling"].value == "compact"
+    assert flags["sibling"]._value == "compact"
 
 
 def test_unknown_fields_and_null_optional_fields_are_ignored():
@@ -295,10 +307,10 @@ def test_unknown_fields_and_null_optional_fields_are_ignored():
         "garden-layout"
     ]
 
-    assert flag.failed is False
-    assert flag.value == "compact"
+    assert flag._failed is False
+    assert flag._value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
-    assert flag.metadata.variant_key is None
+    assert flag.metadata._variant_key is None
 
 
 @pytest.mark.parametrize(
@@ -320,8 +332,8 @@ def test_experiment_and_holdout_ids_in_the_metadata_are_ignored(field, value):
         "garden-layout"
     ]
 
-    assert flag.failed is False
-    assert flag.value == "compact"
+    assert flag._failed is False
+    assert flag._value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
     assert not hasattr(flag.metadata, field)
 
@@ -349,12 +361,12 @@ def test_a_record_without_value_is_read_as_an_older_server_record():
         "garden-layout"
     ]
 
-    assert flag.value == "compact"
+    assert flag._value == "compact"
     assert isinstance(flag.metadata, FlagMetadata)
-    assert flag.metadata.config_version == 1
-    assert flag.metadata.rule_type is None
-    assert flag.metadata.rule_id is None
-    assert flag.metadata.variant_key is None
+    assert flag.metadata._config_version == 1
+    assert flag.metadata._rule_type is None
+    assert flag.metadata._rule_id is None
+    assert flag.metadata._variant_key is None
 
 
 def test_a_failed_older_server_record_is_kept_as_failed():
@@ -375,8 +387,8 @@ def test_a_failed_older_server_record_is_kept_as_failed():
         "garden-layout"
     ]
 
-    assert flag.failed is True
-    assert flag.value is False
+    assert flag._failed is True
+    assert flag._value is False
     assert flag.reason is not None and flag.reason.description == "Timed out"
 
 
@@ -429,9 +441,9 @@ def test_one_unreadable_older_server_record_keeps_its_siblings():
 
     flags = normalize_flags_response(response)["flags"]
 
-    assert flags["bad"].failed is True
+    assert flags["bad"]._failed is True
     assert flags["bad"]._malformed_field == "reason"
-    assert flags["good"].failed is False
+    assert flags["good"]._failed is False
     assert flags["good"].get_value() is True
 
 
@@ -450,7 +462,7 @@ def test_a_value_too_deeply_nested_to_encode_fails_only_that_record():
 
     flags = normalize_flags_response(response)["flags"]
 
-    assert flags["deep"].failed is True
+    assert flags["deep"]._failed is True
     assert flags["deep"]._malformed_field == "value"
     assert flags["sibling"].get_value() == "compact"
 
@@ -489,9 +501,9 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_older_server_record(
 
     malformed = flags["garden-layout"]
     assert malformed.key == "garden-layout"
-    assert malformed.failed is True
+    assert malformed._failed is True
     assert malformed._malformed_field == path
-    assert malformed.value is None
+    assert malformed._value is None
     assert (malformed.enabled, malformed.variant, malformed.get_value()) == (
         False,
         None,
@@ -504,7 +516,7 @@ def test_a_known_field_with_the_wrong_type_fails_only_that_older_server_record(
             {"flags": {"sibling": _older_record(key="sibling")}}
         )["flags"]["sibling"]
     )
-    assert (sibling.failed, sibling.value, sibling._malformed_field) == (
+    assert (sibling._failed, sibling._value, sibling._malformed_field) == (
         False,
         "compact",
         None,
@@ -525,13 +537,15 @@ def test_a_valid_older_server_record_renders_as_before():
             condition_index=0,
             description="Matched condition set 1",
         ),
-        metadata=FlagMetadata(
-            id=202,
-            payload=None,
-            version=9,
-            description="Garden layout",
-            has_experiment=False,
-            config_version=1,
+        metadata=_set_private_fields(
+            FlagMetadata(
+                id=202,
+                payload=None,
+                version=9,
+                description="Garden layout",
+                has_experiment=False,
+            ),
+            _config_version=1,
         ),
     )
 
@@ -548,9 +562,9 @@ def test_a_record_key_of_the_wrong_type_fails_only_that_record(make_record):
     )["flags"]
 
     assert flags["garden-layout"].key == "garden-layout"
-    assert flags["garden-layout"].failed is True
+    assert flags["garden-layout"]._failed is True
     assert flags["garden-layout"]._malformed_field == "key"
-    assert flags["sibling"].failed is False
+    assert flags["sibling"]._failed is False
 
 
 @pytest.mark.parametrize("make_record", [_record, _older_record])
@@ -565,8 +579,8 @@ def test_a_record_is_read_under_its_map_key(make_record, key):
     ]
 
     assert flag.key == "garden-layout"
-    assert flag.failed is False
-    assert flag.value == "compact"
+    assert flag._failed is False
+    assert flag._value == "compact"
 
 
 def test_a_server_failed_record_is_not_marked_unreadable():
@@ -582,7 +596,7 @@ def test_a_server_failed_record_is_not_marked_unreadable():
     )["flags"]
 
     for flag in flags.values():
-        assert flag.failed is True
+        assert flag._failed is True
         assert flag._malformed_field is None
 
 
@@ -651,9 +665,9 @@ def test_a_config_version_1_payload_is_kept():
 
 
 def test_feature_flag_value_defaults_to_the_legacy_value():
-    assert FeatureFlag.from_value_and_payload("a", "control", None).value == "control"
-    assert FeatureFlag.from_value_and_payload("a", True, None).value is True
-    assert FeatureFlag.from_value_and_payload("a", False, None).value is False
+    assert FeatureFlag.from_value_and_payload("a", "control", None)._value == "control"
+    assert FeatureFlag.from_value_and_payload("a", True, None)._value is True
+    assert FeatureFlag.from_value_and_payload("a", False, None)._value is False
 
 
 # Legacy accessor parity: a v4 record and the equivalent older-server record must give

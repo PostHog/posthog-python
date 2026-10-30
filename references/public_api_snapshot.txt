@@ -1129,11 +1129,9 @@ attribute posthog.traces = None
 attribute posthog.types.BeforeSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.BeforeSpanSendCallback = Callable[[dict[str, Any]], Optional[dict[str, Any]]]
 attribute posthog.types.FeatureFlag.enabled: bool
-attribute posthog.types.FeatureFlag.failed: bool = False
 attribute posthog.types.FeatureFlag.key: str
 attribute posthog.types.FeatureFlag.metadata: Union[FlagMetadata, LegacyFlagMetadata]
 attribute posthog.types.FeatureFlag.reason: Optional[FlagReason]
-attribute posthog.types.FeatureFlag.value: Any = _DERIVED_VALUE
 attribute posthog.types.FeatureFlag.variant: Optional[str]
 attribute posthog.types.FeatureFlagError.CONNECTION_ERROR = 'connection_error'
 attribute posthog.types.FeatureFlagError.ERRORS_WHILE_COMPUTING = 'errors_while_computing_flags'
@@ -1150,15 +1148,10 @@ attribute posthog.types.FeatureFlagResult.key: str
 attribute posthog.types.FeatureFlagResult.payload: Optional[Any]
 attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
-attribute posthog.types.FlagMetadata.config_version: Optional[int] = None
 attribute posthog.types.FlagMetadata.description: str
-attribute posthog.types.FlagMetadata.forced_variant: Optional[bool] = None
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
 attribute posthog.types.FlagMetadata.id: Optional[int]
 attribute posthog.types.FlagMetadata.payload: Optional[str]
-attribute posthog.types.FlagMetadata.rule_id: Optional[str] = None
-attribute posthog.types.FlagMetadata.rule_type: Optional[str] = None
-attribute posthog.types.FlagMetadata.variant_key: Optional[str] = None
 attribute posthog.types.FlagMetadata.version: Optional[int]
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
@@ -1343,11 +1336,11 @@ class posthog.request.GetResponse(data: Any, etag: Optional[str] = None, not_mod
 class posthog.request.HTTPAdapterWithSocketOptions(*args, socket_options: Optional[SocketOptions] = None, **kwargs)
 class posthog.request.QuotaLimitError 
 class posthog.tracing.span.Span 
-class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata], value: Any = _DERIVED_VALUE, failed: bool = False)
+class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[FlagReason], metadata: Union[FlagMetadata, LegacyFlagMetadata])
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None, config_version: Optional[int] = None, rule_type: Optional[str] = None, rule_id: Optional[str] = None, variant_key: Optional[str] = None, forced_variant: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 

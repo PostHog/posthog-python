@@ -3,7 +3,17 @@ import logging
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, TypedDict, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+)
 
 FlagValue = Union[bool, str]
 
@@ -171,13 +181,6 @@ class FlagMetadata:
         description: Feature flag description.
         has_experiment: Whether the flag has a linked experiment. ``None`` when
             the server does not report the field (older deployments).
-        config_version: Configuration format of the flag. Responses without a
-            typed ``value`` always read as ``1``.
-        rule_type: Type of the rule that produced the result, when one did.
-        rule_id: ID of the rule that produced the result, when one did.
-        variant_key: Key of the assigned variant, when one was assigned.
-        forced_variant: Whether a condition-level variant override produced the
-            result.
     """
 
     id: Optional[int]
@@ -185,11 +188,16 @@ class FlagMetadata:
     version: Optional[int]
     description: str
     has_experiment: Optional[bool] = None
-    config_version: Optional[int] = None
-    rule_type: Optional[str] = None
-    rule_id: Optional[str] = None
-    variant_key: Optional[str] = None
-    forced_variant: Optional[bool] = None
+    # Work in progress: the ``/flags?v=4`` metadata fields are private until the
+    # typed flag value accessors ship, which make them public. ``_config_version``
+    # is the configuration format of the flag (``1`` for a record without a typed
+    # ``value``); the rule fields name the rule that produced the result, and the
+    # variant fields the assigned variant.
+    _config_version: Optional[int] = field(default=None, init=False)
+    _rule_type: Optional[str] = field(default=None, init=False)
+    _rule_id: Optional[str] = field(default=None, init=False)
+    _variant_key: Optional[str] = field(default=None, init=False)
+    _forced_variant: Optional[bool] = field(default=None, init=False)
 
     @classmethod
     def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
@@ -201,7 +209,7 @@ class FlagMetadata:
         if not resp:
             return LegacyFlagMetadata(payload=None)
         raw_has_experiment = resp.get("has_experiment")
-        return cls(
+        metadata = cls(
             id=resp.get("id"),
             payload=resp.get("payload"),
             version=resp.get("version"),
@@ -209,12 +217,22 @@ class FlagMetadata:
             has_experiment=raw_has_experiment
             if isinstance(raw_has_experiment, bool)
             else None,
-            config_version=1,
         )
+        return _set_private_fields(metadata, _config_version=1)
+
+
+_T = TypeVar("_T")
+
+
+def _set_private_fields(obj: _T, **fields: Any) -> _T:
+    """Set the private, work-in-progress fields of a frozen dataclass."""
+    for name, value in fields.items():
+        object.__setattr__(obj, name, value)
+    return obj
 
 
 class _DerivedValue:
-    """Default of ``FeatureFlag.value``: derive the value from ``variant`` and ``enabled``."""
+    """Default of ``FeatureFlag._value``: derive the value from ``variant`` and ``enabled``."""
 
     def __repr__(self) -> str:
         return "<derived from variant and enabled>"
@@ -227,7 +245,6 @@ _DERIVED_VALUE: Any = _DerivedValue()
 class FeatureFlag:
     """Detailed feature flag evaluation returned by the flags API.
 
-    ``value``, ``failed``, ``reason`` and ``metadata`` are the evaluation details.
     ``enabled``, ``variant`` and ``metadata.payload`` are the value rendered the way
     responses before ``/flags?v=4`` carried it, which the legacy getters return.
 
@@ -237,11 +254,6 @@ class FeatureFlag:
         variant: Variant key for multivariate flags, otherwise ``None``.
         reason: Optional reason metadata explaining the result.
         metadata: Payload and other metadata returned by the API.
-        value: The typed flag value: a boolean, string, number, object, or
-            ``None`` when the flag has no value. Defaults to ``variant``, or
-            ``enabled`` when there is no variant.
-        failed: Whether the flag failed to evaluate, or its record could not be
-            read.
     """
 
     key: str
@@ -249,20 +261,25 @@ class FeatureFlag:
     variant: Optional[str]
     reason: Optional[FlagReason]
     metadata: Union[FlagMetadata, LegacyFlagMetadata]
-    value: Any = _DERIVED_VALUE
-    failed: bool = False
+    # Work in progress: private until the typed flag value accessors ship, which
+    # make them public. ``_value`` is the typed flag value: a boolean, string,
+    # number, object, or ``None`` when the flag has no value; it defaults to
+    # ``variant``, or ``enabled`` when there is no variant. ``_failed`` says whether
+    # the flag failed to evaluate, or its record could not be read.
+    _value: Any = field(default=_DERIVED_VALUE, init=False)
+    _failed: bool = field(default=False, init=False)
     # The wire path of the field that made the record unreadable, such as
     # ``"metadata.id"``. ``None`` unless the record could not be read; a record the
-    # server marks failed has ``failed`` set and this ``None``.
+    # server marks failed has ``_failed`` set and this ``None``.
     _malformed_field: Optional[str] = field(
         default=None, init=False, repr=False, compare=False
     )
 
     def __post_init__(self) -> None:
-        if self.value is _DERIVED_VALUE:
+        if self._value is _DERIVED_VALUE:
             object.__setattr__(
                 self,
-                "value",
+                "_value",
                 self.variant if self.variant is not None else self.enabled,
             )
 
@@ -389,19 +406,22 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
                 has_experiment=_read_typed(
                     raw_metadata.get("has_experiment"), "metadata.has_experiment", bool
                 ),
-                config_version=_read_int(
+            )
+            _set_private_fields(
+                metadata,
+                _config_version=_read_int(
                     raw_metadata.get("config_version"), "metadata.config_version"
                 ),
-                rule_type=_read_typed(
+                _rule_type=_read_typed(
                     raw_metadata.get("rule_type"), "metadata.rule_type", str
                 ),
-                rule_id=_read_typed(
+                _rule_id=_read_typed(
                     raw_metadata.get("rule_id"), "metadata.rule_id", str
                 ),
-                variant_key=_read_typed(
+                _variant_key=_read_typed(
                     raw_metadata.get("variant_key"), "metadata.variant_key", str
                 ),
-                forced_variant=_read_typed(
+                _forced_variant=_read_typed(
                     raw_metadata.get("forced_variant"), "metadata.forced_variant", bool
                 ),
             )
@@ -414,15 +434,14 @@ def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
         # A value nested too deeply to encode as a payload fails only this record.
         return _malformed_record(key, "value")
 
-    return FeatureFlag(
+    flag = FeatureFlag(
         key=key,
         enabled=enabled,
         variant=variant,
         reason=reason,
         metadata=metadata,
-        value=value,
-        failed=failed,
     )
+    return _set_private_fields(flag, _value=value, _failed=failed)
 
 
 def _parse_older_record(key: str, resp: Dict[str, Any]) -> FeatureFlag:
@@ -453,7 +472,7 @@ def _parse_older_record(key: str, resp: Dict[str, Any]) -> FeatureFlag:
     except _MalformedRecord as error:
         return _malformed_record(key, str(error))
 
-    return FeatureFlag(
+    flag = FeatureFlag(
         key=key,
         # An older server always sends ``enabled``; a record without it keeps
         # ``None``, as before.
@@ -461,8 +480,8 @@ def _parse_older_record(key: str, resp: Dict[str, Any]) -> FeatureFlag:
         variant=resp.get("variant"),
         reason=FlagReason.from_json(raw_reason),
         metadata=FlagMetadata.from_json(raw_metadata),
-        failed=resp.get("failed") is True,
     )
+    return _set_private_fields(flag, _failed=resp.get("failed") is True)
 
 
 def _read_record_key(resp: Dict[str, Any]) -> None:
@@ -479,11 +498,10 @@ def _malformed_record(key: str, malformed_field: str) -> FeatureFlag:
         variant=None,
         reason=None,
         metadata=LegacyFlagMetadata(payload=None),
-        value=None,
-        failed=True,
     )
-    object.__setattr__(flag, "_malformed_field", malformed_field)
-    return flag
+    return _set_private_fields(
+        flag, _value=None, _failed=True, _malformed_field=malformed_field
+    )
 
 
 def _parse_record(key: str, resp: Any) -> FeatureFlag:
