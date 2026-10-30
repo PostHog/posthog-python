@@ -506,7 +506,8 @@ def _capture_flag_events(
     that group-scoped flags fire a separate event for each group a user is evaluated
     under. A config version 2 record adds its attribution to the event and to that
     tuple, so equal-valued A/A arms, successive experiments of one flag, and
-    holdouts are each reported. A config version 1 tuple is unchanged.
+    holdouts are each reported. Its reason code replaces the human-readable
+    ``$feature_flag_reason``. A config version 1 event and tuple are unchanged.
 
     ``has_experiment`` is the server-reported signal for whether the flag is linked
     to an experiment (``None`` when the server did not report it). When the
@@ -541,6 +542,7 @@ def _capture_flag_events(
 
     if feature_flag_reported_key not in reported_flags:
         if attribution is not None:
+            properties.pop("$feature_flag_reason", None)
             properties.update(attribution.flag_called_properties())
         # Record the server's experiment signal when known, so minimization's impact
         # can be measured by segmenting on it.

@@ -627,6 +627,98 @@ def test_an_older_server_record_reports_no_attribution():
         assert _named(events, EXPOSURE) == []
 
 
+# --- $feature_flag_reason ------------------------------------------------------------------
+
+REASON_DESCRIPTION = "Matched rule 1"
+
+
+@pytest.mark.parametrize("path", list(SYNC_READS))
+@pytest.mark.parametrize(
+    "record",
+    [
+        _record(
+            "targeting_match",
+            rule_type="targeted_release",
+            rule_id=RULE,
+            description=REASON_DESCRIPTION,
+        ),
+        _record("no_rule_match", False, description=REASON_DESCRIPTION),
+        _record("error", None, failed=True, description=REASON_DESCRIPTION),
+        _split(description=REASON_DESCRIPTION),
+    ],
+    ids=["targeting_match", "no_rule_match", "failed", "experiment_split"],
+)
+def test_a_config_version_2_call_reports_its_reason_by_code_only(record, path):
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert called.properties["$feature_flag_reason_code"] == record["reason"]["code"]
+    assert "$feature_flag_reason" not in called.properties
+
+
+@pytest.mark.parametrize("path", list(SYNC_READS))
+@pytest.mark.parametrize(
+    "record",
+    [
+        _record(
+            "condition_match",
+            "annual",
+            config_version=1,
+            description=REASON_DESCRIPTION,
+        ),
+        # A record from a server before /flags?v=4, which has no config version.
+        {
+            "key": FLAG,
+            "enabled": True,
+            "variant": "annual",
+            "reason": {
+                "code": "condition_match",
+                "condition_index": 0,
+                "description": REASON_DESCRIPTION,
+            },
+            "metadata": {"id": 77, "version": 3},
+        },
+    ],
+    ids=["config_version_1", "older_server"],
+)
+def test_a_call_without_config_version_2_keeps_its_reason_description(record, path):
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert called.properties["$feature_flag_reason"] == REASON_DESCRIPTION
+    assert _attribution(called.properties) == {}
+
+
+@pytest.mark.parametrize(
+    "config_version, code, reason",
+    [(1, "condition_match", REASON_DESCRIPTION), (2, "targeting_match", None)],
+)
+def test_minimal_calls_keep_the_reason_description_only_without_config_version_2(
+    config_version, code, reason
+):
+    messages: List[Dict[str, Any]] = []
+
+    def before_send(message: Dict[str, Any]) -> Dict[str, Any]:
+        messages.append(message)
+        return message
+
+    client = Client(FAKE_TEST_API_KEY, send=False, before_send=before_send)
+    record = _record(
+        code, config_version=config_version, description=REASON_DESCRIPTION
+    )
+    try:
+        with _serving(_response(record, minimalFlagCalledEvents=True)):
+            client.evaluate_flags(DISTINCT_ID).get_flag(FLAG)
+            client.get_feature_flag_result(FLAG, "visitor-43")
+    finally:
+        client.shutdown()
+
+    assert [message["event"] for message in messages] == [FLAG_CALLED, FLAG_CALLED]
+    for message in messages:
+        assert set(message["properties"]) <= _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+        assert message["properties"].get("$feature_flag_reason") == reason
+
+
 # --- The exact events of a split ---------------------------------------------------------
 
 
@@ -666,7 +758,7 @@ def test_a_split_sends_both_events_with_exact_properties(path):
         f"$feature/{FLAG}": "annual",
         "$feature_flag_request_id": REQUEST_ID,
         "$feature_flag_evaluated_at": EVALUATED_AT,
-        "$feature_flag_reason": "Assigned variant 'annual-first'",
+        # The reason code replaces the record's reason description.
         "$feature_flag_version": 3,
         "$feature_flag_id": 77,
         "$feature_flag_has_experiment": True,
@@ -685,12 +777,14 @@ async def test_async_split_sends_both_events_with_exact_properties():
         )
         snapshot.get_flag(FLAG)
 
-    events = await _read_async_events([_response(_split())], [read])
+    response = _response(_split(description="Assigned variant 'annual-first'"))
+    events = await _read_async_events([response], [read])
 
     assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
     called, exposure = events
     assert exposure.properties == EXPECTED_EXPOSURE
     assert _attribution(called.properties) == EXPECTED_ATTRIBUTION
+    assert "$feature_flag_reason" not in called.properties
     # The async client sends group keys as strings.
     assert exposure.groups == called.groups == {"company": "7"}
     assert exposure.distinct_id == called.distinct_id == DISTINCT_ID
