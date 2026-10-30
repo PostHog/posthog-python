@@ -570,6 +570,16 @@ def test_personless_mode(mock_client):
     assert "options" not in trace_args
     assert trace_args["distinct_id"] == id
 
+    # An empty or whitespace distinct id counts as missing.
+    for blank in ("", "  "):
+        mock_client.capture_ai.reset_mock()
+        chain.invoke(
+            {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=blank)]}
+        )
+        for call in mock_client.capture_ai.call_args_list:
+            assert call[1]["options"] == {"process_person_profile": False}
+            assert call[1]["distinct_id"] not in ("", "  ")
+
 
 @pytest.fixture
 def unauthorized_http_client():
