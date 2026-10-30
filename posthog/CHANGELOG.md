@@ -1,5 +1,38 @@
 # posthog
 
+## 7.80.3 — 2026-10-29
+
+### Patch changes
+
+- [4d6e447](https://github.com/posthog/posthog-python/commit/4d6e44766175f80fbbf538ab4369b1f3916f05f7) Report cached input tokens from OpenAI Agents generation and response spans, which nest them under the usage details fields, and declare them inclusive. — Thanks @mosafariuk!
+
+## 7.80.2 — 2026-10-29
+
+### Patch changes
+
+- [ad1b1cb](https://github.com/posthog/posthog-python/commit/ad1b1cb1e2052621d979cfdccb4870d6b4b31613) Capture an `$ai_embedding` event with `$ai_is_error` and `$ai_error` when an OpenAI `embeddings.create()` call fails, in the sync and async wrappers. Before, a failed embeddings call left no event. — Thanks @pcbeingused333!
+
+## 7.80.1 — 2026-10-29
+
+### Patch changes
+
+- [1625f4f](https://github.com/posthog/posthog-python/commit/1625f4fbc1809d7a19b34354ad2df2a0e016928f) Fix streaming OpenAI chat completions when `stream_options` is `None` or `NOT_GIVEN` (it raised a `TypeError`), and stop adding `include_usage` to the `stream_options` dict the caller passed in. — Thanks @pcbeingused333!
+
+## 7.80.0 — 2026-10-29
+
+### Minor changes
+
+- [febb3ed](https://github.com/posthog/posthog-python/commit/febb3ed2f1584e68c05c73625becbdd18fe5f944) Add `metrics={"autocapture": True}` (alpha): HTTP, database and runtime metrics from the official OpenTelemetry instrumentations, with no instrumentation code. Install `posthog[metrics]` and run `opentelemetry-bootstrap -a install` to add the instrumentors for your libraries. Create the client before your web app (Django: in `AppConfig.ready()`): apps created earlier are not measured. For Flask, use module lookup as below, or import the `Flask` class only after the client starts; an earlier `from flask import Flask` alias is not instrumented. Already-served Flask apps are not re-instrumented after shutdown; create a new app for a replacement client. Autocapture does not start when the app already set up OpenTelemetry; export those metrics to PostHog instead. Raw URLs and paths, client addresses, user agents and captured headers are never recorded. `metrics.before_send` also applies to autocaptured measurements: it can change their value and attributes, or drop them.
+  
+  ```python
+  import flask
+  from posthog import Posthog
+  
+  client = Posthog("phc_...", metrics={"autocapture": True})
+  app = flask.Flask(__name__)
+  ```
+   — Thanks @DanielVisca!
+
 ## 7.79.0 — 2026-10-28
 
 ### Minor changes
