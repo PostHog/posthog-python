@@ -263,6 +263,29 @@ def test_prepare_tool_list_injects_context_into_dicts():
     assert "context" not in tools[0]["inputSchema"]["properties"]
 
 
+@pytest.mark.parametrize("sdk_tool", [False, True])
+def test_prepare_tool_list_injects_context_into_tool_objects(sdk_tool: bool) -> None:
+    client, _ = make_client()
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tool = (
+        Tool(name="search", inputSchema=schema)
+        if sdk_tool
+        else SimpleNamespace(name="search", input_schema=schema)
+    )
+    schema_attribute = (
+        "input_schema" if hasattr(tool, "input_schema") else "inputSchema"
+    )
+
+    prepared = client.prepare_tool_list([tool])
+
+    advertised = getattr(prepared[0], schema_attribute)
+    assert "context" in advertised["properties"]
+    assert "context" in advertised["required"]
+    assert "q" in advertised["properties"]
+    # the caller's schema dict is untouched
+    assert "context" not in schema["properties"]
+
+
 def test_prepare_tool_list_can_be_disabled():
     client, _ = make_client()
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
