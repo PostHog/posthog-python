@@ -20,6 +20,7 @@ from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
+    structured_content,
 )
 from posthog.version import VERSION
 
@@ -602,7 +603,7 @@ def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
     delivered = prepared.result.root if wrapped else prepared.result
     assert len(call_result.content) == 1
     assert delivered.content[-1].text == _handle_block(prepared.conversation_id)["text"]
-    assert delivered.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+    assert structured_content(delivered)[MCP_INSTRUCTIONS_KEY] == {
         "conversation_id": prepared.conversation_id
     }
     assert _UUID7.match(prepared.conversation_id)
