@@ -30,14 +30,16 @@ def execute(spec, host):
             if spec["mode"] == "refresh"
             else min(spec["operations"], 32 if spec.get("flag_count") == 1000 else 160)
         )
-        workload.run(warmup)
-        workload.verify()
-        settle()
         operations = (
             spec.get("allocation_operations", spec["operations"])
             if spec["pass"] == "allocation"
             else spec["operations"]
         )
+        workload.prepare_phase(warmup)
+        workload.run(warmup)
+        workload.verify()
+        workload.prepare_phase(operations)
+        settle()
         result = {
             "pass": spec["pass"],
             "operations": operations,
@@ -61,12 +63,9 @@ def execute(spec, host):
 
             def checkpoint(completed):
                 nonlocal observed
-                observed = max(observed, memory()["rss"])
-                if spec["mode"] == "refresh" and (
-                    completed % 5 == 0 or completed == spec["operations"]
-                ):
-                    settle()
-                    result["checkpoints"].append({"operations": completed, **memory()})
+                snapshot = memory()
+                observed = max(observed, snapshot["rss"])
+                result["checkpoints"].append({"operations": completed, **snapshot})
 
             start = time.perf_counter_ns()
             workload.run(checkpoint=checkpoint)

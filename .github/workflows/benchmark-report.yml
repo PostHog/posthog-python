@@ -1,0 +1,21 @@
+name: Python SDK benchmark report
+
+on:
+    workflow_run:
+        workflows: ['Python SDK benchmarks']
+        types: [completed]
+
+permissions: {}
+
+jobs:
+    report:
+        permissions:
+            contents: read
+            actions: read
+            pull-requests: write
+        uses: PostHog/.github/.github/workflows/sdk-benchmark-report.yml@2a6111d08d784c0ca84f7f97f32a13fdd6d31449 # SDK benchmark workflow (PostHog/.github PR #84)
+        with:
+            workflow-path: .github/workflows/benchmarks.yml
+            artifact-name: python-benchmark-results
+            report-key: posthog-python
+            sdk: posthog-python

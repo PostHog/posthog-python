@@ -1,14 +1,6 @@
 name: Python SDK benchmarks
 
-on:
-    pull_request:
-        paths:
-            - 'posthog/**'
-            - 'benchmarks/**'
-            - 'pyproject.toml'
-            - 'setup.py'
-            - 'uv.lock'
-            - '.github/workflows/benchmarks.yml'
+on: [pull_request]
 
 permissions: {}
 
@@ -19,7 +11,11 @@ concurrency:
 jobs:
     benchmark:
         runs-on: ubuntu-24.04
-        timeout-minutes: 30
+        timeout-minutes: 10
+        strategy:
+            fail-fast: false
+            matrix:
+                shard: [flags-single, flags-scaling, flags-memory, capture]
         permissions:
             contents: read
         steps:
@@ -61,12 +57,67 @@ jobs:
               run: .venv-benchmark/bin/python -B benchmarks/test_benchmarks.py
 
             - name: Measure paired base and head
+              id: measure
+              timeout-minutes: 8
               run: |
                   .venv-benchmark/bin/python -B benchmarks/run.py \
                     --base "$BASE_WORKTREE" \
                     --head "$GITHUB_WORKSPACE" \
                     --output "$RESULTS" \
-                    --repetitions 6
+                    --repetitions 6 \
+                    --shard "${{ matrix.shard }}"
+
+            - name: Upload raw shard results
+              if: always()
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: benchmark-shard-${{ matrix.shard }}
+                  path: |
+                      ${{ runner.temp }}/python-benchmark-results/base.json
+                      ${{ runner.temp }}/python-benchmark-results/head.json
+                      ${{ runner.temp }}/python-benchmark-results/revisions.json
+                  if-no-files-found: warn
+                  retention-days: 14
+
+    collect:
+        needs: benchmark
+        if: ${{ !cancelled() }}
+        runs-on: ubuntu-24.04
+        timeout-minutes: 5
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: ${{ github.event.pull_request.head.sha }}
+                  persist-credentials: false
+
+            - name: Download shard results
+              uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+              with:
+                  pattern: benchmark-shard-*
+                  path: ${{ runner.temp }}/python-benchmark-shards
+                  merge-multiple: false
+
+            - name: Collect and render benchmark comparison
+              uses: PostHog/.github/.github/actions/benchmark-report@04f8421ec4daa7f4066eaeb4c53621ba79ddc3ca # SDK benchmark reporting (PostHog/.github PR #84)
+              with:
+                  mode: collect
+                  source-status: ${{ needs.benchmark.result }}
+                  shard-manifest: benchmarks/shards.json
+                  shard-directory: ${{ runner.temp }}/python-benchmark-shards
+                  output-directory: ${{ runner.temp }}/python-benchmark-report
+
+            - name: Upload rendered comparison
+              if: always()
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: python-benchmark-report
+                  path: |
+                      ${{ runner.temp }}/python-benchmark-report/report.md
+                      ${{ runner.temp }}/python-benchmark-report/comparison.json
+                  if-no-files-found: ignore
+                  retention-days: 14
 
             - name: Upload raw benchmark results
               if: always()
@@ -74,7 +125,9 @@ jobs:
               uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
               with:
                   name: python-benchmark-results
-                  path: ${{ runner.temp }}/python-benchmark-results
+                  path: |
+                      ${{ runner.temp }}/python-benchmark-report/bundle.json
+                      ${{ runner.temp }}/python-benchmark-report/revisions.json
                   if-no-files-found: warn
                   retention-days: 14
 

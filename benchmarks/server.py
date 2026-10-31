@@ -20,11 +20,15 @@ class BenchmarkServer:
         self.lock = threading.Lock()
         self.payload = "x" * spec.get("payload_bytes", 0)
         self.body = json.dumps(definitions(spec.get("flag_count", 0))).encode()
+        self.seen = bytearray(spec["operations"])
+        self.expected_sequences = 0
         self.state: dict[str, Any] = {
             "definitions": 0,
             "delivered": 0,
             "requests": 0,
             "invalid_events": 0,
+            "unique_sequences": 0,
+            "missing_sequences": 0,
             "delivered_by_user": {user["distinct_id"]: 0 for user in USERS},
             "unexpected": [],
         }
@@ -65,7 +69,29 @@ class BenchmarkServer:
                         if not 0 < size <= 20 * 1024 * 1024:
                             raise ValueError("Invalid body length")
                         body = json.loads(self.rfile.read(size))
-                        if path == "/__benchmark/definitions":
+                        if path == "/__benchmark/reset":
+                            operations = body["operations"]
+                            if (
+                                type(operations) is not int
+                                or not 0 <= operations <= spec["operations"]
+                            ):
+                                raise ValueError("Invalid phase operations")
+                            owner.seen[:] = bytes(len(owner.seen))
+                            owner.expected_sequences = operations
+                            owner.state.update(
+                                definitions=0,
+                                delivered=0,
+                                requests=0,
+                                invalid_events=0,
+                                unique_sequences=0,
+                                missing_sequences=operations,
+                                delivered_by_user={
+                                    user["distinct_id"]: 0 for user in USERS
+                                },
+                                unexpected=[],
+                            )
+                            self.reply(200, b"{}")
+                        elif path == "/__benchmark/definitions":
                             generation = body["generation"]
                             if (
                                 not isinstance(generation, int)
@@ -87,15 +113,29 @@ class BenchmarkServer:
                             for event in batch:
                                 properties = event.get("properties", {})
                                 user = event.get("distinct_id")
+                                sequence = properties.get("sequence")
+                                valid_sequence = (
+                                    type(sequence) is int
+                                    and 0 <= sequence < owner.expected_sequences
+                                )
                                 if (
                                     event.get("event") != "benchmark"
                                     or user not in owner.state["delivered_by_user"]
                                     or properties.get("payload") != owner.payload
                                     or properties.get("plan") != "pro"
+                                    or not valid_sequence
+                                    or user
+                                    != USERS[sequence % len(USERS)]["distinct_id"]
                                 ):
                                     owner.state["invalid_events"] += 1
                                 else:
                                     owner.state["delivered_by_user"][user] += 1
+                                    if owner.seen[sequence]:
+                                        owner.state["invalid_events"] += 1
+                                    else:
+                                        owner.seen[sequence] = 1
+                                        owner.state["unique_sequences"] += 1
+                                        owner.state["missing_sequences"] -= 1
                             self.reply(200, b'{"status":1}')
                         else:
                             self.unexpected(path)

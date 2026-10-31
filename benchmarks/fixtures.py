@@ -1,4 +1,4 @@
-"""Deterministic fixtures matching the Node pilot's flag mix and identities."""
+"""Deterministic fixtures for sdk-benchmarks/v1."""
 
 import hashlib
 import json
@@ -189,7 +189,8 @@ def workloads(smoke=False):
                 "id": f"capture.enqueue.{size}",
                 "mode": "capture",
                 "payload_bytes": size,
-                "operations": 100 if smoke else 1000,
+                "operations": 200 if smoke else 1000,
+                "completion_boundary": "api_return",
                 "concurrency": 1,
                 "passes": ["timing"],
             }
@@ -197,13 +198,19 @@ def workloads(smoke=False):
         ],
         *[
             {
-                "id": f"capture.drain.{size}",
+                "id": f"capture.drain.{strategy}.{size}",
                 "mode": "drain",
+                "drain_strategy": strategy,
+                "flush_every": 100
+                if strategy == "steady"
+                else (200 if smoke else 1000),
+                "completion_boundary": "completed_delivery",
                 "payload_bytes": size,
                 "operations": 200 if smoke else 1000,
                 "concurrency": 1,
                 "passes": ["timing", "allocation", "memory"],
             }
+            for strategy in ("steady", "burst")
             for size in (32, 4096)
         ],
     ]
