@@ -1,0 +1,90 @@
+name: Python SDK benchmarks
+
+on:
+    pull_request:
+        paths:
+            - 'posthog/**'
+            - 'benchmarks/**'
+            - 'pyproject.toml'
+            - 'setup.py'
+            - 'uv.lock'
+            - '.github/workflows/benchmarks.yml'
+
+permissions: {}
+
+concurrency:
+    group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+    cancel-in-progress: true
+
+jobs:
+    benchmark:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        permissions:
+            contents: read
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+              with:
+                  ref: ${{ github.event.pull_request.head.sha }}
+                  fetch-depth: 0
+                  persist-credentials: false
+
+            - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              with:
+                  python-version: '3.12.12'
+
+            - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              with:
+                  version: '0.13.4'
+                  enable-cache: true
+
+            - name: Prepare pinned baseline
+              env:
+                  TARGET_SHA: ${{ github.event.pull_request.base.sha }}
+                  HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+              run: |
+                  set -euo pipefail
+                  export BASE_WORKTREE="$RUNNER_TEMP/python-benchmark-base"
+                  export RESULTS="$RUNNER_TEMP/python-benchmark-results"
+                  printf 'BASE_WORKTREE=%s\nRESULTS=%s\n' "$BASE_WORKTREE" "$RESULTS" >> "$GITHUB_ENV"
+                  BASE_SHA=$(git merge-base "$TARGET_SHA" "$HEAD_SHA")
+                  git worktree add --detach "$BASE_WORKTREE" "$BASE_SHA"
+                  mkdir -p "$RESULTS"
+                  python -c 'import json, os, pathlib, sys; pathlib.Path(os.environ["RESULTS"], "revisions.json").write_text(json.dumps({"target":os.environ["TARGET_SHA"], "head":os.environ["HEAD_SHA"], "base":sys.argv[1]}, indent=2))' "$BASE_SHA"
+
+            - name: Install isolated head and baseline wheels
+              run: |
+                  python benchmarks/prepare.py .
+                  python benchmarks/prepare.py "$BASE_WORKTREE"
+
+            - name: Test measurement controls and fixtures
+              run: .venv-benchmark/bin/python -B benchmarks/test_benchmarks.py
+
+            - name: Measure paired base and head
+              run: |
+                  .venv-benchmark/bin/python -B benchmarks/run.py \
+                    --base "$BASE_WORKTREE" \
+                    --head "$GITHUB_WORKSPACE" \
+                    --output "$RESULTS" \
+                    --repetitions 6
+
+            - name: Upload raw benchmark results
+              if: always()
+              id: results
+              uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: python-benchmark-results
+                  path: ${{ runner.temp }}/python-benchmark-results
+                  if-no-files-found: warn
+                  retention-days: 14
+
+            - name: Link results
+              if: always()
+              env:
+                  ARTIFACT_URL: ${{ steps.results.outputs.artifact-url }}
+              run: |
+                  printf '## Python SDK benchmark data\n\n' >> "$GITHUB_STEP_SUMMARY"
+                  if [[ -n "$ARTIFACT_URL" ]]; then
+                    printf '[Download paired measurements and execution metadata](%s)\n\n' "$ARTIFACT_URL" >> "$GITHUB_STEP_SUMMARY"
+                  fi
+                  printf 'Measurements are informational. Check workload statuses before comparing values.\n' >> "$GITHUB_STEP_SUMMARY"
