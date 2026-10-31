@@ -11,6 +11,7 @@ except ImportError:
 
 from posthog.ai.gemini.gemini_converter import (
     extract_gemini_content_from_chunk,
+    extract_gemini_usage_from_response,
     format_gemini_input,
     format_gemini_response,
     format_gemini_streaming_output,
@@ -311,3 +312,31 @@ class TestGeminiThoughtParts:
             {"type": "thinking", "thinking": "Hmm, "},
             {"type": "text", "text": "done"},
         ]
+
+
+class TestGeminiUsage:
+    def test_tool_use_prompt_tokens_count_as_input(self):
+        # Built-in tools (Google Search, URL context) report the retrieved content
+        # in tool_use_prompt_token_count, separately from prompt_token_count.
+        resp = types.GenerateContentResponse(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=20,
+                tool_use_prompt_token_count=300,
+                candidates_token_count=10,
+                total_token_count=330,
+            )
+        )
+        usage = extract_gemini_usage_from_response(resp)
+        assert usage["input_tokens"] == 320
+        assert usage["output_tokens"] == 10
+
+    def test_input_tokens_without_tool_use(self):
+        resp = types.GenerateContentResponse(
+            usage_metadata=types.GenerateContentResponseUsageMetadata(
+                prompt_token_count=20,
+                candidates_token_count=10,
+                total_token_count=30,
+            )
+        )
+        usage = extract_gemini_usage_from_response(resp)
+        assert usage["input_tokens"] == 20

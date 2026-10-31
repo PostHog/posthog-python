@@ -528,8 +528,16 @@ def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
     Returns:
         TokenUsage with standardized usage
     """
+    input_tokens = getattr(metadata, "prompt_token_count", 0)
+
+    # Built-in tools (Google Search, URL context) report the retrieved content
+    # separately from prompt_token_count, but it is billed as input
+    tool_use_tokens = getattr(metadata, "tool_use_prompt_token_count", 0)
+    if isinstance(tool_use_tokens, int) and tool_use_tokens > 0:
+        input_tokens += tool_use_tokens
+
     usage = TokenUsage(
-        input_tokens=getattr(metadata, "prompt_token_count", 0),
+        input_tokens=input_tokens,
         output_tokens=getattr(metadata, "candidates_token_count", 0),
     )
 
