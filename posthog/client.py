@@ -123,6 +123,8 @@ from .types import (
     FlagValue,
     SendFeatureFlagsOptions,
     UnresolvedFlagReason,
+    _has_untyped_flag_records,
+    _UNTYPED_FLAGS_RESPONSE_MESSAGE,
     normalize_flags_response,
     to_flags_and_payloads,
     to_payloads,
@@ -1016,6 +1018,8 @@ class Client(object):
         # the /flags v2 response and the local-evaluation payload. False until the
         # server reports it, so full events are the fail-safe.
         self._minimal_flag_called_events: bool = False
+        # Whether this client has logged that /flags sent records without typed values.
+        self._logged_untyped_flags_response = False
 
         self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
@@ -1716,6 +1720,11 @@ class Client(object):
             **request_data,
         )
 
+        if not self._logged_untyped_flags_response and _has_untyped_flag_records(
+            resp_data
+        ):
+            self._logged_untyped_flags_response = True
+            self.log.info(_UNTYPED_FLAGS_RESPONSE_MESSAGE)
         response = normalize_flags_response(resp_data)
         # Server-controlled gate for minimal $feature_flag_called events. Only the
         # v2 response shape carries it; absent (legacy shape, older server, team
@@ -5049,6 +5058,7 @@ class Client(object):
                         ),
                         locally_evaluated=False,
                         has_experiment=_metadata_has_experiment(detail.metadata),
+                        details=detail,
                     )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")

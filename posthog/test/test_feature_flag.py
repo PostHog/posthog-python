@@ -1,6 +1,12 @@
 import unittest
 
-from posthog.types import FeatureFlag, FlagMetadata, FlagReason, LegacyFlagMetadata
+from posthog.types import (
+    FeatureFlag,
+    FlagMetadata,
+    FlagReason,
+    LegacyFlagMetadata,
+    _set_private_fields,
+)
 
 
 class TestFeatureFlag(unittest.TestCase):
@@ -38,11 +44,14 @@ class TestFeatureFlag(unittest.TestCase):
         )
         self.assertEqual(
             flag.metadata,
-            FlagMetadata(
-                id=1,
-                payload='{"some": "json"}',
-                version=2,
-                description="test-description",
+            _set_private_fields(
+                FlagMetadata(
+                    id=1,
+                    payload='{"some": "json"}',
+                    version=2,
+                    description="test-description",
+                ),
+                _config_version=1,
             ),
         )
 
@@ -127,7 +136,7 @@ class TestFeatureFlag(unittest.TestCase):
         metadata = FlagMetadata.from_json(resp)
         self.assertEqual(metadata.id, 123)
         self.assertIsNone(metadata.payload)
-        self.assertEqual(metadata.version, 0)  # default value
+        self.assertIsNone(metadata.version)  # absent, not invented
         self.assertEqual(metadata.description, "")  # default value
 
         # Test with None

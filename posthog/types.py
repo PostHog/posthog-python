@@ -1,8 +1,19 @@
 import json
 import logging
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, List, Optional, TypedDict, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    List,
+    Optional,
+    TypedDict,
+    TypeVar,
+    Union,
+    cast,
+)
 
 FlagValue = Union[bool, str]
 
@@ -162,39 +173,80 @@ class FlagMetadata:
     """Feature flag metadata returned by the feature flag API.
 
     Attributes:
-        id: Numeric feature flag ID.
-        payload: Payload configured for the matched flag value, if any.
-        version: Feature flag version.
+        id: Numeric feature flag ID, or ``None`` when the record has none.
+        payload: Payload configured for the matched flag value, if any. For a
+            number or object value it is the value encoded as JSON, the way
+            servers before ``/flags?v=4`` sent it.
+        version: Feature flag version, or ``None`` when the record has none.
         description: Feature flag description.
         has_experiment: Whether the flag has a linked experiment. ``None`` when
             the server does not report the field (older deployments).
     """
 
-    id: int
+    id: Optional[int]
     payload: Optional[str]
-    version: int
+    version: Optional[int]
     description: str
     has_experiment: Optional[bool] = None
+    # Work in progress: the ``/flags?v=4`` metadata fields are private until the
+    # typed flag value accessors ship, which make them public. ``_config_version``
+    # is the configuration format of the flag (``1`` for a record without a typed
+    # ``value``); the rule fields name the rule that produced the result, and the
+    # variant fields the assigned variant.
+    _config_version: Optional[int] = field(default=None, init=False)
+    _rule_type: Optional[str] = field(default=None, init=False)
+    _rule_id: Optional[str] = field(default=None, init=False)
+    _variant_key: Optional[str] = field(default=None, init=False)
+    _forced_variant: Optional[bool] = field(default=None, init=False)
 
     @classmethod
     def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
+        """Parse the metadata of a record without a typed ``value``.
+
+        Such a record comes from a server before ``/flags?v=4``, so only the
+        fields that response carries are read, and ``config_version`` is ``1``.
+        """
         if not resp:
             return LegacyFlagMetadata(payload=None)
         raw_has_experiment = resp.get("has_experiment")
-        return cls(
-            id=resp.get("id", 0),
+        metadata = cls(
+            id=resp.get("id"),
             payload=resp.get("payload"),
-            version=resp.get("version", 0),
+            version=resp.get("version"),
             description=resp.get("description", ""),
             has_experiment=raw_has_experiment
             if isinstance(raw_has_experiment, bool)
             else None,
         )
+        return _set_private_fields(metadata, _config_version=1)
+
+
+_T = TypeVar("_T")
+
+
+def _set_private_fields(obj: _T, **fields: Any) -> _T:
+    """Set the private, work-in-progress fields of a frozen dataclass."""
+    for name, value in fields.items():
+        object.__setattr__(obj, name, value)
+    return obj
+
+
+class _DerivedValue:
+    """Default of ``FeatureFlag._value``: derive the value from ``variant`` and ``enabled``."""
+
+    def __repr__(self) -> str:
+        return "<derived from variant and enabled>"
+
+
+_DERIVED_VALUE: Any = _DerivedValue()
 
 
 @dataclass(frozen=True)
 class FeatureFlag:
     """Detailed feature flag evaluation returned by the flags API.
+
+    ``enabled``, ``variant`` and ``metadata.payload`` are the value rendered the way
+    responses before ``/flags?v=4`` carried it, which the legacy getters return.
 
     Attributes:
         key: Feature flag key.
@@ -209,29 +261,40 @@ class FeatureFlag:
     variant: Optional[str]
     reason: Optional[FlagReason]
     metadata: Union[FlagMetadata, LegacyFlagMetadata]
+    # Work in progress: private until the typed flag value accessors ship, which
+    # make them public. ``_value`` is the typed flag value: a boolean, string,
+    # number, object, or ``None`` when the flag has no value; it defaults to
+    # ``variant``, or ``enabled`` when there is no variant. ``_failed`` says whether
+    # the flag failed to evaluate, or its record could not be read.
+    _value: Any = field(default=_DERIVED_VALUE, init=False)
+    _failed: bool = field(default=False, init=False)
+    # The wire path of the field that made the record unreadable, such as
+    # ``"metadata.id"``. ``None`` unless the record could not be read; a record the
+    # server marks failed has ``_failed`` set and this ``None``.
+    _malformed_field: Optional[str] = field(
+        default=None, init=False, repr=False, compare=False
+    )
+
+    def __post_init__(self) -> None:
+        if self._value is _DERIVED_VALUE:
+            object.__setattr__(
+                self,
+                "_value",
+                self.variant if self.variant is not None else self.enabled,
+            )
 
     def get_value(self) -> FlagValue:
         return self.variant or self.enabled
 
     @classmethod
     def from_json(cls, resp: Any) -> "FeatureFlag":
-        reason = None
-        if resp.get("reason"):
-            reason = FlagReason.from_json(resp.get("reason"))
+        """Parse one flag record of a ``/flags`` response.
 
-        metadata = None
-        if resp.get("metadata"):
-            metadata = FlagMetadata.from_json(resp.get("metadata"))
-        else:
-            metadata = LegacyFlagMetadata(payload=None)
-
-        return cls(
-            key=resp.get("key"),
-            enabled=resp.get("enabled"),
-            variant=resp.get("variant"),
-            reason=reason,
-            metadata=metadata,
-        )
+        A record with a ``value`` member is a ``/flags?v=4`` record. A record
+        without one comes from an older server: its value is ``variant``, or
+        ``enabled`` when there is no variant, and its config version is ``1``.
+        """
+        return _parse_record(resp.get("key"), resp)
 
     @classmethod
     def from_value_and_payload(
@@ -247,6 +310,227 @@ class FeatureFlag:
                 payload=payload,
             ),
         )
+
+
+class _MalformedRecord(Exception):
+    """A known field of a flag record has the wrong JSON type."""
+
+
+def _read_int(value: Any, field: str) -> Optional[int]:
+    # JSON has one number type, so an integral number such as 2.0 is an integer.
+    if value is None:
+        return None
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float) and math.isfinite(value) and value.is_integer():
+        return int(value)
+    raise _MalformedRecord(field)
+
+
+def _read_typed(value: Any, field: str, expected: type) -> Any:
+    if value is None or isinstance(value, expected):
+        return value
+    raise _MalformedRecord(field)
+
+
+def _read_value(value: Any) -> Any:
+    if value is None or isinstance(value, (bool, str, dict)):
+        return value
+    if isinstance(value, int) or (isinstance(value, float) and math.isfinite(value)):
+        return value
+    raise _MalformedRecord("value")
+
+
+def _legacy_rendering(value: Any) -> tuple[bool, Optional[str], Optional[str]]:
+    """Render a typed value as ``(enabled, variant, encoded payload)``.
+
+    A string is the variant, ``None`` is disabled, and a number or object is enabled
+    with the value as a JSON-encoded payload, as servers before ``/flags?v=4`` sent it.
+    """
+    if value is None or isinstance(value, bool):
+        return bool(value), None, None
+    if isinstance(value, str):
+        return True, value, None
+    return True, None, json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
+def _parse_typed_record(key: str, resp: Any) -> FeatureFlag:
+    """Parse a ``/flags?v=4`` record, which carries a typed ``value``.
+
+    Unknown fields are ignored. A known field with the wrong JSON type fails only
+    this record, which then reads as disabled. An absent or null field reads as absent,
+    except ``value``, where null means the flag has no value.
+    """
+    try:
+        if not isinstance(resp, dict):
+            raise _MalformedRecord("record")
+        _read_record_key(resp)
+        value = _read_value(resp.get("value"))
+        failed = _read_typed(resp.get("failed"), "failed", bool) is True
+
+        reason = None
+        raw_reason = _read_typed(resp.get("reason"), "reason", dict)
+        if raw_reason is not None:
+            reason = FlagReason(
+                code=_read_typed(raw_reason.get("code"), "reason.code", str) or "",
+                condition_index=_read_int(
+                    raw_reason.get("condition_index"), "reason.condition_index"
+                ),
+                description=_read_typed(
+                    raw_reason.get("description"), "reason.description", str
+                )
+                or "",
+            )
+
+        if failed:
+            # A failed record has no value, whatever it carries.
+            value = None
+        enabled, variant, encoded_payload = _legacy_rendering(value)
+
+        metadata: Union[FlagMetadata, LegacyFlagMetadata]
+        raw_metadata = _read_typed(resp.get("metadata"), "metadata", dict)
+        if raw_metadata is None:
+            metadata = LegacyFlagMetadata(payload=encoded_payload)
+        else:
+            metadata = FlagMetadata(
+                id=_read_int(raw_metadata.get("id"), "metadata.id"),
+                # A number or object value is its own payload; a payload the record
+                # also carries is ignored.
+                payload=encoded_payload
+                if encoded_payload is not None
+                else raw_metadata.get("payload"),
+                version=_read_int(raw_metadata.get("version"), "metadata.version"),
+                description=_read_typed(
+                    raw_metadata.get("description", ""), "metadata.description", str
+                ),
+                has_experiment=_read_typed(
+                    raw_metadata.get("has_experiment"), "metadata.has_experiment", bool
+                ),
+            )
+            _set_private_fields(
+                metadata,
+                _config_version=_read_int(
+                    raw_metadata.get("config_version"), "metadata.config_version"
+                ),
+                _rule_type=_read_typed(
+                    raw_metadata.get("rule_type"), "metadata.rule_type", str
+                ),
+                _rule_id=_read_typed(
+                    raw_metadata.get("rule_id"), "metadata.rule_id", str
+                ),
+                _variant_key=_read_typed(
+                    raw_metadata.get("variant_key"), "metadata.variant_key", str
+                ),
+                _forced_variant=_read_typed(
+                    raw_metadata.get("forced_variant"), "metadata.forced_variant", bool
+                ),
+            )
+            # Only config version 1 records carry an experiment ID. It is checked,
+            # like every known field, but not kept.
+            _read_int(raw_metadata.get("experiment_id"), "metadata.experiment_id")
+    except _MalformedRecord as error:
+        return _malformed_record(key, str(error))
+    except RecursionError:
+        # A value nested too deeply to encode as a payload fails only this record.
+        return _malformed_record(key, "value")
+
+    flag = FeatureFlag(
+        key=key,
+        enabled=enabled,
+        variant=variant,
+        reason=reason,
+        metadata=metadata,
+    )
+    return _set_private_fields(flag, _value=value, _failed=failed)
+
+
+def _parse_older_record(key: str, resp: Dict[str, Any]) -> FeatureFlag:
+    """Parse a record without a typed ``value``, from a server before ``/flags?v=4``.
+
+    Its value is ``variant``, or ``enabled`` when there is no variant, and its config
+    version is ``1``. As for a ``/flags?v=4`` record, a known field with the wrong
+    JSON type fails only this record.
+    """
+    try:
+        _read_record_key(resp)
+        _read_typed(resp.get("enabled"), "enabled", bool)
+        _read_typed(resp.get("variant"), "variant", str)
+        _read_typed(resp.get("failed"), "failed", bool)
+        raw_reason = _read_typed(resp.get("reason"), "reason", dict)
+        if raw_reason:
+            _read_typed(raw_reason.get("code"), "reason.code", str)
+            _read_int(raw_reason.get("condition_index"), "reason.condition_index")
+            _read_typed(raw_reason.get("description"), "reason.description", str)
+        raw_metadata = _read_typed(resp.get("metadata"), "metadata", dict)
+        if raw_metadata:
+            _read_int(raw_metadata.get("id"), "metadata.id")
+            _read_int(raw_metadata.get("version"), "metadata.version")
+            _read_typed(raw_metadata.get("description"), "metadata.description", str)
+            _read_typed(
+                raw_metadata.get("has_experiment"), "metadata.has_experiment", bool
+            )
+    except _MalformedRecord as error:
+        return _malformed_record(key, str(error))
+
+    flag = FeatureFlag(
+        key=key,
+        # An older server always sends ``enabled``; a record without it keeps
+        # ``None``, as before.
+        enabled=cast(bool, resp.get("enabled")),
+        variant=resp.get("variant"),
+        reason=FlagReason.from_json(raw_reason),
+        metadata=FlagMetadata.from_json(raw_metadata),
+    )
+    return _set_private_fields(flag, _failed=resp.get("failed") is True)
+
+
+def _read_record_key(resp: Dict[str, Any]) -> None:
+    # The flag key is the record's map key. A ``key`` member of the wrong type fails
+    # the record, like any known field; a string that differs is ignored.
+    _read_typed(resp.get("key"), "key", str)
+
+
+def _malformed_record(key: str, malformed_field: str) -> FeatureFlag:
+    """A record with a known field of the wrong JSON type: failed, and disabled."""
+    flag = FeatureFlag(
+        key=key,
+        enabled=False,
+        variant=None,
+        reason=None,
+        metadata=LegacyFlagMetadata(payload=None),
+    )
+    return _set_private_fields(
+        flag, _value=None, _failed=True, _malformed_field=malformed_field
+    )
+
+
+def _parse_record(key: str, resp: Any) -> FeatureFlag:
+    """Parse one record of a ``/flags`` response, stored under ``key``."""
+    if isinstance(resp, dict) and "value" not in resp:
+        return _parse_older_record(key, resp)
+    return _parse_typed_record(key, resp)
+
+
+def _has_untyped_flag_records(resp: Any) -> bool:
+    """Whether a raw ``/flags`` response has a record without a typed ``value``.
+
+    Such a record comes from a server that does not send ``/flags?v=4`` records.
+    """
+    if not isinstance(resp, dict):
+        return False
+    flags = resp.get("flags")
+    if isinstance(flags, dict):
+        return any(
+            isinstance(record, dict) and "value" not in record
+            for record in flags.values()
+        )
+    return bool(resp.get("featureFlags"))
+
+
+_UNTYPED_FLAGS_RESPONSE_MESSAGE = (
+    "[FEATURE FLAGS] The /flags response has no typed flag values, so the server"
+    " may not support /flags?v=4. Every flag is read as config version 1."
+)
 
 
 class FlagsResponse(TypedDict, total=False):
@@ -366,7 +650,7 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
     Normalize the response from the flags API endpoint into a FlagsResponse.
 
     Args:
-        resp: A v1 or v2 response from the flags API endpoint.
+        resp: A v1, v2 or v4 response from the flags API endpoint.
 
     Returns:
         A FlagsResponse containing feature flags and their details.
@@ -379,8 +663,7 @@ def normalize_flags_response(resp: Any) -> FlagsResponse:
         for key, value in flags.items():
             if isinstance(value, FeatureFlag):
                 continue
-            value["key"] = key
-            flags[key] = FeatureFlag.from_json(value)
+            flags[key] = _parse_record(key, value)
     else:
         # Handle legacy format
         featureFlags = resp.get("featureFlags", {})

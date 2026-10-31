@@ -311,6 +311,8 @@ def health():
         else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
     )
     capabilities.append("feature_flags_local_evaluation_v1")
+    # Remote /flags requests send ?v=4 and read the v4 flag record.
+    capabilities.append("flags_response_v4")
     return jsonify(
         {
             "sdk_name": "posthog-python",

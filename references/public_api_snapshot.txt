@@ -322,6 +322,7 @@ alias posthog.exception_capture.BucketedRateLimiter -> posthog.bucketed_rate_lim
 alias posthog.exception_capture.Client -> posthog.client.Client
 alias posthog.exception_utils.ExcInfo -> posthog.args.ExcInfo
 alias posthog.exception_utils.ExceptionArg -> posthog.args.ExceptionArg
+alias posthog.feature_flag_evaluations.FeatureFlag -> posthog.types.FeatureFlag
 alias posthog.feature_flag_evaluations.FlagValue -> posthog.types.FlagValue
 alias posthog.feature_flag_evaluations.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.feature_flags.FlagValue -> posthog.types.FlagValue
@@ -1180,9 +1181,9 @@ attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
 attribute posthog.types.FlagMetadata.description: str
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
-attribute posthog.types.FlagMetadata.id: int
+attribute posthog.types.FlagMetadata.id: Optional[int]
 attribute posthog.types.FlagMetadata.payload: Optional[str]
-attribute posthog.types.FlagMetadata.version: int
+attribute posthog.types.FlagMetadata.version: Optional[int]
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
 attribute posthog.types.FlagReason.description: str
@@ -1376,7 +1377,7 @@ class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str],
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
