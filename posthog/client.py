@@ -4211,12 +4211,18 @@ class Client(object):
             # Source the gate the same way as has_experiment above; see
             # _capture_feature_flag_called_if_needed for why.
             minimal_flag_called_events = self._minimal_flag_called_events
+            # Remotely-evaluated flags carry id and version in the response metadata;
+            # locally-evaluated flags read them from the definition that produced the value.
+            local_flag_id: Optional[int] = None
+            local_flag_version: Optional[int] = None
             if flag_was_locally_evaluated:
-                local_def = (self.feature_flags_by_key or {}).get(key)
+                local_def = snapshot["flags_by_key"].get(key)
                 if isinstance(local_def, dict):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
+                    local_flag_id = local_def.get("id")
+                    local_flag_version = local_def.get("version")
             elif isinstance(flag_details, FeatureFlag):
                 has_experiment = _metadata_has_experiment(flag_details.metadata)
                 minimal_flag_called_events = remote_minimal_flag_called_events
@@ -4235,6 +4241,8 @@ class Client(object):
                 feature_flag_error,
                 has_experiment,
                 minimal_flag_called_events,
+                local_flag_id=local_flag_id,
+                local_flag_version=local_flag_version,
             )
 
         return flag_result
@@ -4524,6 +4532,8 @@ class Client(object):
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        local_flag_id: Optional[int] = None,
+        local_flag_version: Optional[int] = None,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -4548,6 +4558,10 @@ class Client(object):
                     properties["$feature_flag_version"] = flag_details.metadata.version
                 if flag_details.metadata.id:
                     properties["$feature_flag_id"] = flag_details.metadata.id
+        if local_flag_version:
+            properties["$feature_flag_version"] = local_flag_version
+        if local_flag_id:
+            properties["$feature_flag_id"] = local_flag_id
         if feature_flag_error:
             properties["$feature_flag_error"] = feature_flag_error
 
@@ -4983,9 +4997,7 @@ class Client(object):
                 variant=value if isinstance(value, str) else None,
                 payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
-                # The local-evaluation flag definition does not carry a version field;
-                # only the remote ``/flags`` response does via ``metadata.version``.
-                version=None,
+                version=flag_def.get("version"),
                 reason="Evaluated locally",
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
