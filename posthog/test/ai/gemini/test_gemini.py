@@ -1358,8 +1358,11 @@ def test_embed_content_privacy_mode(
     assert props["$ai_input"] is None
 
 
+@pytest.mark.parametrize(
+    "distinct_id", [None, "", "  "], ids=["missing", "empty", "blank"]
+)
 def test_embed_content_no_distinct_id(
-    mock_client, mock_google_genai_client, mock_embed_content_response
+    mock_client, mock_google_genai_client, mock_embed_content_response, distinct_id
 ):
     mock_google_genai_client.models.embed_content.return_value = (
         mock_embed_content_response
@@ -1369,6 +1372,7 @@ def test_embed_content_no_distinct_id(
     client.models.embed_content(
         model="gemini-embedding-001",
         contents="Hello",
+        **({"posthog_distinct_id": distinct_id} if distinct_id is not None else {}),
     )
 
     call_args = mock_client.capture_ai.call_args[1]

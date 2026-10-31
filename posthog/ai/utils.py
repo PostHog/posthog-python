@@ -9,7 +9,7 @@ from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.sanitization import redact_media
 from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
-from posthog.client import Client as PostHogClient
+from posthog.client import Client as PostHogClient, _explicit_distinct_id
 
 from ..version import VERSION as _POSTHOG_VERSION
 
@@ -63,6 +63,11 @@ def _get_tokens_source(
     ):
         return "passthrough"
     return "sdk"
+
+
+def _user_distinct_id(distinct_id: Any) -> Any:
+    """The caller's distinct id as given, or None when it is missing, empty or whitespace."""
+    return distinct_id if _explicit_distinct_id(distinct_id) is not None else None
 
 
 def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwargs):
@@ -538,8 +543,8 @@ def call_llm_and_track_usage(
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+                _user_distinct_id(posthog_distinct_id) is not None
+                or _user_distinct_id(contexts.get_context_distinct_id()) is not None
             )
 
             if not has_person_distinct_id:
@@ -710,8 +715,8 @@ async def call_llm_and_track_usage_async(
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+                _user_distinct_id(posthog_distinct_id) is not None
+                or _user_distinct_id(contexts.get_context_distinct_id()) is not None
             )
 
             if not has_person_distinct_id:
@@ -1014,8 +1019,8 @@ def capture_streaming_event(
         _capture_ai_event(
             ph_client,
             "$ai_generation",
-            distinct_id=event_data.get("distinct_id") or trace_id,
+            distinct_id=_user_distinct_id(event_data.get("distinct_id")) or trace_id,
             properties=event_properties,
             groups=event_data.get("groups"),
-            personless=event_data.get("distinct_id") is None,
+            personless=_user_distinct_id(event_data.get("distinct_id")) is None,
         )

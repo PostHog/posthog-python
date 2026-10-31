@@ -1,6 +1,11 @@
 from typing import Any, Dict, Optional
 
-from ..utils import _capture_ai_event, finalize_ai_content, with_privacy_mode
+from ..utils import (
+    _capture_ai_event,
+    _user_distinct_id,
+    finalize_ai_content,
+    with_privacy_mode,
+)
 
 
 def _capture_embedding_event(
@@ -42,8 +47,8 @@ def _capture_embedding_event(
         _capture_ai_event(
             posthog_client,
             "$ai_embedding",
-            distinct_id=distinct_id or trace_id,
+            distinct_id=_user_distinct_id(distinct_id) or trace_id,
             properties=event_properties,
             groups=groups,
-            personless=distinct_id is None,
+            personless=_user_distinct_id(distinct_id) is None,
         )

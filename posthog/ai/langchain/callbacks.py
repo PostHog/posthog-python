@@ -46,6 +46,7 @@ from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
     _resolve_ai_client,
+    _user_distinct_id,
     finalize_ai_content,
     get_model_params,
     _responses_stop_reason,
@@ -580,10 +581,10 @@ class CallbackHandler(BaseCallbackHandler):
         _capture_ai_event(
             self._ph_client,
             event_name,
-            distinct_id=self._distinct_id or run_id,
+            distinct_id=_user_distinct_id(self._distinct_id) or run_id,
             properties=event_properties,
             groups=self._groups,
-            personless=self._distinct_id is None,
+            personless=_user_distinct_id(self._distinct_id) is None,
         )
 
     def _pop_run_and_capture_generation(
@@ -729,10 +730,10 @@ class CallbackHandler(BaseCallbackHandler):
         _capture_ai_event(
             self._ph_client,
             "$ai_generation",
-            distinct_id=self._distinct_id or trace_id,
+            distinct_id=_user_distinct_id(self._distinct_id) or trace_id,
             properties=event_properties,
             groups=self._groups,
-            personless=self._distinct_id is None,
+            personless=_user_distinct_id(self._distinct_id) is None,
         )
 
     def _log_debug_event(

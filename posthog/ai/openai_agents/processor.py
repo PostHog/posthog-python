@@ -22,6 +22,7 @@ from agents.tracing.span_data import (
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
 from posthog.ai.utils import (
+    _user_distinct_id,
     _capture_processor_event,
     _resolve_ai_client,
     finalize_ai_content,
@@ -168,9 +169,10 @@ class PostHogTracingProcessor(TracingProcessor):
             event,
             properties,
             default_properties=self._properties,
-            distinct_id=distinct_id or properties.get("$ai_trace_id"),
+            distinct_id=_user_distinct_id(distinct_id)
+            or properties.get("$ai_trace_id"),
             groups=self._groups,
-            personless=distinct_id is None,
+            personless=_user_distinct_id(distinct_id) is None,
         )
 
     def on_trace_start(self, trace: Trace) -> None:
