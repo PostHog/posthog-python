@@ -339,6 +339,46 @@ def extract_gemini_stop_reason(response: Any) -> Optional[str]:
     return None
 
 
+# Finish reasons that mean Gemini's content filters stopped the response. The
+# request itself succeeds, so neither an exception nor the HTTP status shows it.
+_GEMINI_BLOCKED_FINISH_REASONS = frozenset(
+    {
+        "SAFETY",
+        "RECITATION",
+        "BLOCKLIST",
+        "PROHIBITED_CONTENT",
+        "SPII",
+        "IMAGE_SAFETY",
+        "IMAGE_PROHIBITED_CONTENT",
+        "IMAGE_RECITATION",
+    }
+)
+
+
+def _gemini_block_reason_from_stop_reason(stop_reason: Optional[str]) -> Optional[str]:
+    """Extract block reason from a Gemini stop reason."""
+    if stop_reason in _GEMINI_BLOCKED_FINISH_REASONS:
+        return f"Gemini blocked the response: {stop_reason}"
+    return None
+
+
+def _extract_gemini_block_reason(response: Any) -> Optional[str]:
+    """
+    Extract block reason from Gemini response.
+
+    Gemini blocks either the prompt (``prompt_feedback.block_reason``, with no
+    candidates) or the generated response (a filter finish reason). The text
+    holds only the reason's name, never content, so privacy mode keeps it.
+    """
+    prompt_feedback = getattr(response, "prompt_feedback", None)
+    if prompt_feedback is not None:
+        block_reason = getattr(prompt_feedback, "block_reason", None)
+        name = getattr(block_reason, "name", block_reason)
+        if isinstance(name, str) and name not in ("", "BLOCKED_REASON_UNSPECIFIED"):
+            return f"Gemini blocked the prompt: {name}"
+    return _gemini_block_reason_from_stop_reason(extract_gemini_stop_reason(response))
+
+
 def extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]:
     """Extract stop reason from a Gemini streaming chunk."""
     return extract_gemini_stop_reason(chunk)

@@ -370,6 +370,28 @@ def extract_stop_reason(response: Any, provider: str) -> Optional[str]:
     return None
 
 
+def _extract_block_reason(response: Any, provider: str) -> Optional[str]:
+    """Extract content filter block reason from response based on provider."""
+    if provider == "gemini":
+        from posthog.ai.gemini.gemini_converter import _extract_gemini_block_reason
+
+        return _extract_gemini_block_reason(response)
+    return None
+
+
+def _extract_stream_block_reason(
+    stop_reason: Optional[str], provider: str
+) -> Optional[str]:
+    """Extract content filter block reason from a stream's stop reason."""
+    if provider == "gemini":
+        from posthog.ai.gemini.gemini_converter import (
+            _gemini_block_reason_from_stop_reason,
+        )
+
+        return _gemini_block_reason_from_stop_reason(stop_reason)
+    return None
+
+
 def extract_available_tool_calls(provider: str, kwargs: Dict[str, Any]):
     """
     Extract available tool calls for the given provider.
@@ -602,6 +624,11 @@ def call_llm_and_track_usage(
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
 
+            if error is None:
+                block_reason = _extract_block_reason(response, provider)
+                if block_reason is not None:
+                    error_params = {"$ai_is_error": True, "$ai_error": block_reason}
+
             if not has_person_distinct_id:
                 tag("$process_person_profile", False)
 
@@ -773,6 +800,11 @@ async def call_llm_and_track_usage_async(
             stop_reason = extract_stop_reason(response, provider)
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
+
+            if error is None:
+                block_reason = _extract_block_reason(response, provider)
+                if block_reason is not None:
+                    error_params = {"$ai_is_error": True, "$ai_error": block_reason}
 
             if not has_person_distinct_id:
                 tag("$process_person_profile", False)
@@ -1203,6 +1235,12 @@ def capture_streaming_event(
     stop_reason = event_data.get("stop_reason")
     if stop_reason is not None:
         event_properties["$ai_stop_reason"] = stop_reason
+
+    if error is None:
+        block_reason = _extract_stream_block_reason(stop_reason, event_data["provider"])
+        if block_reason is not None:
+            event_properties["$ai_is_error"] = True
+            event_properties["$ai_error"] = block_reason
 
     # Handle provider-specific fields
     if (

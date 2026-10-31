@@ -1706,6 +1706,135 @@ def test_stop_reason_streaming(mock_client, mock_google_genai_client):
     assert props["$ai_stop_reason"] == "STOP"
 
 
+def _gemini_response(finish_reason=None, prompt_block_reason=None):
+    mock_response = MagicMock()
+    mock_response.text = None if finish_reason != "STOP" else "Test"
+
+    mock_usage = MagicMock()
+    mock_usage.prompt_token_count = 10
+    mock_usage.candidates_token_count = 0
+    mock_usage.cached_content_token_count = 0
+    mock_usage.thoughts_token_count = 0
+    mock_usage.model_dump.return_value = {"prompt_token_count": 10}
+    mock_response.usage_metadata = mock_usage
+
+    if prompt_block_reason is None:
+        mock_response.prompt_feedback = None
+    else:
+        mock_response.prompt_feedback = MagicMock()
+        mock_response.prompt_feedback.block_reason = MagicMock()
+        mock_response.prompt_feedback.block_reason.name = prompt_block_reason
+
+    if finish_reason is None:
+        mock_response.candidates = []
+    else:
+        mock_candidate = MagicMock()
+        mock_candidate.finish_reason = MagicMock()
+        mock_candidate.finish_reason.name = finish_reason
+        mock_candidate.content = MagicMock()
+        mock_candidate.content.parts = []
+        mock_response.candidates = [mock_candidate]
+    return mock_response
+
+
+@pytest.mark.parametrize(
+    "response_kwargs,expected_error",
+    [
+        (
+            {"finish_reason": "PROHIBITED_CONTENT"},
+            "Gemini blocked the response: PROHIBITED_CONTENT",
+        ),
+        ({"finish_reason": "SAFETY"}, "Gemini blocked the response: SAFETY"),
+        ({"prompt_block_reason": "SAFETY"}, "Gemini blocked the prompt: SAFETY"),
+    ],
+)
+def test_content_filter_block_captured_as_error(
+    mock_client, mock_google_genai_client, response_kwargs, expected_error
+):
+    mock_google_genai_client.models.generate_content.return_value = _gemini_response(
+        **response_kwargs
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    # The call succeeds; the block shows only in the response.
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == expected_error
+    assert props["$ai_http_status"] == 200
+
+
+@pytest.mark.parametrize("finish_reason", ["STOP", "MAX_TOKENS"])
+def test_unblocked_response_is_not_an_error(
+    mock_client, mock_google_genai_client, finish_reason
+):
+    mock_google_genai_client.models.generate_content.return_value = _gemini_response(
+        finish_reason=finish_reason, prompt_block_reason="BLOCKED_REASON_UNSPECIFIED"
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert "$ai_is_error" not in props
+    assert "$ai_error" not in props
+
+
+def test_content_filter_block_error_kept_in_privacy_mode(
+    mock_client, mock_google_genai_client
+):
+    mock_client.privacy_mode = True
+    mock_google_genai_client.models.generate_content.return_value = _gemini_response(
+        finish_reason="PROHIBITED_CONTENT"
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=["Hello"],
+        posthog_distinct_id="test-id",
+    )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_error"] == "Gemini blocked the response: PROHIBITED_CONTENT"
+
+
+def test_content_filter_block_captured_as_error_when_streaming(
+    mock_client, mock_google_genai_client
+):
+    def mock_streaming_response():
+        yield _gemini_response(finish_reason="PROHIBITED_CONTENT")
+
+    mock_google_genai_client.models.generate_content_stream.return_value = (
+        mock_streaming_response()
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    list(
+        client.models.generate_content_stream(
+            model="gemini-2.0-flash",
+            contents=["Hello"],
+            posthog_distinct_id="test-id",
+        )
+    )
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_stop_reason"] == "PROHIBITED_CONTENT"
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Gemini blocked the response: PROHIBITED_CONTENT"
+    assert props["$ai_http_status"] == 200
+
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 

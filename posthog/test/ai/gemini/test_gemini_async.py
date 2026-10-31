@@ -151,6 +151,32 @@ async def test_async_client_basic_generation(
     assert props["$ai_latency"] > 0
 
 
+async def test_async_content_filter_block_captured_as_error(
+    mock_client, mock_google_genai_client
+):
+    mock_response = MagicMock()
+    mock_response.text = None
+    mock_response.usage_metadata = None
+    mock_response.prompt_feedback = None
+    mock_candidate = MagicMock()
+    mock_candidate.finish_reason = MagicMock()
+    mock_candidate.finish_reason.name = "PROHIBITED_CONTENT"
+    mock_candidate.content = MagicMock()
+    mock_candidate.content.parts = []
+    mock_response.candidates = [mock_candidate]
+    mock_google_genai_client.aio.models.generate_content = AsyncMock(
+        return_value=mock_response
+    )
+
+    client = AsyncClient(api_key="test-key", posthog_client=mock_client)
+    await client.models.generate_content(model="gemini-x", contents="Hello")
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Gemini blocked the response: PROHIBITED_CONTENT"
+    assert props["$ai_http_status"] == 200
+
+
 async def test_async_client_timeout_captures_error(
     mock_client, mock_google_genai_client
 ):
