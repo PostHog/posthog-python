@@ -47,7 +47,7 @@ from posthog.request import (
     _get_capture_session,
     normalize_host,
 )
-from posthog.utils import _uuid7, remove_trailing_slash
+from posthog.utils import _rfc3339_timestamp, _uuid7, remove_trailing_slash
 
 if TYPE_CHECKING:
     import requests
@@ -368,7 +368,7 @@ def _post_v1(
         _HEADER_SDK_INFO: sdk_info,
         _HEADER_ATTEMPT: str(attempt),
         _HEADER_REQUEST_ID: request_id,
-        _HEADER_REQUEST_TIMESTAMP: datetime.now(timezone.utc).isoformat(),
+        _HEADER_REQUEST_TIMESTAMP: _rfc3339_timestamp(datetime.now(timezone.utc)),
     }
     body, encoding = _compress_v1(compression, data)
     if encoding is not None:
@@ -533,7 +533,7 @@ def _send_v1_batch(
     request_id = str(_uuid7())
     # Hoisted once so the batch envelope is byte-identical across retry attempts
     # (only the events list shrinks and the attempt header increments).
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = _rfc3339_timestamp(datetime.now(timezone.utc))
     pending_events = [_to_v1_event(m) for m in batch]
     pending_uuids = [_canonical_uuid(e["uuid"]) for e in pending_events]
     # (uuid, details) for every event the server dropped, across all attempts.

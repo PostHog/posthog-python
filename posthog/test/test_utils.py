@@ -159,7 +159,7 @@ class TestUtils(unittest.TestCase):
                 mock_datetime.now.return_value = now.replace(tzinfo=None)
                 normalized = utils._normalize_timestamp("2030-01-01T12:00:00")
 
-            assert normalized == "2030-01-01T12:00:00+00:00"
+            assert normalized == "2030-01-01T12:00:00.000000+00:00"
         finally:
             if original_tz is None:
                 os.environ.pop("TZ", None)
@@ -181,7 +181,7 @@ class TestUtils(unittest.TestCase):
             normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
 
         mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
-        assert normalized == "2026-06-27T06:30:00+00:00"
+        assert normalized == "2026-06-27T06:30:00.000000+00:00"
 
     @parameterized.expand(["2026-06-27", "20260627", "not-Z-an-iso-timestamp"])
     def test_normalize_timestamp_rejects_invalid_string(self, timestamp):

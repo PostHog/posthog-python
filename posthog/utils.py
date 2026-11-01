@@ -67,6 +67,15 @@ def _uuid7() -> UUID:
     return UUID(int=value)
 
 
+def _rfc3339_timestamp(dt: datetime) -> str:
+    """Format an aware datetime as a UTC RFC 3339 string for the capture wire.
+
+    The fraction is always six digits, even when zero, because plain
+    ``isoformat()`` drops it for whole seconds.
+    """
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
+
+
 def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
     """Normalize a datetime or parseable ISO datetime string to UTC."""
     parsed_timestamp: datetime
@@ -89,7 +98,7 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
             ) from None
     else:
         parsed_timestamp = timestamp
-    return guess_timezone(parsed_timestamp).isoformat()
+    return _rfc3339_timestamp(guess_timezone(parsed_timestamp))
 
 
 def remove_trailing_slash(host: str) -> str:

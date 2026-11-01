@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import UUID
 
-from posthog.utils import _normalize_timestamp, _uuid7
+from posthog.utils import _normalize_timestamp, _rfc3339_timestamp, _uuid7
 from posthog.utils import clean as _clean
 
 log = logging.getLogger("posthog")
@@ -257,7 +257,7 @@ def _v1_timestamp(timestamp: Any) -> str:
     rejects naive timestamps.
     """
     if timestamp is None:
-        return datetime.now(timezone.utc).isoformat()
+        return _rfc3339_timestamp(datetime.now(timezone.utc))
     return _normalize_timestamp(timestamp)
 
 
@@ -336,7 +336,7 @@ def _build_v1_batch_body(
     hoisted once so it stays stable across retry attempts.
     """
     body: dict[str, Any] = {
-        "created_at": created_at or datetime.now(timezone.utc).isoformat(),
+        "created_at": created_at or _rfc3339_timestamp(datetime.now(timezone.utc)),
         "batch": events,
     }
     if historical_migration:

@@ -103,6 +103,7 @@ from .utils import (
     SizeLimitedDict,
     _is_personal_api_key,
     _normalize_timestamp,
+    _rfc3339_timestamp,
     clean,
     _drop_invalid_distinct_id,
     _drop_invalid_event_name,
@@ -540,7 +541,7 @@ class AsyncClient:
                 "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
                 "Falling back to the current UTC time."
             )
-            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+            msg["timestamp"] = _rfc3339_timestamp(datetime.now(tz=timezone.utc))
 
         sent_uuid = self._normalize_uuid(msg)
         properties = msg.setdefault("properties", {})

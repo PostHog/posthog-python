@@ -1830,7 +1830,7 @@ class TestClient(unittest.TestCase):
             batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["properties"]["property"], "value")
             self.assertEqual(msg["event"], "python test event")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
@@ -1851,7 +1851,7 @@ class TestClient(unittest.TestCase):
             )
 
             msg = sent_batch(mock_post)[0]
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     def test_capture_converts_parseable_timestamp_string_to_utc(self):
         with patch_capture_send("client") as mock_post:
@@ -1863,7 +1863,7 @@ class TestClient(unittest.TestCase):
             )
 
             msg = sent_batch(mock_post)[0]
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
     def test_capture_replaces_invalid_timestamp_with_current_utc_time(self, timestamp):
@@ -1883,7 +1883,7 @@ class TestClient(unittest.TestCase):
 
         self.assertIsNotNone(result)
         msg = sent_batch(mock_post)[0]
-        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
+        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00.000000+00:00")
         mock_warning.assert_called_once()
         self.assertNotIn(timestamp, repr(mock_warning.call_args))
 
@@ -2026,7 +2026,7 @@ class TestClient(unittest.TestCase):
             batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["$set"]["trait"], "value")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -2070,7 +2070,7 @@ class TestClient(unittest.TestCase):
             batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["$set_once"]["trait"], "value")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -2167,7 +2167,7 @@ class TestClient(unittest.TestCase):
                     "$is_server": True,
                 },
             )
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     def test_advanced_group_identify_with_distinct_id(self):
         with patch_capture_send("client") as mock_post:
@@ -2203,7 +2203,7 @@ class TestClient(unittest.TestCase):
                     "$is_server": True,
                 },
             )
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     @parameterized.expand(
         [
