@@ -1,5 +1,21 @@
 # posthog
 
+## 7.82.0 — 2026-11-02
+
+### Minor changes
+
+- [b10c38a](https://github.com/posthog/posthog-python/commit/b10c38ac3928f3b1cef743dab234e17720c81f08) Add a per-read `send_feature_flag_events` option to `FeatureFlagEvaluations.is_enabled()` and `get_flag()`. Pass `send_feature_flag_events=False` to read a flag from an `evaluate_flags()` snapshot without sending `$feature_flag_called`. The read leaves the dedupe cache alone, so a later read that sends events still reports the flag, and the key still counts as accessed for `only_accessed()`. The option defaults to `True`, as on `get_feature_flag()`. — Thanks @andehen!
+
+### Patch changes
+
+- [e24100b](https://github.com/posthog/posthog-python/commit/e24100b413d8f1a4f14c49dbee3391c8675fb2ff) Add `$feature_flag_id` and `$feature_flag_version` to `$feature_flag_called` events for locally evaluated flags in `get_feature_flag()`, `feature_enabled()` and `get_feature_flag_result()`, and `$feature_flag_version` for locally evaluated flags in `evaluate_flags()`, taken from the flag definition. Remotely evaluated flags already sent both. — Thanks @andehen!
+
+## 7.81.2 — 2026-11-02
+
+### Patch changes
+
+- [f20066e](https://github.com/posthog/posthog-python/commit/f20066e7f2826dab701a8d73fbfd5780c4ccd49a) `emails.send()` now sends the template ID and distinct ID as top-level fields in the request body. — Thanks @mayteio!
+
 ## 7.81.1 — 2026-10-30
 
 ### Patch changes

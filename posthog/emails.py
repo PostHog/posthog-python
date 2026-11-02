@@ -448,8 +448,6 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
             )
         payload["template"] = {"key": template_key, "hash": _content_hash(content)}
         payload["message_data"] = clean(dict(template_data))
-        if distinct_id is not None:
-            payload["identifiers"] = {"distinct_id": distinct_id}
         upload = _PreparedUpload(
             path=_UPLOAD_PATH.format(template_key=template_key),
             body=_encode(
@@ -463,8 +461,8 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         )
     else:
         payload.update({"template_key": template_key, **content})
-        if distinct_id is not None:
-            payload["distinct_id"] = distinct_id
+    if distinct_id is not None:
+        payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
     return _PreparedSend(
         path=_SEND_PATH,
@@ -617,12 +615,12 @@ def _prepare_send(
         raise TypeError("template_data must be a mapping.")
 
     payload: dict[str, Any] = {
-        "template": {"id": str(template_uuid)},
+        "template_id": str(template_uuid),
         "to": to,
         "message_data": clean(dict(template_data or {})),
     }
     if distinct_id is not None:
-        payload["identifiers"] = {"distinct_id": distinct_id}
+        payload["distinct_id"] = distinct_id
     return _PreparedSend(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
