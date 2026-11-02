@@ -1,5 +1,13 @@
 # posthog
 
+## 7.82.1 — 2026-11-02
+
+### Patch changes
+
+- [9ebfb87](https://github.com/posthog/posthog-python/commit/9ebfb87ce3eefb2f3672c99e1b4f083013fe864b) Fix a race condition where concurrent feature flag fallback-cache eviction could raise KeyError instead of returning a cache miss, including during request failures. — Thanks @Sarbajit-Sengupta for your first contribution 🎉!
+- [5b50683](https://github.com/posthog/posthog-python/commit/5b506837995c1ddbb007e8822221552c21b06748) Stringify non-string properties as compact JSON for local `regex` and `not_regex` matching, so booleans, lists, and objects match the same way they do on the flags service. — Thanks @luantaraschi!
+- [a239479](https://github.com/posthog/posthog-python/commit/a239479585d5c5367843ec088e49f52010223d08) Serialize UUID values in feature flag request bodies instead of failing the evaluation, so a UUID distinct id, group key, or flag property reaches the flags service. — Thanks @luantaraschi!
+
 ## 7.82.0 — 2026-11-02
 
 ### Minor changes
