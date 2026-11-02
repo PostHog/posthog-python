@@ -9,7 +9,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FeatureFlag, FlagValue, UnresolvedFlagReason
+from posthog.types import FeatureFlag as _FeatureFlag
+from posthog.types import FlagValue, UnresolvedFlagReason
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class _EvaluatedFlagRecord:
     has_experiment: Optional[bool] = None
     # The parsed /flags record, with its typed value, reason and metadata.
     # ``None`` for a locally evaluated flag.
-    details: Optional[FeatureFlag] = None
+    details: Optional[_FeatureFlag] = None
 
 
 @dataclass
