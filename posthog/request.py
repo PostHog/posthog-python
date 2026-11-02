@@ -7,6 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 from typing import Any, List, Optional, Tuple, Union, cast
+from uuid import UUID
 
 import requests
 from requests.adapters import HTTPAdapter
@@ -460,6 +461,8 @@ class DatetimeSerializer(json.JSONEncoder):
     def default(self, obj: Any):
         if isinstance(obj, (date, datetime)):
             return obj.isoformat()
+        if isinstance(obj, UUID):
+            return str(obj)
 
         return json.JSONEncoder.default(self, obj)
 
