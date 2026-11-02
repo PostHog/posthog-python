@@ -47,22 +47,29 @@ def test_an_unreadable_record_fails_only_itself(results):
     # or metadata, and its siblings read as before.
     assert RELEASED["getters with an unreadable record"]["get_all_flags"] == {}
 
-    expected = RELEASED["getters with the unreadable record read as disabled"]
+    as_disabled = RELEASED["getters with the unreadable record read as disabled"]
+    assert results["getters with the unreadable record read as disabled"] == as_disabled
+
+    # A single-flag read of the unreadable record still reports what 7.82.1
+    # reported when the whole response failed: an unknown_error and no request
+    # details. Only its value differs, disabled instead of None.
+    expected = copy.deepcopy(as_disabled)
+    released_events = RELEASED["getters with an unreadable record"]["events"]
+    for event, released in zip(expected["events"], released_events):
+        if (
+            released[1].get("$feature_flag") == "unreadable"
+            and released[1].get("$feature_flag_error") == "unknown_error"
+        ):
+            event[1].pop("$feature_flag_request_id")
+            event[1].pop("$feature_flag_evaluated_at")
+            event[1]["$feature_flag_error"] = "unknown_error"
     assert results["getters with an unreadable record"] == expected
-    assert results["getters with the unreadable record read as disabled"] == expected
 
 
 @pytest.mark.parametrize("name", sorted(RELEASED["cache histories"]))
 def test_fallback_cache_histories_match_7_82_1(results, name):
-    expected = copy.deepcopy(RELEASED["cache histories"][name])
-    if name == "good, unreadable record, timeout":
-        # 7.82.1 failed the whole response on the unreadable record, so its event
-        # had an unknown_error and no request details. The request now succeeds and
-        # only the record fails, so the event carries the request details and no
-        # error, while the value still falls back to the cached one.
-        unreadable_read = expected["events"][1][1]
-        assert unreadable_read.pop("$feature_flag_error") == "unknown_error"
-        unreadable_read["$feature_flag_request_id"] = scenarios.REQUEST_ID
-        unreadable_read["$feature_flag_evaluated_at"] = scenarios.EVALUATED_AT
-
+    # An unreadable record now fails only itself, but a single-flag read of it
+    # still reports what 7.82.1 reported when the whole response failed: an
+    # unknown_error, no request details, and the cached value.
+    expected = RELEASED["cache histories"][name]
     assert results["cache histories"][name] == expected

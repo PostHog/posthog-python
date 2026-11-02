@@ -4189,7 +4189,11 @@ class Client(object):
                 ):
                     # The record could not be read, so it reads as disabled. It must
                     # not replace the last good cached value, which it falls back to
-                    # like a failed request.
+                    # like a failed request, and it reports what a failed request
+                    # reports: an unknown error and no request details.
+                    feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
+                    request_id = None
+                    evaluated_at = None
                     flag_result = (
                         self._get_stale_flag_fallback(distinct_id, key) or flag_result
                     )
