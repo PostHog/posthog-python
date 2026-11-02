@@ -20,7 +20,11 @@ import jsonschema
 import pytest
 
 from posthog import AsyncPosthog
-from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
+from posthog.client import (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
+    _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES,
+    Client,
+)
 from posthog.test.test_flags_v4_response import FIXTURES, READERS, _build
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlagResult
@@ -705,10 +709,44 @@ def test_minimal_calls_keep_the_reason_description_only_without_config_version_2
     finally:
         client.shutdown()
 
+    allowlist = (
+        _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+        if config_version == 1
+        else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
+    )
     assert [message["event"] for message in messages] == [FLAG_CALLED, FLAG_CALLED]
     for message in messages:
-        assert set(message["properties"]) <= _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+        assert set(message["properties"]) <= allowlist
         assert message["properties"].get("$feature_flag_reason") == reason
+
+
+def test_minimal_config_version_1_calls_drop_super_properties_named_like_attribution():
+    attribution_names = (
+        _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES - _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+    )
+    messages: List[Dict[str, Any]] = []
+
+    def before_send(message: Dict[str, Any]) -> Dict[str, Any]:
+        messages.append(message)
+        return message
+
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        before_send=before_send,
+        super_properties={name: "set-by-the-app" for name in attribution_names},
+    )
+    record = _record(
+        "condition_match", config_version=1, description=REASON_DESCRIPTION
+    )
+    try:
+        with _serving(_response(record, minimalFlagCalledEvents=True)):
+            client.get_feature_flag_result(FLAG, DISTINCT_ID)
+    finally:
+        client.shutdown()
+
+    [message] = messages
+    assert not attribution_names & set(message["properties"])
 
 
 # --- The exact events of a split ---------------------------------------------------------
@@ -1209,7 +1247,7 @@ def test_minimal_flag_called_events_keep_the_attribution():
         client.shutdown()
 
     called, exposure = messages
-    assert set(called["properties"]) <= _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+    assert set(called["properties"]) <= _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
     assert "plan" not in called["properties"]
     assert _attribution(called["properties"]) == EXPECTED_ATTRIBUTION
     # The exposure is a full event.

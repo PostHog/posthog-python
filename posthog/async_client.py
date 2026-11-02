@@ -78,8 +78,8 @@ from .feature_flag_evaluations import (
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
+from .types import FeatureFlag as _FeatureFlag
 from .types import (
-    FeatureFlag,
     FlagMetadata,
     FlagValue,
     _has_untyped_flag_records,
@@ -1109,7 +1109,7 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
-        details: Optional[FeatureFlag] = None,
+        details: Optional[_FeatureFlag] = None,
         value_from_details: bool = False,
     ) -> None:
         capture_groups = {

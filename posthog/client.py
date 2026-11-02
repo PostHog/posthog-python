@@ -342,12 +342,6 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$feature_flag_evaluated_at",
         "$feature_flag_error",
         "locally_evaluated",
-        # Config version 2 attribution, which minimal events must keep
-        "$feature_flag_config_version",
-        "$feature_flag_reason_code",
-        "$feature_flag_rule_id",
-        "$feature_flag_rule_type",
-        "$feature_flag_variant",
         # Correctness-required
         "$groups",
         "$process_person_profile",
@@ -365,6 +359,20 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$os_distro",
         "$python_runtime",
         "$python_version",
+    }
+)
+
+# A config version 2 event also keeps its attribution when minimized. Only those
+# events use this wider allowlist, so a config version 1 event is trimmed as before,
+# even when super properties happen to use these names.
+_MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+    | {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant",
     }
 )
 
@@ -560,6 +568,8 @@ def _capture_flag_events(
         if should_minimize:
             extra_capture_kwargs["_property_allowlist"] = (
                 _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+                if attribution is None
+                else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
             )
 
         capture(
