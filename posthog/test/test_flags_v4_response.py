@@ -20,6 +20,7 @@ import pytest
 from posthog import AsyncPosthog
 from posthog.client import Client
 from posthog.feature_flag_evaluations import FeatureFlagEvaluations
+from posthog.request import RequestsTimeout
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import (
     FeatureFlag,
@@ -211,6 +212,59 @@ def test_a_failed_record_never_renders_its_value(client):
 
     assert snapshot.get_flag("garden-layout") is False
     assert snapshot.is_enabled("garden-layout", True) is False
+
+
+@pytest.mark.parametrize(
+    "make_record",
+    [
+        lambda **overrides: _record(**{"metadata.config_version": 1, **overrides}),
+        lambda **overrides: _older_record(**overrides),
+    ],
+    ids=["v4", "older"],
+)
+def test_an_unreadable_record_keeps_the_last_good_cached_value(make_record):
+    responses: List[Any] = [
+        {"flags": {"garden-layout": make_record()}, "requestId": "r1"},
+        {"flags": {"garden-layout": make_record(reason="oops")}, "requestId": "r2"},
+        RequestsTimeout("timed out"),
+    ]
+
+    def flags(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        flag_fallback_cache_url="memory://local/?ttl=300&size=100",
+    )
+    try:
+        with mock.patch("posthog.client.flags", side_effect=flags):
+            values = [
+                client.get_feature_flag(
+                    "garden-layout", DISTINCT_ID, send_feature_flag_events=False
+                )
+                for _ in range(3)
+            ]
+    finally:
+        client.shutdown()
+
+    # The unreadable record falls back to the cached value instead of replacing it,
+    # so the timeout after it still has the last good value.
+    assert values == ["compact", "compact", "compact"]
+
+
+def test_an_unreadable_record_without_a_cached_value_reads_as_disabled(client):
+    response = {"flags": {"garden-layout": _older_record(reason="oops")}}
+    with mock.patch("posthog.client.flags", return_value=response):
+        assert (
+            client.get_feature_flag(
+                "garden-layout", DISTINCT_ID, send_feature_flag_events=False
+            )
+            is False
+        )
 
 
 def _record(**overrides: Any) -> Dict[str, Any]:

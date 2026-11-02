@@ -4181,9 +4181,19 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
+                if (
+                    flag_details is not None
+                    and flag_details._malformed_field is not None
+                ):
+                    # The record could not be read, so it reads as disabled. It must
+                    # not replace the last good cached value, which it falls back to
+                    # like a failed request.
+                    flag_result = (
+                        self._get_stale_flag_fallback(distinct_id, key) or flag_result
+                    )
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
-                if self.flag_cache and flag_result:
+                elif self.flag_cache and flag_result:
                     self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
