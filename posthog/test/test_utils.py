@@ -176,6 +176,30 @@ class TestUtils(unittest.TestCase):
             utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
         )
 
+    @parameterized.expand(
+        [
+            (
+                "whole_second_keeps_zero_fraction",
+                datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.000000+00:00",
+            ),
+            (
+                "microseconds_kept",
+                datetime(2026, 1, 15, 12, 0, 0, 120000, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.120000+00:00",
+            ),
+            (
+                "offset_converted_to_utc",
+                datetime(2026, 1, 15, 7, 30, 0, tzinfo=timezone(timedelta(hours=-5))),
+                "2026-01-15T12:30:00.000000+00:00",
+            ),
+        ]
+    )
+    def test_rfc3339_timestamp_always_writes_the_fraction_in_utc(
+        self, _name: str, value: datetime, expected: str
+    ):
+        assert utils._rfc3339_timestamp(value) == expected
+
     def test_normalize_timestamp_converts_compact_offset_to_utc(self):
         with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
             normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
