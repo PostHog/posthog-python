@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from unittest import mock
@@ -25,7 +26,6 @@ from posthog.types import (
     FeatureFlagResult,
     FlagMetadata,
     FlagReason,
-    _set_private_fields,
     normalize_flags_response,
     to_flags_and_payloads,
 )
@@ -537,17 +537,45 @@ def test_a_valid_older_server_record_renders_as_before():
             condition_index=0,
             description="Matched condition set 1",
         ),
-        metadata=_set_private_fields(
-            FlagMetadata(
-                id=202,
-                payload=None,
-                version=9,
-                description="Garden layout",
-                has_experiment=False,
-            ),
-            _config_version=1,
+        metadata=FlagMetadata(
+            id=202,
+            payload=None,
+            version=9,
+            description="Garden layout",
+            has_experiment=False,
         ),
     )
+
+
+def test_the_private_v4_details_stay_out_of_the_public_dataclass_fields():
+    # The typed value and rule metadata are private until the typed accessors ship:
+    # repr, equality, hashing and asdict() of a parsed flag see only public fields.
+    record = _record(value={"beds": 4}, **{"metadata.rule_id": "rule-1"})
+    flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
+        "garden-layout"
+    ]
+    assert flag._value == {"beds": 4}
+    assert flag.metadata._rule_id == "rule-1"
+
+    public = FeatureFlag(
+        key=flag.key,
+        enabled=flag.enabled,
+        variant=flag.variant,
+        reason=flag.reason,
+        metadata=FlagMetadata(
+            id=flag.metadata.id,
+            payload=flag.metadata.payload,
+            version=flag.metadata.version,
+            description=flag.metadata.description,
+            has_experiment=flag.metadata.has_experiment,
+        ),
+    )
+    assert flag == public
+    assert hash(flag) == hash(public)
+    assert repr(flag) == repr(public)
+    assert asdict(flag) == asdict(public)
+    fields = [*asdict(flag), *asdict(flag)["metadata"]]
+    assert not [name for name in fields if name.startswith("_")]
 
 
 @pytest.mark.parametrize("make_record", [_record, _older_record])

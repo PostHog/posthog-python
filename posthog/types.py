@@ -1,11 +1,12 @@
 import json
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import (
     Any,
     Callable,
+    ClassVar,
     Dict,
     List,
     Optional,
@@ -188,16 +189,18 @@ class FlagMetadata:
     version: Optional[int]
     description: str
     has_experiment: Optional[bool] = None
-    # Work in progress: the ``/flags?v=4`` metadata fields are private until the
-    # typed flag value accessors ship, which make them public. ``_config_version``
-    # is the configuration format of the flag (``1`` for a record without a typed
+    # Work in progress: the ``/flags?v=4`` metadata is private until the typed flag
+    # value accessors ship. It is kept in instance attributes, not dataclass fields,
+    # so ``repr``, equality, hashing and ``dataclasses.asdict`` see only the public
+    # fields; these class attributes are the defaults. ``_config_version`` is the
+    # configuration format of the flag (``1`` for a record without a typed
     # ``value``); the rule fields name the rule that produced the result, and the
     # variant fields the assigned variant.
-    _config_version: Optional[int] = field(default=None, init=False)
-    _rule_type: Optional[str] = field(default=None, init=False)
-    _rule_id: Optional[str] = field(default=None, init=False)
-    _variant_key: Optional[str] = field(default=None, init=False)
-    _forced_variant: Optional[bool] = field(default=None, init=False)
+    _config_version: ClassVar[Optional[int]] = None
+    _rule_type: ClassVar[Optional[str]] = None
+    _rule_id: ClassVar[Optional[str]] = None
+    _variant_key: ClassVar[Optional[str]] = None
+    _forced_variant: ClassVar[Optional[bool]] = None
 
     @classmethod
     def from_json(cls, resp: Any) -> Union["FlagMetadata", LegacyFlagMetadata]:
@@ -225,20 +228,10 @@ _T = TypeVar("_T")
 
 
 def _set_private_fields(obj: _T, **fields: Any) -> _T:
-    """Set the private, work-in-progress fields of a frozen dataclass."""
+    """Set the private, work-in-progress attributes of a frozen dataclass."""
     for name, value in fields.items():
         object.__setattr__(obj, name, value)
     return obj
-
-
-class _DerivedValue:
-    """Default of ``FeatureFlag._value``: derive the value from ``variant`` and ``enabled``."""
-
-    def __repr__(self) -> str:
-        return "<derived from variant and enabled>"
-
-
-_DERIVED_VALUE: Any = _DerivedValue()
 
 
 @dataclass(frozen=True)
@@ -261,27 +254,25 @@ class FeatureFlag:
     variant: Optional[str]
     reason: Optional[FlagReason]
     metadata: Union[FlagMetadata, LegacyFlagMetadata]
-    # Work in progress: private until the typed flag value accessors ship, which
-    # make them public. ``_value`` is the typed flag value: a boolean, string,
+    # Work in progress: private until the typed flag value accessors ship. Like the
+    # private ``FlagMetadata`` attributes, these are instance attributes, not
+    # dataclass fields. ``_value`` is the typed flag value: a boolean, string,
     # number, object, or ``None`` when the flag has no value; it defaults to
     # ``variant``, or ``enabled`` when there is no variant. ``_failed`` says whether
     # the flag failed to evaluate, or its record could not be read.
-    _value: Any = field(default=_DERIVED_VALUE, init=False)
-    _failed: bool = field(default=False, init=False)
+    _value: ClassVar[Any] = None
+    _failed: ClassVar[bool] = False
     # The wire path of the field that made the record unreadable, such as
     # ``"metadata.id"``. ``None`` unless the record could not be read; a record the
     # server marks failed has ``_failed`` set and this ``None``.
-    _malformed_field: Optional[str] = field(
-        default=None, init=False, repr=False, compare=False
-    )
+    _malformed_field: ClassVar[Optional[str]] = None
 
     def __post_init__(self) -> None:
-        if self._value is _DERIVED_VALUE:
-            object.__setattr__(
-                self,
-                "_value",
-                self.variant if self.variant is not None else self.enabled,
-            )
+        object.__setattr__(
+            self,
+            "_value",
+            self.variant if self.variant is not None else self.enabled,
+        )
 
     def get_value(self) -> FlagValue:
         return self.variant or self.enabled
