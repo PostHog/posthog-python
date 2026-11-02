@@ -99,7 +99,7 @@ def no_sleep():
         (
             "with_distinct_id",
             {"distinct_id": "user_123"},
-            {"identifiers": {"distinct_id": "user_123"}},
+            {"distinct_id": "user_123"},
         ),
         ("without_distinct_id", {}, {}),
     ]
@@ -125,7 +125,7 @@ def test_send_posts_the_template_to_the_app_host(_name, overrides, extra_body):
     assert request.headers["Idempotency-Key"] == "welcome:user_123"
     assert request.headers["User-Agent"] == f"posthog-python/{VERSION}"
     assert json.loads(request.body) == {
-        "template": {"id": TEMPLATE_ID},
+        "template_id": TEMPLATE_ID,
         "to": "user@example.com",
         "message_data": {"total": 19.5, "expires_at": "2026-11-20T00:00:00+00:00"},
         **extra_body,
@@ -423,7 +423,7 @@ async def test_async_send_retries_with_the_same_key():
     assert seen[0].extensions["timeout"] == dict.fromkeys(
         ["connect", "read", "write", "pool"], 3
     )
-    assert json.loads(seen[0].content)["identifiers"] == {"distinct_id": "user_123"}
+    assert json.loads(seen[0].content)["distinct_id"] == "user_123"
 
 
 @pytest.mark.asyncio
