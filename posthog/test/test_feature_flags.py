@@ -5871,6 +5871,25 @@ class TestMatchProperties(unittest.TestCase):
 
         self.assertFalse(match_property(property_d, {"key": "value"}))
 
+    @parameterized.expand(
+        [
+            ("list", r"\[1,2\]", [1, 2], True),
+            ("bool", "^true$", True, True),
+            ("python_bool_spelling", "True", True, False),
+            ("object", r'^\{"a":1,"b":\[null\]\}$', {"b": [None], "a": 1}, True),
+            ("python_object_spelling", "'a'", {"a": 1}, False),
+        ]
+    )
+    def test_regex_stringifies_non_string_properties_as_compact_json(
+        self, _name, pattern, property_value, expected
+    ):
+        regex = self.property("key", pattern, "regex")
+        not_regex = self.property("key", pattern, "not_regex")
+        self.assertEqual(expected, match_property(regex, {"key": property_value}))
+        self.assertEqual(
+            not expected, match_property(not_regex, {"key": property_value})
+        )
+
     def test_match_properties_math_operators(self):
         property_a = self.property(key="key", value=1, operator="gt")
         self.assertTrue(match_property(property_a, {"key": 2}))
