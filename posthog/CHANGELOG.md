@@ -1,5 +1,29 @@
 # posthog
 
+## 7.82.1 — 2026-11-02
+
+### Patch changes
+
+- [9ebfb87](https://github.com/posthog/posthog-python/commit/9ebfb87ce3eefb2f3672c99e1b4f083013fe864b) Fix a race condition where concurrent feature flag fallback-cache eviction could raise KeyError instead of returning a cache miss, including during request failures. — Thanks @Sarbajit-Sengupta for your first contribution 🎉!
+- [5b50683](https://github.com/posthog/posthog-python/commit/5b506837995c1ddbb007e8822221552c21b06748) Stringify non-string properties as compact JSON for local `regex` and `not_regex` matching, so booleans, lists, and objects match the same way they do on the flags service. — Thanks @luantaraschi!
+- [a239479](https://github.com/posthog/posthog-python/commit/a239479585d5c5367843ec088e49f52010223d08) Serialize UUID values in feature flag request bodies instead of failing the evaluation, so a UUID distinct id, group key, or flag property reaches the flags service. — Thanks @luantaraschi!
+
+## 7.82.0 — 2026-11-02
+
+### Minor changes
+
+- [b10c38a](https://github.com/posthog/posthog-python/commit/b10c38ac3928f3b1cef743dab234e17720c81f08) Add a per-read `send_feature_flag_events` option to `FeatureFlagEvaluations.is_enabled()` and `get_flag()`. Pass `send_feature_flag_events=False` to read a flag from an `evaluate_flags()` snapshot without sending `$feature_flag_called`. The read leaves the dedupe cache alone, so a later read that sends events still reports the flag, and the key still counts as accessed for `only_accessed()`. The option defaults to `True`, as on `get_feature_flag()`. — Thanks @andehen!
+
+### Patch changes
+
+- [e24100b](https://github.com/posthog/posthog-python/commit/e24100b413d8f1a4f14c49dbee3391c8675fb2ff) Add `$feature_flag_id` and `$feature_flag_version` to `$feature_flag_called` events for locally evaluated flags in `get_feature_flag()`, `feature_enabled()` and `get_feature_flag_result()`, and `$feature_flag_version` for locally evaluated flags in `evaluate_flags()`, taken from the flag definition. Remotely evaluated flags already sent both. — Thanks @andehen!
+
+## 7.81.2 — 2026-11-02
+
+### Patch changes
+
+- [f20066e](https://github.com/posthog/posthog-python/commit/f20066e7f2826dab701a8d73fbfd5780c4ccd49a) `emails.send()` now sends the template ID and distinct ID as top-level fields in the request body. — Thanks @mayteio!
+
 ## 7.81.1 — 2026-10-30
 
 ### Patch changes

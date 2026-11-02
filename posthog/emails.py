@@ -242,12 +242,12 @@ def _prepare_send(
         raise ValueError("max_retries must be a nonnegative integer.")
 
     payload: dict[str, Any] = {
-        "template": {"id": str(template_uuid)},
+        "template_id": str(template_uuid),
         "to": to,
         "message_data": clean(dict(template_data or {})),
     }
     if distinct_id is not None:
-        payload["identifiers"] = {"distinct_id": distinct_id}
+        payload["distinct_id"] = distinct_id
     return _PreparedSend(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),

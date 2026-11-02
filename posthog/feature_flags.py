@@ -1264,7 +1264,9 @@ def _match_property_value(
         return matched
 
     if operator in ("regex", "not_regex"):
-        property_string = "null" if override_value is None else str(override_value)
+        property_string = _value_to_string(
+            override_value, UnresolvedFlagReason.MISSING_CONTEXT
+        )
         regex_match = _match_regex(str(value), property_string)
         if regex_match is None:
             return False
