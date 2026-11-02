@@ -886,23 +886,13 @@ attribute posthog.debug = False
 attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
-attribute posthog.emails.CodeEmailArgs.attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
-attribute posthog.emails.CodeEmailArgs.bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
-attribute posthog.emails.CodeEmailArgs.cc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
-attribute posthog.emails.CodeEmailArgs.headers: NotRequired[Optional[Mapping[str, str]]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.subject: str
-attribute posthog.emails.CodeEmailArgs.tags: NotRequired[Optional[Sequence[EmailTag]]]
-attribute posthog.emails.CodeEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
-attribute posthog.emails.EmailAttachment.content: Union[bytes, bytearray, memoryview, str]
-attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
-attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
-attribute posthog.emails.EmailAttachment.filename: str
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -917,8 +907,6 @@ attribute posthog.emails.EmailStatus.id: str
 attribute posthog.emails.EmailStatus.reason: Optional[str] = None
 attribute posthog.emails.EmailStatus.status: str
 attribute posthog.emails.EmailStatus.status_at: datetime
-attribute posthog.emails.EmailTag.name: str
-attribute posthog.emails.EmailTag.value: str
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
@@ -1354,10 +1342,8 @@ class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_erro
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
 class posthog.emails.CodeEmailArgs 
-class posthog.emails.EmailAttachment 
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
-class posthog.emails.EmailTag 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())

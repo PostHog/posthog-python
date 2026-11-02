@@ -31,17 +31,6 @@ posthog.emails.send(
     html=rendered_html,
     distinct_id="user_123",
 )
-
-# A template in your code. PostHog fills in the variables, and the client
-# uploads the template whenever its content changes.
-posthog.emails.send(
-    to="user@example.com",
-    template_key="welcome",
-    subject="Welcome, {{ variables.name }}",
-    html=welcome_html,
-    template_data={"name": "Ada"},
-    distinct_id="user_123",
-)
 ```
 
 ``posthog.emails`` above is the client's property. For async code, use
@@ -98,8 +87,6 @@ works too. A disabled client sends nothing and raises ``client_disabled``.
 from __future__ import annotations
 
 import asyncio
-import base64
-import hashlib
 import importlib
 import json
 import logging
@@ -140,10 +127,8 @@ from .version import VERSION
 __all__ = [
     "AsyncEmails",
     "CodeEmailArgs",
-    "EmailAttachment",
     "EmailError",
     "EmailStatus",
-    "EmailTag",
     "EmailWarning",
     "Emails",
     "SendEmailResult",
@@ -154,15 +139,12 @@ log = logging.getLogger("posthog")
 
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
-_UPLOAD_PATH = "/api/projects/@current/messaging_templates/by_key/{template_key}/"
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
-_CONTENT_HASH_HEADER = b"posthog-email-template-v1\n"
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
-_TEMPLATE_CONFLICTS = frozenset({"template_outdated", "template_edited_in_posthog"})
 
 
 class EmailError(Exception):
@@ -214,31 +196,6 @@ class SendEmailResult:
     warnings: tuple[EmailWarning, ...] = ()
 
 
-class EmailTag(TypedDict):
-    """A name and value that PostHog adds to the email's engagement events as ``$email_tags``."""
-
-    name: str
-    value: str
-
-
-class EmailAttachment(TypedDict):
-    """A file sent with the email.
-
-    Args:
-        filename: The file name the recipient sees, such as ``invite.ics``.
-        content: The file as ``bytes``, ``bytearray`` or ``memoryview``, or
-            already Base64 encoded as a string.
-        content_type: The MIME type. Without it, the type follows the file name.
-        content_id: Shows the file inline: reference it in ``html`` as
-            ``<img src="cid:logo">`` with ``content_id`` ``logo``.
-    """
-
-    filename: str
-    content: Union[bytes, bytearray, memoryview, str]
-    content_type: NotRequired[str]
-    content_id: NotRequired[str]
-
-
 class _RecipientArgs(TypedDict):
     to: str
     distinct_id: NotRequired[Optional[str]]
@@ -265,43 +222,29 @@ class TemplateEmailArgs(_RecipientArgs):
 
 
 class CodeEmailArgs(_RecipientArgs):
-    """A send of email content that lives in your code, named by a key.
+    """A send of email content that your code rendered for one recipient, named by a key.
 
-    Without ``template_data``, the content is rendered for this one recipient
-    and sent as is. With it, the content is a template: PostHog fills in its
-    ``{{ variables.* }}`` placeholders, and the client uploads the template
-    whenever PostHog doesn't hold its content yet.
+    The content goes out as is. To send a React email, render it to HTML in
+    your app first.
 
     An optional field passed as ``None`` counts as left out.
-
-    A PostHog version that doesn't take a field yet, such as ``cc``, refuses
-    the send with ``invalid_request`` and names the field in
-    ``EmailError.field``. It never drops the field and sends the rest.
 
     Args:
         to: One recipient email address.
         template_key: Names the email, so its metrics, logs and status group
             under it. Letters, digits, ``-`` and ``_``, at most 400.
         subject: The subject line.
-        html: The HTML body. Give ``html``, ``text`` or both. A local template
-            needs ``html``.
+        html: The HTML body. Give ``html``, ``text`` or both.
         text: The plain-text body. Without it, PostHog derives it from
             ``html``. HTML with no text in it, such as a single image, goes out
             without a plain-text part.
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
         reply_to: One address or a list of addresses.
-        cc: One address or a list of addresses that get a visible copy.
-        bcc: One address or a list of addresses that get a hidden copy.
-        headers: Extra email headers by name, such as ``X-Entity-Ref-ID``.
-        tags: Names and values that PostHog adds to the email's engagement
-            events.
-        attachments: Files sent with the email.
         capture_engagement: Capture the email's opens and clicks as events of
             the recipient. Defaults to ``True``. A project whose admin turned
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
-        template_data: Values for the ``{{ variables.* }}`` placeholders.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -318,13 +261,7 @@ class CodeEmailArgs(_RecipientArgs):
     text: NotRequired[Optional[str]]
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
-    cc: NotRequired[Optional[Union[str, Sequence[str]]]]
-    bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
-    headers: NotRequired[Optional[Mapping[str, str]]]
-    tags: NotRequired[Optional[Sequence[EmailTag]]]
-    attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
     capture_engagement: NotRequired[Optional[bool]]
-    template_data: NotRequired[Optional[Mapping[str, Any]]]
 
 
 _OPTIONAL_CODE_FIELDS = frozenset(
@@ -333,21 +270,9 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "text",
         "from_",
         "reply_to",
-        "cc",
-        "bcc",
-        "headers",
-        "tags",
-        "attachments",
         "capture_engagement",
-        "template_data",
     }
 )
-
-
-@dataclass(frozen=True)
-class _PreparedUpload:
-    path: str
-    body: bytes
 
 
 @dataclass(frozen=True)
@@ -382,7 +307,6 @@ class _PreparedSend:
     body: bytes
     idempotency_key: str
     max_retries: Optional[int] = None
-    upload: Optional[_PreparedUpload] = None
 
 
 def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
@@ -436,31 +360,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if not (content.get("html") or content.get("text")):
         raise ValueError("html or text must be a nonempty string.")
 
-    payload: dict[str, Any] = {"to": to}
-    upload = None
-    if "template_data" in args:
-        template_data = args["template_data"]
-        if not isinstance(template_data, Mapping):
-            raise TypeError("template_data must be a mapping.")
-        if not content.get("html"):
-            raise ValueError(
-                "A local template needs html. Pass the HTML body with template_data."
-            )
-        payload["template"] = {"key": template_key, "hash": _content_hash(content)}
-        payload["message_data"] = clean(dict(template_data))
-        upload = _PreparedUpload(
-            path=_UPLOAD_PATH.format(template_key=template_key),
-            body=_encode(
-                {
-                    "name": template_key,
-                    **content,
-                    "if_not_superseded": True,
-                    "if_code_managed": True,
-                }
-            ),
-        )
-    else:
-        payload.update({"template_key": template_key, **content})
+    payload: dict[str, Any] = {"to": to, "template_key": template_key, **content}
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
@@ -469,33 +369,15 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         body=_encode(payload),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
-        upload=upload,
     )
-
-
-def _content_hash(content: Mapping[str, str]) -> str:
-    """PostHog's content hash v1 of a template, so a send can say which content it holds."""
-    encoded = bytearray(_CONTENT_HASH_HEADER)
-    for field in ("subject", "preheader", "html", "text"):
-        value = content.get(field, "").replace("\r\n", "\n").replace("\r", "\n")
-        data = value.encode("utf-8")
-        encoded += f"{len(data)}:".encode() + data + b"\n"
-    return "v1:" + hashlib.sha256(encoded).hexdigest()
 
 
 def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     sender: dict[str, Any] = {}
     if "from_" in args:
         sender["from"] = _nonempty_text(args, "from_")
-    for field in ("reply_to", "cc", "bcc"):
-        if field in args:
-            sender[field] = _addresses(field, args[field])
-    if "headers" in args:
-        sender["headers"] = _headers_field(args["headers"])
-    if "tags" in args:
-        sender["tags"] = _tags(args["tags"])
-    if "attachments" in args:
-        sender["attachments"] = _attachments(args["attachments"])
+    if "reply_to" in args:
+        sender["reply_to"] = _addresses("reply_to", args["reply_to"])
     capture_engagement = args.get("capture_engagement", True)
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")
@@ -512,67 +394,6 @@ def _addresses(field: str, value: Any) -> list[str]:
     if not all(address.strip() for address in addresses):
         raise ValueError(f"{field} must not hold a blank address.")
     return list(addresses)
-
-
-def _headers_field(headers: Any) -> dict[str, str]:
-    if not isinstance(headers, Mapping) or not all(
-        isinstance(name, str) and isinstance(value, str)
-        for name, value in headers.items()
-    ):
-        raise TypeError("headers must map header names to string values.")
-    return dict(headers)
-
-
-def _tags(tags: Any) -> list[dict[str, str]]:
-    if (
-        isinstance(tags, str)
-        or not isinstance(tags, Sequence)
-        or not all(_is_tag(tag) for tag in tags)
-    ):
-        raise TypeError("tags must be a list of {'name': str, 'value': str}.")
-    return [{"name": tag["name"], "value": tag["value"]} for tag in tags]
-
-
-def _attachments(attachments: Any) -> list[dict[str, str]]:
-    if isinstance(attachments, (str, bytes)) or not isinstance(attachments, Sequence):
-        raise TypeError("attachments must be a list of files.")
-    return [_attachment(index, file) for index, file in enumerate(attachments)]
-
-
-def _attachment(index: int, file: Any) -> dict[str, str]:
-    name = f"attachments[{index}]"
-    if not isinstance(file, Mapping) or not {"filename", "content"} <= set(file):
-        raise TypeError(f"{name} needs a filename and its content.")
-    unexpected = set(file) - set(EmailAttachment.__annotations__)
-    if unexpected:
-        raise TypeError(
-            f"{name} has fields an attachment doesn't take: {', '.join(sorted(unexpected))}."
-        )
-    if not all(isinstance(file[field], str) for field in file if field != "content"):
-        raise TypeError(
-            f"{name} needs its filename, content_type and content_id as strings."
-        )
-    return {**file, "content": _base64_content(name, file["content"])}
-
-
-def _base64_content(name: str, content: Any) -> str:
-    if isinstance(content, (bytes, bytearray, memoryview)):
-        return base64.b64encode(bytes(content)).decode("ascii")
-    if isinstance(content, str):
-        return content
-    raise TypeError(
-        f"{name}.content must be bytes or a Base64 string. "
-        "Convert a list of byte values with bytes(content)."
-    )
-
-
-def _is_tag(tag: Any) -> bool:
-    return (
-        isinstance(tag, Mapping)
-        and set(tag) == {"name", "value"}
-        and isinstance(tag["name"], str)
-        and isinstance(tag["value"], str)
-    )
 
 
 def _string(args: Mapping[str, Any], name: str) -> str:
@@ -713,7 +534,7 @@ def _error_name(status: Optional[int], code: str) -> str:
     if status == 409:
         return (
             "validation_error"
-            if code in _TEMPLATE_CONFLICTS
+            if code == "template_outdated"
             else "concurrent_idempotent_requests"
         )
     if status == 422:
@@ -815,12 +636,6 @@ def _parse_status_response(
     )
 
 
-def _parse_upload(status: int, payload: Any, retry_after_header: Optional[str]) -> None:
-    if not 200 <= status < 300:
-        fields = payload if isinstance(payload, dict) else {}
-        raise _response_error(fields, status, retry_after_header)
-
-
 def _response_error(
     fields: Mapping[str, Any], status: int, retry_after_header: Optional[str]
 ) -> EmailError:
@@ -861,10 +676,6 @@ def _retry_delay(error: EmailError, attempt: int, max_retries: int) -> Optional[
 
 def _no_op() -> None:
     pass
-
-
-def _is_outdated(error: EmailError) -> bool:
-    return error.status_code == 409 and error.code == "template_outdated"
 
 
 def _log_warnings(result: SendEmailResult) -> None:
@@ -1072,26 +883,6 @@ class Emails(_EmailsBase):
             has_body=True,
             idempotency_key=prepared.idempotency_key,
         )
-        try:
-            return self._call(
-                "POST",
-                prepared.path,
-                prepared.body,
-                headers,
-                _parse_response,
-                prepared.max_retries,
-            )
-        except EmailError as error:
-            if prepared.upload is None or not _is_outdated(error):
-                raise
-            self._call(
-                "PUT",
-                prepared.upload.path,
-                prepared.upload.body,
-                _headers(secret_key, self.migrated_from, has_body=True),
-                _parse_upload,
-                prepared.max_retries,
-            )
         return self._call(
             "POST",
             prepared.path,
@@ -1276,26 +1067,6 @@ class AsyncEmails(_EmailsBase):
             has_body=True,
             idempotency_key=prepared.idempotency_key,
         )
-        try:
-            return await self._call(
-                "POST",
-                prepared.path,
-                prepared.body,
-                headers,
-                _parse_response,
-                prepared.max_retries,
-            )
-        except EmailError as error:
-            if prepared.upload is None or not _is_outdated(error):
-                raise
-            await self._call(
-                "PUT",
-                prepared.upload.path,
-                prepared.upload.body,
-                _headers(secret_key, self.migrated_from, has_body=True),
-                _parse_upload,
-                prepared.max_retries,
-            )
         return await self._call(
             "POST",
             prepared.path,
