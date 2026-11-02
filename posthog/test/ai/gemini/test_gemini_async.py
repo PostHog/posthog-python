@@ -1178,3 +1178,40 @@ async def test_async_client_streaming_supports_async_with(
     call_args = mock_client.capture.call_args[1]
     assert call_args["event"] == "$ai_generation"
     assert call_args["properties"]["$ai_provider"] == "gemini"
+
+
+async def test_async_streaming_url_context_on_earlier_chunk_bills_tool_use_tokens(
+    mock_client, mock_google_genai_client
+):
+    from google.genai import types
+
+    first = types.GenerateContentResponse(
+        candidates=[types.Candidate(url_context_metadata=types.UrlContextMetadata())]
+    )
+    last = types.GenerateContentResponse(
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=20,
+            tool_use_prompt_token_count=300,
+            candidates_token_count=10,
+            total_token_count=330,
+        )
+    )
+
+    async def stream():
+        yield first
+        yield last
+
+    mock_google_genai_client.aio.models.generate_content_stream = AsyncMock(
+        return_value=stream()
+    )
+
+    client = AsyncClient(api_key="test-key", posthog_client=mock_client)
+    response = await client.models.generate_content_stream(
+        model="gemini-2.0-flash", contents=["Summarise this page"]
+    )
+    async for _ in response:
+        pass
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 320
+    assert props["$ai_output_tokens"] == 10
