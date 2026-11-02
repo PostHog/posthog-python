@@ -1899,6 +1899,9 @@ def test_async_streaming_with_web_search(
 # =======================
 
 
+@pytest.mark.parametrize(
+    "distinct_id", [None, "", "  "], ids=["missing", "empty", "blank"]
+)
 @pytest.mark.parametrize("stream", [False, True], ids=["response", "stream"])
 @pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
 async def test_no_distinct_id_uses_trace_id_and_personless(
@@ -1907,6 +1910,7 @@ async def test_no_distinct_id_uses_trace_id_and_personless(
     mock_anthropic_stream_with_tools,
     is_async,
     stream,
+    distinct_id,
 ):
     """When no distinct_id is provided and no outer context, trace_id is used and event is personless."""
     request = {
@@ -1914,6 +1918,7 @@ async def test_no_distinct_id_uses_trace_id_and_personless(
         "messages": [{"role": "user", "content": "Hello"}],
         "posthog_trace_id": "trace-123",
         "posthog_properties": {"$process_person_profile": True},
+        **({"posthog_distinct_id": distinct_id} if distinct_id is not None else {}),
         **({"stream": True} if stream else {}),
     }
     if is_async:
