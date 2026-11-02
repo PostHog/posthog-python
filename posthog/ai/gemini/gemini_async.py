@@ -259,9 +259,7 @@ class AsyncModels(_GeminiModelsPolicy):
             try:
                 async for chunk in response:
                     # Extract usage stats from chunk
-                    url_context_seen = url_context_seen or has_gemini_url_context(
-                        chunk
-                    )
+                    url_context_seen = url_context_seen or has_gemini_url_context(chunk)
                     chunk_usage = extract_gemini_usage_from_chunk(
                         chunk, url_context_seen=url_context_seen
                     )
