@@ -77,7 +77,9 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
+    _LocalFlagRecord,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from posthog.feature_flags import (
@@ -5010,7 +5012,7 @@ class Client(object):
 
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
-            records[key] = _EvaluatedFlagRecord(
+            records[key] = _LocalFlagRecord(
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
@@ -5053,35 +5055,7 @@ class Client(object):
                         continue
                     if key in locally_evaluated_keys:
                         continue
-                    payload = _parse_flag_payload(
-                        detail.metadata.payload
-                        if isinstance(detail.metadata, FlagMetadata)
-                        else getattr(detail.metadata, "payload", None)
-                    )
-                    records[key] = _EvaluatedFlagRecord(
-                        key=key,
-                        enabled=detail.enabled,
-                        variant=detail.variant,
-                        payload=payload,
-                        id=(
-                            detail.metadata.id
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        version=(
-                            detail.metadata.version
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        reason=(
-                            detail.reason.description
-                            if detail.reason and detail.reason.description
-                            else None
-                        ),
-                        locally_evaluated=False,
-                        has_experiment=_metadata_has_experiment(detail.metadata),
-                        details=detail,
-                    )
+                    records[key] = _RemoteFlagRecord(detail)
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 quota_limited = True

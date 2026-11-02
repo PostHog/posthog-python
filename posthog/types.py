@@ -231,7 +231,9 @@ _T = TypeVar("_T")
 def _set_private_fields(obj: _T, **fields: Any) -> _T:
     """Set the private, work-in-progress attributes of a frozen dataclass."""
     for name, value in fields.items():
-        object.__setattr__(obj, name, value)
+        # A value that is already the default is not stored on the instance.
+        if getattr(obj, name) is not value:
+            object.__setattr__(obj, name, value)
     return obj
 
 

@@ -920,6 +920,23 @@ def test_typed_values_render_the_corpus_legacy_cells_from_both_shapes(case):
         assert result.payload == legacy["payload"]
 
 
+def test_a_snapshot_reads_its_flags_from_the_parsed_records(client):
+    response = _typed_response({"object-flag": {"layout": "compact"}, "off": False})
+    response["flags"]["off"]["metadata"]["payload"] = "not json"
+    snapshot = _evaluate(client, response)
+
+    record = snapshot._flags["object-flag"]
+    assert (record.key, record.enabled, record.variant) == ("object-flag", True, None)
+    assert (record.id, record.version, record.reason) == (300, 2, "Matched rule 1")
+    assert record.has_experiment is False
+    assert record.locally_evaluated is False
+    # The payload is decoded once and the same object is returned on every read.
+    payload = snapshot.get_flag_payload("object-flag")
+    assert payload == {"layout": "compact"}
+    assert snapshot.get_flag_payload("object-flag") is payload
+    assert snapshot.get_flag_payload("off") is None
+
+
 def test_number_and_object_payloads_are_compact_json_in_wire_order():
     response = _typed_response(
         {"number": 12.5, "object": {"b": "ü", "a": [1, True, None]}}
