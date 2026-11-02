@@ -752,6 +752,41 @@ def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", False, None)._value is False
 
 
+class _CustomFlag(FeatureFlag):
+    pass
+
+
+class _CustomMetadata(FlagMetadata):
+    pass
+
+
+class _CustomReason(FlagReason):
+    pass
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _record(),
+        _older_record(),
+        {"key": "garden-layout", "enabled": True},
+        _record(**{"metadata.id": "201"}),
+        _older_record(reason="oops"),
+    ],
+    ids=["v4", "older", "minimal-older", "unreadable-v4", "unreadable-older"],
+)
+def test_from_json_builds_the_subclass_it_is_called_on(record):
+    flag = _CustomFlag.from_json(record)
+
+    assert type(flag) is _CustomFlag
+    assert flag.key == "garden-layout"
+
+
+def test_metadata_and_reason_from_json_build_the_subclass_they_are_called_on():
+    assert type(_CustomMetadata.from_json({"id": 1, "version": 2})) is _CustomMetadata
+    assert type(_CustomReason.from_json({"code": "condition_match"})) is _CustomReason
+
+
 # Legacy accessor parity: a v4 record and the equivalent older-server record must give
 # identical legacy results.
 
