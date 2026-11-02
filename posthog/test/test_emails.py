@@ -698,6 +698,50 @@ def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
     }
 
 
+@pytest.mark.asyncio
+async def test_async_client_posts_rendered_content_and_names_the_provider():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"message_id": "msg_1", "replayed": True})
+
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY, migrated_from="resend")
+    client.emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    result = await client.emails.send(
+        to="user@example.com",
+        template_key="password-reset",
+        subject="Reset your password",
+        html=HTML,
+        text="Reset it here.",
+        from_="Acme <security@example.com>",
+        reply_to="help@example.com",
+        capture_engagement=False,
+        distinct_id="user_123",
+        idempotency_key="reset:user_123",
+    )
+    await client.shutdown()
+
+    assert (result.id, result.replayed) == ("msg_1", True)
+    [request] = seen
+    assert (request.method, str(request.url)) == ("POST", SEND_URL)
+    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert request.headers["Idempotency-Key"] == "reset:user_123"
+    assert request.headers["X-PostHog-Migrated-From"] == "resend"
+    assert json.loads(request.content) == {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        "html": HTML,
+        "text": "Reset it here.",
+        "from": "Acme <security@example.com>",
+        "reply_to": ["help@example.com"],
+        "capture_engagement": False,
+        "distinct_id": "user_123",
+    }
+
+
 @parameterized.expand(
     [
         ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
