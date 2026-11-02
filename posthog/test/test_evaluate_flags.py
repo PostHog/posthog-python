@@ -431,6 +431,38 @@ class TestEvaluateFlagsLocalPayloads(unittest.TestCase):
         self.assertEqual(properties["$feature_flag_payload"], {"copy": "new"})
 
 
+class TestEvaluateFlagsLocalFlagIdentity(unittest.TestCase):
+    """Locally-evaluated flags report the definition's id and version, the same
+    properties remote ``/flags`` metadata supplies."""
+
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        self.client.feature_flags = [
+            _always_on_flag("local-flag", id=4211, version=7),
+            _always_on_flag("unversioned-flag", id=4212),
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_flag_called_event_carries_definition_id_and_version(
+        self, patch_capture, patch_flags
+    ):
+        flags = self.client.evaluate_flags("user-1")
+        flags.is_enabled("local-flag")
+        flags.get_flag("unversioned-flag")
+
+        patch_flags.assert_not_called()
+        properties = _flag_called_properties(patch_capture)
+        self.assertTrue(properties["local-flag"]["locally_evaluated"])
+        self.assertEqual(properties["local-flag"]["$feature_flag_id"], 4211)
+        self.assertEqual(properties["local-flag"]["$feature_flag_version"], 7)
+        self.assertEqual(properties["unversioned-flag"]["$feature_flag_id"], 4212)
+        self.assertNotIn("$feature_flag_version", properties["unversioned-flag"])
+
+
 class TestEvaluateFlagsMissingLocalDefinition(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
