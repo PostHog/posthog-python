@@ -1,5 +1,11 @@
 # posthog
 
+## 7.82.2 — 2026-11-02
+
+### Patch changes
+
+- [57b9db8](https://github.com/posthog/posthog-python/commit/57b9db8493bc06dc448bda244020eea1e0ed1ec5) Count Gemini URL context tool use prompt tokens as input tokens in captured generations; Google Search retrieval is not billed as input and stays out of the total. — Thanks @pcbeingused333!
+
 ## 7.82.1 — 2026-11-02
 
 ### Patch changes
