@@ -1,5 +1,11 @@
 # posthog
 
+## 7.81.2 — 2026-11-02
+
+### Patch changes
+
+- [f20066e](https://github.com/posthog/posthog-python/commit/f20066e7f2826dab701a8d73fbfd5780c4ccd49a) `emails.send()` now sends the template ID and distinct ID as top-level fields in the request body. — Thanks @mayteio!
+
 ## 7.81.1 — 2026-10-30
 
 ### Patch changes
