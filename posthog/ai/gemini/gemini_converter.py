@@ -517,7 +517,7 @@ def extract_gemini_web_search_count(response: Any) -> int:
     return 0
 
 
-def _has_url_context(response: Any) -> bool:
+def has_gemini_url_context(response: Any) -> bool:
     """Whether a response or chunk carries URL context retrieval metadata."""
     candidates = getattr(response, "candidates", None)
     if not isinstance(candidates, (list, tuple)):
@@ -597,7 +597,7 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
         return TokenUsage()
 
     usage = _extract_usage_from_metadata(
-        response.usage_metadata, bill_tool_use_tokens=_has_url_context(response)
+        response.usage_metadata, bill_tool_use_tokens=has_gemini_url_context(response)
     )
 
     # Add web search count if present
@@ -608,12 +608,17 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     return usage
 
 
-def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
+def extract_gemini_usage_from_chunk(
+    chunk: Any, url_context_seen: bool = False
+) -> TokenUsage:
     """
     Extract usage statistics from a Gemini streaming chunk.
 
     Args:
         chunk: Streaming chunk from Gemini API
+        url_context_seen: whether an earlier chunk of the same stream carried
+            URL context metadata. Tool indicators can arrive on a different
+            chunk than the final usage_metadata, so callers carry this flag.
 
     Returns:
         TokenUsage with standardized usage statistics
@@ -631,7 +636,8 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
         return usage
 
     usage_from_metadata = _extract_usage_from_metadata(
-        chunk.usage_metadata, bill_tool_use_tokens=_has_url_context(chunk)
+        chunk.usage_metadata,
+        bill_tool_use_tokens=url_context_seen or has_gemini_url_context(chunk),
     )
 
     # Merge the usage from metadata with any web search count we found
