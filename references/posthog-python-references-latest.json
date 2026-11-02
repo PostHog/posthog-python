@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.75.6",
+    "version": "7.81.1",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -660,6 +660,24 @@
               "description": "Config dict for distributed tracing: ``service_name``,         ``service_version``, ``environment``, ``resource_attributes``,         ``flush_interval`` (5 s), ``max_queue_size`` (2048),         ``max_export_batch_size`` (512), ``max_live_spans`` (10000),         ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),         ``max_events_per_span`` (128), ``max_attribute_value_length``         (8192). ``before_span_send`` is a callable, or a         list run in order, that receives each finished span as a dict         (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)         and returns it, edited, or ``None`` to drop it; a hook that         raises drops the span. Tracing is off until this is provided.         Spans export on a background timer even with ``sync_mode``;         serverless handlers should call ``flush()`` before returning.         Defaults to None.",
               "isOptional": true,
               "type": "dict"
+            },
+            {
+              "name": "app_host",
+              "description": "Your PostHog app host, such as ``https://posthog.example.com``.         ``emails`` sends there. Needed only when ``host`` is not PostHog         Cloud, for example a reverse proxy, which must not receive the         secret key.",
+              "isOptional": true,
+              "type": "str"
+            },
+            {
+              "name": "email_request_timeout_seconds",
+              "description": "Timeout in seconds for each email send         request. Defaults to 15.",
+              "isOptional": false,
+              "type": "float"
+            },
+            {
+              "name": "email_request_max_retries",
+              "description": "Number of retries for an email send after a         network error, a rate limit, or an unavailable service. Defaults to 2.         Set to 0 when a job runner already retries the send.",
+              "isOptional": false,
+              "type": "int"
             }
           ],
           "showDocs": true,
@@ -871,7 +889,7 @@
             },
             {
               "name": "only_evaluate_locally",
-              "description": "If True, never fall back to remote evaluation \u2014         flags that can't be evaluated locally are simply omitted from the snapshot.",
+              "description": "If True, never fall back to remote evaluation \u2014         flags that can't be evaluated locally are omitted from the snapshot and         listed with a reason in its ``unresolved_flags``.",
               "isOptional": false,
               "type": "bool"
             },
@@ -1001,7 +1019,7 @@
         {
           "id": "flush",
           "title": "flush",
-          "description": "Attempt immediate delivery of queued events and ended spans, keeping the client reusable.  For a client shared across requests or serverless invocations (including the module-level client), call ``flush()`` before a short-lived invocation returns. Use ``shutdown()`` instead only for final process cleanup or when disposing of a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.  Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by the consumers. Calls made directly from SDK callbacks such as ``on_error`` are deferred rather than blocking the worker that invoked the callback.",
+          "description": "Attempt immediate delivery of queued events, ended spans and autocaptured metrics, keeping the client reusable.  For a client shared across requests or serverless invocations (including the module-level client), call ``flush()`` before a short-lived invocation returns. Use ``shutdown()`` instead only for final process cleanup or when disposing of a client that will not be reused. Flush does not stop the background workers or feature flag poller, and does not end open spans.  Returning does not guarantee server receipt: pending work can remain after a timeout or span export failure, and failed events may be dropped by the consumers. Calls made directly from SDK callbacks such as ``on_error`` are deferred rather than blocking the worker that invoked the callback.",
           "details": "",
           "category": null,
           "params": [
@@ -2352,7 +2370,7 @@
             },
             {
               "name": "only_evaluate_locally",
-              "description": "If ``True``, never fall back to remote evaluation and         omit flags that cannot be evaluated locally.",
+              "description": "If ``True``, never fall back to remote evaluation and         omit flags that cannot be evaluated locally. The snapshot's         ``unresolved_flags`` lists them with a reason.",
               "isOptional": false,
               "type": "bool"
             },

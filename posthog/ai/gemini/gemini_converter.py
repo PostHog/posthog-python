@@ -13,7 +13,7 @@ from posthog.ai.types import (
     FormattedMessage,
     TokenUsage,
 )
-from posthog.ai.utils import serialize_raw_usage
+from posthog.ai.utils import _redact_mcp_tool_credentials, serialize_raw_usage
 
 _MEDIA_KINDS = {"image": "image", "video": "video", "audio": "audio"}
 _BARE_PART_KEYS = {
@@ -40,6 +40,18 @@ def _format_media_payload(payload: Any) -> Dict[str, Any]:
     return payload
 
 
+def _function_call_block(name: Any, arguments: Any, call_id: Any) -> Dict[str, Any]:
+    block: Dict[str, Any] = {
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+    # Only a real string ID: Gemini omits it for some calls, and mocked parts
+    # answer any attribute.
+    if isinstance(call_id, str):
+        block["id"] = call_id
+    return block
+
+
 def _format_part(part: Any) -> Optional[FormattedContentItem]:
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -64,20 +76,26 @@ def _format_part(part: Any) -> Optional[FormattedContentItem]:
     # shape leaves them unrenderable and invisible to evals.
     if "function_call" in plain:
         call = to_plain(plain["function_call"]) or {}
-        return {
+        block: Dict[str, Any] = {
             "type": "function",
             "function": {
                 "name": call.get("name"),
                 "arguments": call.get("args"),
             },
         }
+        if isinstance(call.get("id"), str):
+            block["id"] = call["id"]
+        return block
     if "function_response" in plain:
         response = to_plain(plain["function_response"]) or {}
-        return {
+        response_block: Dict[str, Any] = {
             "type": "function",
             "tool_name": response.get("name") or "",
             "content": response.get("response"),
         }
+        if isinstance(response.get("id"), str):
+            response_block["tool_use_id"] = response["id"]
+        return response_block
     if not plain:
         return None
     key = next(iter(plain))
@@ -269,13 +287,11 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                         if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
+                                _function_call_block(
+                                    function_call.name,
+                                    function_call.args,
+                                    getattr(function_call, "id", None),
+                                )
                             )
                             continue
 
@@ -364,7 +380,7 @@ def extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
     """
 
     if "config" in kwargs and hasattr(kwargs["config"], "tools"):
-        return kwargs["config"].tools
+        return _redact_mcp_tool_credentials(kwargs["config"].tools)
 
     return None
 
@@ -622,13 +638,11 @@ def extract_gemini_content_from_chunk(
                         if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             blocks.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
+                                _function_call_block(
+                                    function_call.name,
+                                    function_call.args,
+                                    getattr(function_call, "id", None),
+                                )
                             )
                             continue
 
@@ -689,12 +703,13 @@ def format_gemini_streaming_output(
                         text_parts = []
 
                     # Add the function call
-                    content.append(
-                        {
-                            "type": "function",
-                            "function": item.get("function", {}),
-                        }
-                    )
+                    function_block: Dict[str, Any] = {
+                        "type": "function",
+                        "function": item.get("function", {}),
+                    }
+                    if isinstance(item.get("id"), str):
+                        function_block["id"] = item["id"]
+                    content.append(function_block)
                 else:
                     if text_parts:
                         content.append(

@@ -25,11 +25,15 @@ from posthog.ai.utils import (
     _capture_processor_event,
     _resolve_ai_client,
     finalize_ai_content,
+    _format_error_summary,
+    _privacy_mode_enabled,
     with_privacy_mode as _with_privacy_mode,
 )
 from posthog.client import Client
 
 log = logging.getLogger("posthog")
+
+_AUDIO_MODEL_CONFIG_CONTENT_KEYS = frozenset({"prompt", "instructions"})
 
 
 def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
@@ -41,6 +45,27 @@ def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
         return dt.timestamp()
     except (ValueError, AttributeError):
         return None
+
+
+def _usage_detail(usage: Any, details_keys: tuple, key: str) -> Optional[int]:
+    """Read a token count nested under a usage details field.
+
+    Agents span usage is a dict (generation spans) or an OpenAI usage object
+    (response spans), with details under ``input_tokens_details``/
+    ``output_tokens_details`` (Responses) or ``prompt_tokens_details``/
+    ``completion_tokens_details`` (Chat Completions).
+    """
+
+    def get(container: Any, name: str) -> Any:
+        if isinstance(container, dict):
+            return container.get(name)
+        return getattr(container, name, None)
+
+    for details_key in details_keys:
+        value = get(get(usage, details_key), key)
+        if isinstance(value, int):
+            return value
+    return None
 
 
 class PostHogTracingProcessor(TracingProcessor):
@@ -124,6 +149,15 @@ class PostHogTracingProcessor(TracingProcessor):
     def _with_privacy_mode(self, value: Any) -> Any:
         """Apply privacy mode redaction if enabled."""
         return _with_privacy_mode(self._client, self._privacy_mode, value)
+
+    def _privacy_enabled(self) -> bool:
+        return _privacy_mode_enabled(self._client, self._privacy_mode)
+
+    @staticmethod
+    def _summarize_span_error(error_info: Any) -> str:
+        # Agents SDK span errors are plain dicts, not exceptions: only a type name is structured.
+        error_type = error_info.get("type") if isinstance(error_info, dict) else None
+        return _format_error_summary(error_type)
 
     def _evict_stale_entries(self) -> None:
         """Evict oldest entries if dicts exceed max size to prevent unbounded growth."""
@@ -230,7 +264,9 @@ class PostHogTracingProcessor(TracingProcessor):
 
             # Include trace metadata if present
             if metadata:
-                properties["$ai_trace_metadata"] = _ensure_serializable(metadata)
+                properties["$ai_trace_metadata"] = self._with_privacy_mode(
+                    _ensure_serializable(metadata)
+                )
 
             self._capture_event(
                 event="$ai_trace",
@@ -314,7 +350,11 @@ class PostHogTracingProcessor(TracingProcessor):
 
                 error_properties = {
                     "$ai_is_error": True,
-                    "$ai_error": error_message,
+                    "$ai_error": (
+                        self._summarize_span_error(error_info)
+                        if self._privacy_enabled()
+                        else error_message
+                    ),
                     "$ai_error_type": error_type,
                 }
 
@@ -524,11 +564,27 @@ class PostHogTracingProcessor(TracingProcessor):
             ),
         }
 
-        # Add optional token fields if present
+        # Add optional token fields if present. The Agents SDK nests cached
+        # tokens under the usage details fields; flat keys are kept for custom
+        # models. Nested reasoning is not forwarded: compatible providers count
+        # it inside the output total, and the cost backend would add it again.
         if usage.get("reasoning_tokens"):
             properties["$ai_reasoning_tokens"] = usage["reasoning_tokens"]
-        if usage.get("cache_read_input_tokens"):
-            properties["$ai_cache_read_input_tokens"] = usage["cache_read_input_tokens"]
+        cache_read_tokens = usage.get("cache_read_input_tokens")
+        if not cache_read_tokens:
+            cache_read_tokens = _usage_detail(
+                usage,
+                ("input_tokens_details", "prompt_tokens_details"),
+                "cached_tokens",
+            )
+            if cache_read_tokens:
+                # OpenAI-shaped usage counts cached tokens inside input_tokens.
+                # Say so explicitly: the cost backend otherwise infers exclusive
+                # reporting from Claude model names served through compatible
+                # endpoints. A caller-supplied value still takes precedence.
+                properties["$ai_cache_reporting_exclusive"] = False
+        if cache_read_tokens:
+            properties["$ai_cache_read_input_tokens"] = cache_read_tokens
         if usage.get("cache_creation_input_tokens"):
             properties["$ai_cache_creation_input_tokens"] = usage[
                 "cache_creation_input_tokens"
@@ -704,6 +760,15 @@ class PostHogTracingProcessor(TracingProcessor):
         if total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = total_cost_usd
 
+        if usage:
+            cache_read_tokens = _usage_detail(
+                usage, ("input_tokens_details",), "cached_tokens"
+            )
+            if cache_read_tokens:
+                properties["$ai_cache_read_input_tokens"] = cache_read_tokens
+                # Responses input_tokens include cached tokens.
+                properties["$ai_cache_reporting_exclusive"] = False
+
         # Extract output content from response
         if response:
             output_items = getattr(response, "output", None)
@@ -774,7 +839,9 @@ class PostHogTracingProcessor(TracingProcessor):
 
         # Add model config if available (pass-through property)
         if hasattr(span_data, "model_config") and span_data.model_config:
-            properties["model_config"] = _ensure_serializable(span_data.model_config)
+            properties["model_config"] = self._redact_audio_model_config(
+                _ensure_serializable(span_data.model_config)
+            )
 
         # Add time to first audio byte for speech spans (pass-through property)
         if hasattr(span_data, "first_content_at") and span_data.first_content_at:
@@ -820,6 +887,15 @@ class PostHogTracingProcessor(TracingProcessor):
             )
 
         self._capture_event("$ai_span", properties, distinct_id)
+
+    def _redact_audio_model_config(self, model_config: Any) -> Any:
+        # The STT prompt and TTS instructions are user-authored text.
+        if not isinstance(model_config, dict) or not self._privacy_enabled():
+            return model_config
+        return {
+            key: (None if key in _AUDIO_MODEL_CONFIG_CONTENT_KEYS else value)
+            for key, value in model_config.items()
+        }
 
     def _handle_mcp_span(
         self,

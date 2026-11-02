@@ -1403,9 +1403,10 @@ def test_tool_calls(mock_client):
     )
 
 
-async def test_async_traces(mock_client):
+@pytest.mark.parametrize("delay", [0, 0.1])
+async def test_async_traces(mock_client, delay):
     async def sleep(x):  # -> Any:
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(delay)
         return x
 
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
@@ -1422,18 +1423,22 @@ async def test_async_traces(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
     assert mock_client.capture_ai.call_count == 4
 
-    first_call, second_call, third_call, fourth_call = (
-        mock_client.capture_ai.call_args_list
-    )
-    assert first_call[1]["event"] == "$ai_span"
-    assert second_call[1]["event"] == "$ai_generation"
-    assert third_call[1]["event"] == "$ai_trace"
-    assert third_call[1]["properties"]["$ai_span_name"] == "RunnableSequence"
-    assert fourth_call[1]["event"] == "$ai_trace"
-    assert fourth_call[1]["properties"]["$ai_span_name"] == "sleep"
+    calls = [call.kwargs for call in mock_client.capture_ai.call_args_list]
+    assert sorted(call["event"] for call in calls) == [
+        "$ai_generation",
+        "$ai_span",
+        "$ai_trace",
+        "$ai_trace",
+    ]
+    traces = {
+        call["properties"]["$ai_span_name"]: call["properties"]
+        for call in calls
+        if call["event"] == "$ai_trace"
+    }
+    assert set(traces) == {"RunnableSequence", "sleep"}
     assert (
         min(approximate_latency - 1, 0)
-        <= math.floor(third_call[1]["properties"]["$ai_latency"])
+        <= math.floor(traces["RunnableSequence"]["$ai_latency"])
         <= approximate_latency
     )
 
@@ -2716,16 +2721,26 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     assert span_props["$ai_error"] == "ValueError: test error"
 
 
-def test_exception_autocapture_disabled_does_not_capture():
-    """Test that capture_exception is NOT called when autocapture is disabled."""
+@pytest.mark.parametrize(
+    "autocapture, client_privacy_mode, handler_privacy_mode, expected_error",
+    [
+        (False, False, False, "ValueError: test error"),
+        (True, True, False, "ValueError"),
+        (True, False, True, "ValueError"),
+    ],
+)
+def test_exception_autocapture_disabled_does_not_capture(
+    autocapture, client_privacy_mode, handler_privacy_mode, expected_error
+):
+    """capture_exception is skipped when autocapture is off or privacy mode is on."""
     mock_client = MagicMock()
-    mock_client.privacy_mode = False
-    mock_client.enable_exception_autocapture = False
+    mock_client.privacy_mode = client_privacy_mode
+    mock_client.enable_exception_autocapture = autocapture
 
     def failing_span(_):
         raise ValueError("test error")
 
-    callbacks = [CallbackHandler(mock_client)]
+    callbacks = [CallbackHandler(mock_client, privacy_mode=handler_privacy_mode)]
     chain = RunnableLambda(failing_span)
 
     try:
@@ -2746,7 +2761,7 @@ def test_exception_autocapture_disabled_does_not_capture():
 
     span_props = span_calls[0][1]["properties"]
     assert "$exception_event_id" not in span_props
-    assert span_props["$ai_error"] == "ValueError: test error"
+    assert span_props["$ai_error"] == expected_error
 
 
 def test_exception_autocapture_on_llm_generation_error(mock_client):
@@ -2939,6 +2954,57 @@ def test_stop_reason_resolution(
 
     props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props.get("$ai_stop_reason") == expected
+
+
+@pytest.mark.parametrize(
+    "server_tool_use,expected",
+    [
+        # Anthropic reports the exact number of searches
+        ({"web_search_requests": 2}, 2),
+        # no search is not worth an event property
+        ({"web_search_requests": 0}, None),
+        # the provider reports nothing
+        (None, None),
+    ],
+)
+def test_web_search_count(mock_client, server_tool_use, expected):
+    from langchain_core.outputs import ChatGeneration, LLMResult
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid.uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet"},
+    )
+    usage = {"input_tokens": 10, "output_tokens": 5}
+    if server_tool_use is not None:
+        usage["server_tool_use"] = server_tool_use
+    # langchain-anthropic always sets usage_metadata on the message, which the
+    # generations loop prefers over llm_output["usage"]
+    response = LLMResult(
+        generations=[
+            [
+                ChatGeneration(
+                    message=AIMessage(
+                        content="r",
+                        usage_metadata={
+                            "input_tokens": 10,
+                            "output_tokens": 5,
+                            "total_tokens": 15,
+                        },
+                    )
+                )
+            ]
+        ],
+        llm_output={"usage": usage},
+    )
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
+    assert props.get("$ai_web_search_count") == expected
 
 
 class TestGetHttpStatus:

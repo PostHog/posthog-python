@@ -195,7 +195,7 @@ async def test_tool_call_error_is_captured_and_converted():
     assert exception_list[-1]["value"] == "explode"
 
 
-async def test_initialize_emitted_once_per_session():
+async def test_tool_calls_alone_emit_no_initialize():
     server = make_server()
     client = FakeClient()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
@@ -208,7 +208,9 @@ async def test_initialize_emitted_once_per_session():
     )
     await _flush()
 
-    assert len(_events(client, "$mcp_initialize")) == 1
+    # No initialize was sent, so none is reported: Server.middleware sees every
+    # real handshake (test_initialize_handshake.py).
+    assert _events(client, "$mcp_initialize") == []
     assert len(_events(client, "$mcp_tool_call")) == 2
 
 

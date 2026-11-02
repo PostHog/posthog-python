@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 try:
+    from openai import NOT_GIVEN
     from openai.types.chat import ChatCompletion, ChatCompletionMessage
     from openai.types.chat.chat_completion import Choice
     from openai.types.chat.chat_completion_chunk import (
@@ -458,6 +459,60 @@ def test_embeddings(mock_client, mock_embedding_response):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.parametrize("stream_options", [None, NOT_GIVEN, {"foo": "bar"}])
+def test_streaming_stream_options_are_not_mutated(
+    mock_client, streaming_tool_call_chunks, stream_options
+):
+    captured = {}
+
+    def mock_create(self, **kwargs):
+        captured["kwargs"] = kwargs
+        return iter(streaming_tool_call_chunks)
+
+    with patch("openai.resources.chat.completions.Completions.create", new=mock_create):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        stream = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            stream_options=stream_options,
+        )
+        list(stream)
+
+    sent = captured["kwargs"]["stream_options"]
+    assert sent["include_usage"] is True
+    if isinstance(stream_options, dict):
+        assert sent == {"foo": "bar", "include_usage": True}
+        assert stream_options == {"foo": "bar"}
+
+
+def test_embeddings_error(mock_client):
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        side_effect=Exception("Test error"),
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception, match="Test error"):
+            client.embeddings.create(
+                model="text-embedding-3-small",
+                input="Hello world",
+                posthog_distinct_id="test-id",
+            )
+
+    assert mock_client.capture_ai.call_count == 1
+
+    call_args = mock_client.capture_ai.call_args[1]
+    props = call_args["properties"]
+    assert call_args["distinct_id"] == "test-id"
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_model"] == "text-embedding-3-small"
+    assert props["$ai_input"] == "Hello world"
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Test error"
+    assert props["$ai_http_status"] == 0
+    assert "$ai_input_tokens" not in props
 
 
 def test_groups(mock_client, mock_openai_response):
@@ -1441,6 +1496,65 @@ async def test_async_responses_streaming_with_tokens(mock_client):
 
 
 @pytest.mark.asyncio
+async def test_async_embeddings_error(mock_client):
+    mock_create = AsyncMock(side_effect=Exception("Test error"))
+
+    with patch("openai.resources.embeddings.AsyncEmbeddings.create", new=mock_create):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        with pytest.raises(Exception, match="Test error"):
+            await client.embeddings.create(
+                model="text-embedding-3-small",
+                input="Hello world",
+                posthog_distinct_id="test-id",
+            )
+
+    assert mock_client.capture_ai.call_count == 1
+
+    call_args = mock_client.capture_ai.call_args[1]
+    props = call_args["properties"]
+    assert call_args["event"] == "$ai_embedding"
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "Test error"
+    assert props["$ai_http_status"] == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream_options", [None, NOT_GIVEN, {"foo": "bar"}])
+async def test_async_streaming_stream_options_are_not_mutated(
+    mock_client, streaming_tool_call_chunks, stream_options
+):
+    captured = {}
+
+    async def mock_create(self, **kwargs):
+        captured["kwargs"] = kwargs
+
+        async def chunk_iterable():
+            for chunk in streaming_tool_call_chunks:
+                yield chunk
+
+        return chunk_iterable()
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", new=mock_create
+    ):
+        client = AsyncOpenAI(api_key="test-key", posthog_client=mock_client)
+        stream = await client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+            stream_options=stream_options,
+        )
+        async for _ in stream:
+            pass
+
+    sent = captured["kwargs"]["stream_options"]
+    assert sent["include_usage"] is True
+    if isinstance(stream_options, dict):
+        assert sent == {"foo": "bar", "include_usage": True}
+        assert stream_options == {"foo": "bar"}
+
+
+@pytest.mark.asyncio
 async def test_async_embeddings_create(mock_client, mock_embedding_response):
     mock_create = AsyncMock(return_value=mock_embedding_response)
 
@@ -1931,6 +2045,59 @@ def test_streaming_chat_extracts_model_from_chunk_when_not_in_kwargs(mock_client
 
         # Model should be extracted from chunk, not kwargs
         assert props["$ai_model"] == "gpt-4o-stored-prompt"
+
+
+def test_streaming_chat_keeps_n_choices_apart(mock_client):
+    # With n=2 each chunk carries one choice's delta, named by its index.
+    def chunk(index, content=None, finish_reason=None):
+        return ChatCompletionChunk(
+            id="chunk",
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=index,
+                    delta=ChoiceDelta(content=content),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    chunks = [
+        chunk(0, "Hello"),
+        chunk(1, "Bonjour"),
+        chunk(0, " world"),
+        chunk(1, " le monde"),
+        chunk(1, finish_reason="length"),
+        chunk(0, finish_reason="stop"),
+    ]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = chunks
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        list(
+            client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Hello"}],
+                n=2,
+                stream=True,
+                posthog_distinct_id="test-id",
+            )
+        )
+
+    props = mock_client.capture_ai.call_args[1]["properties"]
+    # The same shape a non-streamed n=2 completion is captured with.
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hello world"},
+                {"type": "text", "text": "Bonjour le monde"},
+            ],
+        }
+    ]
+    assert props["$ai_stop_reason"] == "stop"
 
 
 def test_streaming_chat_prefers_kwargs_model_over_chunk_model(mock_client):

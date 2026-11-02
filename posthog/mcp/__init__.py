@@ -51,6 +51,7 @@ from ._internal import (
     MCPAnalyticsData,
     get_server_tracking_data,
     set_server_tracking_data,
+    tracking_key,
 )
 from .logger import log, set_logger
 from .posthog_mcp import PostHogMCP
@@ -226,18 +227,6 @@ def _warn_if_unsupported_mcp_version() -> None:
         )
 
 
-def _canonical_server(server: Any) -> Any:
-    """The underlying low-level server for high-level wrappers (SDK 1.x FastMCP and
-    jlowin's fastmcp expose ``_mcp_server``; SDK 2.x MCPServer renamed it
-    ``_lowlevel_server``), else the server itself. Used as the tracking key so
-    instrumenting a wrapper and its underlying server resolve to one state instead
-    of two divergent ones (matching the TS SDK)."""
-    low_level = getattr(server, "_mcp_server", None) or getattr(
-        server, "_lowlevel_server", None
-    )
-    return low_level if low_level is not None else server
-
-
 def instrument(
     server: Any,
     posthog_client: Optional[Client] = None,
@@ -286,7 +275,7 @@ def instrument(
     if feedback_options is not None:
         get_feedback_tool_descriptor(feedback_options)
 
-    key = _canonical_server(server)
+    key = tracking_key(server)
 
     try:
         # MCP is an optional peer: load adapters only when instrumentation is

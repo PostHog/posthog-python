@@ -1,5 +1,133 @@
 # posthog
 
+## 7.81.1 — 2026-10-30
+
+### Patch changes
+
+- [be77b83](https://github.com/posthog/posthog-python/commit/be77b83462a690c8c303f5676a28207a9c17f68a) Keep the choices of a streamed OpenAI chat completion with `n > 1` apart in `$ai_output_choices`, as a non-streamed one already does. Their text and tool calls were interleaved into one choice. — Thanks @jaeminbird for your first contribution 🎉!
+- [a61e64d](https://github.com/posthog/posthog-python/commit/a61e64d1a40be337af3e09925d53f56c78d0baba) Preserve Gemini tool call IDs in captured generations, on output tool calls and on tool calls and results in the input history. — Thanks @mosafariuk!
+
+## 7.81.0 — 2026-10-30
+
+### Minor changes
+
+- [01e91db](https://github.com/posthog/posthog-python/commit/01e91db94185969f636d501a58a21eb9f2c3721e) Send transactional email from PostHog email templates with `client.emails.send()` on `Posthog` and `AsyncPosthog`, or with `Emails` and `AsyncEmails` from `posthog.emails` in a process that only sends email. A send needs a project secret API key, goes to the app host, sends an idempotency key, and retries network errors, rate limits and an unavailable service with the same key. Set `app_host`, `email_request_timeout_seconds` and `email_request_max_retries` on the client to configure sends, or `max_retries` on one send. Errors raise `EmailError` with PostHog's error `code` and a category `name`. Read what happened to a sent email with `client.emails.get(message_id)`, which returns an `EmailStatus` with `status`, `created_at`, `status_at` and `reason` for 30 days after the send. — Thanks @mayteio for your first contribution 🎉!
+
+## 7.80.3 — 2026-10-29
+
+### Patch changes
+
+- [4d6e447](https://github.com/posthog/posthog-python/commit/4d6e44766175f80fbbf538ab4369b1f3916f05f7) Report cached input tokens from OpenAI Agents generation and response spans, which nest them under the usage details fields, and declare them inclusive. — Thanks @mosafariuk!
+
+## 7.80.2 — 2026-10-29
+
+### Patch changes
+
+- [ad1b1cb](https://github.com/posthog/posthog-python/commit/ad1b1cb1e2052621d979cfdccb4870d6b4b31613) Capture an `$ai_embedding` event with `$ai_is_error` and `$ai_error` when an OpenAI `embeddings.create()` call fails, in the sync and async wrappers. Before, a failed embeddings call left no event. — Thanks @pcbeingused333!
+
+## 7.80.1 — 2026-10-29
+
+### Patch changes
+
+- [1625f4f](https://github.com/posthog/posthog-python/commit/1625f4fbc1809d7a19b34354ad2df2a0e016928f) Fix streaming OpenAI chat completions when `stream_options` is `None` or `NOT_GIVEN` (it raised a `TypeError`), and stop adding `include_usage` to the `stream_options` dict the caller passed in. — Thanks @pcbeingused333!
+
+## 7.80.0 — 2026-10-29
+
+### Minor changes
+
+- [febb3ed](https://github.com/posthog/posthog-python/commit/febb3ed2f1584e68c05c73625becbdd18fe5f944) Add `metrics={"autocapture": True}` (alpha): HTTP, database and runtime metrics from the official OpenTelemetry instrumentations, with no instrumentation code. Install `posthog[metrics]` and run `opentelemetry-bootstrap -a install` to add the instrumentors for your libraries. Create the client before your web app (Django: in `AppConfig.ready()`): apps created earlier are not measured. For Flask, use module lookup as below, or import the `Flask` class only after the client starts; an earlier `from flask import Flask` alias is not instrumented. Already-served Flask apps are not re-instrumented after shutdown; create a new app for a replacement client. Autocapture does not start when the app already set up OpenTelemetry; export those metrics to PostHog instead. Raw URLs and paths, client addresses, user agents and captured headers are never recorded. `metrics.before_send` also applies to autocaptured measurements: it can change their value and attributes, or drop them.
+  
+  ```python
+  import flask
+  from posthog import Posthog
+  
+  client = Posthog("phc_...", metrics={"autocapture": True})
+  app = flask.Flask(__name__)
+  ```
+   — Thanks @DanielVisca!
+
+## 7.79.0 — 2026-10-28
+
+### Minor changes
+
+- [bb2b9d6](https://github.com/posthog/posthog-python/commit/bb2b9d6bddd250f6dcf03be565af8ba94694e5db) Report flags that local evaluation could not resolve on `evaluate_flags()` snapshots. `FeatureFlagEvaluations.unresolved_flags` maps each such flag to an `UnresolvedFlagReason` (`experience_continuity`, `unsupported_definition`, `unresolved_dependency` or `missing_context`), and reading one reports the `local_evaluation_inconclusive` error instead of `flag_missing`. When definitions load, log one warning per flag that local evaluation can never resolve (experience continuity, a static cohort, an unknown operator, a malformed value, or a missing or circular flag dependency), and again only when its definition changes. `AsyncClient` evaluates only remotely, so its snapshots have no unresolved flags.
+  
+  Behavior changes:
+  
+  - A condition with a filter that local evaluation can't check and a filter that does not match now resolves locally as no match. Before, such a flag fell back to a remote request, or stayed unresolved with `only_evaluate_locally=True`.
+  - An inactive flag with experience continuity enabled now resolves to `false` locally instead of falling back to a remote request.
+  - A flag that depends on a flag with experience continuity enabled is no longer evaluated locally. It falls back to a remote request, or stays unresolved with `only_evaluate_locally=True`.
+  - On `$feature_flag_called` events from an `evaluate_flags()` snapshot, `$feature_flag_error` is now `local_evaluation_inconclusive` instead of `flag_missing` for a flag that has a loaded definition but that local evaluation could not resolve.
+  - `get_all_flags()`, `get_all_flags_and_payloads()` and `evaluate_flags()` no longer log an error with a traceback when a flag needs the server (for example, a static cohort). They fall back to a remote request without logging, as `get_feature_flag()` already did. — Thanks @gustavohstrassburger!
+
+## 7.78.0 — 2026-10-28
+
+### Minor changes
+
+- [351da59](https://github.com/posthog/posthog-python/commit/351da59c252afb7bffed79d21c23aa7e2539a38e) Add a `send_tools_list_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_tools_list`. — Thanks @gesh!
+
+## 7.77.0 — 2026-10-28
+
+### Minor changes
+
+- [d8a1b97](https://github.com/posthog/posthog-python/commit/d8a1b976d665d9f7b3249ac788ef253bb21eed50) Add a `send_initialize_event` option to MCP analytics. It is on by default. Set it to `False` to stop sending `$mcp_initialize`. — Thanks @gesh!
+
+## 7.76.1 — 2026-10-28
+
+### Patch changes
+
+- [b0a2b59](https://github.com/posthog/posthog-python/commit/b0a2b59dc09e96903cdf97ea3c8ab5298bdff7bb) The LangChain callback handler now records `$ai_web_search_count` for Anthropic responses that report `server_tool_use.web_search_requests`, as the OpenAI, Anthropic and Gemini wrappers and `posthog-js` already do. — Thanks @pcbeingused333!
+
+## 7.76.0 — 2026-10-27
+
+### Minor changes
+
+- [284340d](https://github.com/posthog/posthog-python/commit/284340d6ba6df08f68c27eac750b13f3ec89ab19) Add optional per-item model_version to offline evaluations and dataset conversion, preserving model attribution across serialization, retries, and recovery. — Thanks @Radu-Raicea!
+
+## 7.75.11 — 2026-10-23
+
+### Patch changes
+
+- [04e6a4c](https://github.com/posthog/posthog-python/commit/04e6a4c1c4f15e4dd0d010dee5fa83244f9b6dd8) Privacy mode now covers error text and the remaining content paths in the AI integrations.
+  
+  - `$ai_error` no longer carries the exception message when privacy mode is on. Provider errors and validation errors often quote the prompt or the model output, so the SDK now sends a summary built only from structured fields: the class name, HTTP status, provider error code, `param`, request ID and the class names of chained causes (for example `BadRequestError: 400 invalid_request_error param=messages[3].content request_id=req_123`). This applies to the OpenAI, Anthropic and Gemini wrappers (including Gemini embeddings), LangChain generations, spans and traces, and OpenAI Agents spans.
+  - The LangChain callback handler no longer sends an `$exception` event for a failed run when privacy mode is on.
+  - `$ai_tools` masks the `headers` and `authorization` of MCP tool definitions (`type: "mcp"`) with `[REDACTED]`, with or without privacy mode. The tools you pass in are not modified.
+  - Gemini: a per-call `posthog_privacy_mode=False` no longer turns off privacy mode set on the client, matching the OpenAI and Anthropic wrappers.
+  - OpenAI Agents: privacy mode now redacts `$ai_trace_metadata` and the `prompt` and `instructions` in transcription and speech span `model_config`.
+  - OpenTelemetry: `PostHogSpanProcessor` and `PostHogTraceExporter` accept `privacy_mode` and `client`, and also honor the client's (or the module-level) `privacy_mode`. When on, exported spans drop prompt, completion, tool argument and tool result attributes, non-exception span events, exception messages and stack traces, and the span status description. — Thanks @carlos-marchal-ph!
+
+## 7.75.10 — 2026-10-23
+
+### Patch changes
+
+- [25d2767](https://github.com/posthog/posthog-python/commit/25d2767a70378da02c321879f0fa3a2e52d071b7) Failed Gemini calls are now captured with the HTTP status of the error as `$ai_http_status` (for example 429 or 503) instead of 0. google-genai errors carry the status as `code` rather than `status_code`, which the OpenAI and Anthropic wrappers already read. — Thanks @pcbeingused333!
+
+## 7.75.9 — 2026-10-23
+
+### Patch changes
+
+- [8cd8eb5](https://github.com/posthog/posthog-python/commit/8cd8eb5b6fdcdb19db4c4d07fe911c6eb3976d5a) MCP analytics now sends one `$mcp_initialize` for each `initialize` request that a client sends.
+  
+  Before, the SDK sent the event on the first request of each session, once per process. A stateless fleet sent one event for each pod that a session reached. A conversation-anchored session sent another event. A client that connected and sent no other request sent no event.
+  
+  On MCP SDK 2.x, the event comes from `Server.middleware` on every transport. Requests on the 2026-07-28 spec, which has no `initialize`, no longer send one. On MCP SDK 1.x over HTTP, the event comes from `PostHogMcpStatelessSessionMiddleware`. The apps that `instrument()` autowires get this with no change. If you mount the middleware by hand, pass the server as `server=`. MCP SDK 1.x over stdio keeps the first request as the trigger.
+  
+  The event now also has the handshake request as `$mcp_parameters`. On MCP SDK 2.x, it also has the server reply as `$mcp_response`. — Thanks @gesh!
+- [48889b6](https://github.com/posthog/posthog-python/commit/48889b6cc8d0a9eec579684640cb74b393cdd56c) The Claude Agent SDK integration now takes the cumulative input and cache token counts from the final `message_delta` usage, which grow past the `message_start` values when server tools such as web search run, and sets `$ai_web_search_count` from `server_tool_use.web_search_requests`. Streamed generations used to under-report input tokens and cache writes and never recorded the web search count. — Thanks @pcbeingused333!
+
+## 7.75.8 — 2026-10-23
+
+### Patch changes
+
+- [d58380e](https://github.com/posthog/posthog-python/commit/d58380e87f38b725ded6d38b870b734056a526e7) Defer feature flag regex patterns with unsupported syntax or incompatible matching semantics to server evaluation instead of returning incorrect local results. Preserve portable Unicode matching and make end-of-input anchors strict, matching the flags service. — Thanks @marandaneto!
+
+## 7.75.7 — 2026-10-23
+
+### Patch changes
+
+- [ffde3c5](https://github.com/posthog/posthog-python/commit/ffde3c57f26b9daf92f12fbb21edd4f359e4388b) Streamed OpenAI-compatible chat completions whose tool call deltas carry no `index` are no longer dropped from `$ai_output`. A delta with a new id starts a call, and one without an id continues the latest call. — Thanks @pcbeingused333!
+
 ## 7.75.6 — 2026-10-22
 
 ### Patch changes

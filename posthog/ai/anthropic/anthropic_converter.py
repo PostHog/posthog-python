@@ -18,7 +18,7 @@ from posthog.ai.types import (
     TokenUsage,
     ToolInProgress,
 )
-from posthog.ai.utils import serialize_raw_usage
+from posthog.ai.utils import _redact_mcp_tool_credentials, serialize_raw_usage
 
 
 def format_anthropic_response(response: Any) -> List[FormattedMessage]:
@@ -153,7 +153,7 @@ def extract_anthropic_tools(kwargs: Dict[str, Any]) -> Optional[Any]:
         Tool definitions if present, None otherwise
     """
 
-    return kwargs.get("tools", None)
+    return _redact_mcp_tool_credentials(kwargs.get("tools", None))
 
 
 def format_anthropic_streaming_content(

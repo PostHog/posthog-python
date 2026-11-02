@@ -389,9 +389,12 @@ class WrappedCompletions(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         state = _ChatCompletionsStreamState()
-        if "stream_options" not in kwargs:
-            kwargs["stream_options"] = {}
-        kwargs["stream_options"]["include_usage"] = True
+        # The caller's dict is left alone, and None / NOT_GIVEN mean "no options"
+        stream_options = kwargs.get("stream_options")
+        kwargs["stream_options"] = {
+            **(stream_options if isinstance(stream_options, dict) else {}),
+            "include_usage": True,
+        }
         response = self._original.create(**kwargs)
 
         def generator():
@@ -436,9 +439,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             base_url=self._client.base_url,
             kwargs=kwargs,
             formatted_input=_format_openai_streaming_input(kwargs, "chat"),
-            formatted_output=_format_openai_streaming_output(
-                state.output, "chat", state.tool_calls
-            ),
+            formatted_output=state.formatted_output(),
             usage_stats=state.usage_stats,
             latency=latency,
             distinct_id=posthog_distinct_id,
@@ -495,7 +496,23 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         )
 
         start_time = time.time()
-        response = self._original.create(**kwargs)
+        try:
+            response = self._original.create(**kwargs)
+        except Exception as exc:
+            _capture_embedding_event(
+                posthog_client=self._client._ph_client,
+                base_url=self._client.base_url,
+                response=None,
+                request_kwargs=kwargs,
+                latency=time.time() - start_time,
+                distinct_id=posthog_distinct_id,
+                trace_id=posthog_trace_id,
+                properties=posthog_properties,
+                privacy_mode=posthog_privacy_mode,
+                groups=posthog_groups,
+                error=exc,
+            )
+            raise
         end_time = time.time()
 
         _capture_embedding_event(
