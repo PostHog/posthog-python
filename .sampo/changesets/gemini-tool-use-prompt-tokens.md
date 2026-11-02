@@ -2,4 +2,4 @@
 pypi/posthog: patch
 ---
 
-Count Gemini tool use prompt tokens (Google Search, URL context) as input tokens in captured generations.
+Count Gemini URL context tool use prompt tokens as input tokens in captured generations; Google Search retrieval is not billed as input and stays out of the total.

@@ -517,24 +517,39 @@ def extract_gemini_web_search_count(response: Any) -> int:
     return 0
 
 
-def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
+def _has_url_context(response: Any) -> bool:
+    """Whether a response or chunk carries URL context retrieval metadata."""
+    candidates = getattr(response, "candidates", None)
+    if not isinstance(candidates, (list, tuple)):
+        return False
+    return any(getattr(c, "url_context_metadata", None) for c in candidates)
+
+
+def _extract_usage_from_metadata(
+    metadata: Any, bill_tool_use_tokens: bool = False
+) -> TokenUsage:
     """
     Common logic to extract usage from Gemini metadata.
     Used by both streaming and non-streaming paths.
 
     Args:
         metadata: usage_metadata from Gemini response or chunk
+        bill_tool_use_tokens: whether tool_use_prompt_token_count is billed as
+            input (URL context). Google Search retrieval is not billed as input.
 
     Returns:
         TokenUsage with standardized usage
     """
     input_tokens = getattr(metadata, "prompt_token_count", 0)
 
-    # Built-in tools (Google Search, URL context) report the retrieved content
-    # separately from prompt_token_count, but it is billed as input
-    tool_use_tokens = getattr(metadata, "tool_use_prompt_token_count", 0)
-    if isinstance(tool_use_tokens, int) and tool_use_tokens > 0:
-        input_tokens += tool_use_tokens
+    # Built-in tools report the retrieved content separately from
+    # prompt_token_count. URL context content is billed as input; Google Search
+    # retrieval is not, so only add it when the response used URL context.
+    # (A response that used both tools cannot be split from these counts.)
+    if bill_tool_use_tokens:
+        tool_use_tokens = getattr(metadata, "tool_use_prompt_token_count", 0)
+        if isinstance(tool_use_tokens, int) and tool_use_tokens > 0:
+            input_tokens += tool_use_tokens
 
     usage = TokenUsage(
         input_tokens=input_tokens,
@@ -581,7 +596,9 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
         return TokenUsage()
 
-    usage = _extract_usage_from_metadata(response.usage_metadata)
+    usage = _extract_usage_from_metadata(
+        response.usage_metadata, bill_tool_use_tokens=_has_url_context(response)
+    )
 
     # Add web search count if present
     web_search_count = extract_gemini_web_search_count(response)
@@ -613,7 +630,9 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
     if not hasattr(chunk, "usage_metadata") or not chunk.usage_metadata:
         return usage
 
-    usage_from_metadata = _extract_usage_from_metadata(chunk.usage_metadata)
+    usage_from_metadata = _extract_usage_from_metadata(
+        chunk.usage_metadata, bill_tool_use_tokens=_has_url_context(chunk)
+    )
 
     # Merge the usage from metadata with any web search count we found
     usage.update(usage_from_metadata)
