@@ -147,10 +147,16 @@ class TestPostHogTracingProcessor:
         assert trace_kwargs["properties"]["$ai_session_id"] == "group_123"
         assert trace_kwargs["properties"]["$ai_group_id"] == "group_123"
 
-    def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
+    @pytest.mark.parametrize(
+        "distinct_id", [None, "", "  "], ids=["missing", "empty", "blank"]
+    )
+    def test_personless_mode_when_no_distinct_id(
+        self, mock_client, mock_trace, distinct_id
+    ):
         """Test that trace events use personless mode when no distinct_id is provided."""
         processor = PostHogTracingProcessor(
             client=mock_client,
+            distinct_id=distinct_id,
         )
 
         processor.on_trace_start(mock_trace)
