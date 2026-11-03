@@ -1,5 +1,11 @@
 # posthog
 
+## 7.83.1 — 2026-11-03
+
+### Patch changes
+
+- [0c12ca1](https://github.com/posthog/posthog-python/commit/0c12ca1521f6538873e00f5240cad306c9bba455) `PostHogMCP.prepare_tool_list` now adds the `context` argument to MCP SDK 2.x `Tool` objects. It only added it to dicts and 1.x `Tool` objects before, so `$mcp_intent` was never captured for 2.x tool objects. — Thanks @connor-grady!
+
 ## 7.83.0 — 2026-11-03
 
 ### Minor changes
