@@ -239,7 +239,7 @@ class CodeEmailArgs(_RecipientArgs):
             ``html``. HTML with no text in it, such as a single image, goes out
             without a plain-text part.
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
-        reply_to: One address or a list of addresses.
+        reply_to: One address or a list of addresses. An empty list sends no reply-to.
         capture_engagement: Capture the email's opens and clicks as events of
             the recipient. Defaults to ``True``. A project whose admin turned
             engagement capture off captures nothing, whatever the send asks. A
@@ -376,8 +376,9 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     sender: dict[str, Any] = {}
     if "from_" in args:
         sender["from"] = _nonempty_text(args, "from_")
-    if "reply_to" in args:
-        sender["reply_to"] = _addresses("reply_to", args["reply_to"])
+    reply_to = _addresses("reply_to", args["reply_to"]) if "reply_to" in args else []
+    if reply_to:
+        sender["reply_to"] = reply_to
     capture_engagement = args.get("capture_engagement", True)
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")
