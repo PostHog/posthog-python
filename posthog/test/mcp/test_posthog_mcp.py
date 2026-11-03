@@ -19,6 +19,7 @@ from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
+    structured_content,
 )
 from posthog.version import VERSION
 
@@ -173,6 +174,29 @@ def test_prepare_tool_list_injects_context_into_dicts():
     assert "context" in prepared[0]["inputSchema"]["properties"]
     # original tool dict is untouched
     assert "context" not in tools[0]["inputSchema"]["properties"]
+
+
+@pytest.mark.parametrize("sdk_tool", [False, True])
+def test_prepare_tool_list_injects_context_into_tool_objects(sdk_tool: bool) -> None:
+    client, _ = make_client()
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tool = (
+        Tool(name="search", inputSchema=schema)
+        if sdk_tool
+        else SimpleNamespace(name="search", input_schema=schema)
+    )
+    schema_attribute = (
+        "input_schema" if hasattr(tool, "input_schema") else "inputSchema"
+    )
+
+    prepared = client.prepare_tool_list([tool])
+
+    advertised = getattr(prepared[0], schema_attribute)
+    assert "context" in advertised["properties"]
+    assert "context" in advertised["required"]
+    assert "q" in advertised["properties"]
+    # the caller's schema dict is untouched
+    assert "context" not in schema["properties"]
 
 
 def test_prepare_tool_list_can_be_disabled():
@@ -515,7 +539,7 @@ def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
     delivered = prepared.result.root if wrapped else prepared.result
     assert len(call_result.content) == 1
     assert delivered.content[-1].text == _handle_block(prepared.conversation_id)["text"]
-    assert delivered.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+    assert structured_content(delivered)[MCP_INSTRUCTIONS_KEY] == {
         "conversation_id": prepared.conversation_id
     }
     assert _UUID7.match(prepared.conversation_id)

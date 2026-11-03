@@ -156,14 +156,22 @@ jobs:
         # the lockfile's mcp 1.x (also exercised incidentally by the `tests`
         # matrix — this leg exists as an explicit, named signal); the v2 leg
         # (spec 2026-07-28) swaps in mcp>=2 and standalone FastMCP 4, which uses
-        # the v2 registry. posthog/test/mcp/conftest.py splits collection by major.
+        # the v2 registry. The v2-bare leg runs mcp>=2 without FastMCP: importing
+        # FastMCP 4 patches camelCase properties onto mcp_types models for the
+        # whole process, which hides reads that plain mcp 2.x rejects.
+        # posthog/test/mcp/conftest.py splits collection by major.
         name: MCP SDK ${{ matrix.mcp-major }} (Python ${{ matrix.python-version }})
         runs-on: ubuntu-latest
         timeout-minutes: 20
         strategy:
             matrix:
                 python-version: ['3.10', '3.14']
-                mcp-major: ['v1', 'v2']
+                mcp-major: ['v1', 'v2', 'v2-bare']
+                include:
+                    - mcp-major: 'v2'
+                      mcp-packages: "'mcp>=2,<3' 'fastmcp>=4,<5'"
+                    - mcp-major: 'v2-bare'
+                      mcp-packages: "'mcp>=2,<3'"
 
         steps:
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -187,11 +195,11 @@ jobs:
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra test
 
             - name: Swap in MCP SDK v2
-              if: matrix.mcp-major == 'v2'
+              if: matrix.mcp-major != 'v1'
               shell: bash
               run: |
                   uv pip uninstall --python "$pythonLocation" fastmcp
-                  uv pip install --python "$pythonLocation" 'mcp>=2,<3' 'fastmcp>=4,<5'
+                  uv pip install --python "$pythonLocation" ${{ matrix.mcp-packages }}
 
             - name: Run MCP tests against SDK ${{ matrix.mcp-major }}
               run: |

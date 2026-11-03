@@ -64,6 +64,17 @@ def events_named(source, name):
     return [e for e in events if e["event"] == name]
 
 
+def structured_content(result):
+    """A ``CallToolResult``'s structured half: ``structuredContent`` on MCP SDK
+    1.x models, ``structured_content`` on 2.x (same wire field). Read the field
+    itself rather than the camelCase spelling, which 2.x only resolves once
+    standalone FastMCP 4's compatibility shim has been imported."""
+    for attr in ("structured_content", "structuredContent"):
+        if hasattr(result, attr):
+            return getattr(result, attr)
+    raise AssertionError("no structured content attribute")
+
+
 def listed_uris(response):
     """The uris a captured ``$mcp_resources_list`` response advertises, whether it
     listed static resources or templates."""
