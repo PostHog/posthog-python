@@ -88,7 +88,9 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
+    _LocalFlagRecord,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from posthog.feature_flags import (
@@ -4449,9 +4451,23 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
+                if (
+                    flag_details is not None
+                    and flag_details._malformed_field is not None
+                ):
+                    # The record could not be read, so it reads as disabled. It must
+                    # not replace the last good cached value, which it falls back to
+                    # like a failed request, and it reports what a failed request
+                    # reports: an unknown error and no request details.
+                    feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
+                    request_id = None
+                    evaluated_at = None
+                    flag_result = (
+                        self._get_stale_flag_fallback(distinct_id, key) or flag_result
+                    )
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
-                if self.flag_cache and flag_result:
+                elif self.flag_cache and flag_result:
                     self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
@@ -4493,12 +4509,18 @@ class Client(object):
             # Source the gate the same way as has_experiment above; see
             # _capture_feature_flag_called_if_needed for why.
             minimal_flag_called_events = self._minimal_flag_called_events
+            # Remotely-evaluated flags carry id and version in the response metadata;
+            # locally-evaluated flags read them from the definition that produced the value.
+            local_flag_id: Optional[int] = None
+            local_flag_version: Optional[int] = None
             if flag_was_locally_evaluated:
-                local_def = (self.feature_flags_by_key or {}).get(key)
+                local_def = snapshot["flags_by_key"].get(key)
                 if isinstance(local_def, dict):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
+                    local_flag_id = local_def.get("id")
+                    local_flag_version = local_def.get("version")
             elif isinstance(flag_details, FeatureFlag):
                 has_experiment = _metadata_has_experiment(flag_details.metadata)
                 minimal_flag_called_events = remote_minimal_flag_called_events
@@ -4518,6 +4540,8 @@ class Client(object):
                 feature_flag_error,
                 has_experiment,
                 minimal_flag_called_events,
+                local_flag_id=local_flag_id,
+                local_flag_version=local_flag_version,
             )
 
         return flag_result
@@ -4810,6 +4834,8 @@ class Client(object):
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        local_flag_id: Optional[int] = None,
+        local_flag_version: Optional[int] = None,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -4834,6 +4860,10 @@ class Client(object):
                     properties["$feature_flag_version"] = flag_details.metadata.version
                 if flag_details.metadata.id:
                     properties["$feature_flag_id"] = flag_details.metadata.id
+        if local_flag_version:
+            properties["$feature_flag_version"] = local_flag_version
+        if local_flag_id:
+            properties["$feature_flag_id"] = local_flag_id
         if feature_flag_error:
             properties["$feature_flag_error"] = feature_flag_error
 
@@ -5233,15 +5263,13 @@ class Client(object):
 
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
-            records[key] = _EvaluatedFlagRecord(
+            records[key] = _LocalFlagRecord(
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
                 payload=_parse_flag_payload(local_payloads.get(key)),
                 id=flag_def.get("id"),
-                # The local-evaluation flag definition does not carry a version field;
-                # only the remote ``/flags`` response does via ``metadata.version``.
-                version=None,
+                version=flag_def.get("version"),
                 reason="Evaluated locally",
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
@@ -5278,35 +5306,7 @@ class Client(object):
                         continue
                     if key in locally_evaluated_keys:
                         continue
-                    payload = _parse_flag_payload(
-                        detail.metadata.payload
-                        if isinstance(detail.metadata, FlagMetadata)
-                        else getattr(detail.metadata, "payload", None)
-                    )
-                    records[key] = _EvaluatedFlagRecord(
-                        key=key,
-                        enabled=detail.enabled,
-                        variant=detail.variant,
-                        payload=payload,
-                        id=(
-                            detail.metadata.id
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        version=(
-                            detail.metadata.version
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        reason=(
-                            detail.reason.description
-                            if detail.reason and detail.reason.description
-                            else None
-                        ),
-                        locally_evaluated=False,
-                        has_experiment=_metadata_has_experiment(detail.metadata),
-                        details=detail,
-                    )
+                    records[key] = _RemoteFlagRecord(detail)
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 quota_limited = True

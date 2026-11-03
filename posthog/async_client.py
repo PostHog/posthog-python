@@ -40,8 +40,6 @@ from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
     Client as _SyncClient,
     _capture_flag_events,
-    _metadata_has_experiment,
-    _parse_flag_payload,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -74,13 +72,13 @@ from .emails import AsyncEmails, _client_emails, _validate_options
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
 from .types import FeatureFlag as _FeatureFlag
 from .types import (
-    FlagMetadata,
     FlagValue,
     _has_untyped_flag_records,
     _UNTYPED_FLAGS_RESPONSE_MESSAGE,
@@ -1021,25 +1019,7 @@ class AsyncClient:
             for key, detail in response.get("flags", {}).items():
                 if requested_keys is not None and key not in requested_keys:
                     continue
-                metadata = detail.metadata
-                records[key] = _EvaluatedFlagRecord(
-                    key=key,
-                    enabled=detail.enabled,
-                    variant=detail.variant,
-                    payload=_parse_flag_payload(metadata.payload),
-                    id=metadata.id if isinstance(metadata, FlagMetadata) else None,
-                    version=(
-                        metadata.version if isinstance(metadata, FlagMetadata) else None
-                    ),
-                    reason=(
-                        detail.reason.description
-                        if detail.reason and detail.reason.description
-                        else None
-                    ),
-                    locally_evaluated=False,
-                    has_experiment=_metadata_has_experiment(metadata),
-                    details=detail,
-                )
+                records[key] = _RemoteFlagRecord(detail)
         except QuotaLimitError:
             self.log.warning(
                 "[FEATURE FLAGS] Feature flag evaluation was quota limited"
