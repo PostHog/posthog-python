@@ -40,8 +40,6 @@ from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
-    _metadata_has_experiment,
-    _parse_flag_payload,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -74,11 +72,17 @@ from .emails import AsyncEmails, _client_emails, _validate_options
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
-from .types import FlagMetadata, FlagValue, normalize_flags_response
+from .types import (
+    FlagValue,
+    _has_untyped_flag_records,
+    _UNTYPED_FLAGS_RESPONSE_MESSAGE,
+    normalize_flags_response,
+)
 from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
 from .version import VERSION
 
@@ -231,6 +235,8 @@ class AsyncClient:
             self.log.setLevel(logging.DEBUG)
         else:
             self.log.setLevel(logging.WARNING)
+        # Whether this client has logged that /flags sent records without typed values.
+        self._logged_untyped_flags_response = False
 
         if not self.api_key:
             self.log.error(
@@ -927,6 +933,11 @@ class AsyncClient:
             client=self._get_http_client(),
             **request_data,
         )
+        if not self._logged_untyped_flags_response and _has_untyped_flag_records(
+            response
+        ):
+            self._logged_untyped_flags_response = True
+            self.log.info(_UNTYPED_FLAGS_RESPONSE_MESSAGE)
         return normalize_flags_response(response)
 
     async def evaluate_flags(
@@ -1004,24 +1015,7 @@ class AsyncClient:
             for key, detail in response.get("flags", {}).items():
                 if requested_keys is not None and key not in requested_keys:
                     continue
-                metadata = detail.metadata
-                records[key] = _EvaluatedFlagRecord(
-                    key=key,
-                    enabled=detail.enabled,
-                    variant=detail.variant,
-                    payload=_parse_flag_payload(metadata.payload),
-                    id=metadata.id if isinstance(metadata, FlagMetadata) else None,
-                    version=(
-                        metadata.version if isinstance(metadata, FlagMetadata) else None
-                    ),
-                    reason=(
-                        detail.reason.description
-                        if detail.reason and detail.reason.description
-                        else None
-                    ),
-                    locally_evaluated=False,
-                    has_experiment=_metadata_has_experiment(metadata),
-                )
+                records[key] = _RemoteFlagRecord(detail)
         except QuotaLimitError:
             self.log.warning(
                 "[FEATURE FLAGS] Feature flag evaluation was quota limited"

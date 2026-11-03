@@ -86,6 +86,7 @@ def test_health_opts_into_local_evaluation_without_losing_capture(
     monkeypatch.setattr(adapter, "CAPTURE_MODE", mode)
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
+    assert "flags_response_v4" in capabilities
     assert capability in capabilities
     assert "capture_ai_v0" in capabilities
 
