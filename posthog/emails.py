@@ -470,12 +470,12 @@ def _attachment(index: int, file: Any) -> dict[str, str]:
             "Read the file and pass its bytes as content instead.",
             f"{field}__path",
         )
-    unknown = next((name for name in file if name not in _ATTACHMENT_FIELDS), None)
-    if unknown is not None:
+    unknown = [name for name in file if name not in _ATTACHMENT_FIELDS]
+    if unknown:
         raise _invalid_attachment(
             "An attachment takes filename, content, content_type and content_id, "
-            f"not {unknown}.",
-            f"{field}__{unknown}",
+            f"not {unknown[0]}.",
+            f"{field}__{unknown[0]}",
         )
     if not isinstance(file.get("filename"), str):
         raise _invalid_attachment(
