@@ -399,6 +399,29 @@ def main(args=None):
     for key in ("runtime_version", "measurement_tools", "os", "arch"):
         if documents["base"]["execution"][key] != documents["head"]["execution"][key]:
             raise ValueError(f"Base/head {key} differ")
+    for document in documents.values():
+        document["benchmarks"] = [
+            {
+                "id": spec["id"],
+                "parameters": spec,
+                "fixture_digest": digest(
+                    {
+                        "spec": spec,
+                        "definitions": (
+                            definitions(spec["flag_count"])
+                            if "flag_count" in spec
+                            else None
+                        ),
+                        "users": USERS,
+                    }
+                ),
+                "status": "error",
+                "reason": "Workload was not run: suite stopped before reaching it",
+                "metrics": [],
+                "runs": [],
+            }
+            for spec in specs
+        ]
     options.output.mkdir(parents=True, exist_ok=True)
 
     def save():
@@ -409,26 +432,12 @@ def main(args=None):
 
     failures = 0
     timeouts = 0
-    for spec in specs:
+    for index, spec in enumerate(specs):
         records = {}
         for role in directories:
-            records[role] = {
-                "id": spec["id"],
-                "parameters": spec,
-                "fixture_digest": digest(
-                    {
-                        "spec": spec,
-                        "definitions": definitions(spec["flag_count"])
-                        if "flag_count" in spec
-                        else None,
-                        "users": USERS,
-                    }
-                ),
-                "status": "ok",
-                "metrics": [],
-                "runs": [],
-            }
-            documents[role]["benchmarks"].append(records[role])
+            records[role] = documents[role]["benchmarks"][index]
+            records[role]["status"] = "ok"
+            del records[role]["reason"]
         for repetition in range(options.repetitions):
             for measurement_pass in spec["passes"]:
                 for role in ["head", "base"] if repetition % 2 else ["base", "head"]:

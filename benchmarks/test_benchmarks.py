@@ -740,32 +740,52 @@ class BenchmarksTest(unittest.TestCase):
             self.assertTrue(profile.parent.name.startswith("posthog-benchmark-worker-"))
             self.assertFalse(profile.parent.exists())
 
-    def test_repeated_timeouts_stop_the_suite_with_partial_results(self):
-        with (
-            tempfile.TemporaryDirectory() as directory,
-            patch(
-                "run.run_worker", return_value={"status": "timeout", "pass": "timing"}
-            ) as worker,
-        ):
-            code = main(
-                [
-                    "--base",
-                    str(ROOT),
-                    "--head",
-                    str(ROOT),
-                    "--output",
-                    directory,
-                    "--smoke",
-                ]
-            )
-            self.assertEqual(code, 1)
-            self.assertEqual(worker.call_count, 2)
-            for role in ("base", "head"):
-                document = json.loads((Path(directory) / f"{role}.json").read_text())
-                self.assertEqual(len(document["benchmarks"]), 1)
-                self.assertEqual(document["benchmarks"][0]["status"], "timeout")
-                self.assertEqual(document["benchmarks"][0]["metrics"], [])
-                self.assertEqual(len(document["benchmarks"][0]["runs"]), 1)
+    def test_repeated_timeouts_preserve_the_complete_inventory(self):
+        for shard in (None, *load_shards()):
+            with (
+                self.subTest(shard=shard),
+                tempfile.TemporaryDirectory() as directory,
+                patch(
+                    "run.run_worker",
+                    side_effect=lambda python, spec, measurement_pass: {
+                        "status": "timeout",
+                        "pass": measurement_pass,
+                    },
+                ) as worker,
+            ):
+                code = main(
+                    [
+                        "--base",
+                        str(ROOT),
+                        "--head",
+                        str(ROOT),
+                        "--output",
+                        directory,
+                        "--smoke",
+                        *(["--shard", shard] if shard else []),
+                    ]
+                )
+                self.assertEqual(code, 1)
+                self.assertEqual(worker.call_count, 2)
+                expected = (
+                    load_shards()[shard]
+                    if shard
+                    else [spec["id"] for spec in workloads(True)]
+                )
+                for role in ("base", "head"):
+                    document = json.loads(
+                        (Path(directory) / f"{role}.json").read_text()
+                    )
+                    records = document["benchmarks"]
+                    self.assertEqual([record["id"] for record in records], expected)
+                    self.assertEqual(records[0]["status"], "timeout")
+                    self.assertEqual(records[0]["metrics"], [])
+                    self.assertEqual(len(records[0]["runs"]), 1)
+                    for record in records[1:]:
+                        self.assertEqual(record["status"], "error")
+                        self.assertIn("not run", record["reason"])
+                        self.assertEqual(record["metrics"], [])
+                        self.assertEqual(record["runs"], [])
 
     def test_oom_classification_requires_evidence(self):
         self.assertEqual(classify_exit(stderr="Killed"), "error")
