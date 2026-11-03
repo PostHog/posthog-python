@@ -25,9 +25,55 @@ RELEASED = json.loads(
 SHAPES = ["v2", "v4"]
 
 
+# This SDK makes these FeatureFlag and FlagMetadata fields public, so the flags in
+# get_flags_decision() carry them. 7.82.1 had none of them; every other field must
+# still match its recording.
+NEW_PUBLIC_FLAG_FIELDS = ("value", "failed", "error_code", "error_message")
+NEW_PUBLIC_METADATA_FIELDS = (
+    "config_version",
+    "rule_type",
+    "rule_id",
+    "variant_key",
+    "forced_variant",
+)
+
+
 @pytest.fixture(scope="module", params=SHAPES)
-def results(request: Any) -> Dict[str, Any]:
+def results_with_new_fields(request: Any) -> Dict[str, Any]:
     return scenarios.run_all(request.param)
+
+
+@pytest.fixture(scope="module")
+def results(results_with_new_fields: Dict[str, Any]) -> Dict[str, Any]:
+    stripped = copy.deepcopy(results_with_new_fields)
+    for scenario in stripped.values():
+        decision = scenario.get("get_flags_decision")
+        for flag in (decision or {}).get("flags", {}).values():
+            for name in NEW_PUBLIC_FLAG_FIELDS:
+                flag.pop(name)
+            if flag["metadata"]["__class__"] == "FlagMetadata":
+                for name in NEW_PUBLIC_METADATA_FIELDS:
+                    flag["metadata"].pop(name)
+    return stripped
+
+
+def test_get_flags_decision_carries_the_new_public_fields(results_with_new_fields):
+    flags = results_with_new_fields["getters"]["get_flags_decision"]["flags"]
+    assert {name: flags["bool-on"][name] for name in NEW_PUBLIC_FLAG_FIELDS} == {
+        "value": True,
+        "failed": False,
+        "error_code": None,
+        "error_message": None,
+    }
+    assert flags["bool-on"]["metadata"]["config_version"] == 1
+    assert flags["server-failed"]["failed"] is True
+    assert flags["server-failed"]["error_code"] == "GENERAL"
+
+    unreadable = results_with_new_fields["getters with an unreadable record"][
+        "get_flags_decision"
+    ]["flags"]["unreadable"]
+    assert (unreadable["value"], unreadable["failed"]) == (None, True)
+    assert unreadable["error_code"] == "PARSE_ERROR"
 
 
 def test_every_legacy_getter_and_event_matches_7_82_1(results):
