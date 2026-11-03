@@ -955,6 +955,18 @@ SECRET_CONTENT = b"secret-file-content"
             "attachments__0__contentType",
         ),
         (
+            "none_key_before_an_unknown_field",
+            [
+                {
+                    None: "ignored",
+                    "filename": "a.txt",
+                    "content": SECRET_CONTENT,
+                    "contentType": "text/plain",
+                }
+            ],
+            "attachments__0__None",
+        ),
+        (
             "content_type_not_text",
             [
                 {"filename": "a.txt", "content": "aGk="},
