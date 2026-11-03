@@ -36,7 +36,7 @@ client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 message = client.messages.create(
     model="claude-sonnet-5-5",
     max_tokens=16000,
-    thinking={"type": "adaptive"},
+    thinking={"type": "adaptive", "display": "summarized"},
     messages=[
         {
             "role": "user",
