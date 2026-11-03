@@ -14,6 +14,7 @@ from posthog.mcp._output_instructions import (
     can_declare_output_instructions,
     mirror_instructions_into_structured_content,
 )
+from posthog.test.mcp._helpers import structured_content
 
 
 def _tool(output_schema, name="demo"):
@@ -204,13 +205,6 @@ def test_mirror_does_not_mutate_a_shared_model_result():
     — and, through the handle, collapse unrelated clients into one session."""
     import mcp.types as mcp_types
 
-    # `structuredContent` on SDK 1.x, `structured_content` on 2.x (same wire field).
-    def structured(result):
-        for attr in ("structured_content", "structuredContent"):
-            if hasattr(result, attr):
-                return getattr(result, attr)
-        raise AssertionError("no structured content attribute")
-
     shared = mcp_types.CallToolResult(
         content=[mcp_types.TextContent(type="text", text="{}")],
         structuredContent={"total": 7},
@@ -220,9 +214,13 @@ def test_mirror_does_not_mutate_a_shared_model_result():
 
     assert delivered is True
     assert first is not shared  # a copy, not the caller's object
-    assert structured(first)[MCP_INSTRUCTIONS_KEY] == {"conversation_id": "conv-A"}
+    assert structured_content(first)[MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": "conv-A"
+    }
     # the shared object the customer owns is untouched, so the next caller is clean
-    assert MCP_INSTRUCTIONS_KEY not in structured(shared)
+    assert MCP_INSTRUCTIONS_KEY not in structured_content(shared)
 
     second, _ = mirror_instructions_into_structured_content(shared, "conv-B")
-    assert structured(second)[MCP_INSTRUCTIONS_KEY] == {"conversation_id": "conv-B"}
+    assert structured_content(second)[MCP_INSTRUCTIONS_KEY] == {
+        "conversation_id": "conv-B"
+    }
