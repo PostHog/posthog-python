@@ -620,6 +620,8 @@ async def test_async_get_retries_an_unavailable_service():
 
 
 HTML = "<p>Reset it here.</p>"
+INVITE = b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
+INVITE_BASE64 = "QkVHSU46VkNBTEVOREFSDQpFTkQ6VkNBTEVOREFSDQo="
 
 
 def send_code(emails: Emails, **overrides: Any):
@@ -644,6 +646,8 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": "Reset it here.",
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
+                "cc": "manager@example.com",
+                "bcc": ["audit@example.com", "archive@example.com"],
                 "capture_engagement": False,
                 "distinct_id": "user_123",
             },
@@ -652,6 +656,8 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": "Reset it here.",
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
+                "cc": ["manager@example.com"],
+                "bcc": ["audit@example.com", "archive@example.com"],
                 "capture_engagement": False,
                 "distinct_id": "user_123",
             },
@@ -663,8 +669,8 @@ def send_code(emails: Emails, **overrides: Any):
         ),
         (
             "empty_address_lists",
-            {"html": HTML, "reply_to": []},
-            {"html": HTML, "reply_to": []},
+            {"html": HTML, "reply_to": [], "cc": [], "bcc": [], "attachments": []},
+            {"html": HTML, "reply_to": [], "cc": [], "bcc": [], "attachments": []},
         ),
         (
             "none_as_left_out",
@@ -673,6 +679,9 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": None,
                 "from_": None,
                 "reply_to": None,
+                "cc": None,
+                "bcc": None,
+                "attachments": None,
                 "capture_engagement": None,
                 "distinct_id": None,
             },
@@ -717,6 +726,9 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         text="Reset it here.",
         from_="Acme <security@example.com>",
         reply_to="help@example.com",
+        cc="manager@example.com",
+        bcc=["audit@example.com"],
+        attachments=[{"filename": "invite.ics", "content": INVITE}],
         capture_engagement=False,
         distinct_id="user_123",
         idempotency_key="reset:user_123",
@@ -737,6 +749,9 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         "text": "Reset it here.",
         "from": "Acme <security@example.com>",
         "reply_to": ["help@example.com"],
+        "cc": ["manager@example.com"],
+        "bcc": ["audit@example.com"],
+        "attachments": [{"filename": "invite.ics", "content": INVITE_BASE64}],
         "capture_engagement": False,
         "distinct_id": "user_123",
     }
@@ -766,12 +781,13 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
         ("blank_reply_to", {"html": HTML, "reply_to": " "}, ValueError),
         ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
+        ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
+        ("bcc_not_text", {"html": HTML, "bcc": [123]}, TypeError),
         (
             "template_data_on_code_form",
             {"html": HTML, "template_data": {"first_name": "Jane"}},
             TypeError,
         ),
-        ("cc_on_code_form", {"html": HTML, "cc": "a@example.com"}, TypeError),
         (
             "capture_engagement_on_template_form",
             {
@@ -779,6 +795,36 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
                 "template_key": None,
                 "subject": None,
                 "capture_engagement": False,
+            },
+            TypeError,
+        ),
+        (
+            "cc_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "cc": "a@example.com",
+            },
+            TypeError,
+        ),
+        (
+            "bcc_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "bcc": ["a@example.com"],
+            },
+            TypeError,
+        ),
+        (
+            "attachments_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "attachments": [{"filename": "a.txt", "content": b"hi"}],
             },
             TypeError,
         ),
@@ -798,4 +844,140 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
             **{name: value for name, value in args.items() if value is not None}
         )
 
+    assert adapter.requests == []
+
+
+def test_a_server_that_does_not_take_a_field_refuses_the_send_and_names_it():
+    refused = {
+        "type": "invalid_request",
+        "code": "invalid_request",
+        "detail": "cc: PostHog doesn't take this field on this route.",
+        "attr": "cc",
+    }
+    emails, adapter = emails_with([(400, refused, {}), accepted()])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html=HTML, cc="manager@example.com")
+
+    error = raised.value
+    assert (error.name, error.code, error.field) == (
+        "validation_error",
+        "invalid_request",
+        "cc",
+    )
+    assert len(adapter.requests) == 1
+
+
+def test_attachments_are_sent_base64_encoded_once_across_retries():
+    emails, adapter = emails_with([rejected(503, "delivery_unavailable"), accepted()])
+
+    send_code(
+        emails,
+        html=HTML,
+        attachments=[
+            {
+                "filename": "invite.ics",
+                "content": INVITE,
+                "content_type": "text/calendar; method=REQUEST",
+            },
+            {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+        ],
+    )
+
+    first, retry = adapter.requests
+    assert json.loads(first.body)["attachments"] == [
+        {
+            "filename": "invite.ics",
+            "content": INVITE_BASE64,
+            "content_type": "text/calendar; method=REQUEST",
+        },
+        {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+    ]
+    assert retry.body == first.body
+
+
+@parameterized.expand(
+    [
+        ("bytearray", bytearray(INVITE)),
+        ("memoryview", memoryview(INVITE)),
+        (
+            "strided_memoryview",
+            memoryview(bytes(b for byte in INVITE for b in (byte, 0)))[::2],
+        ),
+    ]
+)
+def test_attachment_content_from_any_bytes_buffer_is_base64_encoded(_name, content):
+    emails, adapter = emails_with([accepted()])
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": content}]
+    )
+
+    [request] = adapter.requests
+    assert json.loads(request.body)["attachments"] == [
+        {"filename": "invite.ics", "content": INVITE_BASE64}
+    ]
+
+
+SECRET_CONTENT = b"secret-file-content"
+
+
+@parameterized.expand(
+    [
+        (
+            "one_file_not_a_list",
+            {"filename": "a.txt", "content": SECRET_CONTENT},
+            "attachments",
+        ),
+        ("bytes_not_a_list", SECRET_CONTENT, "attachments"),
+        ("file_not_a_mapping", [SECRET_CONTENT], "attachments__0"),
+        (
+            "list_of_ints",
+            [{"filename": "a.txt", "content": list(SECRET_CONTENT)}],
+            "attachments__0__content",
+        ),
+        ("no_content", [{"filename": "a.txt"}], "attachments__0__content"),
+        ("no_filename", [{"content": SECRET_CONTENT}], "attachments__0__filename"),
+        (
+            "path",
+            [{"filename": "a.txt", "content": SECRET_CONTENT, "path": "/tmp/a.txt"}],
+            "attachments__0__path",
+        ),
+        (
+            "unknown_field",
+            [
+                {
+                    "filename": "a.txt",
+                    "content": SECRET_CONTENT,
+                    "contentType": "text/plain",
+                }
+            ],
+            "attachments__0__contentType",
+        ),
+        (
+            "content_type_not_text",
+            [
+                {"filename": "a.txt", "content": "aGk="},
+                {"filename": "b.txt", "content": SECRET_CONTENT, "content_type": 1},
+            ],
+            "attachments__1__content_type",
+        ),
+    ]
+)
+def test_rejects_an_attachment_it_cannot_send_without_repeating_its_content(
+    _name, attachments, field
+):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html=HTML, attachments=attachments)
+
+    error = raised.value
+    assert (error.name, error.code, error.field) == (
+        "validation_error",
+        "invalid_attachment",
+        field,
+    )
+    assert "secret-file-content" not in str(error)
+    assert "115, 101" not in str(error)
     assert adapter.requests == []
