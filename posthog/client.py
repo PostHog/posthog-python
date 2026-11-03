@@ -147,6 +147,7 @@ from posthog.utils import (
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
+    _rfc3339_timestamp,
     _is_personal_api_key,
     _drop_invalid_distinct_id,
     _drop_invalid_event_name,
@@ -2726,7 +2727,7 @@ class Client(object):
                 "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
                 "Falling back to the current UTC time."
             )
-            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+            msg["timestamp"] = _rfc3339_timestamp(datetime.now(tz=timezone.utc))
 
         self._normalize_event_uuid(msg)
 

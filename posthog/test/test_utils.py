@@ -3,12 +3,12 @@ import os
 import sys
 import time
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from unittest import mock
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
-from typing import Optional
+from typing import Iterator, Optional
 from uuid import UUID
 
 from parameterized import parameterized
@@ -20,6 +20,21 @@ from posthog.types import FeatureFlagResult
 
 TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
 FAKE_TEST_API_KEY = "random_key"
+
+
+@contextmanager
+def local_timezone(tz: str) -> Iterator[None]:
+    original_tz = os.environ.get("TZ")
+    os.environ["TZ"] = tz
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
 
 
 class FakeRedis:
@@ -125,10 +140,7 @@ class TestUtils(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
     def test_guess_timezone_preserves_recent_naive_local_instant_as_utc(self):
-        original_tz = os.environ.get("TZ")
-        try:
-            os.environ["TZ"] = "EST5EDT"
-            time.tzset()
+        with local_timezone("EST5EDT"):
             local_now = datetime(2026, 1, 15, 7, 30, 45, 123456)
             utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
 
@@ -140,32 +152,17 @@ class TestUtils(unittest.TestCase):
 
             assert normalized == utc_now
             assert normalized.isoformat() == "2026-01-15T12:30:45.123456+00:00"
-        finally:
-            if original_tz is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = original_tz
-            time.tzset()
 
     @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
     def test_normalize_timestamp_treats_future_naive_string_as_utc(self):
-        original_tz = os.environ.get("TZ")
-        try:
-            os.environ["TZ"] = "EST5EDT"
-            time.tzset()
+        with local_timezone("EST5EDT"):
             now = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
 
             with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
                 mock_datetime.now.return_value = now.replace(tzinfo=None)
                 normalized = utils._normalize_timestamp("2030-01-01T12:00:00")
 
-            assert normalized == "2030-01-01T12:00:00+00:00"
-        finally:
-            if original_tz is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = original_tz
-            time.tzset()
+            assert normalized == "2030-01-01T12:00:00.000000+00:00"
 
     def test_normalize_timestamp_converts_datetime_to_utc(self):
         timestamp = datetime(
@@ -176,12 +173,39 @@ class TestUtils(unittest.TestCase):
             utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
         )
 
+    @parameterized.expand(
+        [
+            (
+                "whole_second_keeps_zero_fraction",
+                datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.000000+00:00",
+            ),
+            (
+                "microseconds_kept",
+                datetime(2026, 1, 15, 12, 0, 0, 120000, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.120000+00:00",
+            ),
+            (
+                "offset_converted_to_utc",
+                datetime(2026, 1, 15, 7, 30, 0, tzinfo=timezone(timedelta(hours=-5))),
+                "2026-01-15T12:30:00.000000+00:00",
+            ),
+        ]
+    )
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_rfc3339_timestamp_always_writes_the_fraction_in_utc(
+        self, _name: str, value: datetime, expected: str
+    ):
+        # A non-UTC local zone tells UTC conversion apart from local conversion.
+        with local_timezone("EST5EDT"):
+            assert utils._rfc3339_timestamp(value) == expected
+
     def test_normalize_timestamp_converts_compact_offset_to_utc(self):
         with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
             normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
 
         mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
-        assert normalized == "2026-06-27T06:30:00+00:00"
+        assert normalized == "2026-06-27T06:30:00.000000+00:00"
 
     @parameterized.expand(["2026-06-27", "20260627", "not-Z-an-iso-timestamp"])
     def test_normalize_timestamp_rejects_invalid_string(self, timestamp):

@@ -1,5 +1,6 @@
 import unittest
 from datetime import datetime, timedelta, timezone
+from unittest import mock
 
 from parameterized import parameterized
 
@@ -61,13 +62,22 @@ class TestCanonicalEventUuid(unittest.TestCase):
         self.assertIsNone(_canonical_event_uuid(value))
 
 
+def _whole_second_clock() -> "mock._patch":
+    whole_second = datetime(2026, 6, 27, 12, tzinfo=timezone.utc)
+    return mock.patch(
+        "posthog.capture_event.datetime",
+        wraps=datetime,
+        **{"now.return_value": whole_second},
+    )
+
+
 class TestToV1Event(unittest.TestCase):
     def test_required_fields_preserved(self) -> None:
         event = _to_v1_event(_legacy_msg(event="signed_up"))
         self.assertEqual(event["event"], "signed_up")
         self.assertEqual(event["uuid"], "0190000000007000800000000000000a")
         self.assertEqual(event["distinct_id"], "user-1")
-        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00.000000+00:00")
 
     def test_strips_lib_and_lib_version(self) -> None:
         event = _to_v1_event(_legacy_msg())
@@ -258,16 +268,16 @@ class TestToV1Event(unittest.TestCase):
                 )
             )
         )
-        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00.000000+00:00")
 
     def test_timestamp_parseable_string_converted_to_exact_utc_instant(self) -> None:
         event = _to_v1_event(_legacy_msg(timestamp="2026-06-27T17:45:00+05:45"))
-        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00+00:00")
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00.000000+00:00")
 
     def test_timestamp_none_defaults_to_utc_now(self) -> None:
-        event = _to_v1_event(_legacy_msg(timestamp=None))
-        parsed = datetime.fromisoformat(event["timestamp"])
-        self.assertEqual(parsed.tzinfo, timezone.utc)
+        with _whole_second_clock():
+            event = _to_v1_event(_legacy_msg(timestamp=None))
+        self.assertEqual(event["timestamp"], "2026-06-27T12:00:00.000000+00:00")
 
 
 class TestBuildV1BatchBody(unittest.TestCase):
@@ -278,10 +288,10 @@ class TestBuildV1BatchBody(unittest.TestCase):
         self.assertNotIn("api_key", body)
         self.assertNotIn("sent_at", body)
 
-    def test_created_at_is_tz_aware_rfc3339(self) -> None:
-        body = _build_v1_batch_body([])
-        parsed = datetime.fromisoformat(body["created_at"])
-        self.assertIsNotNone(parsed.tzinfo)
+    def test_created_at_defaults_to_utc_now(self) -> None:
+        with _whole_second_clock():
+            body = _build_v1_batch_body([])
+        self.assertEqual(body["created_at"], "2026-06-27T12:00:00.000000+00:00")
 
     def test_created_at_passthrough_used_verbatim(self) -> None:
         # _send_v1_batch hoists created_at and passes it in so it stays stable

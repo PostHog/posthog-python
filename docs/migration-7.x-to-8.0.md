@@ -4,7 +4,7 @@ posthog 8.0 sends every event through capture v1 and removes the legacy capture 
 Most apps upgrade without code changes.
 Read the checklist first, then the sections that apply to you.
 
-<!-- TODO(capture-v1): when the public capture v1 SDK upgrade guide is published (PostHog/posthog.com#21386), link it here for details on options, limits and per-event results. -->
+For the changes every capture v1 SDK shares, such as event options, limits and per-event results, see [Upgrading to capture v1 SDKs](https://posthog.com/docs/libraries/capture-v1).
 
 ## Checklist
 
@@ -14,7 +14,7 @@ You need to change code if your app does any of these:
 - calls `posthog.request.post` or `posthog.request.flags` with positional arguments after `path` or `host`
 - sets `$exception_level` or another reserved exception property in `capture_exception(properties=...)`
 - sets `capture_mode`, `POSTHOG_CAPTURE_MODE` or `gzip`
-- imports `CaptureV1Error`, `posthog.capture_v1`, `request.batch_post`, `EVENTS_ENDPOINT` or `AI_EVENTS_ENDPOINT`
+- imports `CaptureMode`, `posthog.capture_mode`, `CaptureV1Error`, `posthog.capture_v1`, `request.batch_post`, `EVENTS_ENDPOINT` or `AI_EVENTS_ENDPOINT`
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
 - sends events through a proxy that redirects capture requests to another host
 - reuses one event `uuid` for more than one event
@@ -75,7 +75,7 @@ To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$l
 | `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
 | `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Nothing. Send events through a client. |
-| The `gzip` parameter of `request.post` and `request.flags` | Nothing. The parameters after `path` in `post` and after `host` in `flags` are keyword-only, so a 7.x call that passes them by position raises `TypeError`. |
+| The `gzip` parameter of `request.post` and `request.flags` | Nothing. The parameters after `path` in `post` and after `host` in `flags` are keyword-only, so a 7.x call that passes them by position raises `TypeError`. A `gzip=` keyword raises no error: it is sent as a field in the request body. |
 | The `backoff` dependency | Add it to your own requirements if your code imports it. |
 
 The `posthoganalytics` package has the same changes. For example, import `CaptureError` from `posthoganalytics`.
@@ -106,13 +106,14 @@ When the whole request is over the billing limit, capture returns a `402` with n
   - `verdict_summary()`: counts such as `drop/llm_events_over_quota=1, retry/not_persisted=1`
 - `on_error(error, batch)` receives every failure, including in `sync_mode` and from `AsyncPosthog.capture_immediate`.
 - With `on_error` set, the SDK logs nothing for a failed batch.
-- Without `on_error`, the SDK logs one line per failed batch, for example `2 event(s) not persisted by /i/v1/analytics/events: ...`. The line never contains event content or the server's response text.
-- The 7.x lines `error uploading: ...`, `async capture upload failed (...)` and `Immediate async capture failed (...)` are gone. Update any log-based alerts that match them.
+- Without `on_error`, the SDK logs one line per failed batch, for example `2 event(s) not persisted by /i/v1/analytics/events: ...`. The line never contains event content or the server's response text. After a 2xx response it also counts the lost events by PostHog's reason, for example `drop/event_too_big=1`.
+- The 7.x lines `error uploading: ...`, `async capture upload failed (...)` and `Immediate async capture failed (...)` are gone. In `sync_mode`, a failed request no longer logs the 7.x `Error in capture: ...` line, or the same line for another method. Update any log-based alerts that match these lines.
 - In `sync_mode`, a failed `capture()` calls `on_error` and returns `None`. With `debug=True` it calls `on_error` and then re-raises the error.
+- In `sync_mode`, a failed request is retried like a background batch, in the calling thread. With the default `max_retries` of 3, a call makes up to 4 attempts, and each attempt can take up to `timeout` (`capture_ai_timeout` for AI events). With the defaults, an analytics event whose requests keep timing out blocks the call for about a minute. 7.x made one attempt.
 - If a capture inside `on_error` fails, the SDK logs the failure and does not call `on_error` again.
 - The SDK retries `404`, `408`, `429`, `500`, `502`, `503` and `504` responses and network errors. Other error statuses fail the batch at once, including the other 5xx codes. 7.x retried `429` and every 5xx, but not `404`. Capture itself does not return `429`; a proxy in front of it can. A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route, for example an older self-hosted install.
 - Each attempt makes one connection try. 7.x also retried a failed connection up to twice inside each attempt, so a capture request could block for up to three times the `timeout` per attempt.
-- Retries start at 100 ms and double each attempt, up to 30 seconds. Each wait varies randomly by up to 25%, so many clients do not retry at the same moment. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10.
+- Retries start at 100 ms and double each attempt, up to 30 seconds. Each wait varies randomly by up to 25%, so many clients do not retry at the same moment. A `Retry-After` header sets a minimum wait, up to 30 seconds. The `Consumer` default is 3 retries, down from 10. In 7.x the first retry waited up to 1 second.
 - The SDK's own log lines no longer contain event content: the debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. When your `before_send` hook raises, the error line names the event and the exception type, not the exception message, which can hold the data the hook was removing. The traceback is logged at debug level. To inspect events, use `before_send`.
 - A personal API key (`phx_...`) passed as the project API key disables the client and logs one error, as an empty key does. Capture rejects personal API keys, and the SDK no longer sends one with every request.
 
@@ -124,8 +125,8 @@ Capture rejects a whole batch when one event cannot be parsed.
 - An event whose name is missing, `None`, empty or not a string is dropped. The SDK logs one warning per reason per process. 7.x sent it.
 - An event whose `before_send` hook sets `distinct_id` to `None` or a non-string is dropped, with one warning per reason per process. The SDK does not convert the hook's value or make up an ID. 7.x sent it, and capture would reject the whole batch.
 - PostHog drops an event whose name is over 200 UTF-8 bytes (`event_name_too_long`), and `on_error` reports it. 7.x sent events to legacy capture, which had no event name limit.
-- A `NaN` or infinite `float` value is sent as `null`, as in 7.75 and later, and the event is kept. Earlier 7.x versions sent invalid JSON, which made capture reject the whole batch.
-- An event that cannot be serialized to JSON, for example one with a circular reference, is dropped and logged.
+- A `NaN` or infinite `float` value is sent as `null`, as in 7.75 and later, and the event is kept. Earlier 7.x versions sent invalid JSON, which made capture reject the whole batch. A `NaN` value in `$set` sets that person property to `null`.
+- An event that cannot be serialized to JSON, for example one with a circular reference, is dropped and logged. As in 7.x, a circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback.
 - A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key still drops the event.
 
 ## Event uuids
@@ -153,6 +154,7 @@ The SDK moves them out of `properties` for you.
 - `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
 - `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
+- Person processing turned off in the context, with `set_context_option("process_person_profile", False)` or a `$process_person_profile` tag, or in `super_options`, now applies to `$create_alias` and `$groupidentify` events too. A `$process_person_profile: False` in `super_properties` already did this in 7.x. PostHog drops these events when person processing is off, with an ingestion warning. Capture accepts them, so `on_error` does not report the drop. To keep them, turn person processing off per call instead.
 
 ## Tracing headers
 
@@ -183,7 +185,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - `super_options`, a new `Client`, `AsyncPosthog` and module setting, sets options on every event, like `super_properties`.
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`. `get_context_options()` returns the options of the current context. Both exist on `Client` and as module functions. `AsyncPosthog` has no context methods, like it has no `tag()`, so call the module functions. They apply to every client in the context.
 - Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
-- Options are sent as given. PostHog validates them.
+- Options are sent as given. PostHog validates them. It drops an event with an option value it cannot read, such as a list for `cookieless_mode`, as `invalid_options`, and `on_error` reports it.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
 - The legacy option properties, the `$`-prefixed properties legacy capture reads as settings, still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
 
@@ -202,7 +204,7 @@ Values apply in this order. Steps 2 to 4 fill only the options and properties th
 1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
 2. context options and tags
 3. `super_options` and `super_properties`
-4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span, `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span (in `capture` and `capture_ai` only with `capture_trace_context=True`, and always in `capture_exception`), `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
 5. `before_send`, which sees the result of steps 1 to 4 and can change or remove any of it
 6. legacy properties, which fill unset options and are then removed
 
@@ -227,6 +229,8 @@ These changes follow from this order:
 ## AI capture
 
 - `capture_ai` and the AI wrapper integrations send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
+- Send `$ai_` events with `capture_ai`. `capture()` sends every event to `/i/v1/analytics/events`, including `$ai_` events, which PostHog accepts there for now.
+- `capture_ai` sends any event name to the AI endpoint. PostHog drops an event whose name does not start with `$ai_` as `misrouted_event`, and `on_error` reports it. The SDK writes only a debug log.
 - The OpenTelemetry integration (`PostHogSpanProcessor`, `PostHogTraceExporter`) is unchanged: it still exports spans over OTLP to `/i/v0/ai/otel`.
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
 - The AI integrations call your client's `capture_ai`, and never `capture`. A custom client object must implement `capture_ai` and accept its `options` keyword argument. If the client has no `capture_ai`, the wrapper, callback handler or tracing processor logs one error when you create it and captures no AI events; provider calls still work. Before, such a client got `capture` calls.

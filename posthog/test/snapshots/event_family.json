@@ -28,7 +28,7 @@
             }
           ]
         },
-        "timestamp": "2026-01-02T03:04:05+00:00",
+        "timestamp": "2026-01-02T03:04:05.000000+00:00",
         "uuid": "00000000-0000-4000-8000-000000000001"
       },
       {
@@ -43,7 +43,7 @@
             "plan": "pro"
           }
         },
-        "timestamp": "2026-01-02T03:04:05+00:00",
+        "timestamp": "2026-01-02T03:04:05.000000+00:00",
         "uuid": "00000000-0000-4000-8000-000000000002"
       },
       {
@@ -56,7 +56,7 @@
           "alias": "user-123",
           "distinct_id": "anonymous-789"
         },
-        "timestamp": "2026-01-02T03:04:05+00:00",
+        "timestamp": "2026-01-02T03:04:05.000000+00:00",
         "uuid": "00000000-0000-4000-8000-000000000003"
       },
       {
@@ -73,18 +73,18 @@
           "$group_type": "company",
           "$is_server": true
         },
-        "timestamp": "2026-01-02T03:04:05+00:00",
+        "timestamp": "2026-01-02T03:04:05.000000+00:00",
         "uuid": "00000000-0000-4000-8000-000000000004"
       }
     ],
-    "created_at": "2026-01-02T03:04:05+00:00"
+    "created_at": "2026-01-02T03:04:05.000000+00:00"
   },
   "headers": {
     "Authorization": "Bearer phc_snapshot_project",
     "Content-Type": "application/json",
     "PostHog-Attempt": "1",
     "PostHog-Request-Id": "<REQUEST_ID>",
-    "PostHog-Request-Timestamp": "2026-01-02T03:04:05+00:00",
+    "PostHog-Request-Timestamp": "2026-01-02T03:04:05.000000+00:00",
     "PostHog-Sdk-Info": "posthog-python/<SDK_VERSION>",
     "User-Agent": "posthog-python/<SDK_VERSION>"
   },
