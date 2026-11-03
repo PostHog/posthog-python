@@ -318,6 +318,8 @@ def health():
         "fail_open",
         "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
+        # Remote /flags requests send ?v=4 and read the v4 flag record.
+        "flags_response_v4",
     ]
     return jsonify(
         {
