@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import math
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from unittest import mock
@@ -21,6 +22,7 @@ import pytest
 from posthog import AsyncPosthog
 from posthog.client import Client
 from posthog.feature_flag_evaluations import FeatureFlagEvaluations
+from posthog.request import RequestsTimeout
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import (
     FeatureFlag,
@@ -779,6 +781,59 @@ def test_a_failed_record_never_renders_its_value(client):
     assert snapshot.is_enabled("garden-layout", True) is False
 
 
+@pytest.mark.parametrize(
+    "make_record",
+    [
+        lambda **overrides: _record(**{"metadata.config_version": 1, **overrides}),
+        lambda **overrides: _older_record(**overrides),
+    ],
+    ids=["v4", "older"],
+)
+def test_an_unreadable_record_keeps_the_last_good_cached_value(make_record):
+    responses: List[Any] = [
+        {"flags": {"garden-layout": make_record()}, "requestId": "r1"},
+        {"flags": {"garden-layout": make_record(reason="oops")}, "requestId": "r2"},
+        RequestsTimeout("timed out"),
+    ]
+
+    def flags(*args: Any, **kwargs: Any) -> Dict[str, Any]:
+        response = responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        flag_fallback_cache_url="memory://local/?ttl=300&size=100",
+    )
+    try:
+        with mock.patch("posthog.client.flags", side_effect=flags):
+            values = [
+                client.get_feature_flag(
+                    "garden-layout", DISTINCT_ID, send_feature_flag_events=False
+                )
+                for _ in range(3)
+            ]
+    finally:
+        client.shutdown()
+
+    # The unreadable record falls back to the cached value instead of replacing it,
+    # so the timeout after it still has the last good value.
+    assert values == ["compact", "compact", "compact"]
+
+
+def test_an_unreadable_record_without_a_cached_value_reads_as_disabled(client):
+    response = {"flags": {"garden-layout": _older_record(reason="oops")}}
+    with mock.patch("posthog.client.flags", return_value=response):
+        assert (
+            client.get_feature_flag(
+                "garden-layout", DISTINCT_ID, send_feature_flag_events=False
+            )
+            is False
+        )
+
+
 def _record(**overrides: Any) -> Dict[str, Any]:
     record: Dict[str, Any] = {
         "key": "garden-layout",
@@ -1118,6 +1173,36 @@ def test_a_valid_older_server_record_renders_as_before():
     )
 
 
+def test_the_v4_details_are_public_dataclass_fields_and_the_parse_state_is_not():
+    # This PR makes the typed value, failure state, error and rule metadata public
+    # dataclass fields (the v4 parsing release kept them private). The unreadable
+    # field stays private: repr, equality, hashing and asdict() never show it.
+    record = _record(value={"beds": 4}, **{"metadata.rule_id": "rule-1"})
+    flag = normalize_flags_response({"flags": {"garden-layout": record}})["flags"][
+        "garden-layout"
+    ]
+    assert flag.value == {"beds": 4}
+    assert flag.metadata.rule_id == "rule-1"
+
+    fields = asdict(flag)
+    assert {"value", "failed", "error_code", "error_message"} <= set(fields)
+    assert {
+        "config_version",
+        "rule_type",
+        "rule_id",
+        "variant_key",
+        "forced_variant",
+    } <= set(fields["metadata"])
+    assert not [name for name in [*fields, *fields["metadata"]] if name.startswith("_")]
+
+    unreadable = normalize_flags_response(
+        {"flags": {"garden-layout": _record(reason="not an object")}}
+    )["flags"]["garden-layout"]
+    assert unreadable._malformed_field == "reason"
+    assert "_malformed_field" not in repr(unreadable)
+    assert "_malformed_field" not in asdict(unreadable)
+
+
 @pytest.mark.parametrize("make_record", [_record, _older_record])
 def test_a_record_key_of_the_wrong_type_fails_only_that_record(make_record):
     flags = normalize_flags_response(
@@ -1295,6 +1380,41 @@ def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", False, None).value is False
 
 
+class _CustomFlag(FeatureFlag):
+    pass
+
+
+class _CustomMetadata(FlagMetadata):
+    pass
+
+
+class _CustomReason(FlagReason):
+    pass
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        _record(),
+        _older_record(),
+        {"key": "garden-layout", "enabled": True},
+        _record(**{"metadata.id": "201"}),
+        _older_record(reason="oops"),
+    ],
+    ids=["v4", "older", "minimal-older", "unreadable-v4", "unreadable-older"],
+)
+def test_from_json_builds_the_subclass_it_is_called_on(record):
+    flag = _CustomFlag.from_json(record)
+
+    assert type(flag) is _CustomFlag
+    assert flag.key == "garden-layout"
+
+
+def test_metadata_and_reason_from_json_build_the_subclass_they_are_called_on():
+    assert type(_CustomMetadata.from_json({"id": 1, "version": 2})) is _CustomMetadata
+    assert type(_CustomReason.from_json({"code": "condition_match"})) is _CustomReason
+
+
 # Legacy accessor parity: a v4 record and the equivalent older-server record must give
 # identical legacy results.
 
@@ -1426,6 +1546,23 @@ def test_typed_values_render_the_corpus_legacy_cells_from_both_shapes(case):
         assert result is not None
         assert result.get_value() == legacy["value"]
         assert result.payload == legacy["payload"]
+
+
+def test_a_snapshot_reads_its_flags_from_the_parsed_records(client):
+    response = _typed_response({"object-flag": {"layout": "compact"}, "off": False})
+    response["flags"]["off"]["metadata"]["payload"] = "not json"
+    snapshot = _evaluate(client, response)
+
+    record = snapshot._flags["object-flag"]
+    assert (record.key, record.enabled, record.variant) == ("object-flag", True, None)
+    assert (record.id, record.version, record.reason) == (300, 2, "Matched rule 1")
+    assert record.has_experiment is False
+    assert record.locally_evaluated is False
+    # The payload is decoded once and the same object is returned on every read.
+    payload = snapshot.get_flag_payload("object-flag")
+    assert payload == {"layout": "compact"}
+    assert snapshot.get_flag_payload("object-flag") is payload
+    assert snapshot.get_flag_payload("off") is None
 
 
 def test_number_and_object_payloads_are_compact_json_in_wire_order():

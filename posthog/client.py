@@ -58,6 +58,7 @@ from posthog.contexts import (
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
+from posthog.emails import Emails, _client_emails, _no_op, _validate_options
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -76,7 +77,9 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
+    _LocalFlagRecord,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from posthog.feature_flags import (
@@ -731,6 +734,9 @@ class Client(object):
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
         traces: Optional[dict] = None,
+        app_host: Optional[str] = None,
+        email_request_timeout_seconds: float = 15,
+        email_request_max_retries: int = 2,
     ):
         """
         Initialize a new PostHog client instance.
@@ -782,6 +788,15 @@ class Client(object):
             feature_flags_request_max_retries: Number of retries for feature flag
                 requests after network, transport, or timeout failures. Defaults
                 to 1. Set to 0 to disable retries.
+            app_host: Your PostHog app host, such as ``https://posthog.example.com``.
+                ``emails`` sends there. Needed only when ``host`` is not PostHog
+                Cloud, for example a reverse proxy, which must not receive the
+                secret key.
+            email_request_timeout_seconds: Timeout in seconds for each email send
+                request. Defaults to 15.
+            email_request_max_retries: Number of retries for an email send after a
+                network error, a rate limit, or an unavailable service. Defaults to 2.
+                Set to 0 when a job runner already retries the send.
             super_properties: Properties merged into every captured event.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
@@ -1062,6 +1077,10 @@ class Client(object):
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
+        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        self.app_host = app_host
+        self.email_request_timeout_seconds = email_request_timeout_seconds
+        self.email_request_max_retries = email_request_max_retries
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -1234,6 +1253,43 @@ class Client(object):
 
     def _request_identity_kwargs(self) -> Dict[str, str]:
         return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
+
+    _emails: Optional[Emails] = None
+
+    @property
+    def emails(self) -> Emails:
+        """
+        Send transactional email from PostHog email templates, and read the
+        status of each email sent with ``get``.
+
+        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        scope. Sends go to ``app_host``, or to the PostHog Cloud app host of
+        ``host``. ``email_request_timeout_seconds`` and ``email_request_max_retries``
+        configure each send. A disabled or shut-down client sends nothing. See
+        ``posthog.emails`` for setup.
+
+        Examples:
+            ```python
+            client.emails.send(
+                to="user@example.com",
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                template_data={"name": "Ada"},
+                distinct_id="user_123",
+            )
+            ```
+        """
+        if self._emails is None:
+            self._emails = _client_emails(
+                Emails,
+                self.secret_key,
+                self.host,
+                lambda: self.disabled,
+                lambda: None if self._shutdown_requested else _no_op,
+                app_host=self.app_host,
+                timeout=self.email_request_timeout_seconds,
+                max_retries=self.email_request_max_retries,
+            )
+        return self._emails
 
     @property
     def queue(self) -> Queue:
@@ -2429,6 +2485,8 @@ class Client(object):
         self._lifecycle_lock = threading.Lock()
         self._lifecycle_condition = threading.Condition(self._lifecycle_lock)
         self._lifecycle_owner = None
+        # The parent's email session and its lock are not safe to share with the child.
+        self._emails = None
         self._deferred_lifecycle_thread_pending = False
         self._deferred_lifecycle_dirty = False
         self._lifecycle_callback_context = ContextVar(
@@ -3105,6 +3163,12 @@ class Client(object):
                 self._shutdown_flag_definition_cache_provider,
                 errors,
             )
+            if self._emails is not None:
+                self._run_lifecycle_cleanup(
+                    "Failed to close the email transport during lifecycle cleanup",
+                    self._emails.close,
+                    errors,
+                )
             self._run_lifecycle_cleanup(
                 "Failed to unregister client during lifecycle cleanup",
                 self._unregister_duplicate_client,
@@ -4122,9 +4186,23 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
+                if (
+                    flag_details is not None
+                    and flag_details._malformed_field is not None
+                ):
+                    # The record could not be read, so it reads as disabled. It must
+                    # not replace the last good cached value, which it falls back to
+                    # like a failed request, and it reports what a failed request
+                    # reports: an unknown error and no request details.
+                    feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
+                    request_id = None
+                    evaluated_at = None
+                    flag_result = (
+                        self._get_stale_flag_fallback(distinct_id, key) or flag_result
+                    )
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
-                if self.flag_cache and flag_result:
+                elif self.flag_cache and flag_result:
                     self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
@@ -4161,12 +4239,18 @@ class Client(object):
             # Source the gate the same way as has_experiment above; see
             # _capture_feature_flag_called_if_needed for why.
             minimal_flag_called_events = self._minimal_flag_called_events
+            # Remotely-evaluated flags carry id and version in the response metadata;
+            # locally-evaluated flags read them from the definition that produced the value.
+            local_flag_id: Optional[int] = None
+            local_flag_version: Optional[int] = None
             if flag_was_locally_evaluated:
-                local_def = (self.feature_flags_by_key or {}).get(key)
+                local_def = snapshot["flags_by_key"].get(key)
                 if isinstance(local_def, dict):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
+                    local_flag_id = local_def.get("id")
+                    local_flag_version = local_def.get("version")
             elif isinstance(flag_details, FeatureFlag):
                 has_experiment = _metadata_has_experiment(flag_details.metadata)
                 minimal_flag_called_events = remote_minimal_flag_called_events
@@ -4185,6 +4269,8 @@ class Client(object):
                 feature_flag_error,
                 has_experiment,
                 minimal_flag_called_events,
+                local_flag_id=local_flag_id,
+                local_flag_version=local_flag_version,
             )
 
         return flag_result
@@ -4474,6 +4560,8 @@ class Client(object):
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        local_flag_id: Optional[int] = None,
+        local_flag_version: Optional[int] = None,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -4498,6 +4586,10 @@ class Client(object):
                     properties["$feature_flag_version"] = flag_details.metadata.version
                 if flag_details.metadata.id:
                     properties["$feature_flag_id"] = flag_details.metadata.id
+        if local_flag_version:
+            properties["$feature_flag_version"] = local_flag_version
+        if local_flag_id:
+            properties["$feature_flag_id"] = local_flag_id
         if feature_flag_error:
             properties["$feature_flag_error"] = feature_flag_error
 
@@ -4927,7 +5019,7 @@ class Client(object):
 
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
-            records[key] = _EvaluatedFlagRecord(
+            records[key] = _LocalFlagRecord(
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
@@ -4971,35 +5063,7 @@ class Client(object):
                         continue
                     if key in locally_evaluated_keys:
                         continue
-                    payload = _parse_flag_payload(
-                        detail.metadata.payload
-                        if isinstance(detail.metadata, FlagMetadata)
-                        else getattr(detail.metadata, "payload", None)
-                    )
-                    records[key] = _EvaluatedFlagRecord(
-                        key=key,
-                        enabled=detail.enabled,
-                        variant=detail.variant,
-                        payload=payload,
-                        id=(
-                            detail.metadata.id
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        version=(
-                            detail.metadata.version
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        reason=(
-                            detail.reason.description
-                            if detail.reason and detail.reason.description
-                            else None
-                        ),
-                        locally_evaluated=False,
-                        has_experiment=_metadata_has_experiment(detail.metadata),
-                        details=detail,
-                    )
+                    records[key] = _RemoteFlagRecord(detail)
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 quota_limited = True
