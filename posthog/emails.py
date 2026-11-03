@@ -264,7 +264,7 @@ class CodeEmailArgs(_RecipientArgs):
             ``html``. HTML with no text in it, such as a single image, goes out
             without a plain-text part.
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
-        reply_to: One address or a list of addresses.
+        reply_to: One address or a list of addresses. An empty list sends no reply-to.
         cc: One address or a list of addresses that get a visible copy, at
             most 10.
         bcc: One address or a list of addresses that get a hidden copy, at
@@ -416,10 +416,12 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     if "from_" in args:
         sender["from"] = _nonempty_text(args, "from_")
     for field in ("reply_to", "cc", "bcc"):
-        if field in args:
-            sender[field] = _addresses(field, args[field])
-    if "attachments" in args:
-        sender["attachments"] = _attachments(args["attachments"])
+        addresses = _addresses(field, args[field]) if field in args else []
+        if addresses:
+            sender[field] = addresses
+    attachments = _attachments(args["attachments"]) if "attachments" in args else []
+    if attachments:
+        sender["attachments"] = attachments
     capture_engagement = args.get("capture_engagement", True)
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")

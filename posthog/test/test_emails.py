@@ -668,9 +668,9 @@ def send_code(emails: Emails, **overrides: Any):
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
         ),
         (
-            "empty_address_lists",
+            "empty_lists_left_out",
             {"html": HTML, "reply_to": [], "cc": [], "bcc": [], "attachments": []},
-            {"html": HTML, "reply_to": [], "cc": [], "bcc": [], "attachments": []},
+            {"html": HTML},
         ),
         (
             "none_as_left_out",
