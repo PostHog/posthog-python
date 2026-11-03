@@ -251,8 +251,8 @@ class CodeEmailArgs(_RecipientArgs):
     An optional field passed as ``None`` counts as left out.
 
     A PostHog version that doesn't take a field yet, such as ``cc``, refuses
-    the send with ``invalid_request`` and names the field in
-    ``EmailError.field``. It never drops the field and sends the rest.
+    the send with an error that names the field in ``EmailError.field``. It
+    never drops the field and sends the rest.
 
     Args:
         to: One recipient email address.

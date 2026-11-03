@@ -849,9 +849,9 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
 
 def test_a_server_that_does_not_take_a_field_refuses_the_send_and_names_it():
     refused = {
-        "type": "invalid_request",
-        "code": "invalid_request",
-        "detail": "cc: PostHog doesn't take this field on this route.",
+        "type": "validation_error",
+        "code": "invalid_input",
+        "detail": "PostHog doesn't take this field, so it doesn't send the email without it.",
         "attr": "cc",
     }
     emails, adapter = emails_with([(400, refused, {}), accepted()])
@@ -862,7 +862,7 @@ def test_a_server_that_does_not_take_a_field_refuses_the_send_and_names_it():
     error = raised.value
     assert (error.name, error.code, error.field) == (
         "validation_error",
-        "invalid_request",
+        "invalid_input",
         "cc",
     )
     assert len(adapter.requests) == 1
