@@ -4,6 +4,18 @@ All notable changes to `openfeature-provider-posthog` are documented here. This
 file is maintained by [Sampo](https://github.com/bruits/sampo) from changesets in
 `.sampo/changesets/` that target `pypi/openfeature-provider-posthog`.
 
+## 0.1.141 — 2026-11-03
+
+### Patch changes
+
+- Updated dependencies: posthog@7.83.0
+
+## 0.1.140 — 2026-11-02
+
+### Patch changes
+
+- Updated dependencies: posthog@7.82.2
+
 ## 0.1.139 — 2026-11-02
 
 ### Patch changes
