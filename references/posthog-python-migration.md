@@ -1,7 +1,7 @@
 ---
 title: PostHog Python SDK migration guides
-sdk: python
-kind: migration
+sidebar: Docs
+showTitle: true
 ---
 
 ## Migrating from posthog 7.x to 8.0

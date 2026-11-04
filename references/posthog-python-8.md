@@ -1,9 +1,86 @@
 ---
-title: PostHog Python SDK
-sdk: python
-version: unreleased
-major: 8
-status: experimental
+title: "PostHog Python SDK 8.x (experimental)"
+sidebar: Docs
+showTitle: true
+contentMaxWidthClass: max-w-full
+platformLogo: python
+noindex: true
+tableOfContents:
+  - value: "Getting started"
+    url: getting-started
+    depth: 0
+  - value: "Traces"
+    url: traces
+    depth: 0
+  - value: "Alias"
+    url: alias
+    depth: 0
+  - value: "Capture"
+    url: capture
+    depth: 0
+  - value: "Capture AI"
+    url: capture-ai
+    depth: 0
+  - value: "Capture exception"
+    url: capture-exception
+    depth: 0
+  - value: "Emails"
+    url: emails
+    depth: 0
+  - value: "Flush"
+    url: flush
+    depth: 0
+  - value: "Get feature flag"
+    url: get-feature-flag
+    depth: 0
+  - value: "Get feature flag payload"
+    url: get-feature-flag-payload
+    depth: 0
+  - value: "Get feature flag result"
+    url: get-feature-flag-result
+    depth: 0
+  - value: "Get feature flags"
+    url: get-feature-flags
+    depth: 0
+  - value: "Get feature flags and payloads"
+    url: get-feature-flags-and-payloads
+    depth: 0
+  - value: "Evaluate flags"
+    url: evaluate-flags
+    depth: 0
+  - value: "Group identify"
+    url: group-identify
+    depth: 0
+  - value: "Identify"
+    url: identify
+    depth: 0
+  - value: "Is feature enabled"
+    url: is-feature-enabled
+    depth: 0
+  - value: "Setup"
+    url: setup
+    depth: 0
+  - value: "Shutdown"
+    url: shutdown
+    depth: 0
+  - value: "Flag definition loader"
+    url: flag-definition-loader
+    depth: 0
+  - value: "SDK utils"
+    url: sdk-utils
+    depth: 0
+  - value: "AsyncClient"
+    url: asyncclient
+    depth: 0
+  - value: "Module functions"
+    url: module-functions
+    depth: 0
+  - value: "Configs"
+    url: configs
+    depth: 0
+  - value: "Types"
+    url: types
+    depth: 0
 ---
 
 ## Getting started
