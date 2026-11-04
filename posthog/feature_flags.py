@@ -494,6 +494,11 @@ def match_feature_flag_properties(
 
     if flag_filters.get("feature_enrollment") is True:
         enrollment_key = f"$feature_enrollment/{flag.get('key')}"
+        if flag_filters.get("aggregation_group_type_index") is not None:
+            raise InconclusiveMatchError(
+                "Group flag has feature enrollment, which reads person properties",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
         if enrollment_key not in properties:
             raise InconclusiveMatchError(
                 f"Flag has feature enrollment and '{enrollment_key}' was not passed",
