@@ -375,14 +375,14 @@ class FlagCache:
     def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
         current_time = time.time()
 
-        if distinct_id not in self.cache:
+        user_flags = self.cache.get(distinct_id)
+        if user_flags is None:
             return None
 
-        user_flags = self.cache[distinct_id]
-        if flag_key not in user_flags:
+        entry = user_flags.get(flag_key)
+        if entry is None:
             return None
 
-        entry = user_flags[flag_key]
         if self._is_version_current(entry.flag_definition_version) and entry.is_valid(
             current_time, self.default_ttl, current_flag_version
         ):
@@ -397,14 +397,14 @@ class FlagCache:
 
         current_time = time.time()
 
-        if distinct_id not in self.cache:
+        user_flags = self.cache.get(distinct_id)
+        if user_flags is None:
             return None
 
-        user_flags = self.cache[distinct_id]
-        if flag_key not in user_flags:
+        entry = user_flags.get(flag_key)
+        if entry is None:
             return None
 
-        entry = user_flags[flag_key]
         if self._is_version_current(
             entry.flag_definition_version
         ) and entry.is_stale_but_usable(current_time, max_stale_age):

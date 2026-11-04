@@ -109,6 +109,7 @@ alias posthog.ai.gemini.gemini.extract_gemini_stop_reason_from_chunk -> posthog.
 alias posthog.ai.gemini.gemini.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini.setup -> posthog.setup
@@ -125,6 +126,7 @@ alias posthog.ai.gemini.gemini_async.extract_gemini_stop_reason_from_chunk -> po
 alias posthog.ai.gemini.gemini_async.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini_async.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini_async.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini_async.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini_async.setup -> posthog.setup
@@ -1406,13 +1408,14 @@ function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason(response:
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_system_instruction(config: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]
-function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage
+function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any, url_context_seen: bool = False) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_response(response: Any) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_web_search_count(response: Any) -> int
 function posthog.ai.gemini.gemini_converter.format_gemini_input(contents: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_response(response: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_streaming_output(accumulated_content: Union[str, List[Any]]) -> List[FormattedMessage]
+function posthog.ai.gemini.gemini_converter.has_gemini_url_context(response: Any) -> bool
 function posthog.ai.media.bytes_to_base64(data: bytes) -> str
 function posthog.ai.media.ensure_serializable(obj: Any) -> Any
 function posthog.ai.media.normalize_part_keys(d: dict) -> dict
@@ -1850,9 +1853,9 @@ method posthog.exception_utils.AnnotatedValue.substituted_because_contains_sensi
 method posthog.exception_utils.VariableSizeLimiter.add(size)
 method posthog.exception_utils.VariableSizeLimiter.can_add(size)
 method posthog.exception_utils.VariableSizeLimiter.get_remaining_space()
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str) -> Optional[FlagValue]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str, *, send_feature_flag_events: bool = True) -> Optional[FlagValue]
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload(key: str) -> Optional[Any]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False) -> bool
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False, *, send_feature_flag_events: bool = True) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only(keys: List[str]) -> FeatureFlagEvaluations
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed() -> FeatureFlagEvaluations
 method posthog.flag_definition_cache.FlagDefinitionCacheProvider.get_flag_definitions() -> Union[Optional[FlagDefinitionCacheData], Awaitable[Optional[FlagDefinitionCacheData]]]

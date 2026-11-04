@@ -321,6 +321,7 @@ class TestMinimizationViaLocalEvaluationPayload(
             {
                 "$feature_flag",
                 "$feature_flag_response",
+                "$feature_flag_id",
                 "$feature_flag_has_experiment",
                 "locally_evaluated",
                 "$lib",

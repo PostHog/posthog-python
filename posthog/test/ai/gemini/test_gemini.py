@@ -1728,3 +1728,40 @@ def test_integration_stop_reason(mock_client):
     assert isinstance(props["$ai_stop_reason"], str)
     assert props["$ai_provider"] == "gemini"
     assert props["$ai_input_tokens"] > 0
+
+
+def _url_context_stream_chunks():
+    from google.genai import types
+
+    # URL context metadata arrives on an early chunk; usage on the last one.
+    first = types.GenerateContentResponse(
+        candidates=[types.Candidate(url_context_metadata=types.UrlContextMetadata())]
+    )
+    last = types.GenerateContentResponse(
+        usage_metadata=types.GenerateContentResponseUsageMetadata(
+            prompt_token_count=20,
+            tool_use_prompt_token_count=300,
+            candidates_token_count=10,
+            total_token_count=330,
+        )
+    )
+    return first, last
+
+
+def test_streaming_url_context_on_earlier_chunk_bills_tool_use_tokens(
+    mock_client, mock_google_genai_client
+):
+    first, last = _url_context_stream_chunks()
+    mock_google_genai_client.models.generate_content_stream.return_value = iter(
+        [first, last]
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    response = client.models.generate_content_stream(
+        model="gemini-2.0-flash", contents=["Summarise this page"]
+    )
+    list(response)
+
+    props = mock_client.capture_ai.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 320
+    assert props["$ai_output_tokens"] == 10
