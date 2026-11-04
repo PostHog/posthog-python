@@ -4,7 +4,7 @@ sidebar: Docs
 showTitle: true
 ---
 
-## Migrating from posthog 7.x to 8.0
+# Migrating from posthog 7.x to 8.0
 
 posthog 8.0 sends every event through capture v1 and removes the legacy capture path.
 Most apps upgrade without code changes.
@@ -12,7 +12,7 @@ Read the checklist first, then the sections that apply to you.
 
 For the changes every capture v1 SDK shares, such as event options, limits and per-event results, see [Upgrading to capture v1 SDKs](https://posthog.com/docs/libraries/capture-v1).
 
-### Checklist
+## Checklist
 
 You need to change code if your app does any of these:
 
@@ -36,7 +36,7 @@ You need to change code if your app does any of these:
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
 - runs the Django, Flask or ASGI integration on 7.68 to 7.70 without tracing headers turned on (they are now read by default)
 
-### Endpoints
+## Endpoints
 
 | Method | Endpoint |
 | --- | --- |
@@ -60,7 +60,7 @@ Any other redirect fails the batch and reaches `on_error`.
 In 7.x the sync client followed redirects to any origin.
 If a proxy redirects capture requests to another host, point `host` at the final host.
 
-### SDK identity
+## SDK identity
 
 PostHog sets `$lib` and `$lib_version` on every event from the `PostHog-Sdk-Info` request header, which is always `posthog-python/<version>`.
 The SDK removes `$lib` and `$lib_version` from the properties it sends.
@@ -72,7 +72,7 @@ With the default client, or any client the app also used, every event and featur
 In 8.0, MCP events report `posthog-python` like all other events.
 To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$lib`.
 
-### Removed options and APIs
+## Removed options and APIs
 
 | Removed | Use instead |
 | --- | --- |
@@ -96,7 +96,7 @@ Posthog("<api_key>", "https://us.i.posthog.com", True)
 Posthog("<api_key>", host="https://us.i.posthog.com", debug=True)
 ```
 
-### Errors and `on_error`
+## Errors and `on_error`
 
 Capture v1 returns a result for every event, even when the request succeeds.
 An event can be dropped inside a 2xx response, for example when it is over a product quota.
@@ -123,7 +123,7 @@ When the whole request is over the billing limit, capture returns a `402` with n
 - The SDK's own log lines no longer contain event content: the debug line for a queued event names the event and the lane, and the invalid timestamp warning no longer includes the value. When your `before_send` hook raises, the error line names the event and the exception type, not the exception message, which can hold the data the hook was removing. The traceback is logged at debug level. To inspect events, use `before_send`.
 - A personal API key (`phx_...`) passed as the project API key disables the client and logs one error, as an empty key does. Capture rejects personal API keys, and the SDK no longer sends one with every request.
 
-### Invalid events
+## Invalid events
 
 Capture rejects a whole batch when one event cannot be parsed.
 8.0 drops only the invalid event, so the rest of the batch is delivered.
@@ -135,14 +135,14 @@ Capture rejects a whole batch when one event cannot be parsed.
 - An event that cannot be serialized to JSON, for example one with a circular reference, is dropped and logged. As in 7.x, a circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback.
 - A property or option key that JSON cannot represent, such as a tuple, is dropped without a log, and the rest of the event is sent. 7.x dropped the event. `int`, finite `float`, `bool` and `None` keys are still converted to strings. A `NaN` or infinite `float` key still drops the event.
 
-### Event uuids
+## Event uuids
 
 - Each event needs its own uuid. Capture keeps the first event for each uuid in a request and drops the later copies. `on_error` reports each dropped copy in `CaptureError.drops` as `(uuid, "duplicate_event_uuid")`. 7.x sent every copy. Older PostHog versions reject the whole batch with a 400 `duplicate_event_uuid` instead.
 - The SDK accepts a uuid with hyphens, 32 hex digits, `{...}` braces or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
 - Any other value is replaced with a generated uuid, and the SDK logs one warning that names the rule, not the value. An empty string counts as unset, so the SDK generates a uuid without a warning. This applies to `AsyncPosthog` too.
 - Generated uuids are UUIDv7.
 
-### Session and window IDs
+## Session and window IDs
 
 Capture v1 sends `$session_id` and `$window_id` as top-level event fields, not as properties.
 The SDK moves them out of `properties` for you.
@@ -151,7 +151,7 @@ The SDK moves them out of `properties` for you.
 - `None` counts as unset and is removed.
 - Any other value is removed and not sent, because capture would reject the whole batch. 7.x sent it as a property. The SDK logs a warning for each one, with the key and the value's type but not the value.
 
-### Identity and request context
+## Identity and request context
 
 - An empty or whitespace-only `distinct_id` counts as missing, so the event gets a generated personless distinct ID. 7.x sent a whitespace-only ID, and capture dropped the event.
 - Generated personless distinct IDs are UUIDv7. 7.x generated UUIDv4.
@@ -162,7 +162,7 @@ The SDK moves them out of `properties` for you.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
 - Person processing turned off in the context, with `set_context_option("process_person_profile", False)` or a `$process_person_profile` tag, or in `super_options`, now applies to `$create_alias` and `$groupidentify` events too. A `$process_person_profile: False` in `super_properties` already did this in 7.x. PostHog drops these events when person processing is off, with an ingestion warning. Capture accepts them, so `on_error` does not report the drop. To keep them, turn person processing off per call instead.
 
-### Tracing headers
+## Tracing headers
 
 The Django, Flask and ASGI integrations read the `X-PostHog-Distinct-Id` and `X-PostHog-Session-Id` headers by default, as in 7.71 and later.
 The headers only fill a missing distinct ID or session ID, and any client can set them, so never use them for authentication.
@@ -171,14 +171,14 @@ The headers only fill a missing distinct ID or session ID, and any client can se
 - The 7.68 `trust_tracing_headers` and `POSTHOG_MW_TRUST_TRACING_HEADERS` names still work, but are deprecated.
 - If you upgrade from 7.68, 7.69 or 7.70 and never turned these headers on, they are now read.
 
-### Exceptions
+## Exceptions
 
 - `capture_exception` takes a `level=` argument on `Client`, `AsyncPosthog` and the module. It sets `$exception_level`, for example `"warning"` or `"fatal"`. The default is `"error"`, and an unknown value counts as unset.
 - `capture_exception` ignores reserved exception properties in `properties`, such as `$exception_list`, `$exception_level` and `$exception_source`. In 7.x they overrode the SDK's values, with a `DeprecationWarning`. Use `level=` instead of `$exception_level`.
 - `AsyncPosthog.capture_exception` now sends `$exception_level`.
 - `AsyncPosthog.capture_exception` now adds `$trace_id` and `$span_id` from the active OpenTelemetry span, like `Client.capture_exception`. In 7.x it added them only with `capture_trace_context=True`.
 
-### Event options
+## Event options
 
 Capture v1 sends processing options in an `options` object, next to `properties`.
 
@@ -232,7 +232,7 @@ These changes follow from this order:
 - Review your `before_send` hooks for the new event shape. To change an option, edit `options`: a legacy property that `before_send` adds does not replace an option that is already set. A hook that returns a new dict must copy `options`, or the event is sent without them. That includes the `process_person_profile = false` the SDK sets for an event without a distinct ID, so PostHog would create a person for its generated ID.
 - When the server enables minimal `$feature_flag_called` events, those events now keep `$window_id` and the legacy option properties, so their options still apply.
 
-### AI capture
+## AI capture
 
 - `capture_ai` and the AI wrapper integrations send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
 - Send `$ai_` events with `capture_ai`. `capture()` sends every event to `/i/v1/analytics/events`, including `$ai_` events, which PostHog accepts there for now.
@@ -256,14 +256,14 @@ These changes follow from this order:
 - `AsyncPosthog` sends events with `requests` in a worker thread. It uses `httpx` only for feature flags and remote config.
 - `AsyncPosthog` accepts `privacy_mode` and `enable_full_ai_capture`, with the same meaning as on `Client`. An AI integration given an `AsyncPosthog` client used to always truncate and redact media.
 
-### Batching and size limits
+## Batching and size limits
 
 - An analytics event over 10 MiB is dropped and logged, because no capture request can carry it. 7.x dropped events over 900 KiB. Capture drops an event over its own per-event limit and reports it in `CaptureError.drops` as `event_too_big`.
 - An AI event over `capture_ai_max_event_bytes` is dropped and logged.
 - A batch stops before an event that would take it past 5 MiB. A larger event is sent alone.
 - `flush()` and `shutdown()` drain the analytics and AI queues at the same time.
 
-### OpenFeature provider
+## OpenFeature provider
 
 `openfeature-provider-posthog` 0.2.0 works with posthog 7.x and 8.x.
 Older provider versions require posthog below 8.0, so upgrade the provider before or with posthog.
