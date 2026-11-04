@@ -64,6 +64,7 @@ metrics = [
 dev = [
     "django-stubs",
     "griffe",
+    "griffe2md",
     "lxml",
     "mypy",
     "mypy-baseline",
