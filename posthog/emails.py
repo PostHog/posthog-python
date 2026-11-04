@@ -442,7 +442,6 @@ def _addresses(field: str, value: Any) -> list[str]:
 
 
 def _invalid_attachment(message: str, field: str) -> EmailError:
-    # The message never holds the file's content, so the error is safe to log.
     return EmailError(
         name="validation_error",
         code="invalid_attachment",
