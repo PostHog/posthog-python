@@ -322,6 +322,25 @@ def _process_response(
         raise APIError(res.status_code, res.text, retry_after=retry_after)
 
 
+def _is_connection_refused(exc: BaseException) -> bool:
+    """Return True when a requests transport error wraps a refused connection."""
+    pending: List[Any] = [exc]
+    seen = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, ConnectionRefusedError):
+            return True
+        if isinstance(current, BaseException):
+            pending.extend(current.args)
+            pending.append(current.__cause__)
+            pending.append(current.__context__)
+        pending.append(getattr(current, "reason", None))
+    return False
+
+
 def _feature_flags_retry_delay(failed_attempt: int) -> float:
     return _FEATURE_FLAGS_RETRY_BACKOFF_SECONDS * (2**failed_attempt)
 
@@ -354,8 +373,12 @@ def flags(
             return _process_response(
                 res, success_message="Feature flags evaluated successfully"
             )
-        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout):
-            if failed_attempt >= retries:
+        except (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ) as exc:
+            # A refused connection is not transient, so it is not retried.
+            if failed_attempt >= retries or _is_connection_refused(exc):
                 raise
         except APIError as exc:
             if (
