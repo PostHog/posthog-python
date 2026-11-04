@@ -4,7 +4,6 @@ sidebar: Docs
 showTitle: true
 contentMaxWidthClass: max-w-full
 platformLogo: python
-noindex: true
 tableOfContents:
   - value: "Getting started"
     url: getting-started
