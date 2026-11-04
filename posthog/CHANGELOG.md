@@ -1,5 +1,11 @@
 # posthog
 
+## 7.83.2 — 2026-11-04
+
+### Patch changes
+
+- [ae2dcf2](https://github.com/posthog/posthog-python/commit/ae2dcf2eaa76fa2693ed8ebe19bbf22054661acb) Local evaluation now respects early access feature enrollment. A flag with feature enrollment uses the `$feature_enrollment/<flag key>` person property when you pass it, and otherwise falls back to the flags service. Before, it returned `False` for enrolled people who matched no release condition, while the flags service returned `True`. — Thanks @puemos for your first contribution 🎉!
+
 ## 7.83.1 — 2026-11-03
 
 ### Patch changes
