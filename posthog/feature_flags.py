@@ -492,6 +492,21 @@ def match_feature_flag_properties(
 
     flag_filters = flag.get("filters") or {}
 
+    if flag_filters.get("feature_enrollment") is True:
+        enrollment_key = f"$feature_enrollment/{flag.get('key')}"
+        if flag_filters.get("aggregation_group_type_index") is not None:
+            raise InconclusiveMatchError(
+                "Group flag has feature enrollment, which reads person properties",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
+        if enrollment_key not in properties:
+            raise InconclusiveMatchError(
+                f"Flag has feature enrollment and '{enrollment_key}' was not passed",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
+            )
+        enrollment = properties[enrollment_key]
+        return enrollment is True or enrollment == "true"
+
     # Holdouts are evaluated before release conditions, so a held-out value is excluded
     # from the flag's targeting entirely rather than being bucketed into a variant.
     holdout_variant = _get_holdout_variant(flag, bucketing_value)
