@@ -884,8 +884,7 @@ class Client(object):
             posthog = Posthog('<ph_project_api_key>', host='<ph_app_host>')
             ```
 
-        Category:
-            Initialization
+        posthog-capability: setup
         """
         # api_key: This should be the Team API Key (token), public
         self.api_key = (project_api_key or "").strip()
@@ -1274,6 +1273,8 @@ class Client(object):
                 distinct_id="user_123",
             )
             ```
+
+        posthog-capability: emails
         """
         if self._emails is None:
             self._emails = _client_emails(
@@ -1518,8 +1519,7 @@ class Client(object):
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flags
         """
         resp_data = self.get_flags_decision(
             distinct_id,
@@ -1605,8 +1605,7 @@ class Client(object):
             result = posthog.get_feature_flags_and_payloads('<distinct_id>')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flags-and-payloads
         """
         resp = self.get_flags_decision(
             distinct_id,
@@ -1791,8 +1790,7 @@ class Client(object):
             posthog.capture('$pageview', distinct_id="distinct_id_of_the_user", properties={'$current_url': 'https://example.com'})
             ```
 
-        Category:
-            Capture
+        posthog-capability: capture
         """
         return self._capture(event, self._analytics_lane, **kwargs)
 
@@ -1812,8 +1810,7 @@ class Client(object):
         size cap, posting to the dedicated AI ingestion endpoint. The payload
         is sent as given — no redaction or truncation is applied here.
 
-        Category:
-            Capture
+        posthog-capability: capture-ai
         """
         if not event.startswith("$ai_"):
             self.log.debug(
@@ -2016,8 +2013,7 @@ class Client(object):
             posthog.set(distinct_id='user123', properties={'name': 'Max Hedgehog'})
             ```
 
-        Category:
-            Identification
+        posthog-capability: identify
 
         Note: This method will not raise exceptions. Errors are logged.
         """
@@ -2066,8 +2062,7 @@ class Client(object):
             posthog.set_once(distinct_id='user123', properties={'initial_signup_date': '2024-01-01'})
             ```
 
-        Category:
-            Identification
+        posthog-capability: identify
 
         Note: This method will not raise exceptions. Errors are logged.
         """
@@ -2131,8 +2126,7 @@ class Client(object):
             })
             ```
 
-        Category:
-            Identification
+        posthog-capability: group-identify
 
         Note: This method will not raise exceptions. Errors are logged.
         """
@@ -2201,8 +2195,7 @@ class Client(object):
             posthog.alias(previous_id='distinct_id', distinct_id='alias_id')
             ```
 
-        Category:
-            Identification
+        posthog-capability: alias
 
         Note: This method will not raise exceptions. Errors are logged.
         """
@@ -2269,8 +2262,7 @@ class Client(object):
                 posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
             ```
 
-        Category:
-            Error Tracking
+        posthog-capability: capture-exception
         """
         distinct_id = kwargs.get("distinct_id", None)
         properties = kwargs.get("properties", None)
@@ -2844,8 +2836,7 @@ class Client(object):
                 outgoing_headers = {"traceparent": span.traceparent()}
             ```
 
-        Category:
-            Tracing
+        posthog-capability: traces
         """
         pipeline = self._traces_pipeline
         if pipeline is None:
@@ -2874,8 +2865,7 @@ class Client(object):
                 headers["traceparent"] = span.traceparent()
             ```
 
-        Category:
-            Tracing
+        posthog-capability: traces
         """
         return self._active_span_var.get()
 
@@ -2917,6 +2907,8 @@ class Client(object):
             # Before a serverless invocation returns; keep the shared client open.
             posthog.flush(timeout_seconds=10)
             ```
+
+        posthog-capability: flush
         """
         include_metrics_autocapture = not self._skip_metrics_autocapture_flush.get()
         if self._defer_flush_from_callback(
@@ -3360,6 +3352,8 @@ class Client(object):
             ```python
             posthog.join()
             ```
+
+        posthog-capability: shutdown
         """
         with self._lifecycle_lock:
             self._join_requested = True
@@ -3399,6 +3393,8 @@ class Client(object):
             ```python
             posthog.shutdown()
             ```
+
+        posthog-capability: shutdown
         """
         with self._lifecycle_lock:
             if self._shutdown_complete:
@@ -3835,8 +3831,7 @@ class Client(object):
             posthog.load_feature_flags()
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: flag-definition-loader
         """
         if self.disabled:
             with self._flag_definition_publication_lock:
@@ -4020,8 +4015,7 @@ class Client(object):
                 matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: is-feature-enabled
         """
         warnings.warn(
             "`feature_enabled` is deprecated and will be removed in a future major version. "
@@ -4312,6 +4306,8 @@ class Client(object):
 
         Returns:
             Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
+
+        posthog-capability: get-feature-flag-result
         """
         return self._get_feature_flag_result(
             key,
@@ -4361,8 +4357,7 @@ class Client(object):
                 matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flag
         """
         warnings.warn(
             "`get_feature_flag` is deprecated and will be removed in a future major version. "
@@ -4470,8 +4465,7 @@ class Client(object):
                 matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flag-payload
         """
         warnings.warn(
             "`get_feature_flag_payload` is deprecated and will be removed in a future major "
@@ -4778,8 +4772,7 @@ class Client(object):
             posthog.get_all_flags('distinct_id_of_your_user')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flags
         """
         response = self.get_all_flags_and_payloads(
             distinct_id,
@@ -4825,8 +4818,7 @@ class Client(object):
             posthog.get_all_flags_and_payloads('distinct_id_of_your_user')
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: get-feature-flags-and-payloads
         """
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
@@ -4939,8 +4931,7 @@ class Client(object):
             posthog.capture("page_viewed", distinct_id="user_123", flags=flags)
             ```
 
-        Category:
-            Feature flags
+        posthog-capability: evaluate-flags
         """
         host = self._get_feature_flag_evaluations_host()
 
@@ -5266,8 +5257,7 @@ class Client(object):
             The currently loaded feature flag definitions, or ``None`` before
             local evaluation has loaded definitions.
 
-        Category:
-            Feature flags
+        posthog-capability: flag-definition-loader
         """
         return self.feature_flags
 
