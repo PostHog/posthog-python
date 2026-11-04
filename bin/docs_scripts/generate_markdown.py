@@ -475,21 +475,16 @@ def nest(markdown: str, drop_title: bool = True) -> str:
     return "\n".join(out).lstrip("\n")
 
 
-def front_matter(title: str, sections: list[str], noindex: bool = False) -> str:
+def front_matter(title: str, sections: list[str]) -> str:
     """The docs site's front matter. Its ToC lists the page's H2 sections only."""
     toc = []
     for heading in [s[3:] for s in sections if s.startswith("## ")]:
         anchor = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
         toc.append(f'  - value: "{heading}"\n    url: {anchor}\n    depth: 0')
-    head = [
-        f'title: "{title}"',
-        "sidebar: Docs",
-        "showTitle: true",
-        "contentMaxWidthClass: max-w-full",
-    ]
+    head = [f'title: "{title}"', "sidebar: Docs", "showTitle: true"]
     head += [
+        "contentMaxWidthClass: max-w-full",
         "platformLogo: python",
-        *["noindex: true"] * noindex,
         "tableOfContents:",
         *toc,
     ]
@@ -526,9 +521,7 @@ def main() -> None:
     title = f"PostHog Python SDK {major}.x" + (
         "" if status == "current" else " (experimental)"
     )
-    write(
-        f"posthog-python-{major}.md", [front_matter(title, body, noindex=True), *body]
-    )
+    write(f"posthog-python-{major}.md", [front_matter(title, body), *body])
     if status == "current":
         write(
             "posthog-python-reference.md",
