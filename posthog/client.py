@@ -15,6 +15,7 @@ from typing import (
     Any,
     Callable,
     Dict,
+    FrozenSet,
     List,
     Mapping,
     NamedTuple,
@@ -396,17 +397,15 @@ _EXPERIMENT_SPLIT_REASON = "experiment_split"
 _EXPERIMENT_RULE_TYPE = "experiment"
 
 # The reason codes of a config version 2 record that report the rule that produced
-# the result. Any other reason code, and any failed record, reports no rule, even if
-# the record names one.
-_RULE_REASON_CODES = frozenset(
-    {
-        "targeting_match",
-        _EXPERIMENT_SPLIT_REASON,
-        "rollout_miss",
-        "experiment_paused",
-        "holdout",
-    }
-)
+# the result, and the rule types each one allows. Any other reason code, and any
+# failed record, reports no rule, even if the record names one.
+_RULE_TYPES_BY_REASON_CODE: Dict[str, FrozenSet[str]] = {
+    "targeting_match": frozenset({"targeted_release", "percentage_rollout"}),
+    _EXPERIMENT_SPLIT_REASON: frozenset({_EXPERIMENT_RULE_TYPE}),
+    "rollout_miss": frozenset({"percentage_rollout", _EXPERIMENT_RULE_TYPE}),
+    "experiment_paused": frozenset({_EXPERIMENT_RULE_TYPE}),
+    "holdout": frozenset({_EXPERIMENT_RULE_TYPE}),
+}
 
 # ``$experiment_exposure`` copies these from the ``$feature_flag_called`` of the same
 # read, when it has them.
@@ -459,12 +458,15 @@ def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttributi
     evaluation details are read, never the value a getter returned.
 
     The config version and reason code are always reported. The rule ID and rule
-    type are reported, when the record has them, only for a targeting match, a
-    rollout miss, a paused experiment, a holdout and a complete experiment split. A
-    failed record, or any other reason code, reports neither. The variant key is
-    reported only for a complete experiment split: reason ``experiment_split``, rule
-    type ``experiment``, a rule ID and a variant key. A split without all of them is
-    malformed. It keeps its reason but reports no rule ID, rule type or variant, and
+    type are reported together or not at all, only for a targeting match, a rollout
+    miss, a paused experiment, a holdout and a complete experiment split, and only
+    with a rule type the reason code allows (``_RULE_TYPES_BY_REASON_CODE``). A
+    record with no rule ID, no rule type or another rule type, such as a targeting
+    match that names an experiment rule, reports neither. So does a failed record or
+    any other reason code. The variant key is reported only for a complete
+    experiment split: reason ``experiment_split``, rule type ``experiment``, a rule
+    ID and a variant key. A split without all of them is malformed. A record that
+    reports no rule keeps its reason, reports no rule ID, rule type or variant, and
     sends no exposure. Its identity is never guessed from the value, the key or an
     earlier result.
     """
@@ -474,15 +476,18 @@ def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttributi
     if _v4_field(metadata, "config_version") != 2:
         return None
     reason_code = (details.reason.code if details.reason else None) or None
-    if _v4_field(details, "failed") is True or reason_code not in _RULE_REASON_CODES:
+    allowed_rule_types = _RULE_TYPES_BY_REASON_CODE.get(reason_code or "")
+    if _v4_field(details, "failed") is True or allowed_rule_types is None:
         return _RuleAttribution(reason_code, None, None, None)
     rule_id = _v4_field(metadata, "rule_id") or None
     rule_type = _v4_field(metadata, "rule_type") or None
+    if rule_id is None or rule_type not in allowed_rule_types:
+        return _RuleAttribution(reason_code, None, None, None)
     if reason_code != _EXPERIMENT_SPLIT_REASON:
         # Only an experiment split assigns a variant.
         return _RuleAttribution(reason_code, rule_id, rule_type, None)
     variant_key = _v4_field(metadata, "variant_key") or None
-    if rule_type != _EXPERIMENT_RULE_TYPE or rule_id is None or variant_key is None:
+    if variant_key is None:
         return _RuleAttribution(reason_code, None, None, None)
     return _RuleAttribution(reason_code, rule_id, rule_type, variant_key)
 

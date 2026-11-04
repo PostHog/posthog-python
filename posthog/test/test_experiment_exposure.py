@@ -597,6 +597,72 @@ def test_rule_matches_misses_pauses_and_holdouts_name_their_rule(code, rule_type
     FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
+# The rule ID and rule type are sent together, with a rule type the reason allows, or
+# not at all. Contract 8.0.0 accepts such a call without its rule pair only for a
+# malformed split, so these calls are not validated against the vendored schema
+# until a harness release that accepts them is copied.
+BROKEN_RULE_PAIR_CASES = [
+    # Half pairs.
+    ("targeting_match", {"rule_id": RULE}),
+    ("rollout_miss", {"rule_id": RULE}),
+    ("experiment_paused", {"rule_id": RULE}),
+    ("holdout", {"rule_id": RULE}),
+    ("targeting_match", {"rule_type": "targeted_release"}),
+    ("rollout_miss", {"rule_type": "percentage_rollout"}),
+    ("experiment_paused", {"rule_type": "experiment"}),
+    ("holdout", {"rule_type": "experiment"}),
+    # Rule types the reason code does not allow.
+    ("targeting_match", {"rule_id": RULE, "rule_type": "experiment"}),
+    ("rollout_miss", {"rule_id": RULE, "rule_type": "targeted_release"}),
+    ("experiment_paused", {"rule_id": RULE, "rule_type": "percentage_rollout"}),
+    ("holdout", {"rule_id": RULE, "rule_type": "targeted_release"}),
+    # A rule type this SDK does not know.
+    ("targeting_match", {"rule_id": RULE, "rule_type": "future_rule_type"}),
+]
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
+@pytest.mark.parametrize(
+    "code, fields",
+    BROKEN_RULE_PAIR_CASES,
+    ids=[f"{c}-{sorted(f.items())}" for c, f in BROKEN_RULE_PAIR_CASES],
+)
+def test_a_half_or_disallowed_rule_pair_is_not_sent(code, fields, path):
+    record = _record(code, False, **fields)
+
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert _attribution(called.properties) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": code,
+    }
+    assert _named(events, EXPOSURE) == []
+
+
+@pytest.mark.parametrize("path", list(SYNC_READS))
+def test_a_targeting_match_that_names_an_experiment_rule_sends_no_exposure(path):
+    # Even with a variant key and a linked experiment, a targeting match assigns no
+    # arm, so it reports no rule and sends no exposure.
+    record = _record(
+        "targeting_match",
+        "annual",
+        rule_type="experiment",
+        rule_id=RULE,
+        variant_key="annual-first",
+        has_experiment=True,
+    )
+
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert _attribution(called.properties) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": "targeting_match",
+    }
+    assert _named(events, EXPOSURE) == []
+
+
 def test_an_older_server_record_reports_no_attribution():
     # A record without a typed value comes from a server before /flags?v=4. Its
     # metadata is not read as config version 2, whatever it says.
