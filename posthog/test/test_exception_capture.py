@@ -3,7 +3,7 @@ import sys
 import threading
 from textwrap import dedent
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -526,3 +526,83 @@ def test_last_inspected_group_member_retains_its_cause_chain():
     ]
     assert exceptions[-1]["mechanism"]["source"] == "cause"
     assert exceptions[-1]["mechanism"]["parent_id"] == 2
+
+
+_APP_MODULE_SOURCE = dedent(
+    """
+    def entry_point(capture, error):
+        return handler(capture, error)
+
+    def handler(capture, error):
+        return capture(error)
+    """
+)
+
+
+def _call_from_app_module(capture, error):
+    # Run the capture call from frames that belong to an application module,
+    # not to the posthog package, the way a real caller would.
+    namespace = {"__name__": "app"}
+    exec(compile(_APP_MODULE_SOURCE, "app.py", "exec"), namespace)
+    return namespace["entry_point"](capture, error)
+
+
+def _exceptions_for_never_raised(error):
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    return exceptions_from_error_tuple(
+        _call_from_app_module(exc_info_from_error, error)
+    )
+
+
+def test_never_raised_exception_stack_is_outermost_first():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert functions.index("entry_point") < functions.index("handler")
+    assert functions[-1] == "handler"
+
+
+def test_never_raised_exception_stack_omits_sdk_frames():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert "construct_artificial_traceback" not in functions
+    assert "exc_info_from_error" not in functions
+
+
+def test_never_raised_exception_stack_is_marked_synthetic():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    assert exception["mechanism"]["synthetic"] is True
+
+
+def test_raised_exception_passed_by_object_is_not_synthetic():
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    try:
+        raise ValueError("raised")
+    except ValueError as error:
+        exceptions = exceptions_from_error_tuple(exc_info_from_error(error))
+
+    assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def test_client_capture_of_never_raised_exception_sends_synthetic_stack():
+    from posthog.client import Client
+
+    client = Client("phc_test", sync_mode=True)
+    try:
+        with patch.object(client, "capture", return_value="event-id") as capture:
+            _call_from_app_module(
+                lambda error: client.capture_exception(error, distinct_id="user"),
+                ValueError("never raised"),
+            )
+
+        exception = capture.call_args.kwargs["properties"]["$exception_list"][0]
+        functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+        assert exception["mechanism"]["synthetic"] is True
+        assert functions.index("entry_point") < functions.index("handler")
+        assert "capture_exception" not in functions
+    finally:
+        client.shutdown()

@@ -681,9 +681,12 @@ def single_exception_from_error_tuple(
         exception_value["mechanism"].setdefault("handled", True)
         exception_value["mechanism"].pop("source", None)
 
-    # Python capture inputs are runtime exceptions and this builder never
-    # replaces their stack with an SDK-generated current stack.
-    exception_value["mechanism"].setdefault("synthetic", False)
+    # The stack is synthetic only when the SDK built it, which happens for an
+    # exception that was passed to capture without ever being raised.
+    exception_value["mechanism"].setdefault(
+        "synthetic",
+        tb is not None and getattr(exc_value, _SYNTHESIZED_TRACEBACK_ATTR, None) is tb,
+    )
 
     is_exception_group = BaseExceptionGroup is not None and isinstance(
         exc_value, BaseExceptionGroup
@@ -1048,13 +1051,24 @@ def exc_info_from_error(error):
     return exc_info
 
 
+_SYNTHESIZED_TRACEBACK_ATTR = "__posthog_synthesized_traceback"
+
+
+def _is_sdk_frame(frame):
+    # type: (FrameType) -> bool
+    module = frame.f_globals.get("__name__") or ""
+    return module == "posthog" or module.startswith("posthog.")
+
+
 def construct_artificial_traceback(e):
     # type: (BaseException) -> None
     if getattr(e, "__traceback__", None) is not None:
         return
 
+    # Collect the current stack innermost first, leaving out the SDK's own
+    # capture frames so the stack ends where the application called the SDK.
     depth = 0
-    frames = []
+    frames = []  # type: List[FrameType]
     while True:
         try:
             frame = sys._getframe(depth)
@@ -1062,15 +1076,20 @@ def construct_artificial_traceback(e):
         except ValueError:
             break
 
+        if not frames and _is_sdk_frame(frame):
+            continue
         frames.append(frame)
 
-    frames.reverse()
-
+    # Link the traceback from the innermost frame outwards, so that following
+    # tb_next walks from the outermost frame to the innermost one, the same
+    # order the interpreter uses for a raised exception.
     tb = None
     for frame in frames:
         tb = types.TracebackType(tb, frame, frame.f_lasti, frame.f_lineno)
 
-    setattr(e, "__traceback__", tb)
+    if tb is not None:
+        setattr(e, "__traceback__", tb)
+        setattr(e, _SYNTHESIZED_TRACEBACK_ATTR, tb)
 
 
 def _module_in_list(name, items):
