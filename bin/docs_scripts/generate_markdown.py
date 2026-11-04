@@ -22,6 +22,7 @@ emails.EmailError emails.SendEmailResult""".split()
 UTILS = """integrations.django.PosthogContextMiddleware integrations.flask.PosthogFlaskIntegration
 integrations.asgi.PosthogASGIMiddleware integrations.celery.PosthogCeleryIntegration
 request.set_socket_options request.enable_keep_alive request.disable_connection_reuse""".split()
+FIRST = ["setup", "capture", "identify"]
 TAG = re.compile(r"^[ \t]*posthog-capability:[ \t]*([a-z0-9-]+)[ \t]*$\n?", re.M)
 ROLE = re.compile(
     r":(?:py:)?(?:meth|func|class|attr|obj|data|exc|mod|const):`~?([^`]+)`"
@@ -83,7 +84,9 @@ def capabilities(checkout: str) -> dict[str, str]:
         s: " ".join(acronyms.get(w.lower(), w.lower()) for w in n.split())
         for n, s in rows
     }
-    return {s: t[0].upper() + t[1:] for s, t in titles.items()}
+    # Setup, capture and identify come first; the rest follow the README.
+    order = [*FIRST, *(s for s in titles if s not in FIRST)]
+    return {s: titles[s][0].upper() + titles[s][1:] for s in order if s in titles}
 
 
 def has(pkg, path: str) -> bool:
