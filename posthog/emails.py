@@ -88,6 +88,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import binascii
 import importlib
 import json
 import logging
@@ -501,6 +502,14 @@ def _base64_content(field: str, content: Any) -> str:
     if isinstance(content, (bytes, bytearray, memoryview)):
         return base64.b64encode(bytes(content)).decode("ascii")
     if isinstance(content, str):
+        try:
+            base64.b64decode(content, validate=True)
+        except (binascii.Error, ValueError):
+            raise _invalid_attachment(
+                "An attachment's content string must be Base64. "
+                "Pass the file's bytes instead, such as text.encode() for text.",
+                f"{field}__content",
+            ) from None
         return content
     raise _invalid_attachment(
         "An attachment needs content: bytes or a Base64 string. "

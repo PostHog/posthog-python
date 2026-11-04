@@ -937,6 +937,16 @@ SECRET_CONTENT = b"secret-file-content"
             "attachments__0__content",
         ),
         ("no_content", [{"filename": "a.txt"}], "attachments__0__content"),
+        (
+            "text_not_base64",
+            [{"filename": "a.txt", "content": "secret-file-content"}],
+            "attachments__0__content",
+        ),
+        (
+            "non_ascii_text",
+            [{"filename": "a.txt", "content": "secret-file-content é"}],
+            "attachments__0__content",
+        ),
         ("no_filename", [{"content": SECRET_CONTENT}], "attachments__0__filename"),
         (
             "path",
