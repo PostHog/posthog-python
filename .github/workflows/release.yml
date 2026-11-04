@@ -177,10 +177,19 @@ jobs:
           git fetch origin main
           git reset --hard "$COMMIT_HASH"
 
+      # The reference headings come from the sdk-specs capabilities.
+      - name: Check out sdk-specs
+        if: steps.commit-release.outputs.commit-hash != ''
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: PostHog/sdk-specs
+          path: .sdk-specs
+          persist-credentials: false
+
       - name: Generate references
         if: steps.commit-release.outputs.commit-hash != ''
         run: |
-          uv run bin/docs generate-references
+          uv run bin/docs --sdk-specs .sdk-specs
 
       - name: Check for changes in references
         if: steps.commit-release.outputs.commit-hash != ''
