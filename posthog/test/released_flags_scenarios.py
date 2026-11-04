@@ -168,14 +168,15 @@ def _with_client(
             raise response
         return copy.deepcopy(response)
 
-    def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+    # Read the built event in before_send: v1 layers flag properties inside _enqueue.
+    def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append([message["event"], _flag_event_properties(message)])
         return None
 
     try:
         with (
             mock.patch("posthog.client.flags", side_effect=flags),
-            mock.patch.object(client, "_enqueue", side_effect=enqueue),
+            mock.patch.object(client, "before_send", record),
             warnings.catch_warnings(),
         ):
             warnings.simplefilter("ignore")

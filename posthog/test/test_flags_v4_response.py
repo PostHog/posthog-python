@@ -1027,14 +1027,15 @@ def _legacy_outputs(shape: str) -> Dict[str, Any]:
     def response(*args: Any, **kwargs: Any) -> Dict[str, Any]:
         return _parity_response(shape)
 
-    def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+    # Read the built event in before_send: v1 layers flag properties inside _enqueue.
+    def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append((message["event"], _flag_event_properties(message)))
         return None
 
     try:
         with (
             mock.patch("posthog.client.flags", side_effect=response),
-            mock.patch.object(client, "_enqueue", side_effect=enqueue),
+            mock.patch.object(client, "before_send", record),
             pytest.warns(DeprecationWarning),
         ):
             outputs["get_feature_variants"] = client.get_feature_variants(DISTINCT_ID)
