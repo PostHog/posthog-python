@@ -847,7 +847,7 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
     assert adapter.requests == []
 
 
-def test_a_server_that_does_not_take_a_field_refuses_the_send_and_names_it():
+def test_a_refused_send_names_the_field_from_attr():
     refused = {
         "type": "validation_error",
         "code": "invalid_input",
