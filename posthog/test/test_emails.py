@@ -949,6 +949,11 @@ SECRET_CONTENT = b"secret-file-content"
         ),
         ("no_filename", [{"content": SECRET_CONTENT}], "attachments__0__filename"),
         (
+            "empty_filename",
+            [{"filename": "", "content": SECRET_CONTENT}],
+            "attachments__0__filename",
+        ),
+        (
             "path",
             [{"filename": "a.txt", "content": SECRET_CONTENT, "path": "/tmp/a.txt"}],
             "attachments__0__path",

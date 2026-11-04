@@ -479,9 +479,10 @@ def _attachment(index: int, file: Any) -> dict[str, str]:
             f"not {unknown[0]}.",
             f"{field}__{unknown[0]}",
         )
-    if not isinstance(file.get("filename"), str):
+    if not isinstance(file.get("filename"), str) or not file["filename"]:
         raise _invalid_attachment(
-            "An attachment needs its filename as a string.", f"{field}__filename"
+            "An attachment needs a filename, such as 'invoice.pdf'.",
+            f"{field}__filename",
         )
     attachment = {
         "filename": file["filename"],
