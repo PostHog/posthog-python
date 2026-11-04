@@ -76,7 +76,8 @@ GETTER_FLAGS = [
     _flag("v2-number", 12.5, config_version=2),
     _flag("v2-object", {"layout": "compact", "n": [1, True]}, config_version=2),
     _flag("sparse", "compact", metadata={}, has_experiment=None, reason=None),
-    _flag("server-failed", "compact", failed=True),
+    # A failed record that still carries a payload.
+    _flag("server-failed", "compact", failed=True, payload='{"columns": 2}'),
 ]
 
 

@@ -746,6 +746,58 @@ def test_a_config_version_1_payload_is_kept():
     assert flags["string-flag"].metadata.payload == '{"columns": 2}'
 
 
+def _failed_with_payload(shape: str) -> Dict[str, Any]:
+    """A failed record that still carries a payload, in the given response shape."""
+    if shape == "v4":
+        # A producer-valid failed config version 1 record with a payload.
+        [case] = [c for c in READERS["cases"] if c["id"] == "readers.v1_failed"]
+        response = _build(READERS, case)
+        record = response["flags"]["garden-layout"]
+        assert record["failed"] is True
+        assert record["metadata"]["payload"] == '{"columns":2}'
+        return response
+    record = _older_record(enabled=False, variant=None, failed=True)
+    record["metadata"]["payload"] = '{"columns":2}'
+    return {"flags": {"garden-layout": record}, "requestId": "r1"}
+
+
+@pytest.mark.parametrize("shape", ["v4", "older"])
+def test_a_failed_record_has_no_payload_on_any_read(shape, client):
+    # A failed flag reads as disabled, so a payload on it would surprise the caller.
+    response = _failed_with_payload(shape)
+    [flag] = normalize_flags_response(copy.deepcopy(response))["flags"].values()
+    assert flag._failed is True
+    assert flag.metadata.payload is None
+
+    with mock.patch("posthog.client.flags", return_value=copy.deepcopy(response)):
+        result = client.get_feature_flag_result("garden-layout", DISTINCT_ID)
+        assert result is not None and result.payload is None
+        assert client.get_feature_flag_payload("garden-layout", DISTINCT_ID) is None
+        assert (
+            client.get_feature_flag_payload(
+                "garden-layout", "user-2", send_feature_flag_events=True
+            )
+            is None
+        )
+        payloads = client.get_all_flags_and_payloads(DISTINCT_ID)["featureFlagPayloads"]
+        assert "garden-layout" not in (payloads or {})
+        assert "garden-layout" not in (client.get_feature_payloads(DISTINCT_ID) or {})
+        snapshot = client.evaluate_flags(DISTINCT_ID)
+        assert snapshot.get_flag_payload("garden-layout") is None
+
+
+async def test_a_failed_record_has_no_payload_on_the_async_client():
+    with mock.patch(
+        "posthog.async_client._async_flags",
+        new=mock.AsyncMock(return_value=_failed_with_payload("v4")),
+    ):
+        client = AsyncPosthog("project-key", send=False)
+        snapshot = await client.evaluate_flags(DISTINCT_ID)
+        await client.shutdown()
+
+    assert snapshot.get_flag_payload("garden-layout") is None
+
+
 def test_feature_flag_value_defaults_to_the_legacy_value():
     assert FeatureFlag.from_value_and_payload("a", "control", None)._value == "control"
     assert FeatureFlag.from_value_and_payload("a", True, None)._value is True
