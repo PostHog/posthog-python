@@ -313,6 +313,8 @@ def health():
     capabilities.append("feature_flags_local_evaluation_v1")
     # Remote /flags requests send ?v=4 and read the v4 flag record.
     capabilities.append("flags_response_v4")
+    # The legacy payload accessor is exposed on /get_feature_flag_payload.
+    capabilities.append("feature_flag_payloads")
     return jsonify(
         {
             "sdk_name": "posthog-python",
@@ -707,6 +709,32 @@ def get_feature_flag():
         return jsonify({"success": True, "value": value})
     except Exception as e:
         logger.exception("Error evaluating feature flag")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/get_feature_flag_payload", methods=["POST"])
+def get_feature_flag_payload():
+    """Read a flag's payload with the legacy payload accessor (remote evaluation)."""
+    try:
+        if not state.client:
+            return jsonify({"error": "SDK not initialized"}), 400
+        data = request.json or {}
+        if not data.get("key") or not data.get("distinct_id"):
+            return jsonify({"error": "key and distinct_id are required"}), 400
+        client = state.remote_client or state.client
+        payload = client.get_feature_flag_payload(
+            data["key"],
+            data["distinct_id"],
+            person_properties=data.get("person_properties"),
+            groups=data.get("groups"),
+            group_properties=data.get("group_properties"),
+            disable_geoip=data.get("disable_geoip"),
+            only_evaluate_locally=False,
+        )
+        client.flush()
+        return jsonify({"success": True, "value": payload})
+    except Exception as e:
+        logger.exception("Error reading feature flag payload")
         return jsonify({"error": str(e)}), 500
 
 

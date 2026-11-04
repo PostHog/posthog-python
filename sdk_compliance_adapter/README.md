@@ -25,6 +25,7 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 - `POST /flush` - Flush pending events
 - `GET /state` - Return internal state
 - `POST /get_feature_flag` - Evaluate a flag locally or remotely
+- `POST /get_feature_flag_payload` - Read a flag payload remotely with the legacy payload accessor
 - `POST /reload_feature_flag_definitions` - Fresh, bounded definitions readiness barrier
 - `POST /reset` - Reset SDK state
 
