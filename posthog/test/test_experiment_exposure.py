@@ -1320,3 +1320,290 @@ def test_minimal_flag_called_events_keep_the_attribution():
     assert exposure["event"] == EXPOSURE
     assert exposure["properties"]["plan"] == "team"
     assert _attribution(exposure["properties"]) == _attribution(EXPECTED_EXPOSURE)
+
+
+# --- Reason codes, rule IDs and variant keys ---------------------------------------------
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
+@pytest.mark.parametrize("code", ["future_reason", None], ids=["unknown", "missing"])
+def test_an_unknown_or_missing_reason_code_still_reports_config_version_2(code, path):
+    record = _split()
+    if code is None:
+        del record["reason"]
+    else:
+        record["reason"]["code"] = code
+
+    events = _read_events(path, _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    expected: Dict[str, Any] = {"$feature_flag_config_version": 2}
+    if code is not None:
+        expected["$feature_flag_reason_code"] = code
+    assert _attribution(called.properties) == expected
+    assert "$feature_flag_reason" not in called.properties
+    assert _named(events, EXPOSURE) == []
+
+
+@pytest.mark.skip(
+    reason="Contract 8.0.0 requires a registered reason code on a config version 2"
+    " call. Turn this on once a harness release with contract 9.0.0"
+    " (PostHog/posthog-sdk-test-harness#101) is vendored."
+)
+@pytest.mark.parametrize("code", ["future_reason", None], ids=["unknown", "missing"])
+def test_a_call_with_an_unknown_or_missing_reason_code_matches_the_contract(code):
+    record = _split()
+    if code is None:
+        del record["reason"]
+    else:
+        record["reason"]["code"] = code
+
+    events = _read_events("get_feature_flag_result", _response(record))
+
+    [called] = _named(events, FLAG_CALLED)
+    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
+
+
+NOT_A_UUID = ["rule-1", "", "7F3C2A108D4E4B6A9C215E0F1A2B3C4D", "{" + RULE + "}"]
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
+@pytest.mark.parametrize("rule_id", NOT_A_UUID)
+def test_a_rule_id_that_is_not_a_uuid_counts_as_missing(rule_id, path):
+    for record in (
+        _split(rule_id=rule_id),
+        _record("targeting_match", rule_type="targeted_release", rule_id=rule_id),
+    ):
+        events = _read_events(path, _response(record))
+
+        [called] = _named(events, FLAG_CALLED)
+        assert _attribution(called.properties) == {
+            "$feature_flag_config_version": 2,
+            "$feature_flag_reason_code": record["reason"]["code"],
+        }
+        assert _named(events, EXPOSURE) == []
+
+
+def test_an_upper_case_uuid_rule_id_is_kept():
+    events = _read_events(
+        "get_feature_flag_result", _response(_split(rule_id=RULE.upper()))
+    )
+
+    [exposure] = _named(events, EXPOSURE)
+    assert exposure.properties["$feature_flag_rule_id"] == RULE.upper()
+
+
+@pytest.mark.parametrize("path", list(SYNC_READS))
+def test_an_empty_variant_key_is_a_complete_split(path):
+    events = _read_events(path, _response(_split(variant_key="")))
+
+    [called] = _named(events, FLAG_CALLED)
+    assert called.properties["$feature_flag_variant"] == ""
+    [exposure] = _named(events, EXPOSURE)
+    assert exposure.properties["$feature_flag_variant"] == ""
+    EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure.properties))
+
+
+# --- Capture failures ----------------------------------------------------------------------
+
+
+def _dropping(event: str) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """A before_send hook that drops the first ``event`` and keeps everything else."""
+    dropped: List[str] = []
+
+    def before_send(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if message["event"] == event and not dropped:
+            dropped.append(event)
+            return None
+        return message
+
+    return before_send
+
+
+def _raising_once(client: Client, event: str) -> Any:
+    """Patch ``client.capture`` to raise for the first ``event``, then capture as usual."""
+    capture = client.capture
+    raised: List[str] = []
+
+    def maybe_raise(name: str, **kwargs: Any) -> Optional[str]:
+        if name == event and not raised:
+            raised.append(name)
+            raise RuntimeError("capture failed")
+        return capture(name, **kwargs)
+
+    return mock.patch.object(client, "capture", side_effect=maybe_raise)
+
+
+def _sent(client: Client, path: str, reads: int = 2) -> List[str]:
+    """The events that reached the queue over ``reads`` reads of a complete split."""
+    sent: List[str] = []
+    enqueue = client._enqueue
+
+    def record(msg: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+        uuid = enqueue(msg, *args, **kwargs)
+        if uuid is not None:
+            sent.append(msg["event"])
+        return uuid
+
+    with (
+        _serving(_response(_split())),
+        mock.patch.object(client, "_enqueue", side_effect=record),
+    ):
+        for _ in range(reads):
+            assert _read(client, path) == "annual"
+    return sent
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag", "snapshot.get_flag"])
+@pytest.mark.parametrize("event", [FLAG_CALLED, EXPOSURE])
+def test_a_dropped_capture_keeps_no_dedupe_key(event, path):
+    client = Client(FAKE_TEST_API_KEY, send=False, before_send=_dropping(event))
+    try:
+        sent = _sent(client, path)
+    finally:
+        client.shutdown()
+
+    # The other event of the first read is still sent, and the dropped one is sent
+    # again by the second read, once.
+    assert sorted(sent) == sorted([FLAG_CALLED, EXPOSURE])
+
+
+@pytest.mark.parametrize("path", ["get_feature_flag", "snapshot.get_flag"])
+@pytest.mark.parametrize("event", [FLAG_CALLED, EXPOSURE])
+def test_a_raising_capture_keeps_no_dedupe_key(event, path, client):
+    with _raising_once(client, event):
+        sent = _sent(client, path)
+
+    assert sorted(sent) == sorted([FLAG_CALLED, EXPOSURE])
+
+
+def test_a_dropped_config_version_1_call_is_deduped_as_before():
+    client = Client(FAKE_TEST_API_KEY, send=False, before_send=_dropping(FLAG_CALLED))
+    recording, events = _record_events(client)
+    record = _record("condition_match", "annual", config_version=1)
+    try:
+        with _serving(_response(record)), recording:
+            _read(client, "get_feature_flag")
+            _read(client, "get_feature_flag")
+    finally:
+        client.shutdown()
+
+    # Config version 1 dedupe is unchanged: the attempt takes the key.
+    assert [event.name for event in events] == [FLAG_CALLED]
+
+
+def test_a_flags_reload_does_not_repeat_an_exposure(client):
+    recording, events = _record_events(client)
+    with _serving(_response(_split())), recording:
+        _read(client, "get_feature_flag")
+        client._update_flag_state(
+            {"flags": [], "group_type_mapping": {}, "cohorts": {}}
+        )
+        _read(client, "get_feature_flag")
+        client.evaluate_flags(DISTINCT_ID).get_flag(FLAG)
+
+    assert len(_named(events, EXPOSURE)) == 1
+
+
+# --- Super properties ------------------------------------------------------------------------
+
+SPOOFED_SUPER_PROPERTIES = {
+    "$feature_flag_config_version": 7,
+    "$feature_flag_reason_code": "spoofed",
+    "$feature_flag_rule_type": "spoofed",
+    "$feature_flag_rule_id": OTHER_RULE,
+    "$feature_flag_variant": "spoofed",
+    "$feature_flag_reason": "spoofed",
+    "$feature_flag_forced_variant": True,
+    "$feature_flag_experiment_id": 301,
+    "$experiment_exposure_source": "spoofed",
+}
+
+
+def _messages_with_super_properties(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    messages: List[Dict[str, Any]] = []
+
+    def before_send(message: Dict[str, Any]) -> Dict[str, Any]:
+        messages.append(copy.deepcopy(message))
+        return message
+
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        before_send=before_send,
+        super_properties=dict(SPOOFED_SUPER_PROPERTIES),
+    )
+    try:
+        with _serving(_response(record)):
+            _read(client, "get_feature_flag")
+    finally:
+        client.shutdown()
+    return messages
+
+
+def test_super_properties_cannot_change_config_version_2_attribution():
+    messages = _messages_with_super_properties(_split())
+
+    [called] = [m for m in messages if m["event"] == FLAG_CALLED]
+    assert _attribution(called["properties"]) == EXPECTED_ATTRIBUTION
+    for name in (
+        "$feature_flag_reason",
+        "$feature_flag_forced_variant",
+        "$feature_flag_experiment_id",
+    ):
+        assert name not in called["properties"], name
+    [exposure] = [m for m in messages if m["event"] == EXPOSURE]
+    assert _attribution(exposure["properties"]) == _attribution(EXPECTED_EXPOSURE)
+    assert not set(EXPOSURE_LEAVES_OUT) & set(exposure["properties"])
+    for name in ("$feature_flag_experiment_id", "$feature_flag_forced_variant"):
+        assert name not in exposure["properties"], name
+    EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure["properties"]))
+
+
+def test_super_properties_cannot_add_rule_fields_a_config_version_2_call_omits():
+    messages = _messages_with_super_properties(_record("no_rule_match", False))
+
+    [called] = messages
+    assert _attribution(called["properties"]) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": "no_rule_match",
+    }
+
+
+def test_super_properties_still_apply_to_config_version_1_calls():
+    record = _record("condition_match", "annual", config_version=1)
+    [called] = _messages_with_super_properties(record)
+
+    for name, value in SPOOFED_SUPER_PROPERTIES.items():
+        assert called["properties"][name] == value, name
+
+
+async def test_async_super_properties_cannot_change_config_version_2_attribution():
+    messages: List[Dict[str, Any]] = []
+    with mock.patch(
+        "posthog.async_client._async_flags",
+        new=mock.AsyncMock(return_value=_response(_split())),
+    ):
+        client = AsyncPosthog(
+            "project-key",
+            send=False,
+            super_properties=dict(SPOOFED_SUPER_PROPERTIES),
+        )
+        prepare = client._prepare_event
+
+        def record(*args: Any, **kwargs: Any) -> Any:
+            prepared, uuid = prepare(*args, **kwargs)
+            messages.append(copy.deepcopy(prepared))
+            return prepared, uuid
+
+        with mock.patch.object(client, "_prepare_event", side_effect=record):
+            snapshot = await client.evaluate_flags(DISTINCT_ID)
+            snapshot.get_flag(FLAG)
+        await client.shutdown()
+
+    [called] = [m for m in messages if m["event"] == FLAG_CALLED]
+    assert _attribution(called["properties"]) == EXPECTED_ATTRIBUTION
+    assert "$feature_flag_reason" not in called["properties"]
+    [exposure] = [m for m in messages if m["event"] == EXPOSURE]
+    assert _attribution(exposure["properties"]) == _attribution(EXPECTED_EXPOSURE)
+    assert not set(EXPOSURE_LEAVES_OUT) & set(exposure["properties"])

@@ -467,6 +467,7 @@ class AsyncClient:
         msg: dict[str, Any],
         disable_geoip: Optional[bool],
         property_allowlist=None,
+        pinned_properties=None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if self.disabled or not self._accepting:
             return None, None
@@ -498,6 +499,10 @@ class AsyncClient:
             msg["properties"].setdefault("$release_id", self._release_id)
         if self.is_server:
             msg["properties"]["$is_server"] = True
+        # After every enrichment step, so a super property never changes or adds
+        # config version 2 flag attribution.
+        if pinned_properties is not None:
+            msg["properties"] = pinned_properties.apply(msg["properties"])
         if property_allowlist is not None:
             msg["properties"] = {
                 key: value
@@ -530,7 +535,7 @@ class AsyncClient:
 
     def _build_capture_event(
         self, event: str, kwargs: OptionalCaptureArgs
-    ) -> tuple[dict[str, Any], Optional[bool], Any]:
+    ) -> tuple[dict[str, Any], Optional[bool], Any, Any]:
         properties = {**(kwargs.get("properties") or {}), **system_context()}
         if self.capture_trace_context:
             properties = {**_get_current_otel_span_properties(), **properties}
@@ -566,6 +571,7 @@ class AsyncClient:
             },
             kwargs.get("disable_geoip"),
             kwargs.get("_property_allowlist"),
+            kwargs.get("_pinned_properties"),
         )
 
     def capture(
@@ -573,11 +579,11 @@ class AsyncClient:
     ) -> Optional[str]:
         """Queue an event without blocking for network delivery."""
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, pinned_properties = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, pinned_properties
             )
             if prepared is None or sent_uuid is None:
                 return None
@@ -621,11 +627,11 @@ class AsyncClient:
         self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, pinned_properties = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, pinned_properties
             )
             if prepared is None or sent_uuid is None:
                 return None

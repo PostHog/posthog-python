@@ -1045,7 +1045,8 @@ def _legacy_outputs(shape: str) -> Dict[str, Any]:
 
     def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
         events.append((message["event"], _flag_event_properties(message)))
-        return None
+        # Accept the event, as the real queue does, by returning an event UUID.
+        return "70000000-0000-4000-8000-000000000000"
 
     try:
         with (

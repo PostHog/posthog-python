@@ -31,6 +31,7 @@ DESCRIPTION = (
 )
 API_KEY = "phc_released_flags_scenarios"
 DISTINCT_ID = "user-1"
+ACCEPTED_UUID = "70000000-0000-4000-8000-000000000000"
 REQUEST_ID = "60000000-0000-4000-8000-000000000000"
 EVALUATED_AT = 1800000000000
 MATCHED = {
@@ -170,7 +171,8 @@ def _with_client(
 
     def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
         events.append([message["event"], _flag_event_properties(message)])
-        return None
+        # Accept the event, as the real queue does, by returning an event UUID.
+        return ACCEPTED_UUID
 
     try:
         with (
