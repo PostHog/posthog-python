@@ -13,7 +13,10 @@ def source_digest(directory):
             str(path.relative_to(directory)): digest(path.read_bytes())
             for path in sorted(directory.rglob("*"))
             if path.is_file()
-            and path.suffix in (".py", ".txt", ".in")
+            and (
+                path.suffix in (".py", ".txt", ".in")
+                or path == directory / "shards.json"
+            )
             and "__pycache__" not in path.parts
         }
     )

@@ -49,25 +49,40 @@ class Workload:
             if spec["concurrency"] > 1
             else None
         )
-        self.events = [
-            {
-                "event": "benchmark",
-                "distinct_id": user["distinct_id"],
-                "properties": {
-                    "payload": "x" * spec.get("payload_bytes", 0),
-                    "plan": "pro",
-                },
-            }
-            for user in USERS
-        ]
         try:
             if self.flags:
                 self.check_flags()
                 assert self.state()["definitions"] > 0
-            self.verify()
+                self.verify()
+            else:
+                self.prepare_phase(spec["operations"])
         except BaseException:
             self.close()
             raise
+
+    def prepare_phase(self, operations):
+        """Reset only outside measurement, after the preceding phase is verified."""
+        if self.flags:
+            self.generation = 0
+            control(self.host, "/__benchmark/definitions", {"generation": 0})
+            self.client.load_feature_flags()
+            self.check_flags()
+        else:
+            control(self.host, "/__benchmark/reset", {"operations": operations})
+            self.captured = 0
+            self.captured_by_user = {user["distinct_id"]: 0 for user in USERS}
+            self.events = [
+                {
+                    "event": "benchmark",
+                    "distinct_id": USERS[i % len(USERS)]["distinct_id"],
+                    "properties": {
+                        "payload": "x" * self.spec["payload_bytes"],
+                        "plan": "pro",
+                        "sequence": i,
+                    },
+                }
+                for i in range(operations)
+            ]
 
     def state(self):
         return control(self.host, "/__benchmark/state")
@@ -115,22 +130,30 @@ class Workload:
                 before = self.state()["definitions"]
                 self.client.load_feature_flags()
                 assert self.state()["definitions"] == before + 1
-                self.check_flags()
                 if checkpoint:
                     checkpoint(i + 1)
         elif mode in ("capture", "drain"):
             for i in range(operations):
-                event = self.events[i % len(self.events)]
+                event = self.events[i]
                 assert self.client.capture(**event) is not None, (
                     "Capture rejected an event"
                 )
                 self.captured += 1
                 self.captured_by_user[USERS[i % len(USERS)]["distinct_id"]] += 1
-                if (i + 1) % 100 == 0 or i + 1 == operations:
-                    if mode == "drain":
-                        self.client.flush(timeout_seconds=None)
-                    if checkpoint:
-                        checkpoint(i + 1)
+                completed = i + 1
+                if (
+                    mode == "drain"
+                    and self.spec["drain_strategy"] == "steady"
+                    and (
+                        completed % self.spec["flush_every"] == 0
+                        or completed == operations
+                    )
+                ):
+                    self.client.flush(timeout_seconds=None)
+                if checkpoint and (completed % 100 == 0 or completed == operations):
+                    checkpoint(completed)
+            if mode == "drain" and self.spec["drain_strategy"] == "burst":
+                self.client.flush(timeout_seconds=None)
         else:
             for start in range(0, operations, self.spec["concurrency"]):
                 if self.pool:
@@ -145,8 +168,9 @@ class Workload:
                         future.result()
                 else:
                     self.evaluate(start)
-                if checkpoint and start % 32 == 0:
-                    checkpoint(min(start + self.spec["concurrency"], operations))
+                completed = min(start + self.spec["concurrency"], operations)
+                if checkpoint and (completed % 32 == 0 or completed == operations):
+                    checkpoint(completed)
 
     def verify(self):
         if self.flags:
@@ -159,7 +183,11 @@ class Workload:
         assert state["delivered"] == self.captured, (
             "Delivered counts must match captures"
         )
-        assert state["invalid_events"] == 0, "Capture payload or identity changed"
+        assert state["invalid_events"] == 0, (
+            "Capture payload, identity or sequence changed"
+        )
+        assert state["unique_sequences"] == self.captured
+        assert state["missing_sequences"] == 0, "Missing capture sequences"
         assert state["delivered_by_user"] == self.captured_by_user, (
             "Capture identity distribution changed"
         )
