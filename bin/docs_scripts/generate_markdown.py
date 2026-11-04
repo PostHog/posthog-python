@@ -1,35 +1,27 @@
-"""Generate this SDK's reference Markdown from source.
+"""Generate the SDK reference Markdown from source with Griffe, which never imports the SDK.
 
-Griffe reads the package statically, so the SDK is never imported. Docstrings are parsed as
-Google style. A `posthog-capability: <slug>` line maps a symbol to its sdk-specs capability,
-and unmapped symbols land in SDK utils under their `Category:`. The shared renderer turns the
-symbol list into Markdown, so every SDK's page has the same shape.
+A `posthog-capability: <slug>` docstring line puts a symbol under that PostHog/sdk-specs
+capability, in the sdk-specs README's order. Untagged symbols go to SDK utils, grouped by
+their `Category:`.
 
-    python bin/docs_scripts/generate_markdown.py --sdk-specs <PostHog/sdk-specs checkout> [--major 8 --source-ref v1]
+    python bin/docs_scripts/generate_markdown.py --sdk-specs DIR [--major 8 --source-ref v1]
 """
 
 import argparse
-import json
 import logging
 import re
-import subprocess
-import sys
-import tempfile
 import textwrap
 from pathlib import Path
-from typing import Any
+from typing import NamedTuple
 
 import griffe
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import sdk_specs  # noqa: E402
-
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = "https://github.com/PostHog/posthog-python/blob/v{version}/{path}#L{line}"
-REFERENCES = [
-    ("Client", "client.Client", "Client"),
-    ("AsyncClient", "async_client.AsyncClient", "AsyncClient"),
-]
+SOURCE = "[Source](https://github.com/PostHog/posthog-python/blob/{ref}/{path}#L{line})"
+PAGE = "---\ntitle: PostHog Python SDK\nsdk: python\nversion: {}\nmajor: {}\nstatus: {}\n---"
+GUIDES = (
+    "---\ntitle: PostHog Python SDK migration guides\nsdk: python\nkind: migration\n---"
+)
 TYPES = """args.OptionalCaptureArgs args.OptionalSetArgs feature_flag_evaluations.FeatureFlagEvaluations
 types.FeatureFlagResult types.FeatureFlag types.FlagsAndPayloads types.FeatureFlagEvaluationRuntime
 types.UnresolvedFlagReason flag_definition_cache.FlagDefinitionCacheProvider flag_definition_cache.FlagDefinitionCacheData
@@ -46,7 +38,7 @@ UTILS = {
 }
 WRAPPERS = "openai anthropic gemini langchain openai_agents claude_agent_sdk".split()
 CONFIGS = [("integrations.django.PosthogContextMiddleware", "Django settings")]
-# Where a symbol works when that isn't everywhere Python runs, by module. Extras are checked against pyproject.toml.
+# Where a symbol works, by module, when that isn't everywhere Python runs.
 AVAILABLE_IN = {
     "async_client": "the `async` extra, `posthog[async]`",
     "integrations.django": "Django apps",
@@ -62,229 +54,250 @@ AVAILABLE_IN = {
     "ai.openai_agents": "apps with the `openai-agents` package",
     "ai.claude_agent_sdk": "apps with the `claude-agent-sdk` package",
 }
-LITERAL_VALUE = re.compile(
-    r"""^(None|True|False|-?\d[\d_.e]*|(["']).*\2|\[\]|\{\}|\(\))$"""
-)
+ACRONYMS = {"id": "ID", "ai": "AI", "http": "HTTP", "mcp": "MCP"}
+STAR = {"variadic positional": "*", "variadic keyword": "**"}
 TAG = re.compile(r"^[ \t]*posthog-capability:[ \t]*([a-z0-9-]+)[ \t]*$\n?", re.M)
+CAPABILITY_ROW = re.compile(
+    r"^\| ([^|]+?) \| \[`openspec/specs/([a-z0-9-]+)/spec\.md`\]", re.M
+)
 FENCE = re.compile(r"```(\w*)\n(.*?)```", re.S)
 LABEL = re.compile(r"#\s*(Correct example|Counter example \(incorrect\))\.?:?\s*(.*)")
 ROLE = re.compile(
     r":(?:py:)?(?:meth|func|class|attr|obj|data|exc|mod|const):`~?([^`]+)`"
 )
 LITERAL = re.compile(r"^([^\n]*?)::\n\n((?:(?:[ \t]+[^\n]*)?\n)+)", re.M)
+LITERAL_VALUE = re.compile(
+    r"""^(None|True|False|-?\d[\d_.e]*|(["']).*\2|\[\]|\{\}|\(\))$"""
+)
+SETTING = re.compile(r"^\s*- `(POSTHOG_[A-Z_]+)`: (.*?)(?=^\s*- `|^\s*$)", re.M | re.S)
+VALUE = re.compile(r"^(\w+): (.*?)(?=^\w+:|\Z)", re.M | re.S)
+NEWLINE = re.compile(r"\s*\n\s*")
+
+
+class Entry(NamedTuple):
+    slug: str | None
+    group: str | None
+    name: str
+    body: list[str]
+
+    def render(self, level: int) -> str:
+        return "\n\n".join([f"{'#' * level} `{self.name}`", *self.body])
 
 
 def text(value) -> str:
-    return str(value) if value is not None else ""
+    return "" if value is None else str(value)
 
 
-def md(value: str) -> str:
-    """Converts the Sphinx markup in these docstrings to Markdown: roles, double backticks, literal blocks."""
-    value = re.sub(r"``([^`]+)``", r"`\1`", ROLE.sub(r"`\1`", value or ""))
-
-    def block(m: re.Match) -> str:
-        lead = m.group(1) + ":\n\n" if m.group(1).strip() else ""
-        return lead + "```python\n" + textwrap.dedent(m.group(2)).strip() + "\n```\n\n"
-
-    return LITERAL.sub(block, value + "\n").strip()
-
-
-def get(pkg, path: str):
+def get(obj, path: str):
     try:
-        return pkg[path]
+        return obj[path]
     except KeyError:
         return None
 
 
-def available_in(path: str) -> str | None:
-    module = path.removeprefix("posthog.")
-    return next(
-        (
-            where
-            for prefix, where in AVAILABLE_IN.items()
-            if module == prefix or module.startswith(prefix + ".")
-        ),
-        None,
+def fence(code: str) -> str:
+    return f"```python\n{code.strip()}\n```"
+
+
+def code(value) -> str:
+    return f"`{NEWLINE.sub(' ', str(value)).strip()}`" if value else ""
+
+
+def md(value: str) -> str:
+    """Sphinx roles, double backticks and literal blocks become Markdown."""
+    value = re.sub(r"``([^`]+)``", r"`\1`", ROLE.sub(r"`\1`", value or ""))
+
+    def block(m: re.Match) -> str:
+        lead = m.group(1) + ":\n\n" if m.group(1).strip() else ""
+        return lead + fence(textwrap.dedent(m.group(2))) + "\n\n"
+
+    return LITERAL.sub(block, value + "\n").strip()
+
+
+def unpipe(span: str) -> str:
+    """Escapes pipes for a table. A pipe splits its code span, since MDX shows `\\|` literally."""
+    if not span.startswith("`"):
+        return span.replace("|", "\\|")
+    return " \\| ".join(f"`{x}`" for x in re.split(r"\s*\|\s*", span[1:-1]))
+
+
+def cell(value) -> str:
+    """Table cell text: fences become inline code and paragraphs join with <br />."""
+    value = FENCE.sub(
+        lambda m: f"`{NEWLINE.sub('; ', m.group(2).strip())}`", text(value).strip()
     )
+    value = "<br />".join(NEWLINE.sub(" ", p) for p in re.split(r"\n\s*\n", value))
+    return "".join(unpipe(s) for s in re.split(r"(`[^`]*`)", value))
 
 
-def check_extras() -> None:
-    extras = re.search(
-        r"^\[project\.optional-dependencies\]\n(.*?)(?=^\[)",
-        (ROOT / "pyproject.toml").read_text(),
-        re.M | re.S,
+def row(name, desc="", kind="", default="", required=False, value="", where="") -> str:
+    """One parameter, field or setting: its name, a labels line, then its description."""
+    default = (
+        "**Required**"
+        if required
+        else default and f"**Default:** {cell(code(default))}"
     )
-    named = set(re.findall(r"^(\w+) = ", extras.group(1), re.M)) if extras else set()
-    missing = {
-        x for w in AVAILABLE_IN.values() for x in re.findall(r"posthog\[(\w+)\]", w)
-    } - named
-    if missing:
-        raise SystemExit(
-            f"AVAILABLE_IN names extras pyproject.toml doesn't define: {sorted(missing)}"
-        )
+    labels = [
+        where and f"**Where:** {where}",
+        value and f"**Value:** {cell(code(value))}",
+        kind and f"**Type:** {cell(code(kind))}",
+        default,
+    ]
+    parts = [code(name), " · ".join(x for x in labels if x), cell(desc)]
+    return "| " + "<br />".join(x for x in parts if x) + " |"
 
 
-def source(obj, version: str) -> str:
-    return SOURCE.format(
-        version=version, path=obj.relative_package_filepath, line=obj.lineno
-    )
+def table(title: str, rows: list[str]) -> list[str]:
+    """A details block holding a one-column table."""
+    head = f"<summary>{title} ({len(rows)})</summary>\n\n| {title[:-1]} |\n| --- |"
+    return ["\n".join(["<details>", head, *rows, "", "</details>"])] if rows else []
 
 
 def parse(obj) -> tuple[str | None, list]:
+    """The symbol's capability tag and its parsed docstring sections."""
     raw = obj.docstring.value if obj.docstring else ""
-    tag = TAG.search(raw)
-    body = TAG.sub("", raw).strip()
+    tag, body = TAG.search(raw), TAG.sub("", raw).strip()
     sections = griffe.Docstring(body, parent=obj).parse("google") if body else []
     return (tag.group(1) if tag else None), sections
 
 
-def examples(value) -> list[dict]:
+def examples(blocks: str) -> list[str]:
+    """Each fenced block, labeled by its first comment line. Unlabeled blocks are correct."""
     out = []
-    for _, code in FENCE.findall("\n".join(t for _, t in value)):
-        label = why = None
-        head, _, rest = code.lstrip("\n").partition("\n")
-        match = LABEL.match(head.strip())
-        if match:
-            label, why, code = (
-                "correct" if match.group(1).startswith("Correct") else "incorrect",
-                match.group(2) or None,
-                rest,
-            )
-        out.append({"code": code, "label": label, "why": why})
-    return out
-
-
-def typed_dict_fields(pkg, annotation: str) -> dict:
-    match = re.fullmatch(r"Unpack\[(\w+)\]", annotation)
-    cls = get(pkg, f"args.{match.group(1)}") if match else None
-    return {n: text(a.annotation) for n, a in cls.attributes.items()} if cls else {}
-
-
-def params(pkg, fn, documented: dict) -> list[dict]:
-    out = []
-    for p in fn.parameters:
-        if p.name in ("self", "cls") or p.name.startswith("_"):
-            continue
-        kind = p.kind.value
-        if kind == "variadic keyword":
-            fields = typed_dict_fields(pkg, text(p.annotation))
-            for name in [n for n in documented if n in fields]:
-                out.append(
-                    {
-                        "name": name,
-                        "type": fields[name],
-                        "description": md(documented.pop(name)),
-                    }
+    for _, src in FENCE.findall(blocks):
+        head, _, rest = src.lstrip("\n").partition("\n")
+        label = "**Correct example.**"
+        if m := LABEL.match(head.strip()):
+            src, why = rest, m.group(2)
+            if m.group(1).startswith("Counter"):
+                why = (
+                    why[:1].upper()
+                    + why[1:]
+                    + ("." if why and why[-1] not in ".!?" else "")
                 )
-            if fields:
-                continue
-        star = {"variadic positional": "*", "variadic keyword": "**"}.get(kind, "")
-        required = p.default is None and not star
-        out.append(
-            {
-                "name": star + p.name,
-                "type": text(p.annotation),
-                "default": None if star else p.default and text(p.default),
-                "required": required,
-                "description": md(documented.pop(p.name, "")),
-            }
-        )
-    out += [{"name": n, "description": md(d)} for n, d in documented.items()]
+                label = f"**Counter example (incorrect).** {why}".strip()
+        out.append(f"{label}\n\n{fence(src)}")
     return out
+
+
+def public(p) -> bool:
+    return p.name not in ("self", "cls") and not p.name.startswith("_")
 
 
 def signature(fn, name: str) -> str:
     parts = []
-    for p in fn.parameters:
-        if p.name in ("self", "cls") or p.name.startswith("_"):
-            continue
-        star = {"variadic positional": "*", "variadic keyword": "**"}.get(
-            p.kind.value, ""
-        )
+    for p in filter(public, fn.parameters):
+        star = STAR.get(p.kind.value, "")
         part = star + p.name + (f": {p.annotation}" if p.annotation is not None else "")
         parts.append(
             part + (f" = {p.default}" if p.default is not None and not star else "")
         )
-    ret = f" -> {fn.returns}" if fn.returns is not None and name[0].islower() else ""
-    prefix = "async " if "async" in fn.labels else ""
-    line = f"{prefix}{name}({', '.join(parts)}){ret}"
-    return (
-        line
-        if len(line) <= 88
-        else f"{prefix}{name}(\n" + "".join(f"    {p},\n" for p in parts) + f"){ret}"
+    returns = (
+        f" -> {fn.returns}" if fn.returns is not None and name[0].islower() else ""
     )
+    head = ("async " if "async" in fn.labels else "") + name
+    if len(line := f"{head}({', '.join(parts)}){returns}") <= 88:
+        return line
+    return f"{head}(\n" + "".join(f"    {p},\n" for p in parts) + f"){returns}"
 
 
-def entry(pkg, obj, qualname: str, version: str, group: str | None = None) -> dict:
+def params(fn, documented: dict) -> list[str]:
+    """A row per parameter. Each documented key of an `Unpack[...]` TypedDict gets a row."""
+    rows = []
+    for p in filter(public, fn.parameters):
+        star = STAR.get(p.kind.value, "")
+        unpacked = re.fullmatch(r"Unpack\[(\w+)\]", text(p.annotation))
+        typed = get(fn.package, f"args.{unpacked.group(1)}") if unpacked else None
+        if star == "**" and typed and (fields := typed.attributes):
+            for n in [n for n in documented if n in fields]:
+                rows.append(row(n, md(documented.pop(n)), text(fields[n].annotation)))
+            continue
+        desc = md(documented.pop(p.name, ""))
+        default, required = (
+            "" if star else text(p.default),
+            p.default is None and not star,
+        )
+        rows.append(row(star + p.name, desc, text(p.annotation), default, required))
+    return rows + [row(n, md(d)) for n, d in documented.items()]
+
+
+def entry(obj, name: str, ref: str, group: str | None = None) -> Entry:
     slug, sections = parse(obj)
-    e: dict[str, Any] = {
-        "qualname": qualname,
-        "capability": slug,
-        "group": group,
-        "description": "",
-        "examples": [],
-        "source": source(obj, version),
-        "availableIn": available_in(obj.module.path),
-    }
-    texts, notes, documented = [], [], {}
+    texts, notes, shown, raises = [], [], [], []
+    documented: dict[str, str] = {}
+    returns, deprecated = ("", ""), ""
     for s in sections:
-        kind = s.kind.value
+        kind, value = s.kind.value, s.value
         if kind == "text":
-            texts.append(s.value)
+            texts.append(value)
         elif kind in ("parameters", "other parameters"):
-            documented.update({p.name: p.description for p in s.value})
+            documented |= {p.name: p.description for p in value}
         elif kind == "returns":
-            e["returns"] = {
-                "type": text(s.value[0].annotation)
-                or text(getattr(obj, "returns", "")),
-                "description": md(" ".join(r.description for r in s.value)),
-            }
+            rtype = text(value[0].annotation) or text(getattr(obj, "returns", ""))
+            returns = (rtype, md(" ".join(r.description for r in value)))
         elif kind == "raises":
-            e["raises"] = [
-                {"type": text(r.annotation), "description": md(r.description)}
-                for r in s.value
+            raises = [
+                f"**Raises** {code(text(r.annotation))}. {md(r.description)}".strip()
+                for r in value
             ]
         elif kind == "examples":
-            e["examples"] += examples(s.value)
+            shown += examples("\n".join(t for _, t in value))
         elif kind == "deprecated":
-            e["deprecated"] = s.value.description
+            deprecated = f"**Deprecated.** {value.description}"
         elif kind == "admonition" and s.title in ("Example", "Examples"):
-            body = s.value.description
-            e["examples"] += (
-                examples([(None, body)])
+            body = value.description
+            shown += (
+                examples(body)
                 if "```" in body
-                else [{"code": body, "label": None, "why": None}]
+                else [f"**Correct example.**\n\n{fence(body)}"]
             )
         elif kind == "admonition" and s.title == "Category":
-            e["group"] = group or s.value.description.strip()
+            group = group or value.description.strip()
         elif kind == "admonition":
-            notes.append(f"**{s.title}.** {md(s.value.description)}")
-    e["description"], e["notes"] = md("\n\n".join(texts)), "\n\n".join(notes)
+            notes.append(f"**{s.title}.** {md(value.description)}")
+    sig, rows = "", []
     if obj.is_function:
-        name = qualname.removesuffix("(...)")
-        e["signature"] = signature(obj, name if obj.name == "__init__" else obj.name)
-        e["params"] = params(pkg, obj, documented)
-        if not e.get("returns") and obj.returns is not None and obj.name != "__init__":
-            e["returns"] = {"type": text(obj.returns)}
+        sig = signature(
+            obj, name.removesuffix("(...)") if obj.name == "__init__" else obj.name
+        )
+        rows = params(obj, documented)
+        if not any(returns) and obj.returns is not None and obj.name != "__init__":
+            returns = (text(obj.returns), "")
     elif obj.is_class and "__init__" in obj.members:
         init = obj.members["__init__"]
-        e["signature"] = signature(init, obj.name)
-        e["params"] = params(
-            pkg,
-            init,
-            documented
-            | {
-                p.name: p.description
-                for s in parse(init)[1]
-                if s.kind.value == "parameters"
-                for p in s.value
-            },
-        )
-    elif obj.is_attribute:
-        e["signature"] = (
-            f"{qualname}: {obj.annotation}" if obj.annotation is not None else None
-        )
-    return e
+        args = {
+            p.name: p.description
+            for s in parse(init)[1]
+            if s.kind.value == "parameters"
+            for p in s.value
+        }
+        sig, rows = signature(init, obj.name), params(init, documented | args)
+    elif obj.is_attribute and obj.annotation is not None:
+        sig = f"{name}: {obj.annotation}"
+    where = available_in(obj.module.path)
+    returned = any(returns) and f"**Returns** {code(returns[0])}" + (
+        returns[1] and f". {returns[1]}"
+    )
+    body = [
+        deprecated,
+        where and f"**Available in:** {where}",
+        md("\n\n".join(texts)),
+        sig and fence(sig),
+        *table("Parameters", rows),
+        returned and returned.strip(),
+        *raises,
+        "\n\n".join(notes),
+        *shown,
+        SOURCE.format(ref=ref, path=obj.relative_package_filepath, line=obj.lineno),
+    ]
+    return Entry(slug, group, name, [b for b in body if b])
+
+
+def available_in(module: str) -> str | None:
+    module = module.removeprefix("posthog.") + "."
+    return next(
+        (w for m, w in AVAILABLE_IN.items() if module.startswith(m + ".")), None
+    )
 
 
 def members(cls) -> list:
@@ -297,126 +310,84 @@ def members(cls) -> list:
     ]
 
 
-def documented_fields(cls) -> dict:
-    """Field descriptions from the class's `Attributes:`, `Args:` and `Values:` sections, and from `__init__`'s `Args:`."""
+def type_block(cls, ref: str) -> str:
+    """A type's section. Dataclasses, TypedDicts, enums and errors show their fields."""
     sections = parse(cls)[1] + (
         parse(cls.members["__init__"])[1] if "__init__" in cls.members else []
     )
-    found = {
-        item.name: item.description
+    documented = {
+        i.name: i.description
         for s in sections
         if s.kind.value in ("attributes", "parameters")
-        for item in s.value
+        for i in s.value
     }
     for s in sections:
         if s.kind.value == "admonition" and s.title == "Values":
-            found |= {
-                n: " ".join(d.split())
-                for n, d in re.findall(
-                    r"^(\w+): (.*?)(?=^\w+:|\Z)", s.value.description, re.M | re.S
-                )
+            documented |= {
+                n: " ".join(d.split()) for n, d in VALUE.findall(s.value.description)
             }
-    return found
-
-
-def is_data(cls) -> bool:
-    """Dataclasses, TypedDicts, enums and errors carry fields readers use. Service objects carry only state."""
     bases = " ".join(text(b) for b in cls.bases)
-    return any("dataclass" in text(d.value) for d in cls.decorators) or any(
+    data = any("dataclass" in text(d.value) for d in cls.decorators) or any(
         k in bases for k in ("TypedDict", "Enum", "Exception", "Error")
     )
-
-
-def type_info(pkg, cls, version: str) -> dict:
-    _, sections = parse(cls)
-    documented = documented_fields(cls)
-    # Only a literal is a default. A field set from an __init__ argument shows that argument's name instead.
-    enum = any("Enum" in text(b) for b in cls.bases)
-
-    def value(a):
-        return text(a.value) if LITERAL_VALUE.match(text(a.value)) else None
-
-    fields = [
-        {
-            "name": n,
-            "type": None if enum else text(a.annotation),
-            "default": None if enum else value(a),
-            "value": value(a) if enum else None,
-            "description": md(
-                a.docstring.value if a.docstring else documented.get(n, "")
-            ),
-        }
-        for n, a in cls.attributes.items()
-        if is_data(cls) and not n.startswith("_") and "property" not in a.labels
-    ]
+    rows = []
+    for n, a in cls.attributes.items():
+        if data and not n.startswith("_") and "property" not in a.labels:
+            # Only a literal is a default. A field set from an __init__ argument has none.
+            literal = text(a.value) if LITERAL_VALUE.match(text(a.value)) else ""
+            desc = md(a.docstring.value if a.docstring else documented.get(n, ""))
+            enum = "Enum" in bases
+            rows.append(
+                row(n, desc, value=literal)
+                if enum
+                else row(n, desc, text(a.annotation), literal)
+            )
     methods = [
-        entry(pkg, m, f"{cls.name}.{m.name}", version)
+        entry(m, f"{cls.name}.{m.name}", ref).render(4)
         for m in members(cls)
         if m.name != "__init__"
     ]
-    description = md("\n\n".join(s.value for s in sections if s.kind.value == "text"))
-    return {
-        "name": cls.name,
-        "description": description,
-        "fields": fields,
-        "methods": methods,
-        "source": source(cls, version),
-    }
+    desc = md("\n\n".join(s.value for s in parse(cls)[1] if s.kind.value == "text"))
+    if not (desc or rows or methods):
+        return ""
+    src = SOURCE.format(ref=ref, path=cls.relative_package_filepath, line=cls.lineno)
+    return "\n\n".join(
+        [
+            f"### `{cls.name}`",
+            *filter(None, [desc]),
+            *table("Fields", rows),
+            *methods,
+            src,
+        ]
+    )
 
 
-def configs(pkg) -> list[dict]:
-    out = []
-    for path, where in CONFIGS:
-        cls = get(pkg, path)
-        doc = cls.docstring.value if cls and cls.docstring else ""
-        for name, desc in re.findall(
-            r"^\s*- `(POSTHOG_[A-Z_]+)`: (.*?)(?=^\s*- `|^\s*$)", doc, re.M | re.S
-        ):
-            out.append(
-                {
-                    "name": name,
-                    "where": where,
-                    "description": md(" ".join(desc.split())),
-                }
-            )
-    return out
+def reference(pkg, caps: dict[str, str], ref: str) -> list[str]:
+    """Every capability, SDK utils, AsyncClient, module functions, configs and types."""
 
+    def methods(cls: str, prefix: str) -> list[Entry]:
+        names = {"__init__": "(...)"}
+        return [
+            entry(m, prefix + names.get(m.name, f".{m.name}"), ref)
+            for m in members(pkg[cls])
+        ]
 
-def page(pkg, version: str, major: int, status: str) -> dict:
-    refs: list[dict[str, Any]] = []
-    for title, path, prefix in REFERENCES:
-        cls = pkg[path]
-        refs.append(
-            {
-                "title": title,
-                "entries": [
-                    entry(
-                        pkg,
-                        m,
-                        f"{prefix}(...)"
-                        if m.name == "__init__"
-                        else f"{prefix}.{m.name}",
-                        version,
-                    )
-                    for m in members(cls)
-                ],
-            }
-        )
+    client, asyncs = (
+        methods("client.Client", "Client"),
+        methods("async_client.AsyncClient", "AsyncClient"),
+    )
     module = [
-        entry(pkg, m, f"posthog.{n}", version)
+        entry(m, f"posthog.{n}", ref)
         for n, m in pkg.members.items()
         if not m.is_alias and m.is_function and not n.startswith("_")
     ]
-    refs.append({"title": "Module functions", "entries": module})
     for group, paths in UTILS.items():
-        for path in paths:
-            if (obj := get(pkg, path)) is not None:
-                refs[0]["entries"].append(
-                    entry(pkg, obj, f"posthog.{path}", version, group)
-                )
+        for obj, path in [(get(pkg, p), p) for p in paths]:
+            if obj is not None:
+                client.append(entry(obj, f"posthog.{path}", ref, group))
                 if obj.is_class:
-                    refs[0]["entries"] += [
-                        entry(pkg, m, f"{obj.name}.{m.name}", version, group)
+                    client += [
+                        entry(m, f"{obj.name}.{m.name}", ref, group)
                         for m in members(obj)
                         if m.name != "__init__"
                     ]
@@ -428,94 +399,125 @@ def page(pkg, version: str, major: int, status: str) -> dict:
                 if not n.startswith("_") and n[0].isupper()
             )
             summary = md(mod.docstring.value.split("\n\n")[0]) if mod.docstring else ""
-            refs[0]["entries"].append(
-                {
-                    "qualname": f"posthog.ai.{name}",
-                    "group": "AI wrapper clients",
-                    "availableIn": available_in(f"ai.{name}"),
-                    "description": " ".join(
-                        filter(None, [summary, f"Exports {names}."])
-                    ),
-                }
+            where = available_in(f"ai.{name}")
+            body = [
+                where and f"**Available in:** {where}",
+                " ".join(filter(None, [summary, f"Exports {names}."])),
+            ]
+            client.append(
+                Entry(
+                    None,
+                    "AI wrapper clients",
+                    f"posthog.ai.{name}",
+                    [b for b in body if b],
+                )
             )
-    # Newest guide first, so the migration page opens on the latest upgrade.
-    migrations = sorted((ROOT / "docs").glob("migration-*.md"), reverse=True)
-    return {
-        "sdk": "python",
-        "title": "PostHog Python SDK",
-        "version": version,
-        "major": major,
-        "status": status,
-        "language": "python",
-        "gettingStarted": (ROOT / "docs/getting-started.md").read_text(),
-        "references": refs,
-        "configs": configs(pkg),
-        "types": [type_info(pkg, c, version) for p in TYPES if (c := get(pkg, p))],
-        "migrations": [m.read_text() for m in migrations],
-    }
+    if unknown := {e.slug for e in client + asyncs + module if e.slug} - caps.keys():
+        raise SystemExit(
+            f"posthog-capability tags sdk-specs doesn't define: {sorted(unknown)}"
+        )
+
+    # Each capability is titled as in sdk-specs, so its heading's anchor is the capability's slug.
+    out = []
+    for slug, title in caps.items():
+        if tagged := [e for e in client if e.slug == slug]:
+            out += [f"## {title}", *(e.render(3) for e in tagged)]
+    if utils := [e for e in client if not e.slug]:
+        out.append("## SDK utils")
+        for group in dict.fromkeys(e.group or "Other" for e in utils):
+            out += [
+                f"### {group}",
+                *(e.render(4) for e in utils if (e.group or "Other") == group),
+            ]
+    for title, entries in (("AsyncClient", asyncs), ("Module functions", module)):
+        ordered = sorted(
+            entries, key=lambda e: list(caps).index(e.slug) if e.slug else len(caps)
+        )
+        out += [f"## {title}", *(e.render(3) for e in ordered)]
+    settings = []
+    for path, where in CONFIGS:
+        cls = get(pkg, path)
+        doc = cls.docstring.value if cls and cls.docstring else ""
+        settings += [
+            row(n, md(" ".join(d.split())), where=where)
+            for n, d in SETTING.findall(doc)
+        ]
+    if settings:
+        out += ["## Configs", *table("Settings", settings)]
+    if types := [
+        t for t in (type_block(pkg[p], ref) for p in TYPES if get(pkg, p)) if t
+    ]:
+        out += ["## Types", *types]
+    return out
+
+
+def capabilities(checkout: str) -> dict[str, str]:
+    """Each sdk-specs capability's slug and title in sentence case, in the README's order."""
+    caps = {}
+    for name, slug in CAPABILITY_ROW.findall(
+        (Path(checkout) / "README.md").read_text()
+    ):
+        words = [
+            ACRONYMS.get(w.lower(), w if w.isupper() and len(w) > 1 else w.lower())
+            for w in name.split()
+        ]
+        title = " ".join(words)
+        caps[slug] = title[0].upper() + title[1:]
+    return caps
+
+
+def nest(markdown: str, drop_title: bool = True) -> str:
+    """Moves each heading down one level, dropping the H1 when asked. Code stays as written."""
+    out, in_fence = [], False
+    for line in markdown.strip().split("\n"):
+        in_fence ^= bool(re.match(r"\s*(```|~~~)", line))
+        if in_fence or not re.match(r"#{1,5} ", line):
+            out.append(line)
+        elif not (drop_title and line.startswith("# ")):
+            out.append("#" + line)
+    return "\n".join(out).lstrip("\n")
+
+
+def write(name: str, sections: list[str]) -> None:
+    (ROOT / "references" / name).write_text("\n\n".join(sections) + "\n")
+    print(f"wrote references/{name}")
 
 
 def main() -> None:
-    args = argparse.ArgumentParser()
+    args = argparse.ArgumentParser(description="Generate the SDK reference Markdown.")
+    args.add_argument("--sdk-specs", required=True, help="PostHog/sdk-specs checkout")
     args.add_argument(
-        "--sdk-specs",
-        required=True,
-        help="Checkout of PostHog/sdk-specs to take capabilities from",
+        "--major", type=int, help="target major, defaults to the declared one"
     )
     args.add_argument(
-        "--renderer", default=str(Path(__file__).resolve().parent / "render.mjs")
-    )
-    args.add_argument(
-        "--major",
-        type=int,
-        help="Major this branch targets, defaults to the declared version's major",
-    )
-    args.add_argument(
-        "--source-ref",
-        help="Git ref for source links, defaults to the release tag v<version>",
+        "--source-ref", help="git ref for source links, defaults to the tag"
     )
     opts = args.parse_args()
     logging.getLogger("griffe").setLevel(logging.ERROR)
-    check_extras()
-    pkg = griffe.load(
-        "posthog",
-        search_paths=[str(ROOT)],
-        docstring_parser="google",
-        resolve_aliases=False,
-    )
-    found = re.search(r'VERSION = "([^"]+)"', (ROOT / "posthog/version.py").read_text())
-    if found is None:
-        raise SystemExit("posthog/version.py has no VERSION")
-    declared = found.group(1)
+    pkg = griffe.load("posthog", search_paths=[str(ROOT)], resolve_aliases=False)
+    declared = (ROOT / "posthog/version.py").read_text().split('"')[1]
     major = opts.major or int(declared.split(".")[0])
-    # A branch that targets a newer major than it has released documents an experimental reference.
+    # A branch that targets a newer major than it has released documents an experimental one.
     status = "current" if int(declared.split(".")[0]) >= major else "experimental"
     version = declared if status == "current" else "unreleased"
-    global SOURCE
-    SOURCE = SOURCE.replace("v{version}", opts.source_ref or "v{version}")
-    data = page(pkg, version, major, status)
-    outputs = {
-        f"posthog-python-{data['major']}.md": [],
-        "posthog-python-migration.md": ["--migration"],
-    }
-    with (
-        tempfile.NamedTemporaryFile("w", suffix=".json") as f,
-        tempfile.NamedTemporaryFile("w", suffix=".json") as caps,
-    ):
-        json.dump(data, f)
-        json.dump(sdk_specs.capabilities(opts.sdk_specs), caps)
-        f.flush()
-        caps.flush()
-        for name, flag in outputs.items():
-            md = subprocess.run(
-                ["node", opts.renderer, f.name, caps.name, *flag],
-                check=True,
-                capture_output=True,
-                text=True,
-            ).stdout
-            if md:
-                (ROOT / "references" / name).write_text(md)
-                print(f"wrote references/{name}")
+    ref = opts.source_ref or f"v{version}"
+    started = nest((ROOT / "docs/getting-started.md").read_text())
+    reference_md = reference(pkg, capabilities(opts.sdk_specs), ref)
+    write(
+        f"posthog-python-{major}.md",
+        [
+            PAGE.format(version, major, status),
+            "## Getting started",
+            started,
+            *reference_md,
+        ],
+    )
+    # Newest guide first, so the migration page opens on the latest upgrade.
+    if guides := sorted((ROOT / "docs").glob("migration-*.md"), reverse=True):
+        write(
+            "posthog-python-migration.md",
+            [GUIDES, *(nest(g.read_text(), drop_title=False) for g in guides)],
+        )
 
 
 if __name__ == "__main__":
