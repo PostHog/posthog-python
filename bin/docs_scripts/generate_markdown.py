@@ -18,10 +18,7 @@ import griffe
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE = "[Source](https://github.com/PostHog/posthog-python/blob/{ref}/{path}#L{line})"
-PAGE = "---\ntitle: PostHog Python SDK\nsdk: python\nversion: {}\nmajor: {}\nstatus: {}\n---"
-GUIDES = (
-    "---\ntitle: PostHog Python SDK migration guides\nsdk: python\nkind: migration\n---"
-)
+GUIDES = "---\ntitle: PostHog Python SDK migration guides\nsidebar: Docs\nshowTitle: true\n---"
 TYPES = """args.OptionalCaptureArgs args.OptionalSetArgs feature_flag_evaluations.FeatureFlagEvaluations
 types.FeatureFlagResult types.FeatureFlag types.FlagsAndPayloads types.FeatureFlagEvaluationRuntime
 types.UnresolvedFlagReason flag_definition_cache.FlagDefinitionCacheProvider flag_definition_cache.FlagDefinitionCacheData
@@ -478,6 +475,27 @@ def nest(markdown: str, drop_title: bool = True) -> str:
     return "\n".join(out).lstrip("\n")
 
 
+def front_matter(title: str, sections: list[str], noindex: bool = False) -> str:
+    """The docs site's front matter. Its ToC lists the page's H2 sections only."""
+    toc = []
+    for heading in [s[3:] for s in sections if s.startswith("## ")]:
+        anchor = re.sub(r"[^\w\- ]", "", heading.lower()).replace(" ", "-")
+        toc.append(f'  - value: "{heading}"\n    url: {anchor}\n    depth: 0')
+    head = [
+        f'title: "{title}"',
+        "sidebar: Docs",
+        "showTitle: true",
+        "contentMaxWidthClass: max-w-full",
+    ]
+    head += [
+        "platformLogo: python",
+        *["noindex: true"] * noindex,
+        "tableOfContents:",
+        *toc,
+    ]
+    return "\n".join(["---", *head, "---"])
+
+
 def write(name: str, sections: list[str]) -> None:
     (ROOT / "references" / name).write_text("\n\n".join(sections) + "\n")
     print(f"wrote references/{name}")
@@ -503,15 +521,19 @@ def main() -> None:
     ref = opts.source_ref or f"v{version}"
     started = nest((ROOT / "docs/getting-started.md").read_text())
     reference_md = reference(pkg, capabilities(opts.sdk_specs), ref)
-    write(
-        f"posthog-python-{major}.md",
-        [
-            PAGE.format(version, major, status),
-            "## Getting started",
-            started,
-            *reference_md,
-        ],
+    body = ["## Getting started", started, *reference_md]
+    # Each major gets its own page. The current one is also the latest reference.
+    title = f"PostHog Python SDK {major}.x" + (
+        "" if status == "current" else " (experimental)"
     )
+    write(
+        f"posthog-python-{major}.md", [front_matter(title, body, noindex=True), *body]
+    )
+    if status == "current":
+        write(
+            "posthog-python-reference.md",
+            [front_matter("PostHog Python SDK", body), *body],
+        )
     # Newest guide first, so the migration page opens on the latest upgrade.
     if guides := sorted((ROOT / "docs").glob("migration-*.md"), reverse=True):
         write(
