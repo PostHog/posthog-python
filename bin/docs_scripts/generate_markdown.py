@@ -50,6 +50,8 @@ def entry(obj, name: str) -> str:
     md = griffe2md.render_object_docs(obj, CONFIG)
     # Annotation links point at anchors this page doesn't have.
     md = re.sub(r"\[([^\]]+)\]\(#[\w.]+\)", r"\1", md)
+    # The site reads Markdown as MDX 1: HTML must be JSX, and braces in <code> are expressions.
+    md = re.sub(r"<code>(.*?)</code>", r"`\1`", md.replace("<br>", "<br />"))
     # A parameter documented only in the docstring, like a **kwargs key, isn't required.
     md = re.sub(r"^(`\w+` \|  \| .*) \| \*required\*$", r"\1 | ", md, flags=re.M)
     return re.sub(r"^### .*$", f"### `{name}`", md.strip(), count=1, flags=re.M)
