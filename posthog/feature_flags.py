@@ -492,6 +492,17 @@ def match_feature_flag_properties(
 
     flag_filters = flag.get("filters") or {}
 
+    if flag_filters.get("feature_enrollment"):
+        enrollment_key = f"$feature_enrollment/{flag.get('key')}"
+        if enrollment_key not in properties:
+            raise InconclusiveMatchError(
+                f"Flag has feature enrollment and '{enrollment_key}' was not passed",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
+            )
+        return (
+            properties[enrollment_key] is True or properties[enrollment_key] == "true"
+        )
+
     # Holdouts are evaluated before release conditions, so a held-out value is excluded
     # from the flag's targeting entirely rather than being bucketed into a variant.
     holdout_variant = _get_holdout_variant(flag, bucketing_value)
