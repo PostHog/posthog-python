@@ -1,8 +1,9 @@
 """Split the MCP test suite by installed MCP SDK major.
 
 The suite runs against both majors in CI — the ``tests-mcp`` matrix has a
-``mcp>=1.26,<2`` leg and a ``mcp>=2,<3`` leg (the main ``tests`` matrix also
-exercises the v1 side incidentally). Files coupled to one
+``mcp>=1.26,<2`` leg and two ``mcp>=2,<3`` legs, with and without standalone
+FastMCP 4 (the main ``tests`` matrix also exercises the v1 side incidentally).
+Files coupled to one
 major's seams import symbols the other major doesn't ship, so they are excluded
 from *collection* (a skip marker can't help — the failure is at import time).
 Version-agnostic files (units, truncation, session tokens, PostHogMCP, ids)

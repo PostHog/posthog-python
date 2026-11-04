@@ -97,6 +97,7 @@ def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
         "disable_geoip",
         "historical_migration",
     } <= set(capabilities)
+    assert "flags_response_v4" in capabilities
     assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
     assert [c for c in capabilities if c.startswith("encoding_")] == [

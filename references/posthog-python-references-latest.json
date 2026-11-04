@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.82.2",
+    "version": "7.83.1",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -83,7 +83,7 @@
       "properties": [
         {
           "name": "id",
-          "type": "int",
+          "type": "Optional[int]",
           "description": "Field: id"
         },
         {
@@ -93,7 +93,7 @@
         },
         {
           "name": "version",
-          "type": "int",
+          "type": "Optional[int]",
           "description": "Field: version"
         },
         {

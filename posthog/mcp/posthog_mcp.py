@@ -771,10 +771,10 @@ class PostHogMCP(Client):
         if self._is_sdk_virtual_tool(tool):
             return tool
         new_schema = add_context_parameter_to_schema(
-            getattr(tool, "inputSchema", None), name, description
+            _tool_schema(tool), name, description
         )
         try:
-            tool.inputSchema = new_schema
+            _set_tool_schema(tool, new_schema)
         except Exception:  # noqa: BLE001
             pass
         return tool
