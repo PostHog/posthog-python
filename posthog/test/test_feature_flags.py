@@ -1197,6 +1197,13 @@ class TestLocalEvaluation(unittest.TestCase):
             ("enrollment not passed", {}, 0, "flags-fallback-value", 1),
             ("enrolled", {"$feature_enrollment/beta-feature": "true"}, 0, True, 0),
             ("opted out", {"$feature_enrollment/beta-feature": False}, 100, False, 0),
+            (
+                "not a true value",
+                {"$feature_enrollment/beta-feature": 1},
+                100,
+                False,
+                0,
+            ),
         ]
     )
     def test_feature_enrollment_flag(
