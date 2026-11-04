@@ -5,6 +5,7 @@ from typing import (
     Any,
     Dict,
     FrozenSet,
+    List,
     Mapping,
     NamedTuple,
     Union,
@@ -70,6 +71,9 @@ class OptionalCaptureArgs(TypedDict):
     _pinned_properties: NotRequired[
         Optional["_PinnedProperties"]
     ]  # Internal: properties fixed after super properties are merged. Used by config version 2 flag events.
+    _before_send_drops: NotRequired[
+        Optional[List[str]]
+    ]  # Internal: gets the event name when before_send drops the event. Used by flag event dedupe.
 
 
 class _PinnedProperties(NamedTuple):

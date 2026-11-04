@@ -1420,18 +1420,25 @@ def _dropping(event: str) -> Callable[[Dict[str, Any]], Optional[Dict[str, Any]]
     return before_send
 
 
-def _raising_once(client: Client, event: str) -> Any:
-    """Patch ``client.capture`` to raise for the first ``event``, then capture as usual."""
-    capture = client.capture
-    raised: List[str] = []
+def _failing_once(client: Client, event: str, failure: str) -> Any:
+    """Patch ``client.capture`` to fail for the first ``event``, then capture as usual.
 
-    def maybe_raise(name: str, **kwargs: Any) -> Optional[str]:
-        if name == event and not raised:
-            raised.append(name)
-            raise RuntimeError("capture failed")
+    ``failure`` is ``"raise"`` for a raising capture, or ``"unqueued"`` for a capture
+    that returns ``None`` without ``before_send`` dropping the event, as a full or
+    closed queue, opt-out or a disabled client does.
+    """
+    capture = client.capture
+    failed: List[str] = []
+
+    def maybe_fail(name: str, **kwargs: Any) -> Optional[str]:
+        if name == event and not failed:
+            failed.append(name)
+            if failure == "raise":
+                raise RuntimeError("capture failed")
+            return None
         return capture(name, **kwargs)
 
-    return mock.patch.object(client, "capture", side_effect=maybe_raise)
+    return mock.patch.object(client, "capture", side_effect=maybe_fail)
 
 
 def _sent(client: Client, path: str, reads: int = 2) -> List[str]:
@@ -1456,40 +1463,79 @@ def _sent(client: Client, path: str, reads: int = 2) -> List[str]:
 
 @pytest.mark.parametrize("path", ["get_feature_flag", "snapshot.get_flag"])
 @pytest.mark.parametrize("event", [FLAG_CALLED, EXPOSURE])
-def test_a_dropped_capture_keeps_no_dedupe_key(event, path):
+def test_an_event_dropped_by_before_send_keeps_its_dedupe_key(event, path):
     client = Client(FAKE_TEST_API_KEY, send=False, before_send=_dropping(event))
     try:
         sent = _sent(client, path)
     finally:
         client.shutdown()
 
-    # The other event of the first read is still sent, and the dropped one is sent
-    # again by the second read, once.
-    assert sorted(sent) == sorted([FLAG_CALLED, EXPOSURE])
+    # The application dropped the event, so the second read does not send it again.
+    # The other event of the first read is still sent, once.
+    assert sent == [EXPOSURE if event == FLAG_CALLED else FLAG_CALLED]
+
+
+async def test_async_an_event_dropped_by_before_send_keeps_its_dedupe_key():
+    seen: List[str] = []
+    batches: List[Any] = []
+
+    def before_send(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        seen.append(message["event"])
+        return None if message["event"] == EXPOSURE else message
+
+    async def batch_post(*args: Any, **kwargs: Any) -> None:
+        batches.append(kwargs["batch"])
+
+    with (
+        mock.patch(
+            "posthog.async_client._async_flags",
+            new=mock.AsyncMock(return_value=_response(_split())),
+        ),
+        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+    ):
+        client = AsyncPosthog("project-key", before_send=before_send, flush_interval=30)
+        for _ in range(2):
+            snapshot = await client.evaluate_flags(DISTINCT_ID)
+            assert snapshot.get_flag(FLAG) == "annual"
+            await client.flush(timeout_seconds=1)
+        await client.shutdown()
+
+    # before_send saw each event once: the dropped exposure kept its key, so the
+    # second read sent neither event again.
+    assert seen == [FLAG_CALLED, EXPOSURE]
+    sent = [event["event"] for batch in batches for event in batch]
+    assert sent == [FLAG_CALLED]
 
 
 @pytest.mark.parametrize("path", ["get_feature_flag", "snapshot.get_flag"])
 @pytest.mark.parametrize("event", [FLAG_CALLED, EXPOSURE])
-def test_a_raising_capture_keeps_no_dedupe_key(event, path, client):
-    with _raising_once(client, event):
+@pytest.mark.parametrize("failure", ["raise", "unqueued"])
+def test_a_failed_capture_keeps_no_dedupe_key(failure, event, path, client):
+    with _failing_once(client, event, failure):
         sent = _sent(client, path)
 
+    # The other event of the first read is still sent, and the failed one is sent
+    # by the second read, once.
     assert sorted(sent) == sorted([FLAG_CALLED, EXPOSURE])
 
 
-def test_a_dropped_config_version_1_call_is_deduped_as_before():
-    client = Client(FAKE_TEST_API_KEY, send=False, before_send=_dropping(FLAG_CALLED))
-    recording, events = _record_events(client)
+def test_an_unqueued_config_version_1_call_is_deduped_as_before(client):
     record = _record("condition_match", "annual", config_version=1)
-    try:
-        with _serving(_response(record)), recording:
-            _read(client, "get_feature_flag")
-            _read(client, "get_feature_flag")
-    finally:
-        client.shutdown()
+    calls: List[str] = []
+
+    def unqueued(name: str, **kwargs: Any) -> None:
+        calls.append(name)
+        return None
+
+    with (
+        _serving(_response(record)),
+        mock.patch.object(client, "capture", side_effect=unqueued),
+    ):
+        _read(client, "get_feature_flag")
+        _read(client, "get_feature_flag")
 
     # Config version 1 dedupe is unchanged: the attempt takes the key.
-    assert [event.name for event in events] == [FLAG_CALLED]
+    assert calls == [FLAG_CALLED]
 
 
 def test_a_flags_reload_does_not_repeat_an_exposure(client):

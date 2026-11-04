@@ -551,16 +551,21 @@ def _capture_once(
     event: str,
     **kwargs: Any,
 ) -> None:
-    """Capture one flag event and keep its dedupe key only if capture accepted it.
+    """Capture one flag event and keep its dedupe key unless capture failed.
 
     The key is reserved before the capture, so concurrent reads do not send the
-    same event twice, and released again when capture drops the event (returns
-    ``None``, for example from ``before_send`` or a closed queue) or raises. A
-    failure is logged and never reaches the read.
+    same event twice. It is released when capture raises, or returns ``None``
+    because the event could not be queued (a full or closed queue, opt-out or a
+    disabled client), so a later read tries again. An event that ``before_send``
+    drops keeps its key: the application chose to drop it, and every later read
+    would be dropped the same way. A failure is logged and never reaches the read.
     """
     reported.add(dedupe_key)
+    before_send_drops: List[str] = []
     try:
-        accepted = capture(event, **kwargs) is not None
+        accepted = capture(
+            event, _before_send_drops=before_send_drops, **kwargs
+        ) is not None or bool(before_send_drops)
     except Exception:
         _flag_events_log.exception("[FEATURE FLAGS] Failed to capture %s", event)
         accepted = False
@@ -619,9 +624,9 @@ def _capture_flag_events(
     per distinct ID, groups, flag, rule and variant. It has its own dedupe, so a
     ``$feature_flag_called`` already reported never suppresses it.
 
-    Both config version 2 events are attempted independently: a failed or dropped
-    capture of one does not stop the other, and keeps no dedupe key, so a later read
-    tries again. Their attribution is pinned after super properties are merged, so
+    Both config version 2 events are attempted independently: a failed capture of
+    one does not stop the other, and keeps no dedupe key, so a later read tries
+    again. An event that ``before_send`` drops keeps its key. Their attribution is pinned after super properties are merged, so
     a super property can neither change it nor add a field the event never carries.
     Config version 1 events are sent and deduped as before.
     """
@@ -2204,6 +2209,7 @@ class Client(object):
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
         pinned_properties = kwargs.get("_pinned_properties", None)
+        before_send_drops = kwargs.get("_before_send_drops", None)
 
         properties = {**(properties or {}), **system_context()}
 
@@ -2326,6 +2332,7 @@ class Client(object):
             lane,
             property_allowlist=property_allowlist,
             pinned_properties=pinned_properties,
+            before_send_drops=before_send_drops,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2941,6 +2948,7 @@ class Client(object):
         lane=None,
         property_allowlist=None,
         pinned_properties=None,
+        before_send_drops=None,
     ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
@@ -3012,6 +3020,8 @@ class Client(object):
                 modified_msg = self.before_send(msg)
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
+                    if before_send_drops is not None:
+                        before_send_drops.append(msg["event"])
                     return None
                 if not isinstance(modified_msg, dict):
                     raise TypeError("before_send must return a dict or None")
