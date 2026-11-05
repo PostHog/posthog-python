@@ -436,6 +436,39 @@ def _merge_openai_system_prompt(
     return messages
 
 
+# https://docs.anthropic.com/en/api/errors
+_ANTHROPIC_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "billing_error": 402,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
+}
+
+
+def _stream_error_event_status(exc: BaseException, status: int) -> int:
+    """Status of an error that arrived as an `error` event inside a stream.
+
+    Anthropic sends errors that happen after a stream starts (such as
+    overloaded_error) as an SSE `error` event, and its SDK raises them with the
+    stream's own 200 status. Use the status that the error type stands for, or
+    0 when it is unknown, so the event is not recorded as a 200.
+    """
+    if status < 400:
+        body = getattr(exc, "body", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        error_type = error.get("type") if isinstance(error, dict) else None
+        if isinstance(error_type, str):
+            return _ANTHROPIC_ERROR_TYPE_STATUS.get(error_type, 0)
+        return 0
+    return status
+
+
 def _get_http_status(exc: BaseException) -> int:
     """HTTP status of an SDK exception, 0 when it has none.
 
@@ -444,7 +477,7 @@ def _get_http_status(exc: BaseException) -> int:
     """
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
-        return status
+        return _stream_error_event_status(exc, status)
     code = getattr(exc, "code", None)
     if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:
         return code
