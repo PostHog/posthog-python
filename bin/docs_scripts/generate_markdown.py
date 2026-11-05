@@ -1,12 +1,14 @@
 """Generate the SDK reference Markdown from source with griffe2md, which never imports the SDK.
 
-A `posthog-capability: <slug>` docstring line puts a symbol under that PostHog/sdk-specs
-capability, in the sdk-specs README's order. Untagged symbols go to SDK utils.
+docs/capabilities.json maps each entry's label to a PostHog/sdk-specs capability, shown in
+the sdk-specs README's order. Its `utils` lists the Client members that go to SDK utils, and
+its `next` maps labels that only the next major has.
 
     python bin/docs_scripts/generate_markdown.py --sdk-specs DIR [--major 8]
 """
 
 import argparse
+import json
 import logging
 import re
 from pathlib import Path
@@ -23,7 +25,6 @@ UTILS = """integrations.django.PosthogContextMiddleware integrations.flask.Posth
 integrations.asgi.PosthogASGIMiddleware integrations.celery.PosthogCeleryIntegration
 request.set_socket_options request.enable_keep_alive request.disable_connection_reuse""".split()
 FIRST = ["setup", "capture", "identify"]
-TAG = re.compile(r"^[ \t]*posthog-capability:[ \t]*([a-z0-9-]+)[ \t]*$\n?", re.M)
 ROLE = re.compile(
     r":(?:py:)?(?:meth|func|class|attr|obj|data|exc|mod|const):`~?([^`]+)`"
 )
@@ -37,14 +38,14 @@ CONFIG = {
 }
 
 
-def tag(obj) -> str | None:
-    """The capability tag. It and any Sphinx roles are stripped from the docstrings rendered."""
-    found = TAG.search(obj.docstring.value) if obj.docstring else None
+def clean(obj) -> None:
+    """Strips Sphinx roles, and the Category section the JSON docs read, from the docstrings."""
     for o in [obj, *(m for m in obj.members.values() if not m.is_alias)]:
         if o.docstring:
-            text = ROLE.sub(r"`\1`", TAG.sub("", o.docstring.value))
+            text = ROLE.sub(r"`\1`", o.docstring.value)
+            head, _, tail = text.partition("\nCategory:\n")
+            text = head.rstrip() + "".join(f"\n{t}" for t in tail.split("\n")[1:])
             o.docstring.value = re.sub(r"(?<!`)``([^`]+)``(?!`)", r"`\1`", text)
-    return found.group(1) if found else None
 
 
 def signature(name, function, *_, **__) -> str:
@@ -109,21 +110,43 @@ def has(pkg, path: str) -> bool:
         return False
 
 
-def reference(pkg, caps: dict[str, str]) -> list[str]:
+def reference(pkg, caps: dict[str, str], current: bool) -> list[str]:
+    """`current` is false for a next major, which can remove what the map names."""
     order = {slug: i for i, slug in enumerate(caps)}
     utils, types = ([pkg[p] for p in paths if has(pkg, p)] for paths in (UTILS, TYPES))
-    client = [(tag(m), m) for m in methods(pkg["client.Client"])]
-    asyncs = sorted(
-        ((tag(m), m) for m in methods(pkg["async_client.AsyncClient"])),
-        key=lambda e: order.get(e[0] or "", len(order)),
-    )
     module = [
         m
         for n, m in pkg.members.items()
         if not m.is_alias and m.is_function and not n.startswith("_")
     ]
-    for obj in [*module, *utils, *types]:
-        tag(obj)
+    sync, asyncs = (
+        methods(pkg["client.Client"]),
+        methods(pkg["async_client.AsyncClient"]),
+    )
+    found = {label("Client", m) for m in sync} | {
+        label("AsyncClient", m) for m in asyncs
+    }
+    found |= {f"posthog.{m.name}" for m in module}
+    for obj in [*sync, *asyncs, *module, *utils, *types]:
+        clean(obj)
+    data = json.loads((ROOT / "docs/capabilities.json").read_text())
+    utils_names, later = set(data.pop("utils")), data.pop("next", {})
+    mapped = {**later, **data}
+    for name, slug in mapped.items():
+        if current and name not in found and name not in later:
+            raise SystemExit(f"docs/capabilities.json: no symbol for {name}")
+        if slug not in caps:
+            raise SystemExit(
+                f"docs/capabilities.json: {name}: {slug} isn't in sdk-specs"
+            )
+    for name in sorted(found - mapped.keys() - utils_names):
+        if name.startswith("Client"):
+            raise SystemExit(f"docs/capabilities.json: map {name} or add it to utils")
+    client = [(mapped.get(label("Client", m)), m) for m in sync]
+    asyncs = sorted(
+        ((mapped.get(label("AsyncClient", m)), m) for m in asyncs),
+        key=lambda e: order.get(e[0] or "", len(order)),
+    )
     out = []
     for slug, title in caps.items():
         if tagged := [m for t, m in client if t == slug]:
@@ -191,7 +214,7 @@ def main() -> None:
     body = [
         "## Getting started",
         started,
-        *reference(pkg, capabilities(opts.sdk_specs)),
+        *reference(pkg, capabilities(opts.sdk_specs), declared >= major),
     ]
     title = f"PostHog Python SDK {major}.x" + (
         "" if declared >= major else " (experimental)"

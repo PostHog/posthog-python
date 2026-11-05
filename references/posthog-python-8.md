@@ -985,13 +985,6 @@ with client.new_context():
     client.capture('event_name')
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `Client.scoped`
 
 ```python
@@ -1006,13 +999,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `fresh` |  | Whether to create a fresh context that doesn't inherit from parent. | `False`
 `capture_exceptions` | `Optional[bool]` | Whether to automatically capture exceptions in this context. If omitted, defaults to this client's exception autocapture setting. | `None`
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `Client.tag`
 
@@ -1029,13 +1015,6 @@ Name | Type | Description | Default
 `name` | `str` | The tag key. | *required*
 `value` | `Any` | The tag value. | *required*
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `Client.get_tags`
 
 ```python
@@ -1049,13 +1028,6 @@ Get all tags from the current context.
 Type | Description
 ---- | -----------
 `Dict[str, Any]` | Dict of all tags in the current context.
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `Client.set_context_option`
 
@@ -1077,13 +1049,6 @@ Name | Type | Description | Default
 `key` | `str` | The option name, such as `"process_person_profile"`. | *required*
 `value` | `Any` | The option value, sent as given. | *required*
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `Client.get_context_options`
 
 ```python
@@ -1097,13 +1062,6 @@ Get all capture options from the current context.
 Type | Description
 ---- | -----------
 `Dict[str, Any]` | Dict of all capture options in the current context.
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `Client.identify_context`
 
@@ -1119,13 +1077,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `distinct_id` | `str` | The distinct ID to associate with the current context and its children. | *required*
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `Client.set_context_session`
 
 ```python
@@ -1140,13 +1091,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `session_id` | `str` | The session ID to associate with the current context and its children. | *required*
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `Client.set_context_device_id`
 
 ```python
@@ -1160,13 +1104,6 @@ Set the device ID for the current context.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `device_id` | `str` | The device ID to associate with the current context and its children. | *required*
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `Client.feature_flags`
 
@@ -1202,13 +1139,6 @@ Name | Type | Description | Default
 payloads = posthog.get_feature_payloads('<distinct_id>')
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
-
 ### `Client.get_flags_decision`
 
 ```python
@@ -1234,13 +1164,6 @@ Name | Type | Description | Default
 ```python
 decision = posthog.get_flags_decision('user123')
 ```
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
 
 ### `Client.metrics`
 
@@ -1294,13 +1217,6 @@ Requires `secret_key` for authentication.
 
 </details>
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
-
 ### `Client.get_feature_flag_evaluation_runtime`
 
 ```python
@@ -1333,13 +1249,6 @@ runtime = posthog.get_feature_flag_evaluation_runtime("my-flag")
 if runtime is FeatureFlagEvaluationRuntime.SERVER:
     ...
 ```
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
 
 ### `Client.get_feature_flag_keys_by_evaluation_runtime`
 
@@ -1376,13 +1285,6 @@ client_keys = posthog.get_feature_flag_keys_by_evaluation_runtime(
     FeatureFlagEvaluationRuntime.CLIENT
 )
 ```
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
 
 ### `posthog.integrations.django.PosthogContextMiddleware`
 
@@ -2121,13 +2023,6 @@ with new_context():
     capture("event_name", properties={"property": "value"})
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.scoped`
 
 ```python
@@ -2153,13 +2048,6 @@ def process_payment(payment_id):
     capture("payment_started")
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.set_context_session`
 
 ```python
@@ -2180,13 +2068,6 @@ Name | Type | Description | Default
 from posthog import set_context_session
 set_context_session("session_123")
 ```
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.set_context_device_id`
 
@@ -2210,13 +2091,6 @@ from posthog import set_context_device_id
 set_context_device_id("device_123")
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.identify_context`
 
 ```python
@@ -2238,13 +2112,6 @@ from posthog import identify_context
 identify_context("user_123")
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Identification
-
-</details>
-
 ### `posthog.set_capture_exception_code_variables_context`
 
 ```python
@@ -2258,13 +2125,6 @@ Override code-variable capture for exceptions in the current context.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `enabled` | `bool` | Whether exceptions captured in this context should include local variable values from stack frames. | *required*
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.set_code_variables_mask_patterns_context`
 
@@ -2280,13 +2140,6 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `mask_patterns` | `list[str]` | Variable-name patterns whose values should be replaced with `***` when code variables are captured. | *required*
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.set_code_variables_ignore_patterns_context`
 
 ```python
@@ -2300,13 +2153,6 @@ Override code-variable ignore patterns for exceptions in the current context.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `ignore_patterns` | `list[str]` | Variable-name patterns that should be omitted entirely when code variables are captured. | *required*
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.set_code_variables_mask_url_credentials_context`
 
@@ -2326,13 +2172,6 @@ set_code_variables_detect_secrets_context(enabled: bool)
 Whether to apply entropy-based secret detection as a last-resort redaction of
 high-entropy values (API keys, tokens, strong passwords) in captured code
 variables for the current context.
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.tag`
 
@@ -2356,13 +2195,6 @@ from posthog import tag
 tag("user_id", "123")
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.get_tags`
 
 ```python
@@ -2376,13 +2208,6 @@ Get all tags from the current context.
 Type | Description
 ---- | -----------
 `Dict[str, Any]` | Dict of all tags in the current context
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.set_context_option`
 
@@ -2411,13 +2236,6 @@ with new_context():
     set_context_option("process_person_profile", False)
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
-
 ### `posthog.get_context_options`
 
 ```python
@@ -2431,13 +2249,6 @@ Get all capture options from the current context.
 Type | Description
 ---- | -----------
 `Dict[str, Any]` | Dict of all capture options in the current context
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Contexts
-
-</details>
 
 ### `posthog.capture`
 
@@ -3024,13 +2835,6 @@ from posthog import FeatureFlagEvaluationRuntime, get_feature_flag_evaluation_ru
 runtime = get_feature_flag_evaluation_runtime("my-flag")
 ```
 
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
-
 ### `posthog.get_feature_flag_keys_by_evaluation_runtime`
 
 ```python
@@ -3055,13 +2859,6 @@ frontend.
 from posthog import FeatureFlagEvaluationRuntime, get_feature_flag_keys_by_evaluation_runtime
 client_keys = get_feature_flag_keys_by_evaluation_runtime(FeatureFlagEvaluationRuntime.CLIENT)
 ```
-
-<details class="category" open markdown="1">
-<summary>Category</summary>
-
-Feature flags
-
-</details>
 
 ### `posthog.load_feature_flags`
 
