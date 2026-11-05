@@ -969,11 +969,12 @@ def _parse_usage_model(
     # Both cache_read and cache_write tokens should be subtracted since Anthropic's raw API
     # reports input_tokens as tokens NOT read from or used to create a cache.
     # For other providers (OpenAI, etc.), input_tokens already excludes cache tokens as expected.
-    # Match logic consistent with plugin-server: exact match on provider OR substring match on model
+    # Match logic consistent with plugin-server: exact match on provider, substring
+    # match on model, or a Claude model under another provider (e.g. Vertex AI)
     is_anthropic = False
     if provider and provider.lower() == "anthropic":
         is_anthropic = True
-    elif model and "anthropic" in model.lower():
+    elif model and ("anthropic" in model.lower() or model.lower().startswith("claude")):
         is_anthropic = True
 
     if is_anthropic and normalized_usage.input_tokens:
@@ -1047,12 +1048,15 @@ def _parse_usage(
                     if isinstance(response_metadata, dict)
                     else None
                 )
-                ollama_usage = getattr(
-                    message_chunk, "usage_metadata", None
-                )  # for Ollama
+                # LangChain's standard usage, which also covers Ollama
+                usage_metadata = getattr(message_chunk, "usage_metadata", None)
 
+                # Prefer the standard usage: its input_tokens include cache reads
+                # and writes, as the Anthropic subtraction in _parse_usage_model
+                # expects. ChatAnthropic also copies the raw API usage, whose
+                # input_tokens already exclude the cache, into response_metadata.
                 chunk_usage = (
-                    bedrock_anthropic_usage or bedrock_titan_usage or ollama_usage
+                    usage_metadata or bedrock_anthropic_usage or bedrock_titan_usage
                 )
                 if chunk_usage:
                     llm_usage = _parse_usage_model(chunk_usage, provider, model)
