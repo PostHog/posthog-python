@@ -685,7 +685,8 @@ def single_exception_from_error_tuple(
     # exception that was passed to capture without ever being raised.
     exception_value["mechanism"].setdefault(
         "synthetic",
-        tb is not None and getattr(exc_value, _SYNTHESIZED_TRACEBACK_ATTR, None) is tb,
+        tb is not None
+        and getattr(exc_value, _SYNTHESIZED_TRACEBACK_ID_ATTR, None) == id(tb),
     )
 
     is_exception_group = BaseExceptionGroup is not None and isinstance(
@@ -1051,7 +1052,7 @@ def exc_info_from_error(error):
     return exc_info
 
 
-_SYNTHESIZED_TRACEBACK_ATTR = "__posthog_synthesized_traceback"
+_SYNTHESIZED_TRACEBACK_ID_ATTR = "__posthog_synthesized_traceback_id"
 
 
 def _is_sdk_frame(frame):
@@ -1089,7 +1090,9 @@ def construct_artificial_traceback(e):
 
     if tb is not None:
         setattr(e, "__traceback__", tb)
-        setattr(e, _SYNTHESIZED_TRACEBACK_ATTR, tb)
+        # Keep the id, not the traceback: a traceback in the instance dict would
+        # make the exception impossible to pickle.
+        setattr(e, _SYNTHESIZED_TRACEBACK_ID_ATTR, id(tb))
 
 
 def _module_in_list(name, items):

@@ -1,3 +1,4 @@
+import pickle
 import subprocess
 import sys
 import threading
@@ -606,3 +607,29 @@ def test_client_capture_of_never_raised_exception_sends_synthetic_stack():
         assert "capture_exception" not in functions
     finally:
         client.shutdown()
+
+
+def test_never_raised_exception_stays_pickleable_after_capture():
+    from posthog.exception_utils import exc_info_from_error
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    restored = pickle.loads(pickle.dumps(error))
+
+    assert isinstance(restored, ValueError)
+    assert restored.args == ("never raised",)
+
+
+def test_never_raised_exception_is_not_synthetic_once_raised():
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    try:
+        raise error
+    except ValueError as raised:
+        exceptions = exceptions_from_error_tuple(exc_info_from_error(raised))
+
+    assert exceptions[0]["mechanism"]["synthetic"] is False
