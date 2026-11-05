@@ -123,7 +123,7 @@ In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [
 ### `Client(...)`
 
 ```python
-__init__(project_api_key: str, host: str = None, debug: str = False, max_queue_size: str = 10000, send: str = True, on_error: str = None, flush_at: str = 100, flush_interval: str = 5.0, gzip: str = False, max_retries: str = 3, sync_mode: str = False, timeout: float = 15, thread: float = 1, poll_interval: float = 30, personal_api_key: float = None, disabled: float = False, disable_geoip: float = True, is_server: float = True, historical_migration: float = False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: float = 1, super_properties: float = None, enable_exception_autocapture: float = False, log_captured_exceptions: float = False, project_root: float = None, privacy_mode: float = False, before_send: float = None, flag_fallback_cache_url: float = None, enable_local_evaluation: float = True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables: Optional[FlagDefinitionCacheProvider] = False, code_variables_mask_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_ignore_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_mask_url_credentials: Optional[FlagDefinitionCacheProvider] = None, code_variables_detect_secrets: Optional[FlagDefinitionCacheProvider] = None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting: list[str] | None = False, exception_autocapture_bucket_size: list[str] | None = ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate: list[str] | None = ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds: list[str] | None = ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key: Optional[Union[CaptureCompression, str]] = None, metrics: Optional[dict] = None, enable_full_ai_capture: Optional[dict] = False, capture_trace_context: Optional[dict] = False, _use_ai_lane: Optional[dict] = False, _enable_multimodal_capture: Optional[dict] = False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
+__init__(project_api_key: str, host: str = None, debug: str = False, max_queue_size: str = 10000, send: str = True, on_error: str = None, flush_at: str = 100, flush_interval: str = 5.0, gzip: str = False, max_retries: str = 3, sync_mode: str = False, timeout: float = 15, thread: float = 1, poll_interval: float = 30, personal_api_key: float = None, disabled: float = False, disable_geoip: float = True, is_server: float = True, historical_migration: float = False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: float = 1, super_properties: float = None, enable_exception_autocapture: float = False, log_captured_exceptions: float = False, project_root: float = None, privacy_mode: float = False, before_send: float = None, flag_fallback_cache_url: float = None, enable_local_evaluation: float = True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables: Optional[FlagDefinitionCacheProvider] = False, code_variables_mask_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_ignore_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_mask_url_credentials: Optional[FlagDefinitionCacheProvider] = None, code_variables_detect_secrets: Optional[FlagDefinitionCacheProvider] = None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting: list[str] | None = False, exception_autocapture_bucket_size: list[str] | None = ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate: list[str] | None = ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds: list[str] | None = ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key: Optional[Union[CaptureCompression, str]] = None, metrics: Optional[dict] = None, enable_full_ai_capture: Optional[dict] = False, capture_trace_context: Optional[dict] = False, _use_ai_lane: Optional[dict] = False, _enable_multimodal_capture: Optional[dict] = False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 ```
 
 Initialize a new PostHog client instance.
@@ -157,6 +157,7 @@ Name | Type | Description | Default
 `app_host` | `Optional[str]` | Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. | `None`
 `email_request_timeout_seconds` | `float` | Timeout in seconds for each email send request. Defaults to 15. | `15`
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
+`migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties merged into every captured event. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
@@ -450,10 +451,10 @@ except Exception as e:
 emails: Emails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope. Sends go to `app_host`, or to the PostHog Cloud app host of
 `host`. `email_request_timeout_seconds` and `email_request_max_retries`
 configure each send. A disabled or shut-down client sends nothing. See
@@ -1893,7 +1894,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-__init__(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error: bool = None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send: Optional[dict[str, Any]] = None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns: bool = None, code_variables_ignore_patterns: bool = None, code_variables_mask_url_credentials: bool = None, code_variables_detect_secrets: bool = None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
+__init__(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error: bool = None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send: Optional[dict[str, Any]] = None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns: bool = None, code_variables_ignore_patterns: bool = None, code_variables_mask_url_credentials: bool = None, code_variables_detect_secrets: bool = None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -1944,10 +1945,10 @@ Capture an exception. This method never raises, including in debug mode.
 emails: AsyncEmails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope, and `posthog[async]`. Sends go to `app_host`, or to the PostHog
 Cloud app host of `host`. `email_request_timeout_seconds` and
 `email_request_max_retries` configure each send. A disabled or shut-down
@@ -3831,12 +3832,12 @@ span.update_name(f"{request.method} {route.pattern}")
 ### `Emails`
 
 ```python
-Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None) -> None
+Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None) -> None
 ```
 
 Bases: `_EmailsBase`
 
-Sends transactional email from PostHog email templates.
+Sends transactional email from PostHog email templates or from content in your code.
 
 `host` is your PostHog app host. PostHog Cloud ingestion hosts map to the
 app host, so `us.i.posthog.com` sends to `us.posthog.com`. Any other
@@ -3846,7 +3847,8 @@ Each send retries network errors, rate limits and an unavailable service up
 to `max_retries` times, with the same idempotency key. Set
 `max_retries=0` when a job runner already retries the send. `timeout`
 is in seconds, per request. Pass `session` to send through your own
-`requests.Session`, for example a test double.
+`requests.Session`, for example a test double. `migrated_from`, such
+as `"resend"`, tells PostHog which provider your sends came from.
 
 **Functions:**
 
@@ -3854,7 +3856,7 @@ Name | Description
 ---- | -----------
 `close` | Close the HTTP connections this client opened. A `session` you passed in stays open.
 `get` | Read what happened to an email that `send` queued.
-`send` | Queue one email from a transactional email template.
+`send` | Queue one email, from a template in PostHog or from content in your code.
 
 **Attributes:**
 
@@ -3863,6 +3865,7 @@ Name | Type | Description
 `disabled` |  | 
 `host` |  | 
 `max_retries` |  | 
+`migrated_from` |  | 
 `secret_key` |  | 
 `timeout` |  | 
 
@@ -3928,6 +3931,12 @@ host = determine_app_host(host)
 max_retries = max_retries
 ```
 
+#### `posthog.emails.Emails.migrated_from`
+
+```python
+migrated_from = migrated_from
+```
+
 #### `posthog.emails.Emails.secret_key`
 
 ```python
@@ -3937,21 +3946,26 @@ secret_key = secret_key.strip() if isinstance(secret_key, str) else None
 #### `posthog.emails.Emails.send`
 
 ```python
-send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendEmailResult
+send(**kwargs: Any) -> SendEmailResult
 ```
 
-Queue one email from a transactional email template.
+Queue one email, from a template in PostHog or from content in your code.
+
+Pass exactly one form. The template form names a template made in
+PostHog with `template_id`. The code form names the email with
+`template_key` and passes `subject` and `html`, `text` or both:
+see `CodeEmailArgs`.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`to` | `str` | One recipient email address. | *required*
-`template_id` | `Union[str, UUID]` | The UUID of a template made transactional in PostHog. | *required*
-`template_data` | `Optional[Mapping[str, Any]]` | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | `None`
-`distinct_id` | `Optional[str]` | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | `None`
-`idempotency_key` | `Optional[str]` | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | `None`
-`max_retries` | `Optional[int]` | Overrides the client's maximum number of retries for this send. `0` turns retries off. | `None`
+`to` |  | One recipient email address. | 
+`template_id` |  | The UUID of a template made transactional in PostHog. | 
+`template_data` |  | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | 
+`distinct_id` |  | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
 
 **Returns:**
 
@@ -3976,6 +3990,13 @@ emails.send(
     template_data={"name": "Ada"},
     distinct_id="user_123",
     idempotency_key="welcome:user_123",
+)
+emails.send(
+    to="user@example.com",
+    template_key="password-reset",
+    subject="Reset your password",
+    html=rendered_html,
+    distinct_id="user_123",
 )
 ```
 
