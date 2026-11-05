@@ -15,6 +15,7 @@ from uuid import UUID
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.connection import HTTPConnection
+from urllib3.exceptions import NewConnectionError
 from urllib3.util.retry import Retry
 
 from posthog._logging import _configure_posthog_logging
@@ -336,7 +337,11 @@ def _is_connection_refused(exc: BaseException) -> bool:
         if isinstance(current, BaseException):
             pending.extend(current.args)
             pending.append(current.__cause__)
-            pending.append(current.__context__)
+            # __context__ records whatever exception was being handled, which may
+            # have nothing to do with this request. urllib3 1.x only links the
+            # socket error to NewConnectionError that way, so follow it just there.
+            if isinstance(current, NewConnectionError):
+                pending.append(current.__context__)
         pending.append(getattr(current, "reason", None))
     return False
 

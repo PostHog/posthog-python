@@ -724,6 +724,41 @@ class TestFlagsRetries(unittest.TestCase):
 
     @mock.patch("posthog.request.time.sleep")
     @mock.patch("posthog.request._get_flags_session")
+    def test_flags_retries_when_handling_an_unrelated_refused_connection(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "featureFlags": {"test-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
+
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = [
+            requests.exceptions.Timeout("timed out"),
+            mock_response,
+        ]
+        mock_get_flags_session.return_value = mock_session
+
+        # The application evaluates flags while handling its own refused
+        # connection, so the timeout inherits that error as its __context__.
+        try:
+            raise ConnectionRefusedError("database is down")
+        except ConnectionRefusedError:
+            response = flags(
+                "test-key", "https://test.posthog.com", distinct_id="user123"
+            )
+
+        self.assertEqual(response["featureFlags"], {"test-flag": True})
+        self.assertEqual(mock_session.post.call_count, 2)
+        mock_sleep.assert_called_once_with(0.3)
+
+    @mock.patch("posthog.request.time.sleep")
+    @mock.patch("posthog.request._get_flags_session")
     def test_flags_retry_count_zero_disables_retries(
         self, mock_get_flags_session, mock_sleep
     ):
