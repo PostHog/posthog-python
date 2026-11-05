@@ -8,6 +8,7 @@ its `next` maps labels that only the next major has.
 """
 
 import argparse
+import copy
 import json
 import logging
 import re
@@ -50,9 +51,14 @@ def clean(obj) -> None:
 
 def signature(name, function, *_, **__) -> str:
     """griffe2md's signature template gives an unannotated parameter the previous one's
-    annotation and drops `async`, so griffe writes the signature instead."""
+    annotation and drops `async`, so griffe writes the signature instead. Private
+    parameters, which start with `_`, are left out."""
     prefix = "async " if "async" in function.labels else ""
-    return prefix + function.signature(name=str(name).strip())
+    public = copy.copy(function)
+    public.parameters = griffe.Parameters(
+        *(p for p in function.parameters if not p.name.startswith("_"))
+    )
+    return prefix + public.signature(name=str(name).strip())
 
 
 ENV = griffe2md.prepare_env()
