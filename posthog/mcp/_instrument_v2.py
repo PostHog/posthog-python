@@ -55,6 +55,7 @@ from ._instrumentation import (
     is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
+    params_client_conversation,
     prepare_request,
     raw_listing_owns_tool_name,
     record_initialize,
@@ -204,10 +205,11 @@ async def _record_v2_initialize(
 ) -> None:
     try:
         mcp_session_id, token = _initialize_session(ctx)
+        params = dict(ctx.params) if isinstance(ctx.params, Mapping) else {}
         await record_initialize(
             data,
-            session=await handshake_session(data, mcp_session_id, token),
-            params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
+            session=await handshake_session(data, mcp_session_id, token, params),
+            params=params,
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
             timestamp=started,
@@ -718,6 +720,7 @@ def _wrap_v2_resource_request(
                 request=request,
                 extra=extra,
                 token=token,
+                client_conversation=params_client_conversation(params),
             )
         except Exception as error:  # noqa: BLE001 - analytics must not break resources
             log(f"Warning: could not prepare resource analytics: {error}")
@@ -799,6 +802,7 @@ def _wrap_v2_list_tools(
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
+            client_conversation=params_client_conversation(params),
         )
 
         start = time.monotonic()

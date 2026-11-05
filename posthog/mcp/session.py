@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, NamedTuple, Optional
+from typing import Any, Mapping, NamedTuple, Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._ids import deterministic_prefixed_id, new_prefixed_id
@@ -120,6 +120,7 @@ async def handshake_session(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
+    params: Mapping[str, Any],
 ) -> ResolvedSession:
     """The session an ``initialize`` belongs to: the one the client's later requests
     resolve to through :func:`resolve_session_id_with_source`.
@@ -127,14 +128,17 @@ async def handshake_session(
     A token or a transport session id gives it directly, so this leaves the server's
     shared session alone. One server serves many clients, and a handshake must not
     move the session that ``McpAnalytics.capture()`` reads. Without either, the
-    session is this process's own, which only the resolver can hand out."""
+    client's own conversation id (in the ``initialize`` params' ``_meta``) or this
+    process's own session applies, which only the resolver can hand out."""
     if token is not None:
         return ResolvedSession(token.session_id, "token")
     if mcp_session_id:
         return ResolvedSession(
             derive_session_id_from_mcp_session(mcp_session_id), "mcp"
         )
-    return await resolve_session_id_with_source(data, None)
+    return await resolve_session_id_with_source(
+        data, None, client_conversation=read_client_conversation(params.get("_meta"))
+    )
 
 
 async def resolve_session_id_with_source(

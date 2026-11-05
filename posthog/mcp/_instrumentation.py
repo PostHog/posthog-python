@@ -47,6 +47,7 @@ from ._model_parameters import (
     add_model_parameter_to_schema,
     get_model_description,
     is_capture_model_enabled,
+    request_meta_from_context,
     resolve_model,
 )
 from ._output_instructions import add_instructions_to_output_schema
@@ -1311,6 +1312,12 @@ class ToolsListLifecycle:
         )
 
 
+def params_client_conversation(params: Any) -> Optional[ClientConversation]:
+    """The client's own conversation id on a request's ``params`` object, which both
+    MCP SDK majors expose as ``params.meta``."""
+    return read_client_conversation(request_meta_from_context(params))
+
+
 async def start_tools_list_lifecycle(
     data: MCPAnalyticsData,
     *,
@@ -1321,6 +1328,7 @@ async def start_tools_list_lifecycle(
     client_name: Optional[str],
     client_version: Optional[str],
     protocol_version: Optional[str],
+    client_conversation: Optional[ClientConversation] = None,
 ) -> ToolsListLifecycle:
     session = await prepare_request(
         data,
@@ -1331,6 +1339,7 @@ async def start_tools_list_lifecycle(
         request=request,
         extra=extra,
         token=token,
+        client_conversation=client_conversation,
     )
     return ToolsListLifecycle(
         data=data,

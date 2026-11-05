@@ -345,10 +345,13 @@ async def _record_initialize(
         from starlette.requests import Request
 
         header = session_header
+        params = _initialize_params(message)[0]
         await record_initialize(
             data,
-            session=await handshake_session(data, header, decode_session_id(header)),
-            params=_initialize_params(message)[0],
+            session=await handshake_session(
+                data, header, decode_session_id(header), params
+            ),
+            params=params,
             result=None,
             extra={"session_id": header, "ctx": _InitializeContext(Request(scope))},
             timestamp=started,

@@ -45,7 +45,9 @@ ChatGPT's `openai/session` and derives `$session_id` from it when the call carri
 handle and no transport session. Such a call mints no handle and gets no prompt-back block, so a
 server with `enable_conversation_id=False` still groups ChatGPT calls with tool schemas and results
 left unchanged. Each event records which source grouped it in `$mcp_session_source`:
-`conversation`, `transport`, `client_metadata`, or `generated`. The reasoning is recorded in
+`conversation`, `transport`, `client_metadata`, or `generated`. Every request that resolves a
+session reads it (`tools/call`, `tools/list`, resource requests and `initialize`), and custom
+events from `McpAnalytics.capture()` carry the instance's own source. The reasoning is recorded in
 posthog-js `docs/adr/0014`.
 
 

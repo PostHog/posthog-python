@@ -3,15 +3,20 @@
 results (posthog-js ADR-0014). Every call lands on a fresh server state, as on a
 per-request stateless server. Runs under both MCP majors."""
 
+from datetime import datetime, timezone
+from types import SimpleNamespace
+
 import pytest
 
-from posthog.mcp import PostHogMCP
+from posthog.mcp import McpAnalytics, PostHogMCP
+from posthog.mcp._internal import set_server_tracking_data
 from posthog.mcp._instrumentation import prepare_request, start_tool_call_lifecycle
 from posthog.mcp._internal import MCPAnalyticsData
 from posthog.mcp._posthog_events import build_posthog_capture_events
 from posthog.mcp._sink import McpEventSink
 from posthog.mcp.session import (
     ClientConversation,
+    handshake_session,
     derive_session_id_from_client_conversation,
     derive_session_id_from_conversation,
     derive_session_id_from_mcp_session,
@@ -22,10 +27,23 @@ from posthog.mcp.session import (
 from posthog.mcp.session_token import SessionTokenPayload
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
+    MCP_MAJOR,
     FakeClient,
     events_named as _events,
     flush_background as _flush,
 )
+from posthog.test.mcp.test_initialize_handshake import (
+    BASE_HEADERS,
+    KINDS,
+    fleet,
+    initialize_params,
+    rpc,
+)
+
+
+class FakeServer:
+    """A weak-referenceable stand-in for the server key tracking state hangs off."""
+
 
 CHATGPT_SESSION = "v1/aBcDeF123"
 CHATGPT_META = {"openai/session": CHATGPT_SESSION}
@@ -246,12 +264,18 @@ def test_session_source_property_names_the_grouping_source(internal, wire):
             {"request_meta": CHATGPT_META, "session_id": "ses_carried"},
             "ses_carried",
         ),
+        ({"request_meta": CHATGPT_META, "session_id": ""}, CHATGPT_SESSION_ID),
         (
             {"request_meta": CHATGPT_META, "args": {"conversation_id": HANDLE}},
             derive_session_id_from_conversation(HANDLE),
         ),
     ],
-    ids=["client conversation", "explicit session", "echoed handle"],
+    ids=[
+        "client conversation",
+        "explicit session",
+        "empty session id",
+        "echoed handle",
+    ],
 )
 def test_prepare_tool_call_groups_by_the_client_conversation(kwargs, session_id):
     client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
@@ -293,3 +317,123 @@ async def test_client_conversation_session_is_not_a_synthesized_handshake(
     await _flush()
 
     assert len(_events(client, "$mcp_initialize")) == initialize_events
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_tools_list_is_grouped_by_the_client_conversation(kind):
+    client = FakeClient()
+    async with fleet(client, pods=2, kind=kind) as lb:
+        for request_id in (1, 2):
+            response = await lb.post(
+                rpc("tools/list", {"_meta": CHATGPT_META}, request_id), BASE_HEADERS
+            )
+            assert response.status_code == 200, response.text
+    await _flush()
+
+    listings = _events(client, "$mcp_tools_list")
+    assert [e["properties"]["$session_id"] for e in listings] == [
+        CHATGPT_SESSION_ID
+    ] * 2
+    assert {e["properties"]["$mcp_session_source"] for e in listings} == {
+        "client_metadata"
+    }
+
+
+@pytest.mark.parametrize(
+    ("carried", "session_id", "source"),
+    [
+        ({}, CHATGPT_SESSION_ID, "client_metadata"),
+        (
+            {"mcp_session_id": "transport"},
+            derive_session_id_from_mcp_session("transport"),
+            "mcp",
+        ),
+        (
+            {"token": SessionTokenPayload(session_id="ses_token")},
+            "ses_token",
+            "token",
+        ),
+    ],
+    ids=["none", "transport session id", "session token"],
+)
+async def test_an_initialize_resolves_the_client_conversation_like_any_request(
+    carried, session_id, source
+):
+    data = MCPAnalyticsData(options=MCPAnalyticsOptions(), session_id="ses_memory")
+
+    resolved = await handshake_session(
+        data,
+        carried.get("mcp_session_id"),
+        carried.get("token"),
+        {**initialize_params("ChatGPT"), "_meta": CHATGPT_META},
+    )
+
+    assert resolved == (session_id, source)
+    assert (data.session_id, data.session_source) == ("ses_memory", "generated")
+
+
+async def record_asgi_initialize(data, params):
+    from posthog.mcp.asgi import _record_initialize
+
+    scope = {"type": "http", "method": "POST", "headers": [], "path": "/mcp"}
+    await _record_initialize(
+        data, {"params": params}, scope, datetime.now(timezone.utc), 200, None
+    )
+
+
+async def record_v2_initialize(data, params):
+    from posthog.mcp._instrument_v2 import _record_v2_initialize
+
+    ctx = SimpleNamespace(params=params, session=None, request=None)
+    await _record_v2_initialize(data, ctx, {}, datetime.now(timezone.utc))
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        record_asgi_initialize,
+        pytest.param(
+            record_v2_initialize,
+            marks=pytest.mark.skipif(MCP_MAJOR < 2, reason="mcp 2.x only"),
+        ),
+    ],
+    ids=["asgi middleware", "v2 middleware"],
+)
+async def test_a_recorded_initialize_carries_the_client_conversation(record):
+    client = FakeClient()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(),
+        sink=McpEventSink(client),
+        session_id=new_session_id(),
+    )
+
+    await record(data, {**initialize_params("ChatGPT"), "_meta": CHATGPT_META})
+    await _flush()
+
+    (event,) = _events(client, "$mcp_initialize")
+    assert event["properties"]["$session_id"] == CHATGPT_SESSION_ID
+    assert event["properties"]["$mcp_session_source"] == "client_metadata"
+
+
+@pytest.mark.parametrize(
+    ("session_source", "wire"),
+    [("generated", "generated"), ("mcp", "transport"), ("token", "transport")],
+)
+async def test_custom_events_carry_the_instance_session_source(session_source, wire):
+    client = FakeClient()
+    key = FakeServer()
+    set_server_tracking_data(
+        key,
+        MCPAnalyticsData(
+            options=MCPAnalyticsOptions(),
+            sink=McpEventSink(client),
+            session_id="ses_instance",
+            session_source=session_source,
+        ),
+    )
+
+    await McpAnalytics(key).capture("custom_thing")
+
+    (event,) = _events(client, "custom_thing")
+    assert event["properties"]["$session_id"] == "ses_instance"
+    assert event["properties"]["$mcp_session_source"] == wire

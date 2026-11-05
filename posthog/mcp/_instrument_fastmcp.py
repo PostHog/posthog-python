@@ -35,6 +35,7 @@ from ._instrumentation import (
     extract_tools,
     is_first_listing_page,
     mutate_tool_schema,
+    params_client_conversation,
     request_to_dict,
     resolve_virtual_tool_injection,
     resolve_session_and_client,
@@ -268,6 +269,9 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
+            client_conversation=params_client_conversation(
+                getattr(req, "params", None)
+            ),
         )
 
         start = time.monotonic()
