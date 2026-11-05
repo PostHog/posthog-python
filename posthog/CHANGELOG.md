@@ -1,5 +1,11 @@
 # posthog
 
+## 7.83.3 — 2026-11-05
+
+### Patch changes
+
+- [7cd0d8a](https://github.com/posthog/posthog-python/commit/7cd0d8a4a9cadafc92bc479c4ec209436476132c) Streaming Gemini calls that fail now record the HTTP status of the google-genai error (for example 429 or 503) in `$ai_http_status`. Before, `capture_streaming_event` read only `status_code`, so these events were captured with a status of 0. — Thanks @pcbeingused333!
+
 ## 7.83.2 — 2026-11-04
 
 ### Patch changes
