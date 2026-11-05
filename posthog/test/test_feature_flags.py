@@ -1192,6 +1192,78 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 1)
 
+    @parameterized.expand(
+        [
+            ("enrollment not passed", {}, 0, "flags-fallback-value", 1, False),
+            (
+                "enrolled",
+                {"$feature_enrollment/beta-feature": "true"},
+                0,
+                True,
+                0,
+                False,
+            ),
+            (
+                "opted out",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "not a true value",
+                {"$feature_enrollment/beta-feature": 1},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "group flag",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                "flags-fallback-value",
+                1,
+                True,
+            ),
+        ]
+    )
+    def test_feature_enrollment_flag(
+        self, _name, person_properties, rollout, expected, flags_calls, group
+    ):
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "beta-feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": rollout}],
+                    "feature_enrollment": True,
+                    "aggregation_group_type_index": 0 if group else None,
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+        with mock.patch("posthog.client.flags") as patch_flags:
+            patch_flags.return_value = {
+                "featureFlags": {"beta-feature": "flags-fallback-value"}
+            }
+            value = client.get_feature_flag(
+                "beta-feature",
+                "distinct_id",
+                person_properties=person_properties,
+                groups={"company": "acme"} if group else None,
+                group_properties={
+                    "company": {"$feature_enrollment/beta-feature": "true"}
+                }
+                if group
+                else None,
+            )
+
+        self.assertEqual((value, patch_flags.call_count), (expected, flags_calls))
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_get_all_flags_with_fallback(self, patch_flags, patch_capture):
@@ -5870,6 +5942,25 @@ class TestMatchProperties(unittest.TestCase):
         self.assertTrue(match_property(property_d, {"key": 4}))
 
         self.assertFalse(match_property(property_d, {"key": "value"}))
+
+    @parameterized.expand(
+        [
+            ("list", r"\[1,2\]", [1, 2], True),
+            ("bool", "^true$", True, True),
+            ("python_bool_spelling", "True", True, False),
+            ("object", r'^\{"a":1,"b":\[null\]\}$', {"b": [None], "a": 1}, True),
+            ("python_object_spelling", "'a'", {"a": 1}, False),
+        ]
+    )
+    def test_regex_stringifies_non_string_properties_as_compact_json(
+        self, _name, pattern, property_value, expected
+    ):
+        regex = self.property("key", pattern, "regex")
+        not_regex = self.property("key", pattern, "not_regex")
+        self.assertEqual(expected, match_property(regex, {"key": property_value}))
+        self.assertEqual(
+            not expected, match_property(not_regex, {"key": property_value})
+        )
 
     def test_match_properties_math_operators(self):
         property_a = self.property(key="key", value=1, operator="gt")

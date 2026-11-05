@@ -1,5 +1,37 @@
 # posthog
 
+## 7.83.2 — 2026-11-04
+
+### Patch changes
+
+- [ae2dcf2](https://github.com/posthog/posthog-python/commit/ae2dcf2eaa76fa2693ed8ebe19bbf22054661acb) Local evaluation now respects early access feature enrollment. A flag with feature enrollment uses the `$feature_enrollment/<flag key>` person property when you pass it, and otherwise falls back to the flags service. Before, it returned `False` for enrolled people who matched no release condition, while the flags service returned `True`. — Thanks @puemos for your first contribution 🎉!
+
+## 7.83.1 — 2026-11-03
+
+### Patch changes
+
+- [0c12ca1](https://github.com/posthog/posthog-python/commit/0c12ca1521f6538873e00f5240cad306c9bba455) `PostHogMCP.prepare_tool_list` now adds the `context` argument to MCP SDK 2.x `Tool` objects. It only added it to dicts and 1.x `Tool` objects before, so `$mcp_intent` was never captured for 2.x tool objects. — Thanks @connor-grady!
+
+## 7.83.0 — 2026-11-03
+
+### Minor changes
+
+- [e094dc5](https://github.com/posthog/posthog-python/commit/e094dc59522b8d7d7b68a74cac4259a61daef60f) Request `/flags?v=4` and read each flag's typed value, reason and metadata. They stay internal for now: this release adds no public methods, fields or types for them, and `repr`, equality and `dataclasses.asdict` of a flag show only its existing fields. Servers that still send the older response keep working, and a flag record with a field of the wrong JSON type fails only that flag. For valid flag records, existing getters, callbacks and `$feature_flag_called` properties return the same values as before: a number or object value reads as `True`, with the value as its payload. Two things can differ: the human-readable reason text of a config version 2 flag is the one the server sends at v4, and a record with a known field of the wrong JSON type (for example a string `reason`) now reads as a failed flag instead of being read anyway or failing the whole response. The SDK logs once per client when a server sends a response without typed values. `FlagMetadata.id` and `FlagMetadata.version` are `None` when a record has none, instead of `0`, so their type is now `Optional[int]`. — Thanks @andehen!
+
+## 7.82.2 — 2026-11-02
+
+### Patch changes
+
+- [57b9db8](https://github.com/posthog/posthog-python/commit/57b9db8493bc06dc448bda244020eea1e0ed1ec5) Count Gemini URL context tool use prompt tokens as input tokens in captured generations; Google Search retrieval is not billed as input and stays out of the total. — Thanks @pcbeingused333!
+
+## 7.82.1 — 2026-11-02
+
+### Patch changes
+
+- [9ebfb87](https://github.com/posthog/posthog-python/commit/9ebfb87ce3eefb2f3672c99e1b4f083013fe864b) Fix a race condition where concurrent feature flag fallback-cache eviction could raise KeyError instead of returning a cache miss, including during request failures. — Thanks @Sarbajit-Sengupta for your first contribution 🎉!
+- [5b50683](https://github.com/posthog/posthog-python/commit/5b506837995c1ddbb007e8822221552c21b06748) Stringify non-string properties as compact JSON for local `regex` and `not_regex` matching, so booleans, lists, and objects match the same way they do on the flags service. — Thanks @luantaraschi!
+- [a239479](https://github.com/posthog/posthog-python/commit/a239479585d5c5367843ec088e49f52010223d08) Serialize UUID values in feature flag request bodies instead of failing the evaluation, so a UUID distinct id, group key, or flag property reaches the flags service. — Thanks @luantaraschi!
+
 ## 7.82.0 — 2026-11-02
 
 ### Minor changes
