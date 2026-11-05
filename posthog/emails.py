@@ -4,8 +4,10 @@ Setup:
 
 1. In PostHog, open the email template under Workflows, make it transactional,
    and copy its ID. ``template_id`` is that UUID.
-2. Create a project secret API key (``phs_...``) with Workflow write access
-   (``hog_flow:write``) in your project settings. The project API key
+2. Create a project secret API key (``phs_...``) with the "Send transactional
+   email" preset (``transactional_email:write``) in your project settings. Add
+   ``transactional_email:read`` too if you read email statuses with a key that
+   can't send. Keys made with ``hog_flow:write`` still work. The project API key
    (``phc_...``) captures events but cannot send email.
 3. Send from the client you already use, or from :class:`Emails` in a process
    that only sends email:
@@ -63,7 +65,7 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 - ``missing_secret_key``: the client has no ``secret_key``.
 - ``missing_app_host``: the client's ``host`` is not PostHog Cloud. Set ``app_host``.
 - ``authentication_failed`` (401) or ``permission_denied`` (403): the key is
-  wrong, or it lacks ``hog_flow:write``.
+  wrong, or it lacks ``transactional_email:write``.
 - ``not_found`` (404): the template ID is wrong, or transactional email is not
   enabled for the project.
 - ``client_disabled``: the client is disabled, so it sends nothing.
@@ -71,9 +73,9 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
 
 Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 30 days after the send, as an :class:`EmailStatus`. A key with only
-``hog_flow:read`` can read statuses but not send. ``get`` raises ``not_found``
-(404) for an unknown ID, an email older than 30 days, or for a few seconds
-after the send.
+``transactional_email:read`` can read statuses but not send. ``get`` raises
+``not_found`` (404) for an unknown ID, an email older than 30 days, or for a
+few seconds after the send.
 
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
@@ -707,10 +709,10 @@ def _headers(
 
 _SEND_NOT_DONE = "no email was sent"
 _GET_NOT_DONE = "no email status was read"
-_SEND_KEY_NEEDED = "Sending email needs secret_key, a project secret API key with the hog_flow:write scope."
+_SEND_KEY_NEEDED = "Sending email needs secret_key, a project secret API key with the transactional_email:write scope."
 _GET_KEY_NEEDED = (
     "Reading an email status needs secret_key, a project secret API key with the "
-    "hog_flow:read or hog_flow:write scope."
+    "transactional_email:read or transactional_email:write scope."
 )
 _ResultT = TypeVar("_ResultT")
 _Parse = Callable[[int, Any, Optional[str]], _ResultT]

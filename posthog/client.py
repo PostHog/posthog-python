@@ -1259,7 +1259,7 @@ class Client(object):
         Send transactional email from PostHog email templates or from content
         in your code, and read the status of each email sent with ``get``.
 
-        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        Needs ``secret_key``, a project secret API key with the ``transactional_email:write``
         scope. Sends go to ``app_host``, or to the PostHog Cloud app host of
         ``host``. ``email_request_timeout_seconds`` and ``email_request_max_retries``
         configure each send. A disabled or shut-down client sends nothing. See
