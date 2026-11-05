@@ -48,7 +48,7 @@ jobs:
       - name: Generate references
         id: changes
         run: |
-          uv run bin/docs --sdk-specs .sdk-specs
+          uv run --extra dev bin/docs --sdk-specs .sdk-specs
           git add references
           git diff --cached --quiet || echo "changed=true" >> "$GITHUB_OUTPUT"
 
