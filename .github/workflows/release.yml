@@ -189,11 +189,16 @@ jobs:
           persist-credentials: false
 
       - name: Generate references
+        id: reference
         # Best-effort: a failure never blocks the release. Run generate-references.yml to retry.
         continue-on-error: true
         if: steps.commit-release.outputs.commit-hash != ''
         run: |
           uv run bin/docs --sdk-specs .sdk-specs
+
+      - name: Warn if the SDK reference didn't regenerate
+        if: steps.reference.outcome == 'failure'
+        run: echo "::warning::The SDK reference didn't regenerate. Run generate-references.yml to retry."
 
       - name: Check for changes in references
         if: steps.commit-release.outputs.commit-hash != ''
