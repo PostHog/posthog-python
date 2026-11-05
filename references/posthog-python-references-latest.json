@@ -2,7 +2,7 @@
   "id": "posthog-python",
   "hogRef": "0.3",
   "info": {
-    "version": "7.83.3",
+    "version": "7.84.0",
     "id": "posthog-python",
     "title": "PostHog Python SDK",
     "description": "Integrate PostHog into any python application.",
@@ -678,6 +678,12 @@
               "description": "Number of retries for an email send after a         network error, a rate limit, or an unavailable service. Defaults to 2.         Set to 0 when a job runner already retries the send.",
               "isOptional": false,
               "type": "int"
+            },
+            {
+              "name": "migrated_from",
+              "description": "The email provider you moved from, such as         ``\"resend\"``. ``emails`` sends it with every request.",
+              "isOptional": true,
+              "type": "str"
             }
           ],
           "showDocs": true,
