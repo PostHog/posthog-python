@@ -176,6 +176,7 @@ def test_client_email_options_set_the_host_timeout_and_retries():
         app_host="https://posthog.example.com/",
         email_request_timeout_seconds=3,
         email_request_max_retries=0,
+        migrated_from="resend",
     )
     unavailable = response(503, {"code": "delivery_unavailable"})
 
@@ -188,6 +189,35 @@ def test_client_email_options_set_the_host_timeout_and_retries():
     request.assert_called_once()
     assert request.call_args.args[1].startswith("https://posthog.example.com/api/")
     assert request.call_args.kwargs["timeout"] == 3
+    sent = request.call_args.kwargs["auth"](
+        requests.Request("POST", "https://posthog.example.com/").prepare()
+    )
+    assert sent.headers["X-PostHog-Migrated-From"] == "resend"
+
+
+def test_names_the_provider_the_client_moved_from_on_every_request():
+    emails, adapter = emails_with([accepted(), status_reply()], migrated_from="resend")
+
+    send(emails)
+    emails.get(MESSAGE_ID)
+
+    assert [
+        request.headers["X-PostHog-Migrated-From"] for request in adapter.requests
+    ] == [
+        "resend",
+        "resend",
+    ]
+
+
+@parameterized.expand([("space", "re send"), ("not_text", 1), ("empty", "")])
+def test_rejects_a_provider_name_that_is_not_a_header_value(_name, migrated_from):
+    with pytest.raises(ValueError):
+        Posthog(
+            "phc_test",
+            secret_key=SECRET_KEY,
+            sync_mode=True,
+            migrated_from=migrated_from,
+        )
 
 
 @parameterized.expand(
@@ -282,6 +312,18 @@ def test_waits_for_retry_after_and_gives_up_on_a_longer_one(no_sleep):
         ("client_option", {"max_retries": 0}, {}, 1),
         ("per_send_override", {}, {"max_retries": 0}, 1),
         ("per_send_override_above_client", {"max_retries": 0}, {"max_retries": 1}, 2),
+        (
+            "code_send_override",
+            {},
+            {
+                "template_id": None,
+                "template_key": "password-reset",
+                "subject": "Reset",
+                "html": "<p>Reset</p>",
+                "max_retries": 0,
+            },
+            1,
+        ),
     ]
 )
 def test_max_retries_zero_leaves_retries_to_the_caller(
@@ -290,9 +332,12 @@ def test_max_retries_zero_leaves_retries_to_the_caller(
     emails, adapter = emails_with(
         [rejected(503, "delivery_unavailable")] * 3, **client_options
     )
+    args = {"to": "user@example.com", "template_id": TEMPLATE_ID, **send_options}
 
     with pytest.raises(EmailError):
-        send(emails, **send_options)
+        emails.send(
+            **{name: value for name, value in args.items() if value is not None}
+        )
 
     assert len(adapter.requests) == requests_made
 
@@ -572,3 +617,185 @@ async def test_async_get_retries_an_unavailable_service():
     assert [(request.method, str(request.url)) for request in seen] == [
         ("GET", STATUS_URL)
     ] * 2
+
+
+HTML = "<p>Reset it here.</p>"
+
+
+def send_code(emails: Emails, **overrides: Any):
+    return emails.send(
+        **{
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            **overrides,
+        }
+    )
+
+
+@parameterized.expand(
+    [
+        ("html_only", {"html": HTML}, {"html": HTML}),
+        ("text_only", {"text": "Reset it here."}, {"text": "Reset it here."}),
+        (
+            "every_field",
+            {
+                "html": HTML,
+                "text": "Reset it here.",
+                "from_": "Acme <security@example.com>",
+                "reply_to": "help@example.com",
+                "capture_engagement": False,
+                "distinct_id": "user_123",
+            },
+            {
+                "html": HTML,
+                "text": "Reset it here.",
+                "from": "Acme <security@example.com>",
+                "reply_to": ["help@example.com"],
+                "capture_engagement": False,
+                "distinct_id": "user_123",
+            },
+        ),
+        (
+            "several_reply_to",
+            {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
+            {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
+        ),
+        (
+            "empty_reply_to_left_out",
+            {"html": HTML, "reply_to": []},
+            {"html": HTML},
+        ),
+        (
+            "none_as_left_out",
+            {
+                "html": HTML,
+                "text": None,
+                "from_": None,
+                "reply_to": None,
+                "capture_engagement": None,
+                "distinct_id": None,
+            },
+            {"html": HTML},
+        ),
+    ]
+)
+def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
+    emails, adapter = emails_with([accepted("msg_1")])
+
+    result = send_code(emails, idempotency_key="reset:user_123", **overrides)
+
+    assert result.id == "msg_1"
+    [request] = adapter.requests
+    assert (request.method, request.url) == ("POST", SEND_URL)
+    assert request.headers["Idempotency-Key"] == "reset:user_123"
+    assert json.loads(request.body) == {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        "capture_engagement": True,
+        **extra_body,
+    }
+
+
+@pytest.mark.asyncio
+async def test_async_client_posts_rendered_content_and_names_the_provider():
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(202, json={"message_id": "msg_1", "replayed": True})
+
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY, migrated_from="resend")
+    client.emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    result = await client.emails.send(
+        to="user@example.com",
+        template_key="password-reset",
+        subject="Reset your password",
+        html=HTML,
+        text="Reset it here.",
+        from_="Acme <security@example.com>",
+        reply_to="help@example.com",
+        capture_engagement=False,
+        distinct_id="user_123",
+        idempotency_key="reset:user_123",
+    )
+    await client.shutdown()
+
+    assert (result.id, result.replayed) == ("msg_1", True)
+    [request] = seen
+    assert (request.method, str(request.url)) == ("POST", SEND_URL)
+    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert request.headers["Idempotency-Key"] == "reset:user_123"
+    assert request.headers["X-PostHog-Migrated-From"] == "resend"
+    assert json.loads(request.content) == {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        "html": HTML,
+        "text": "Reset it here.",
+        "from": "Acme <security@example.com>",
+        "reply_to": ["help@example.com"],
+        "capture_engagement": False,
+        "distinct_id": "user_123",
+    }
+
+
+@parameterized.expand(
+    [
+        ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
+        ("no_form", {"template_key": None}, TypeError),
+        ("no_content", {}, TypeError),
+        ("no_subject", {"subject": None, "html": HTML}, TypeError),
+        ("subject_not_text", {"subject": 1, "html": HTML}, TypeError),
+        ("from_not_text", {"html": HTML, "from_": 1}, TypeError),
+        ("from_keyword", {"html": HTML, "from": "a@example.com"}, TypeError),
+        (
+            "key_with_space",
+            {"template_key": "reset password", "html": HTML},
+            ValueError,
+        ),
+        (
+            "key_with_trailing_newline",
+            {"template_key": "welcome\n", "html": HTML},
+            ValueError,
+        ),
+        ("key_too_long", {"template_key": "k" * 401, "html": HTML}, ValueError),
+        ("empty_html", {"html": ""}, ValueError),
+        ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
+        ("blank_reply_to", {"html": HTML, "reply_to": " "}, ValueError),
+        ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
+        (
+            "template_data_on_code_form",
+            {"html": HTML, "template_data": {"first_name": "Jane"}},
+            TypeError,
+        ),
+        ("cc_on_code_form", {"html": HTML, "cc": "a@example.com"}, TypeError),
+        (
+            "capture_engagement_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "capture_engagement": False,
+            },
+            TypeError,
+        ),
+    ]
+)
+def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
+    emails, adapter = emails_with([])
+    args = {
+        "to": "user@example.com",
+        "template_key": "password-reset",
+        "subject": "Reset your password",
+        **overrides,
+    }
+
+    with pytest.raises(error):
+        emails.send(
+            **{name: value for name, value in args.items() if value is not None}
+        )
+
+    assert adapter.requests == []
