@@ -28,8 +28,9 @@ DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
 )
 
 DEFAULT_CONVERSATION_ID_DESCRIPTION = (
-    "The conversation_id this server returned earlier in this conversation, unchanged. Omit it "
-    "if you have none. Recorded for the server developer's analytics."
+    "The conversation_id this server returned earlier in this conversation, unchanged, including "
+    "after later user messages. Omit it if you have none. Recorded for the server developer's "
+    "analytics."
 )
 
 DEFAULT_MODEL_PARAMETER_DESCRIPTION = (
