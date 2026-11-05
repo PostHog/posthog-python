@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[2]
 TYPES = """args.OptionalCaptureArgs feature_flag_evaluations.FeatureFlagEvaluations types.FeatureFlagResult
 types.FeatureFlag types.FlagsAndPayloads types.UnresolvedFlagReason feature_flags.InconclusiveMatchError
 feature_flags.RequiresServerEvaluation capture_send.CaptureError tracing.span.Span emails.Emails
-emails.EmailError emails.SendEmailResult""".split()
+emails.EmailError emails.SendEmailResult args.OptionalSetArgs emails.CodeEmailArgs""".split()
 UTILS = """integrations.django.PosthogContextMiddleware integrations.flask.PosthogFlaskIntegration
 integrations.asgi.PosthogASGIMiddleware integrations.celery.PosthogCeleryIntegration
 request.set_socket_options request.enable_keep_alive request.disable_connection_reuse""".split()
@@ -47,8 +47,20 @@ def tag(obj) -> str | None:
     return found.group(1) if found else None
 
 
+def signature(name, function, *_, **__) -> str:
+    """griffe2md's signature template gives an unannotated parameter the previous one's
+    annotation and drops `async`, so griffe writes the signature instead."""
+    prefix = "async " if "async" in function.labels else ""
+    return prefix + function.signature(name=str(name).strip())
+
+
+ENV = griffe2md.prepare_env()
+ENV.filters["format_signature"] = signature
+
+
 def entry(obj, name: str) -> str:
-    md = griffe2md.render_object_docs(obj, CONFIG)
+    template = ENV.get_template(f"{obj.kind.value}.md.jinja")
+    md = template.render(**griffe2md.prepare_context(obj, CONFIG))
     # Annotation links point at anchors this page doesn't have.
     md = re.sub(r"\[([^\]]+)\]\(#[\w.]+\)", r"\1", md)
     # The site reads Markdown as MDX 1: HTML must be JSX, and braces in <code> are expressions.
