@@ -123,7 +123,7 @@ In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [
 ### `Client(...)`
 
 ```python
-__init__(project_api_key: str, host: str = None, debug: str = False, max_queue_size: str = 10000, send: str = True, on_error: str = None, flush_at: str = 100, flush_interval: str = 5.0, gzip: str = False, max_retries: str = 3, sync_mode: str = False, timeout: float = 15, thread: float = 1, poll_interval: float = 30, personal_api_key: float = None, disabled: float = False, disable_geoip: float = True, is_server: float = True, historical_migration: float = False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: float = 1, super_properties: float = None, enable_exception_autocapture: float = False, log_captured_exceptions: float = False, project_root: float = None, privacy_mode: float = False, before_send: float = None, flag_fallback_cache_url: float = None, enable_local_evaluation: float = True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables: Optional[FlagDefinitionCacheProvider] = False, code_variables_mask_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_ignore_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_mask_url_credentials: Optional[FlagDefinitionCacheProvider] = None, code_variables_detect_secrets: Optional[FlagDefinitionCacheProvider] = None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting: list[str] | None = False, exception_autocapture_bucket_size: list[str] | None = ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate: list[str] | None = ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds: list[str] | None = ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key: Optional[Union[CaptureCompression, str]] = None, metrics: Optional[dict] = None, enable_full_ai_capture: Optional[dict] = False, capture_trace_context: Optional[dict] = False, _use_ai_lane: Optional[dict] = False, _enable_multimodal_capture: Optional[dict] = False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
+__init__(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 ```
 
 Initialize a new PostHog client instance.
@@ -958,7 +958,7 @@ Flat list of the lanes' consumers, analytics first (kept for backwards compatibi
 ### `Client.new_context`
 
 ```python
-new_context(fresh = False, capture_exceptions: Optional[bool] = None)
+new_context(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
@@ -988,7 +988,7 @@ Contexts
 ### `Client.scoped`
 
 ```python
-scoped(fresh = False, capture_exceptions: Optional[bool] = None)
+scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Decorator that creates a new context for the wrapped function using this client.
@@ -1419,7 +1419,7 @@ Name | Type | Description | Default
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_properties`
 
 ```python
-aextract_properties(request)
+async aextract_properties(request)
 ```
 
 Async version of extract_properties for use in async request handling.
@@ -1432,7 +1432,7 @@ Follows Django's naming convention for async methods (auser, asave, etc.).
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_request_user`
 
 ```python
-aextract_request_user(request)
+async aextract_request_user(request)
 ```
 
 Async version of extract_request_user for use in async request handling.
@@ -1445,7 +1445,7 @@ Follows Django's naming convention for async methods (auser, asave, etc.).
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_tags`
 
 ```python
-aextract_tags(request)
+async aextract_tags(request)
 ```
 
 Compatibility alias for `aextract_properties`.
@@ -1894,7 +1894,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-__init__(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error: bool = None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send: Optional[dict[str, Any]] = None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns: bool = None, code_variables_ignore_patterns: bool = None, code_variables_mask_url_credentials: bool = None, code_variables_detect_secrets: bool = None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
+__init__(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -1908,7 +1908,7 @@ Queue an event without blocking for network delivery.
 ### `AsyncClient.capture_immediate`
 
 ```python
-capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+async capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 ```
 
 Capture one event and wait until its delivery attempt completes.
@@ -1967,13 +1967,13 @@ await client.emails.send(
 ### `AsyncClient.flush`
 
 ```python
-flush(timeout_seconds: Optional[float] = 10) -> None
+async flush(timeout_seconds: Optional[float] = 10) -> None
 ```
 
 ### `AsyncClient.evaluate_flags`
 
 ```python
-evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
+async evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 ```
 
 Evaluate flags remotely without blocking the event loop.
@@ -1992,19 +1992,19 @@ group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, A
 ### `AsyncClient.shutdown`
 
 ```python
-shutdown() -> None
+async shutdown() -> None
 ```
 
 ### `AsyncClient.join`
 
 ```python
-join() -> None
+async join() -> None
 ```
 
 ### `AsyncClient.get_remote_config_payload`
 
 ```python
-get_remote_config_payload(key: str) -> Optional[Any]
+async get_remote_config_payload(key: str) -> Optional[Any]
 ```
 
 Fetch and decrypt a remote-config payload without blocking the loop.
@@ -2046,7 +2046,7 @@ Contexts
 ### `posthog.scoped`
 
 ```python
-scoped(fresh = False, capture_exceptions: Optional[bool] = None)
+scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Decorator that creates a new context for the function.
@@ -4120,4 +4120,169 @@ replayed: bool = False
 
 ```python
 warnings: tuple[EmailWarning, ...] = ()
+```
+
+### `OptionalSetArgs`
+
+Bases: `TypedDict`
+
+Optional arguments for the set method.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`distinct_id` |  | Unique identifier for the user to set properties on. If not set, the context distinct_id is used, if available, otherwise this function does nothing. Setting context-level distinct_id's is recommended. | 
+`properties` |  | Dictionary of properties to set on the person | 
+`timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
+`uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
+`disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`disable_geoip` | `NotRequired[Optional[bool]]` | 
+`distinct_id` | `NotRequired[Optional[ID_TYPES]]` | 
+`properties` | `NotRequired[Optional[Dict[str, Any]]]` | 
+`timestamp` | `NotRequired[Optional[Union[datetime, str]]]` | 
+`uuid` | `NotRequired[Optional[Union[str, UUID]]]` | 
+
+#### `posthog.args.OptionalSetArgs.disable_geoip`
+
+```python
+disable_geoip: NotRequired[Optional[bool]]
+```
+
+#### `posthog.args.OptionalSetArgs.distinct_id`
+
+```python
+distinct_id: NotRequired[Optional[ID_TYPES]]
+```
+
+#### `posthog.args.OptionalSetArgs.properties`
+
+```python
+properties: NotRequired[Optional[Dict[str, Any]]]
+```
+
+#### `posthog.args.OptionalSetArgs.timestamp`
+
+```python
+timestamp: NotRequired[Optional[Union[datetime, str]]]
+```
+
+#### `posthog.args.OptionalSetArgs.uuid`
+
+```python
+uuid: NotRequired[Optional[Union[str, UUID]]]
+```
+
+### `CodeEmailArgs`
+
+Bases: `_RecipientArgs`
+
+A send of email content that your code rendered for one recipient, named by a key.
+
+The content goes out as is. To send a React email, render it to HTML in
+your app first.
+
+An optional field passed as `None` counts as left out.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`to` |  | One recipient email address. | 
+`template_key` |  | Names the email, so its metrics, logs and status group under it. Letters, digits, `-` and `_`, at most 400. | 
+`subject` |  | The subject line. | 
+`html` |  | The HTML body. Give `html`, `text` or both. | 
+`text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
+`from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
+`reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
+`capture_engagement` |  | Capture the email's opens and clicks as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`distinct_id` |  | The recipient's distinct ID in your product. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`capture_engagement` | `NotRequired[Optional[bool]]` | 
+`distinct_id` | `NotRequired[Optional[str]]` | 
+`from_` | `NotRequired[Optional[str]]` | 
+`html` | `NotRequired[Optional[str]]` | 
+`idempotency_key` | `NotRequired[Optional[str]]` | 
+`max_retries` | `NotRequired[Optional[int]]` | 
+`reply_to` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
+`subject` | `str` | 
+`template_key` | `str` | 
+`text` | `NotRequired[Optional[str]]` | 
+`to` | `str` | 
+
+#### `posthog.emails.CodeEmailArgs.capture_engagement`
+
+```python
+capture_engagement: NotRequired[Optional[bool]]
+```
+
+#### `posthog.emails.CodeEmailArgs.distinct_id`
+
+```python
+distinct_id: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.from_`
+
+```python
+from_: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.html`
+
+```python
+html: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.idempotency_key`
+
+```python
+idempotency_key: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.max_retries`
+
+```python
+max_retries: NotRequired[Optional[int]]
+```
+
+#### `posthog.emails.CodeEmailArgs.reply_to`
+
+```python
+reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+```
+
+#### `posthog.emails.CodeEmailArgs.subject`
+
+```python
+subject: str
+```
+
+#### `posthog.emails.CodeEmailArgs.template_key`
+
+```python
+template_key: str
+```
+
+#### `posthog.emails.CodeEmailArgs.text`
+
+```python
+text: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.to`
+
+```python
+to: str
 ```

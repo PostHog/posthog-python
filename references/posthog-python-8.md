@@ -123,7 +123,7 @@ In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [
 ### `Client(...)`
 
 ```python
-__init__(project_api_key: str, host: str = None, *, debug: str = False, max_queue_size: str = 10000, send: str = True, on_error: str = None, flush_at: str = 100, flush_interval: str = 5.0, max_retries: str = 3, sync_mode: str = False, timeout: float = 15, thread: float = 1, poll_interval: float = 30, personal_api_key: float = None, disabled: float = False, disable_geoip: float = True, is_server: float = True, historical_migration: float = False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: float = 1, super_properties: float = None, super_options: float = None, enable_exception_autocapture: float = False, log_captured_exceptions: float = False, project_root: float = None, privacy_mode: float = False, before_send: float = None, flag_fallback_cache_url: float = None, enable_local_evaluation: float = True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables: Optional[FlagDefinitionCacheProvider] = False, code_variables_mask_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_ignore_patterns: Optional[FlagDefinitionCacheProvider] = None, code_variables_mask_url_credentials: Optional[FlagDefinitionCacheProvider] = None, code_variables_detect_secrets: Optional[FlagDefinitionCacheProvider] = None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting: list[str] | None = False, exception_autocapture_bucket_size: list[str] | None = ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate: list[str] | None = ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds: list[str] | None = ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key: int = None, metrics: Optional[dict] = None, enable_full_ai_capture: Optional[dict] = False, capture_trace_context: Optional[dict] = False, _use_ai_lane: Optional[dict] = False, _enable_multimodal_capture: Optional[dict] = False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
+__init__(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
 ```
 
 Initialize a new PostHog client instance.
@@ -247,12 +247,6 @@ posthog.capture(
 ```python
 # Page view event
 posthog.capture('$pageview', distinct_id="distinct_id_of_the_user", properties={'$current_url': 'https://example.com'})
-```
-```python
-# Counter example (incorrect): capture keeps the first event for each uuid in a request and drops the later copies
-event_id = str(uuid.uuid4())
-posthog.capture("order_placed", distinct_id="user_123", uuid=event_id)
-posthog.capture("order_paid", distinct_id="user_123", uuid=event_id)  # dropped as duplicate_event_uuid
 ```
 
 ## Identify
@@ -793,12 +787,6 @@ if flags.is_enabled("new-dashboard"):
     render_new_dashboard()
 posthog.capture("page_viewed", distinct_id="user_123", flags=flags)
 ```
-```python
-# Counter example (incorrect): the event can carry different flag values than the code branched on
-if posthog.get_feature_flag("new-dashboard", "user_123"):
-    render_new_dashboard()
-posthog.capture("page_viewed", distinct_id="user_123", send_feature_flags=True)  # evaluates flags again
-```
 
 ## Group identify
 
@@ -977,7 +965,7 @@ Flat list of the lanes' consumers, analytics first (kept for backwards compatibi
 ### `Client.new_context`
 
 ```python
-new_context(fresh = False, capture_exceptions: Optional[bool] = None)
+new_context(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
@@ -1007,7 +995,7 @@ Contexts
 ### `Client.scoped`
 
 ```python
-scoped(fresh = False, capture_exceptions: Optional[bool] = None)
+scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Decorator that creates a new context for the wrapped function using this client.
@@ -1486,7 +1474,7 @@ Name | Type | Description | Default
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_properties`
 
 ```python
-aextract_properties(request)
+async aextract_properties(request)
 ```
 
 Async version of extract_properties for use in async request handling.
@@ -1499,7 +1487,7 @@ Follows Django's naming convention for async methods (auser, asave, etc.).
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_request_user`
 
 ```python
-aextract_request_user(request)
+async aextract_request_user(request)
 ```
 
 Async version of extract_request_user for use in async request handling.
@@ -1512,7 +1500,7 @@ Follows Django's naming convention for async methods (auser, asave, etc.).
 #### `posthog.integrations.django.PosthogContextMiddleware.aextract_tags`
 
 ```python
-aextract_tags(request)
+async aextract_tags(request)
 ```
 
 Compatibility alias for `aextract_properties`.
@@ -1961,7 +1949,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-__init__(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error: bool = None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send: Optional[dict[str, Any]] = None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns: bool = None, code_variables_ignore_patterns: bool = None, code_variables_mask_url_credentials: bool = None, code_variables_detect_secrets: bool = None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
+__init__(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -1975,7 +1963,7 @@ Queue an event without blocking for network delivery.
 ### `AsyncClient.capture_immediate`
 
 ```python
-capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+async capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 ```
 
 Capture one event and wait until its delivery attempt completes.
@@ -1997,28 +1985,6 @@ set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 ```python
 alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 ```
-
-### `AsyncClient.capture_ai`
-
-```python
-capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-```
-
-Queue an AI event for the AI capture endpoint without blocking.
-
-Takes the same arguments and returns the same value as `capture()`.
-The event uses a separate queue with a larger per-event size cap. The
-payload is sent as given, with no redaction or truncation.
-
-### `AsyncClient.capture_ai_immediate`
-
-```python
-capture_ai_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-```
-
-Capture one AI event and wait until its delivery attempt completes.
-
-Uses the AI capture endpoint and the `capture_ai_*` settings.
 
 ### `AsyncClient.capture_exception`
 
@@ -2064,13 +2030,13 @@ await client.emails.send(
 ### `AsyncClient.flush`
 
 ```python
-flush(timeout_seconds: Optional[float] = 10) -> None
+async flush(timeout_seconds: Optional[float] = 10) -> None
 ```
 
 ### `AsyncClient.evaluate_flags`
 
 ```python
-evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
+async evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 ```
 
 Evaluate flags remotely without blocking the event loop.
@@ -2089,19 +2055,41 @@ group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, A
 ### `AsyncClient.shutdown`
 
 ```python
-shutdown() -> None
+async shutdown() -> None
 ```
 
 ### `AsyncClient.join`
 
 ```python
-join() -> None
+async join() -> None
 ```
+
+### `AsyncClient.capture_ai`
+
+```python
+capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+```
+
+Queue an AI event for the AI capture endpoint without blocking.
+
+Takes the same arguments and returns the same value as `capture()`.
+The event uses a separate queue with a larger per-event size cap. The
+payload is sent as given, with no redaction or truncation.
+
+### `AsyncClient.capture_ai_immediate`
+
+```python
+async capture_ai_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+```
+
+Capture one AI event and wait until its delivery attempt completes.
+
+Uses the AI capture endpoint and the `capture_ai_*` settings.
 
 ### `AsyncClient.get_remote_config_payload`
 
 ```python
-get_remote_config_payload(key: str) -> Optional[Any]
+async get_remote_config_payload(key: str) -> Optional[Any]
 ```
 
 Fetch and decrypt a remote-config payload without blocking the loop.
@@ -2143,7 +2131,7 @@ Contexts
 ### `posthog.scoped`
 
 ```python
-scoped(fresh = False, capture_exceptions: Optional[bool] = None)
+scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
 Decorator that creates a new context for the function.
@@ -3391,7 +3379,7 @@ Internal — instances are created by the SDK via `Client.evaluate_flags()`.
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag`
 
 ```python
-get_flag(key: str) -> Optional[FlagValue]
+get_flag(key: str, *, send_feature_flag_events: bool = True) -> Optional[FlagValue]
 ```
 
 Return the flag value. Fires `$feature_flag_called` on first access.
@@ -3399,6 +3387,9 @@ Return the flag value. Fires `$feature_flag_called` on first access.
 Returns the variant string for multivariate flags, `True` for enabled flags
 without a variant, `False` for disabled flags, and `None` for flags that
 were not returned by the evaluation.
+
+Pass `send_feature_flag_events=False` to skip the event for this read, as
+with `is_enabled`.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload`
 
@@ -3413,7 +3404,7 @@ Does not count as an access for `only_accessed` and does not fire any event.
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled`
 
 ```python
-is_enabled(key: str, default_value: bool = False) -> bool
+is_enabled(key: str, default_value: bool = False, *, send_feature_flag_events: bool = True) -> bool
 ```
 
 Return whether the flag is enabled. Fires `$feature_flag_called` on the
@@ -3425,6 +3416,7 @@ Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `key` | `str` | The feature flag key. | *required*
 `default_value` | `bool` | Returned when the flag has no value in this evaluation — the key was not part of the evaluated set, or the evaluation itself came back empty (failed `/flags` request, quota limit, or no resolvable `distinct_id`). Defaults to `False`. | `False`
+`send_feature_flag_events` | `bool` | Whether this read sends `$feature_flag_called`. When `False`, no event is sent and the dedupe cache is left alone, but the key still counts as accessed for `only_accessed`. | `True`
 
 A flag that has a value always wins over `default_value`, including a
 disabled flag, which returns `False` even when `default_value=True`.
@@ -3598,6 +3590,9 @@ FeatureFlag(key: str, enabled: bool, variant: Optional[str], reason: Optional[Fl
 
 Detailed feature flag evaluation returned by the flags API.
 
+`enabled`, `variant` and `metadata.payload` are the value rendered the way
+responses before `/flags?v=4` carried it, which the legacy getters return.
+
 **Attributes:**
 
 Name | Type | Description
@@ -3612,7 +3607,7 @@ Name | Type | Description
 
 Name | Description
 ---- | -----------
-`from_json` | Build a flag from one entry of a flags API response. Missing `metadata` becomes empty legacy metadata.
+`from_json` | Parse one flag record of a `/flags` response.
 `from_value_and_payload` | Build a flag from its value and payload. A string value is a variant, so the flag is enabled.
 `get_value` | Return the variant for a multivariate flag, otherwise whether the flag is enabled.
 
@@ -3628,7 +3623,11 @@ enabled: bool
 from_json(resp: Any) -> FeatureFlag
 ```
 
-Build a flag from one entry of a flags API response. Missing `metadata` becomes empty legacy metadata.
+Parse one flag record of a `/flags` response.
+
+A record with a `value` member is a `/flags?v=4` record. A record
+without one comes from an older server: its value is `variant`, or
+`enabled` when there is no variant, and its config version is `1`.
 
 #### `posthog.types.FeatureFlag.from_value_and_payload`
 
@@ -3822,25 +3821,25 @@ events were dropped or ran out of retries.
 response. Events missing from it never got a verdict, because every
 attempt that reached them failed as a whole request.
 
-**Attributes:**
-
-Name | Type | Description
----- | ---- | -----------
-`status` |  | The HTTP status of the last attempt, or `0` when no response arrived.
-`message` |  | What went wrong.
-`endpoint` |  | The capture path the batch was sent to, so one `on_error` handler can tell the analytics and AI lanes apart.
-`retry_after` |  | Seconds the last response's `Retry-After` header asked to wait, or `None` when it sent none.
-`request_id` |  | The ID the SDK gave the batch. Every attempt sends the same ID.
-`attempts` |  | How many times the SDK sent the batch.
-`retry_exhausted` |  | Uuids the server asked the SDK to retry that were never delivered.
-`drops` |  | `(uuid, details)` pairs the server told the SDK to drop on a 2xx response.
-`event_results` |  | Each event uuid's last verdict from a 2xx response.
-
 **Functions:**
 
 Name | Description
 ---- | -----------
 `verdict_summary` | Count the undelivered events by verdict and reason, for example
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`attempts` |  | 
+`drops` |  | 
+`endpoint` |  | 
+`event_results` |  | 
+`message` |  | 
+`request_id` |  | 
+`retry_after` |  | 
+`retry_exhausted` |  | 
+`status` |  | 
 
 #### `posthog.capture_send.CaptureError.attempts`
 
@@ -4360,4 +4359,68 @@ replayed: bool = False
 
 ```python
 warnings: tuple[EmailWarning, ...] = ()
+```
+
+### `OptionalSetArgs`
+
+Bases: `TypedDict`
+
+Optional arguments for the set method.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`distinct_id` |  | Unique identifier for the user to set properties on. If not set, the context distinct_id is used, if available, otherwise this function does nothing. Setting context-level distinct_id's is recommended. | 
+`properties` |  | Dictionary of properties to set on the person | 
+`timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
+`uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
+`disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
+`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. | 
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`disable_geoip` | `NotRequired[Optional[bool]]` | 
+`distinct_id` | `NotRequired[Optional[ID_TYPES]]` | 
+`options` | `NotRequired[Optional[Dict[str, Any]]]` | 
+`properties` | `NotRequired[Optional[Dict[str, Any]]]` | 
+`timestamp` | `NotRequired[Optional[Union[datetime, str]]]` | 
+`uuid` | `NotRequired[Optional[Union[str, UUID]]]` | 
+
+#### `posthog.args.OptionalSetArgs.disable_geoip`
+
+```python
+disable_geoip: NotRequired[Optional[bool]]
+```
+
+#### `posthog.args.OptionalSetArgs.distinct_id`
+
+```python
+distinct_id: NotRequired[Optional[ID_TYPES]]
+```
+
+#### `posthog.args.OptionalSetArgs.options`
+
+```python
+options: NotRequired[Optional[Dict[str, Any]]]
+```
+
+#### `posthog.args.OptionalSetArgs.properties`
+
+```python
+properties: NotRequired[Optional[Dict[str, Any]]]
+```
+
+#### `posthog.args.OptionalSetArgs.timestamp`
+
+```python
+timestamp: NotRequired[Optional[Union[datetime, str]]]
+```
+
+#### `posthog.args.OptionalSetArgs.uuid`
+
+```python
+uuid: NotRequired[Optional[Union[str, UUID]]]
 ```
