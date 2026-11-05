@@ -626,8 +626,9 @@ def _capture_flag_events(
 
     Both config version 2 events are attempted independently: a failed capture of
     one does not stop the other, and keeps no dedupe key, so a later read tries
-    again. An event that ``before_send`` drops keeps its key. Their attribution is pinned after super properties are merged, so
-    a super property can neither change it nor add a field the event never carries.
+    again. An event that ``before_send`` drops keeps its key. Their attribution is
+    pinned after super properties are merged, so a super property can neither change
+    it nor add a field the event never carries.
     Config version 1 events are sent and deduped as before.
     """
     groups_key = (
@@ -4695,9 +4696,10 @@ class Client(object):
         """
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be locally evaluated.
-        This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`,
-        and, when a remotely evaluated config version 2 flag assigns an experiment variant, the
-        `$experiment_exposure` event.
+        This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+        When the flag was evaluated remotely and its config version 2 record is a complete experiment
+        split (an experiment rule with a rule ID and a variant key), it also captures the
+        `$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
         Examples:
             ```python

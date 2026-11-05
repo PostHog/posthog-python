@@ -56,7 +56,7 @@
       "const": true
     }
   },
-  "description": "Closed projection of the flag-access context properties. Other existing capture fields are outside this projection. Complete v2 producer context follows the terminal outcome; tolerant-reader diagnostics may omit an incomplete attribution tuple. A config version 2 call carries $feature_flag_reason_code and never $feature_flag_reason, the reason description that only version 1 calls carry.",
+  "description": "Closed projection of the flag-access context properties. Other existing capture fields are outside this projection. Complete v2 producer context follows the terminal outcome. A tolerant reader drops the whole attribution of a record that breaks its reason's rows (a rule ID without its rule type or the reverse, a rule type the reason does not allow, or a malformed split): for every reason that names a rule, a call may keep the config version and reason code and omit all rule, variant and experiment attribution, while a partly populated or mismatched tuple is rejected. A config version 2 call whose reason code is missing or not registered keeps the raw code, if any, and carries no attribution; a registered code only matches its own reason's branches. A config version 2 call never carries $feature_flag_reason, the reason description that only version 1 calls carry.",
   "allOf": [
     {
       "if": {
@@ -70,9 +70,6 @@
         }
       },
       "then": {
-        "required": [
-          "$feature_flag_reason_code"
-        ],
         "not": {
           "anyOf": [
             {
@@ -98,6 +95,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -126,6 +124,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -154,6 +153,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id",
               "$feature_flag_variant"
@@ -178,6 +178,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -206,6 +207,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -234,6 +236,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -262,6 +265,7 @@
               }
             },
             "required": [
+              "$feature_flag_reason_code",
               "$feature_flag_rule_type",
               "$feature_flag_rule_id"
             ],
@@ -286,6 +290,9 @@
                 "const": "no_rule_match"
               }
             },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
             "not": {
               "anyOf": [
                 {
@@ -317,6 +324,9 @@
                 "const": "missing_group_key"
               }
             },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
             "not": {
               "anyOf": [
                 {
@@ -348,6 +358,9 @@
                 "const": "dependency_error"
               }
             },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
             "not": {
               "anyOf": [
                 {
@@ -377,6 +390,223 @@
             "properties": {
               "$feature_flag_reason_code": {
                 "const": "error"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "const": "targeting_match"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "const": "experiment_split"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "const": "rollout_miss"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "const": "experiment_paused"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "const": "holdout"
+              }
+            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
+            "not": {
+              "anyOf": [
+                {
+                  "required": [
+                    "$feature_flag_rule_type"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_rule_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_experiment_id"
+                  ]
+                },
+                {
+                  "required": [
+                    "$feature_flag_variant"
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "properties": {
+              "$feature_flag_reason_code": {
+                "not": {
+                  "enum": [
+                    "targeting_match",
+                    "experiment_split",
+                    "rollout_miss",
+                    "experiment_paused",
+                    "holdout",
+                    "no_rule_match",
+                    "missing_group_key",
+                    "dependency_error",
+                    "error",
+                    "flag_disabled"
+                  ]
+                }
               }
             },
             "not": {
@@ -411,38 +641,9 @@
                 "const": "flag_disabled"
               }
             },
-            "not": {
-              "anyOf": [
-                {
-                  "required": [
-                    "$feature_flag_rule_type"
-                  ]
-                },
-                {
-                  "required": [
-                    "$feature_flag_rule_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "$feature_flag_experiment_id"
-                  ]
-                },
-                {
-                  "required": [
-                    "$feature_flag_variant"
-                  ]
-                }
-              ]
-            }
-          },
-          {
-            "description": "A tolerant reader may emit a diagnostic call for a malformed split after omitting all rule/experiment attribution. The config marker and reason remain available for diagnostics.",
-            "properties": {
-              "$feature_flag_reason_code": {
-                "const": "experiment_split"
-              }
-            },
+            "required": [
+              "$feature_flag_reason_code"
+            ],
             "not": {
               "anyOf": [
                 {

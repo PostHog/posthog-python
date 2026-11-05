@@ -598,9 +598,7 @@ def test_rule_matches_misses_pauses_and_holdouts_name_their_rule(code, rule_type
 
 
 # The rule ID and rule type are sent together, with a rule type the reason allows, or
-# not at all. Contract 8.0.0 accepts such a call without its rule pair only for a
-# malformed split, so these calls are not validated against the vendored schema
-# until a harness release that accepts them is copied.
+# not at all. A call that drops a broken pair keeps its config version and reason code.
 BROKEN_RULE_PAIR_CASES = [
     # Half pairs.
     ("targeting_match", {"rule_id": RULE}),
@@ -638,6 +636,7 @@ def test_a_half_or_disallowed_rule_pair_is_not_sent(code, fields, path):
         "$feature_flag_reason_code": code,
     }
     assert _named(events, EXPOSURE) == []
+    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
 @pytest.mark.parametrize("path", list(SYNC_READS))
@@ -661,6 +660,7 @@ def test_a_targeting_match_that_names_an_experiment_rule_sends_no_exposure(path)
         "$feature_flag_reason_code": "targeting_match",
     }
     assert _named(events, EXPOSURE) == []
+    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
 def test_an_older_server_record_reports_no_attribution():
@@ -1343,24 +1343,6 @@ def test_an_unknown_or_missing_reason_code_still_reports_config_version_2(code, 
     assert _attribution(called.properties) == expected
     assert "$feature_flag_reason" not in called.properties
     assert _named(events, EXPOSURE) == []
-
-
-@pytest.mark.skip(
-    reason="Contract 8.0.0 requires a registered reason code on a config version 2"
-    " call. Turn this on once a harness release with contract 9.0.0"
-    " (PostHog/posthog-sdk-test-harness#101) is vendored."
-)
-@pytest.mark.parametrize("code", ["future_reason", None], ids=["unknown", "missing"])
-def test_a_call_with_an_unknown_or_missing_reason_code_matches_the_contract(code):
-    record = _split()
-    if code is None:
-        del record["reason"]
-    else:
-        record["reason"]["code"] = code
-
-    events = _read_events("get_feature_flag_result", _response(record))
-
-    [called] = _named(events, FLAG_CALLED)
     FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
@@ -1382,6 +1364,7 @@ def test_a_rule_id_that_is_not_a_uuid_counts_as_missing(rule_id, path):
             "$feature_flag_reason_code": record["reason"]["code"],
         }
         assert _named(events, EXPOSURE) == []
+        FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
 def test_an_upper_case_uuid_rule_id_is_kept():

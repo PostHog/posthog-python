@@ -127,9 +127,11 @@ class FeatureFlagEvaluations:
     from the server in the first place, pass ``flag_keys`` to :meth:`Client.evaluate_flags`.
 
     Reading a flag sends ``$feature_flag_called``, deduplicated as :meth:`is_enabled`
-    describes. When the flag was evaluated remotely and its config version 2 record
-    assigns an experiment variant, the read also sends ``$experiment_exposure``, once
-    per assignment.
+    describes. When the flag was evaluated remotely and its config version 2 record is
+    a complete experiment split (an experiment rule with a rule ID and a variant key),
+    the read also sends ``$experiment_exposure``. The SDK sends one exposure per
+    distinct ID, groups, flag, rule and variant. ``send_feature_flag_events=False``
+    suppresses both events.
     """
 
     def __init__(
