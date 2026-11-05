@@ -305,6 +305,22 @@ def _ctx_mcp_session_id(ctx: Any) -> Optional[str]:
     return read_mcp_session_header(get_request_headers(ctx))
 
 
+def _is_internal_dispatch(ctx: Any) -> bool:
+    """True when the SDK invoked this handler itself, not for a client request.
+
+    On the 2026-07-28 streamable-HTTP path the SDK runs the ``tools/list`` handler
+    while serving a ``tools/call`` (to validate ``Mcp-Param-*`` headers against the
+    tool's input schema). That call shares the inbound HTTP request, whose required
+    ``Mcp-Method`` header still names the outer method, so it gives the call away."""
+    try:
+        declared_method = ctx.request.headers.get("mcp-method")
+    except Exception:  # noqa: BLE001 - no HTTP request (stdio, legacy era) means a client call
+        return False
+    return declared_method is not None and declared_method != getattr(
+        ctx, "method", declared_method
+    )
+
+
 def _resolve_ctx(
     ctx: Any,
 ) -> Tuple[Optional[Any], Optional[str], Optional[str], Optional[str], Optional[str]]:
@@ -786,6 +802,8 @@ def _wrap_v2_list_tools(
     data.raw_tool_names_probe = probe_raw_tool_names
 
     async def handler(ctx: Any, params: Any) -> Any:
+        if _is_internal_dispatch(ctx):
+            return await original(ctx, params)
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )

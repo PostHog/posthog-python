@@ -395,6 +395,7 @@ async def prime_session(
     *,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload] = None,
+    client_conversation: Optional[ClientConversation] = None,
 ) -> None:
     """Point the shared per-server session at *this* request before the tool body runs.
 
@@ -405,7 +406,9 @@ async def prime_session(
     and attribute a custom event to the wrong caller. Emits nothing — it only
     settles the transport/memory session an in-tool event should belong to.
     """
-    await resolve_session_id(data, mcp_session_id, token=token)
+    await resolve_session_id(
+        data, mcp_session_id, token=token, client_conversation=client_conversation
+    )
 
 
 def _is_sse_request(extra: Optional[Dict[str, Any]]) -> bool:
@@ -568,7 +571,10 @@ class ToolCallLifecycle:
 
     async def prime_session(self) -> None:
         await prime_session(
-            self.data, mcp_session_id=self.mcp_session_id, token=self.token
+            self.data,
+            mcp_session_id=self.mcp_session_id,
+            token=self.token,
+            client_conversation=self.client_conversation,
         )
 
     def virtual_result_texts(self, primary_text: str) -> List[str]:

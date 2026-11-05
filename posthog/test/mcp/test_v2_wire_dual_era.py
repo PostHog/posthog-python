@@ -20,6 +20,8 @@ from contextlib import asynccontextmanager
 
 import httpx
 import pytest
+import mcp.types as mcp_types
+from mcp.server.lowlevel import Server
 from mcp.server.mcpserver import MCPServer
 
 from posthog.mcp import (
@@ -482,3 +484,66 @@ async def test_real_request_headers_reach_the_event():
     props = _events(client, "$mcp_tool_call")[0]["properties"]
     assert props[P.CLIENT_USER_AGENT] == user_agent
     assert props[P.VENDOR_CLIENT] == "cli"
+
+
+# --- internal tools/list (Mcp-Param-* header validation) -----------------------
+
+
+def make_lowlevel_server():
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(
+                    name="add",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}},
+                    },
+                )
+            ]
+        )
+
+    async def on_call_tool(ctx, params):
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="ok")]
+        )
+
+    return Server("low-wire", on_call_tool=on_call_tool, on_list_tools=on_list_tools)
+
+
+@pytest.mark.parametrize(
+    "make", [make_server, make_lowlevel_server], ids=["mcpserver", "lowlevel"]
+)
+async def test_modern_tool_call_emits_no_tools_list_from_header_validation(make):
+    """The SDK's own tools/call path may run the tools/list handler to find the
+    tool's input schema. That is not a request the client sent, so it is no event."""
+    server = make()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions())
+
+    async with wire(server) as http:
+        response = await modern_call(http, "add", {"a": 1, "b": 2})
+    await _flush()
+
+    assert response.status_code == 200
+    assert [event["event"] for event in client.events] == ["$mcp_tool_call"]
+
+
+@pytest.mark.parametrize(
+    "make", [make_server, make_lowlevel_server], ids=["mcpserver", "lowlevel"]
+)
+async def test_modern_client_tools_list_still_emits(make):
+    server = make()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions())
+
+    async with wire(server) as http:
+        response = await http.post(
+            "/mcp",
+            json=rpc("tools/list", {"_meta": modern_meta()}),
+            headers=modern_headers("tools/list"),
+        )
+    await _flush()
+
+    assert response.status_code == 200
+    assert len(_events(client, "$mcp_tools_list")) == 1

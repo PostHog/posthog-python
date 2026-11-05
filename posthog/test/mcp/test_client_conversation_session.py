@@ -3,7 +3,7 @@
 results (posthog-js ADR-0014). Every call lands on a fresh server state, as on a
 per-request stateless server. Runs under both MCP majors."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -231,6 +231,46 @@ async def test_client_conversation_never_touches_shared_state():
 
     assert resolved == (CHATGPT_SESSION_ID, "client_metadata")
     assert (data.session_id, data.session_source, data.last_activity) == before
+
+
+@pytest.mark.parametrize(
+    "chatgpt_gaps_in_minutes",
+    [[20, 20], [50]],
+    ids=["calls inside the window", "call after the window"],
+)
+async def test_client_conversation_calls_do_not_keep_the_instance_session_alive(
+    chatgpt_gaps_in_minutes,
+):
+    data = MCPAnalyticsData(options=MCPAnalyticsOptions(), session_id=new_session_id())
+
+    async def prime(meta):
+        await start_tool_call_lifecycle(
+            data,
+            name="get_plan",
+            arguments={},
+            request_meta=meta,
+            allow_self_reported_model=True,
+            mcp_session_id=None,
+            token=None,
+            client_name=None,
+            client_version=None,
+            protocol_version=None,
+            extra={},
+        ).prime_session()
+
+    await prime(None)
+    first_session = data.session_id
+    for minutes in chatgpt_gaps_in_minutes:
+        data.last_activity -= timedelta(minutes=minutes)
+        before = (data.session_id, data.session_source, data.last_activity)
+        await prime(CHATGPT_META)
+        assert (data.session_id, data.session_source, data.last_activity) == before
+    data.last_activity -= timedelta(minutes=5)
+
+    await prime(None)
+
+    assert data.session_source == "generated"
+    assert data.session_id != first_session
 
 
 @pytest.mark.parametrize(
