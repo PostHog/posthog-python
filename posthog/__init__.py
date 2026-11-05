@@ -530,7 +530,8 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             }
         )
         ```
-    posthog-capability: capture
+    Category:
+        Events
     """
 
     return _proxy("capture", event, **kwargs)
@@ -565,7 +566,8 @@ def capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[st
         )
         ```
 
-    posthog-capability: capture-ai
+    Category:
+        Events
     """
     return _proxy("capture_ai", event, **kwargs)
 
@@ -596,7 +598,8 @@ def set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         from posthog import set
         set(distinct_id='distinct_id', properties={'name': 'Max Hedgehog'})
         ```
-    posthog-capability: identify
+    Category:
+        Identification
     """
 
     return _proxy("set", **kwargs)
@@ -629,7 +632,8 @@ def set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
         set_once(distinct_id='distinct_id', properties={'initial_url': '/blog'})
 
         ```
-    posthog-capability: identify
+    Category:
+        Identification
     """
     return _proxy("set_once", **kwargs)
 
@@ -667,7 +671,8 @@ def group_identify(
             'employees': 11
         })
         ```
-    posthog-capability: group-identify
+    Category:
+        Identification
     """
 
     return _proxy(
@@ -709,7 +714,8 @@ def alias(
         from posthog import alias
         alias(previous_id='distinct_id', distinct_id='alias_id')
         ```
-    posthog-capability: alias
+    Category:
+        Identification
     """
 
     return _proxy(
@@ -748,7 +754,8 @@ def capture_exception(
         except Exception as e:
             capture_exception(e)
         ```
-    posthog-capability: capture-exception
+    Category:
+        Events
     """
 
     return _proxy("capture_exception", exception=exception, **kwargs)
@@ -790,7 +797,8 @@ def feature_enabled(
         if is_my_flag_enabled:
             matched_flag_payload = get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
         ```
-    posthog-capability: is-feature-enabled
+    Category:
+        Feature flags
     """
     return _proxy(
         "feature_enabled",
@@ -842,7 +850,8 @@ def get_feature_flag(
         if enabled_variant == 'variant-key':
             matched_flag_payload = get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
         ```
-    posthog-capability: get-feature-flag
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_feature_flag",
@@ -890,7 +899,8 @@ def get_all_flags(
         from posthog import get_all_flags
         get_all_flags('distinct_id_of_your_user')
         ```
-    posthog-capability: get-feature-flags
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_all_flags",
@@ -945,8 +955,6 @@ def get_feature_flag_result(
         print(f"Variant: {result.variant}")
         print(f"Payload: {result.payload}")
     ```
-
-    posthog-capability: get-feature-flag-result
     """
     return _proxy(
         "get_feature_flag_result",
@@ -997,7 +1005,8 @@ def get_feature_flag_payload(
         This function returns the payload only, not the FeatureFlagResult wrapper
         used internally to compute it.
 
-    posthog-capability: get-feature-flag-payload
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_feature_flag_payload",
@@ -1061,7 +1070,8 @@ def get_all_flags_and_payloads(
     Returns:
         A dict with ``featureFlags`` and ``featureFlagPayloads`` entries.
 
-    posthog-capability: get-feature-flags-and-payloads
+    Category:
+        Feature flags
     """
     return _proxy(
         "get_all_flags_and_payloads",
@@ -1124,7 +1134,8 @@ def evaluate_flags(
         capture("page_viewed", distinct_id="user_123", flags=flags)
         ```
 
-    posthog-capability: evaluate-flags
+    Category:
+        Feature flags
     """
     return _proxy(
         "evaluate_flags",
@@ -1152,7 +1163,8 @@ def feature_flag_definitions():
         definitions = feature_flag_definitions()
         ```
 
-    posthog-capability: flag-definition-loader
+    Category:
+        Feature flags
     """
     return _proxy("feature_flag_definitions")
 
@@ -1215,7 +1227,8 @@ def load_feature_flags():
         load_feature_flags()
         ```
 
-    posthog-capability: flag-definition-loader
+    Category:
+        Feature flags
     """
     return _proxy("load_feature_flags")
 
@@ -1257,7 +1270,8 @@ def flush(timeout_seconds: Optional[float] = 10) -> None:
         posthog.flush(timeout_seconds=10)
         ```
 
-    posthog-capability: flush
+    Category:
+        Client management
     """
     _proxy("flush", timeout_seconds=timeout_seconds)
 
@@ -1276,7 +1290,8 @@ def join() -> None:
         join()
         ```
 
-    posthog-capability: shutdown
+    Category:
+        Client management
     """
     _proxy("join")
 
@@ -1323,7 +1338,8 @@ def start_span(
             outgoing_headers = {"traceparent": span.traceparent()}
         ```
 
-    posthog-capability: traces
+    Category:
+        Tracing
     """
     return _proxy(
         "start_span",
@@ -1351,7 +1367,8 @@ def get_active_span() -> Optional[Span]:
             headers["traceparent"] = span.traceparent()
         ```
 
-    posthog-capability: traces
+    Category:
+        Tracing
     """
     return _proxy("get_active_span")
 
@@ -1386,7 +1403,8 @@ def shutdown() -> None:
         shutdown()
         ```
 
-    posthog-capability: shutdown
+    Category:
+        Client management
     """
     _proxy("shutdown")
 
@@ -1404,7 +1422,8 @@ def setup() -> Client:
         ``project_api_key`` are missing or blank, the client is disabled and
         module-level calls become no-ops.
 
-    posthog-capability: setup
+    Category:
+        Initialization
     """
     global default_client
     if not default_client:
