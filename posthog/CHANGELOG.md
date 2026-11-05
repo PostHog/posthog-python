@@ -1,5 +1,38 @@
 # posthog
 
+## 7.84.0 — 2026-11-05
+
+### Minor changes
+
+- [063f1ce](https://github.com/posthog/posthog-python/commit/063f1cece68ee0d6e4d644d4b6fe0fbe335e3b29) `posthog.emails.send()` can now send email content your code rendered, such as HTML from Jinja or React Email. Give the email a `template_key` and a `subject`, and pass `html`, `text` or both.
+  
+  ```python
+  posthog = Posthog("phc_...", secret_key="phs_...")
+  
+  result = posthog.emails.send(
+      to="user@example.com",
+      distinct_id="user_123",
+      template_key="password-reset",
+      subject="Reset your password",
+      html=rendered_html,
+  )
+  
+  # "delivered", "bounced", ...
+  status = posthog.emails.get(result.id).status
+  ```
+  
+  You need a project secret API key, the kind that starts with `phs_`. Create one under **Project secret API keys** in your project settings. Set its **Transactional email** scope to Write to send emails, or to Read for a key that only reads statuses. Pass it to the client as `secret_key`. Set `app_host` to your PostHog app URL when you self-host PostHog or send through a reverse proxy.
+  
+  PostHog records each email's delivery, opens and clicks on the person with that `distinct_id`. It groups every email with the same `template_key`, so you see their metrics and logs in one place. The SDK retries a request that hits a network error, a rate limit or an outage twice by default. Every send carries an idempotency key, so a retry never sends the email twice. Pass your own `idempotency_key`, such as `welcome:user_123`, and your job runner's retries are safe too.
+  
+  A send with your own content also takes `from_`, `reply_to` and `capture_engagement=False`. Set `migrated_from` on the client to tell PostHog which email provider you moved from. A failed call raises an `EmailError` with PostHog's `code` and the HTTP `status_code`.
+  
+  Docs: [Send transactional emails with Python](https://posthog.com/docs/workflows/transactional-emails/python) and the [transactional email overview](https://posthog.com/docs/workflows/transactional-emails). — Thanks @Silthus!
+
+### Patch changes
+
+- [b741c65](https://github.com/posthog/posthog-python/commit/b741c65a5cd0e503aaf915e695cdb4d54686d9f9) The LangChain callback handler no longer reports too few input tokens for a non-streamed `ChatAnthropic` call that reads or writes the prompt cache. It took the raw Anthropic usage from `response_metadata`, whose input tokens already exclude the cache, and subtracted the cache tokens again, so a cached call usually reported 0 input tokens. It now reads LangChain's standard `usage_metadata` first, as it already did for streamed calls. — Thanks @jaeminbird for your first contribution 🎉!
+
 ## 7.83.3 — 2026-11-05
 
 ### Patch changes
