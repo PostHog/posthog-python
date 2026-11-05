@@ -552,7 +552,7 @@ def match_feature_flag_properties(
                         )
                         continue
                     effective_properties = group_properties[group_name]
-                    effective_bucketing = groups[group_name]
+                    effective_bucketing = _group_key_to_string(groups[group_name])
                 else:
                     effective_properties = properties
                     effective_bucketing = bucketing_value
@@ -798,6 +798,17 @@ def _json_value_to_string(value, reason: UnresolvedFlagReason) -> str:
     raise InconclusiveMatchError(
         f"Property value of type {type(value).__name__} is not JSON-compatible",
         reason=reason,
+    )
+
+
+def _group_key_to_string(value) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _json_value_to_string(value, UnresolvedFlagReason.MISSING_CONTEXT)
+    raise InconclusiveMatchError(
+        "Group keys must be strings or finite numbers",
+        reason=UnresolvedFlagReason.MISSING_CONTEXT,
     )
 
 
