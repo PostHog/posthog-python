@@ -1,5 +1,11 @@
 # posthog
 
+## 7.84.1 — 2026-11-05
+
+### Patch changes
+
+- [f3116ff](https://github.com/posthog/posthog-python/commit/f3116ffca51ba3dcac8527bb0c50505bab079bdc) Reworded the descriptions of the injected `conversation_id` and `llm_model` arguments and the `get_more_tools` and `send_feedback` virtual tools so they describe the field instead of instructing the model. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools. — Thanks @lucasheriques!
+
 ## 7.84.0 — 2026-11-05
 
 ### Minor changes
