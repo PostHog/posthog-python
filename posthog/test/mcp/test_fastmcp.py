@@ -172,6 +172,39 @@ async def test_tool_call_captures_client_model_without_prior_listing():
     assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
+@pytest.mark.parametrize("enable_conversation_id", [True, False])
+async def test_client_conversation_groups_calls_on_fresh_servers(
+    enable_conversation_id,
+):
+    client = FakeClient()
+    context = SimpleNamespace(
+        request_context=SimpleNamespace(meta={"openai/session": "v1/aBcDeF123"})
+    )
+    results = []
+    for _ in range(2):
+        server = make_server()
+        instrument(
+            server,
+            client,
+            MCPAnalyticsOptions(enable_conversation_id=enable_conversation_id),
+        )
+        results.append(
+            await server._tool_manager.call_tool(
+                "add", {"a": 2, "b": 3}, context=context
+            )
+        )
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert results == [5, 5]
+    assert [c["properties"]["$session_id"] for c in calls] == [
+        "ses_35e4cc45ea3e5e1282c3f091de632132"
+    ] * 2
+    assert {c["properties"]["$mcp_session_source"] for c in calls} == {
+        "client_metadata"
+    }
+
+
 async def test_analytics_flush_drains_its_own_captures():
     async def slow_before_send(event):
         await asyncio.sleep(0.05)

@@ -8,15 +8,55 @@ rolls over after an inactivity timeout."""
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, NamedTuple, Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._ids import deterministic_prefixed_id, new_prefixed_id
 from ._internal import MCPAnalyticsData
 from .session_token import SessionTokenPayload
 
-__all__ = ["derive_session_id_from_mcp_session", "derive_session_id_from_conversation"]
+__all__ = [
+    "derive_session_id_from_mcp_session",
+    "derive_session_id_from_conversation",
+    "derive_session_id_from_client_conversation",
+]
+
+
+class ResolvedSession(NamedTuple):
+    """A request's session id and where it came from: ``"conversation"``,
+    ``"token"``, ``"mcp"``, ``"client_metadata"`` or ``"generated"``."""
+
+    session_id: str
+    source: str
+
+
+class ClientConversation(NamedTuple):
+    """A host client's own conversation id, and the ``_meta`` key it came from."""
+
+    key: str
+    id: str
+
+
+# Host clients that put their own conversation id in a request's ``_meta``, by key.
+# ChatGPT documents ``openai/session`` as an anonymized id "for correlating tool
+# calls within the same ChatGPT session".
+CLIENT_CONVERSATION_META_KEYS = ("openai/session",)
+
+# Printable ASCII only, so every SDK hashes the same characters.
+_CLIENT_CONVERSATION_ID_SHAPE = re.compile(r"[\x20-\x7e]{1,256}")
+
+
+def read_client_conversation(meta: Any) -> Optional[ClientConversation]:
+    """The first recognized client conversation id in a request's ``_meta``."""
+    if not isinstance(meta, dict):
+        return None
+    for key in CLIENT_CONVERSATION_META_KEYS:
+        value = meta.get(key)
+        if isinstance(value, str) and _CLIENT_CONVERSATION_ID_SHAPE.fullmatch(value):
+            return ClientConversation(key, value)
+    return None
 
 
 def new_session_id() -> str:
@@ -44,27 +84,43 @@ def derive_session_id_from_conversation(conversation_id: str) -> str:
     return deterministic_prefixed_id("ses", conversation_id)
 
 
+def derive_session_id_from_client_conversation(key: str, id: str) -> str:
+    """Derive the SDK session id from a host client's conversation id.
+
+    Keyed so two hosts' ids, or a host id and a conversation handle, never share
+    a hash input. Part of the cross-SDK contract, like
+    :func:`derive_session_id_from_conversation`: posthog-js produces the same value
+    byte for byte (``openai/session`` + ``v1/aBcDeF123`` is
+    ``ses_35e4cc45ea3e5e1282c3f091de632132``)."""
+    return deterministic_prefixed_id("ses", f"{key}:{id}")
+
+
 async def resolve_session_id(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
     *,
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
+    client_conversation: Optional[ClientConversation] = None,
 ) -> str:
     """The session id for this request. See :func:`resolve_session_id_with_source`,
     which this wraps -- callers that need to know *where* the session came from
     should use that instead of reading ``data.session_source`` afterwards."""
     session_id, _ = await resolve_session_id_with_source(
-        data, mcp_session_id, token=token, conversation_id=conversation_id
+        data,
+        mcp_session_id,
+        token=token,
+        conversation_id=conversation_id,
+        client_conversation=client_conversation,
     )
     return session_id
 
 
-async def handshake_session_id(
+async def handshake_session(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
-) -> str:
+) -> ResolvedSession:
     """The session an ``initialize`` belongs to: the one the client's later requests
     resolve to through :func:`resolve_session_id_with_source`.
 
@@ -73,10 +129,12 @@ async def handshake_session_id(
     move the session that ``McpAnalytics.capture()`` reads. Without either, the
     session is this process's own, which only the resolver can hand out."""
     if token is not None:
-        return token.session_id
+        return ResolvedSession(token.session_id, "token")
     if mcp_session_id:
-        return derive_session_id_from_mcp_session(mcp_session_id)
-    return await resolve_session_id(data, None)
+        return ResolvedSession(
+            derive_session_id_from_mcp_session(mcp_session_id), "mcp"
+        )
+    return await resolve_session_id_with_source(data, None)
 
 
 async def resolve_session_id_with_source(
@@ -85,12 +143,13 @@ async def resolve_session_id_with_source(
     *,
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
-) -> tuple[str, str]:
+    client_conversation: Optional[ClientConversation] = None,
+) -> ResolvedSession:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
 
     Returns ``(session_id, source)`` where source is one of ``"conversation"``,
-    ``"token"``, ``"mcp"`` or ``"generated"`` -- describing *this* request. Callers
+    ``"token"``, ``"mcp"``, ``"client_metadata"`` or ``"generated"`` -- describing *this* request. Callers
     must not infer it from ``data.session_source`` instead: that field is shared
     mutable state which the conversation branch below deliberately never writes, so
     reading it after the fact reports whatever some earlier request happened to
@@ -99,11 +158,14 @@ async def resolve_session_id_with_source(
     Priority mirrors posthog-js ``getSessionId``: the agent's ``conversation_id``
     handle first (the only id that survives the 2026-07-28 revision's
     per-request server instances), then our self-encoded session token, then the
-    transport's MCP session id, then this instance's own memory.
+    transport's MCP session id, then the host client's own conversation id (ADR-0014
+    in posthog-js), then this instance's own memory. The client id ranks below the
+    first three so it only groups calls that would otherwise fragment, and never
+    regroups a session they already hold.
 
-    ``conversation_id`` is resolved *per request and never stored*: the handle
-    belongs to one chat, and persisting it on shared ``data`` (or advancing
-    ``last_activity``) would leak one chat's session onto a concurrent chat's
+    ``conversation_id`` and ``client_conversation`` are resolved *per request and
+    never stored*: each belongs to one chat, and persisting it on shared ``data`` (or
+    advancing ``last_activity``) would leak one chat's session onto a concurrent chat's
     request.
 
     ``token`` is our self-encoded session token (see :mod:`.session_token`),
@@ -117,7 +179,15 @@ async def resolve_session_id_with_source(
     a genuine token session never needs the fallback.
     """
     if conversation_id:
-        return derive_session_id_from_conversation(conversation_id), "conversation"
+        return ResolvedSession(
+            derive_session_id_from_conversation(conversation_id), "conversation"
+        )
+
+    if token is None and not mcp_session_id and client_conversation is not None:
+        return ResolvedSession(
+            derive_session_id_from_client_conversation(*client_conversation),
+            "client_metadata",
+        )
 
     async with data.session_lock:
         now = datetime.now(timezone.utc)
@@ -129,20 +199,20 @@ async def resolve_session_id_with_source(
             data.session_id = token.session_id
             data.session_source = "token"
             data.last_activity = now
-            return data.session_id, "token"
+            return ResolvedSession(data.session_id, "token")
 
         if mcp_session_id:
             data.session_id = derive_session_id_from_mcp_session(mcp_session_id)
             data.last_mcp_session_id = mcp_session_id
             data.session_source = "mcp"
             data.last_activity = now
-            return data.session_id, "mcp"
+            return ResolvedSession(data.session_id, "mcp")
 
         # Once a session is MCP-derived, keep it even if a later request arrives
         # without the MCP session id, so the session doesn't fragment.
         if data.session_source == "mcp" and data.last_mcp_session_id:
             data.last_activity = now
-            return data.session_id, "mcp"
+            return ResolvedSession(data.session_id, "mcp")
 
         # Memory fallback (single-owner transports like stdio). A leftover token
         # session must NOT leak to a credential-less request, so anything that
@@ -154,4 +224,4 @@ async def resolve_session_id_with_source(
             data.session_id = new_session_id()
             data.session_source = "generated"
         data.last_activity = now
-        return data.session_id, "generated"
+        return ResolvedSession(data.session_id, "generated")

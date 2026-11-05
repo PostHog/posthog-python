@@ -72,10 +72,14 @@ def rpc(method, params, request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
-async def modern_call(http, name, arguments, request_id=1, model=None):
+async def modern_call(http, name, arguments, request_id=1, model=None, meta=None):
     body = rpc(
         "tools/call",
-        {"name": name, "arguments": arguments, "_meta": modern_meta(model=model)},
+        {
+            "name": name,
+            "arguments": arguments,
+            "_meta": {**modern_meta(model=model), **(meta or {})},
+        },
         request_id,
     )
     return await http.post(
@@ -218,6 +222,40 @@ async def test_modern_conversation_anchors_session_across_instances():
     # sharing no state, is the cross-pod contract.
     assert [c["properties"]["$session_id"] for c in calls] == [expected, expected]
     assert [c["properties"]["$mcp_conversation_id"] for c in calls] == [minted, minted]
+
+
+@pytest.mark.parametrize("enable_conversation_id", [True, False])
+async def test_modern_client_conversation_groups_calls_across_instances(
+    enable_conversation_id,
+):
+    """A host client's own conversation id (ADR-0014) groups fresh per-request
+    instances with no handle and no result change: ``openai/session`` survives the
+    SDK lifting the reserved envelope keys out of ``_meta``."""
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=enable_conversation_id)
+    responses = []
+    for _ in range(2):
+        server = make_server()
+        instrument(server, client, options)
+        async with wire(server) as http:
+            responses.append(
+                await modern_call(
+                    http,
+                    "add",
+                    {"a": 1, "b": 1},
+                    meta={"openai/session": "v1/aBcDeF123"},
+                )
+            )
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert [c["properties"]["$session_id"] for c in calls] == [
+        "ses_35e4cc45ea3e5e1282c3f091de632132"
+    ] * 2
+    assert {c["properties"]["$mcp_session_source"] for c in calls} == {
+        "client_metadata"
+    }
+    assert all("conversation_id" not in r.text for r in responses)
 
 
 async def test_modern_result_shape_survives_instrumentation():

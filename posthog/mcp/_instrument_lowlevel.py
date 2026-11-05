@@ -132,7 +132,7 @@ def _wrap_resource_request(
         request = request_to_dict(req)
         extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         try:
-            session_id = await prepare_request(
+            session = await prepare_request(
                 data,
                 mcp_session_id=mcp_session_id,
                 client_name=client_name,
@@ -152,7 +152,7 @@ def _wrap_resource_request(
         except Exception as error:
             await record_resource_request(
                 data,
-                session_id,
+                session,
                 event_type=event_type,
                 request=request,
                 error=error,
@@ -166,7 +166,7 @@ def _wrap_resource_request(
 
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request=request,
             response=resource_listing_response(event_type, result),

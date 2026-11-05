@@ -54,7 +54,13 @@ from .logger import log, warn
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
-from .session import resolve_session_id, resolve_session_id_with_source
+from .session import (
+    ClientConversation,
+    ResolvedSession,
+    read_client_conversation,
+    resolve_session_id,
+    resolve_session_id_with_source,
+)
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import resolve_missing_capability_tool_name
 from .types import CollectFeedbackOptions, FeedbackReport, ToolInputOptions
@@ -243,7 +249,7 @@ def _wrap_response(result: Any) -> Any:
 async def record_initialize(
     data: MCPAnalyticsData,
     *,
-    session_id: str,
+    session: ResolvedSession,
     params: Dict[str, Any],
     result: Any,
     extra: Optional[Dict[str, Any]],
@@ -261,7 +267,7 @@ async def record_initialize(
     in the background, as for every other event."""
 
     request = {"method": "initialize", "params": params}
-    await handle_identify(data, session_id, request, extra)
+    await handle_identify(data, session.session_id, request, extra)
     # The option stops only the event. Identify still runs, so later events of
     # the session keep an identity that only the handshake can resolve.
     if not data.options.send_initialize_event:
@@ -273,10 +279,11 @@ async def record_initialize(
     client_info = params.get("clientInfo")
     client_info = client_info if isinstance(client_info, dict) else {}
     agreed = result.get("protocolVersion") if isinstance(result, dict) else None
-    data.mark_session_initialized(session_id)
+    data.mark_session_initialized(session.session_id)
     event: Dict[str, Any] = {
         "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
-        "session_id": session_id,
+        "session_id": session.session_id,
+        "session_source": session.source,
         "client_name": text(client_info.get("name")),
         "client_version": text(client_info.get("version")),
         "protocol_version": text(agreed) or text(params.get("protocolVersion")),
@@ -305,10 +312,10 @@ def _first_request_stands_in_for_initialize(
     conversation-anchored session: it belongs to a chat, not to a handshake, and
     synthesizing one there is how a single connection used to report two. So a
     client whose first request already echoes a conversation reports no initialize
-    here."""
+    here. The same goes for a session anchored by the client's own conversation id."""
     if data.handshake_observed_in_process:
         return False
-    if session_source == "conversation":
+    if session_source in ("conversation", "client_metadata"):
         return False
     scope = getattr(get_request(extra), "scope", None)
     return not (isinstance(scope, dict) and scope.get(HANDSHAKE_OBSERVER_KEY) is data)
@@ -316,8 +323,7 @@ def _first_request_stands_in_for_initialize(
 
 async def _maybe_emit_initialize(
     data: MCPAnalyticsData,
-    session_id: str,
-    session_source: str,
+    session: ResolvedSession,
     client_name: Optional[str],
     client_version: Optional[str],
     extra: Optional[Dict[str, Any]],
@@ -328,14 +334,15 @@ async def _maybe_emit_initialize(
     :func:`_first_request_stands_in_for_initialize`)."""
     if not data.options.send_initialize_event:
         return
-    if not _first_request_stands_in_for_initialize(data, session_source, extra):
+    if not _first_request_stands_in_for_initialize(data, session.source, extra):
         return
-    if session_id in data.initialized_sessions:
+    if session.session_id in data.initialized_sessions:
         return
-    data.mark_session_initialized(session_id)
+    data.mark_session_initialized(session.session_id)
     event: Dict[str, Any] = {
         "event_type": MCPAnalyticsEventType.MCP_INITIALIZE,
-        "session_id": session_id,
+        "session_id": session.session_id,
+        "session_source": session.source,
         "client_name": client_name,
         "client_version": client_version,
         "protocol_version": protocol_version,
@@ -451,10 +458,11 @@ async def prepare_request(
     token: Optional[SessionTokenPayload] = None,
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
-) -> str:
-    """Resolve the session id, run identify, then emit initialize if this request
-    has to stand in for an unobserved handshake. Returns the session id to stamp on
-    the event for this request.
+    client_conversation: Optional[ClientConversation] = None,
+) -> ResolvedSession:
+    """Resolve the session, run identify, then emit initialize if this request
+    has to stand in for an unobserved handshake. Returns the session to stamp on
+    the event for this request: its id, and the source that grouped it.
 
     ``conversation_id`` is the agent's handle for this request, and when present
     it anchors the session (ADR-0004) so every event of the request — initialize
@@ -483,26 +491,24 @@ async def prepare_request(
     A request that reached us over HTTP yet still resolved to this process's memory
     has nothing correlating it across pods, which on a stateless server means the
     mint middleware never attached — warn once rather than fragment silently."""
-    session_id, session_source = await resolve_session_id_with_source(
-        data, mcp_session_id, token=token, conversation_id=conversation_id
+    session = await resolve_session_id_with_source(
+        data,
+        mcp_session_id,
+        token=token,
+        conversation_id=conversation_id,
+        client_conversation=client_conversation,
     )
     if (
-        session_source == "generated"
+        session.source == "generated"
         and get_request(extra) is not None
         and not _is_sse_request(extra)
     ):
         _warn_stateless_session_not_wired(data)
-    await handle_identify(data, session_id, request, extra)
+    await handle_identify(data, session.session_id, request, extra)
     await _maybe_emit_initialize(
-        data,
-        session_id,
-        session_source,
-        client_name,
-        client_version,
-        extra,
-        protocol_version,
+        data, session, client_name, client_version, extra, protocol_version
     )
-    return session_id
+    return session
 
 
 @dataclass(frozen=True)
@@ -518,6 +524,7 @@ class ToolCallLifecycle:
     name: str
     arguments: Optional[Dict[str, Any]]
     request_meta: Optional[Dict[str, Any]]
+    client_conversation: Optional[ClientConversation]
     allow_self_reported_model: bool
     analytics_owned_parameters: Optional[FrozenSet[str]]
     request: Dict[str, Any]
@@ -544,7 +551,7 @@ class ToolCallLifecycle:
     def is_feedback(self) -> bool:
         return self.feedback_name is not None and self.name == self.feedback_name
 
-    async def prepare_session(self, conversation_id: Optional[str]) -> str:
+    async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
         return await prepare_request(
             self.data,
             mcp_session_id=self.mcp_session_id,
@@ -555,6 +562,7 @@ class ToolCallLifecycle:
             extra=self.extra,
             token=self.token,
             conversation_id=conversation_id,
+            client_conversation=self.client_conversation,
         )
 
     async def prime_session(self) -> None:
@@ -577,10 +585,10 @@ class ToolCallLifecycle:
         self, *, conversation_id_delivered: bool = False
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
-        session_id = await self.prepare_session(conversation_id)
+        session = await self.prepare_session(conversation_id)
         await record_missing_capability(
             self.data,
-            session_id,
+            session,
             conversation_id=conversation_id,
             tool_name=self.missing_name or self.name,
             context=(self.arguments or {}).get("context"),
@@ -599,10 +607,10 @@ class ToolCallLifecycle:
         whether or not the handler raises."""
         report = parse_feedback_report(self.arguments, self.feedback_options)
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
-        session_id = await self.prepare_session(conversation_id)
+        session = await self.prepare_session(conversation_id)
         await record_feedback(
             self.data,
-            session_id,
+            session,
             conversation_id=conversation_id,
             report=report,
             tool_name=self.feedback_name or self.name,
@@ -619,10 +627,10 @@ class ToolCallLifecycle:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
         conversation_id = self._anchored_conversation_id(False)
-        session_id = await self.prepare_session(conversation_id)
+        session = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
-            session_id,
+            session,
             name=self.name,
             arguments=self.arguments,
             request_meta=self.request_meta,
@@ -642,10 +650,10 @@ class ToolCallLifecycle:
         self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
-        session_id = await self.prepare_session(conversation_id)
+        session = await self.prepare_session(conversation_id)
         await record_tool_call(
             self.data,
-            session_id,
+            session,
             name=self.name,
             arguments=self.arguments,
             request_meta=self.request_meta,
@@ -693,8 +701,12 @@ def start_tool_call_lifecycle(
         ),
         arguments,
     )
-    # A carried session stays stable until the agent supplies its own handle.
-    has_carried_session = token is not None or bool(mcp_session_id)
+    # A carried session stays stable until the agent supplies its own handle. The
+    # client's own conversation id counts: it already groups this call.
+    client_conversation = read_client_conversation(request_meta)
+    has_carried_session = (
+        token is not None or bool(mcp_session_id) or client_conversation is not None
+    )
     if minted and has_carried_session:
         conversation_id, minted = None, False
     return ToolCallLifecycle(
@@ -702,6 +714,7 @@ def start_tool_call_lifecycle(
         name=name,
         arguments=arguments,
         request_meta=request_meta,
+        client_conversation=client_conversation,
         allow_self_reported_model=allow_self_reported_model,
         analytics_owned_parameters=analytics_owned_parameters,
         request=build_tool_call_request(name, arguments),
@@ -722,7 +735,7 @@ def start_tool_call_lifecycle(
 
 async def record_tool_call(
     data: MCPAnalyticsData,
-    session_id: str,
+    session: ResolvedSession,
     *,
     name: str,
     arguments: Optional[Dict[str, Any]],
@@ -745,7 +758,8 @@ async def record_tool_call(
         request = build_tool_call_request(name, arguments)
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "session_source": session.source,
             "resource_name": name,
             "tool_description": data.tool_descriptions.get(name),
             "tool_category": data.tool_categories.get(name),
@@ -1251,7 +1265,7 @@ class ToolsListLifecycle:
     """Common capture lifecycle for one client-facing tools/list dispatch."""
 
     data: MCPAnalyticsData
-    session_id: str
+    session: ResolvedSession
     request: Dict[str, Any]
     extra: Dict[str, Any]
     client_name: Optional[str]
@@ -1261,7 +1275,7 @@ class ToolsListLifecycle:
     async def record_error(self, error: Any, duration_ms: float) -> None:
         await record_tools_list(
             self.data,
-            self.session_id,
+            self.session,
             names=[],
             request=self.request,
             duration_ms=duration_ms,
@@ -1283,7 +1297,7 @@ class ToolsListLifecycle:
     ) -> None:
         await record_tools_list(
             self.data,
-            self.session_id,
+            self.session,
             names=names,
             request=self.request,
             result=result,
@@ -1308,7 +1322,7 @@ async def start_tools_list_lifecycle(
     client_version: Optional[str],
     protocol_version: Optional[str],
 ) -> ToolsListLifecycle:
-    session_id = await prepare_request(
+    session = await prepare_request(
         data,
         mcp_session_id=mcp_session_id,
         client_name=client_name,
@@ -1320,7 +1334,7 @@ async def start_tools_list_lifecycle(
     )
     return ToolsListLifecycle(
         data=data,
-        session_id=session_id,
+        session=session,
         request=request,
         extra=extra,
         client_name=client_name,
@@ -1331,7 +1345,7 @@ async def start_tools_list_lifecycle(
 
 async def record_missing_capability(
     data: MCPAnalyticsData,
-    session_id: str,
+    session: ResolvedSession,
     *,
     conversation_id: Optional[str] = None,
     tool_name: str,
@@ -1350,7 +1364,8 @@ async def record_missing_capability(
         request = build_tool_call_request(tool_name, arguments)
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "session_source": session.source,
             "conversation_id": conversation_id,
             "resource_name": tool_name,
             "parameters": build_captured_mcp_parameters(
@@ -1381,7 +1396,7 @@ async def record_missing_capability(
 
 async def record_feedback(
     data: MCPAnalyticsData,
-    session_id: str,
+    session: ResolvedSession,
     *,
     conversation_id: Optional[str] = None,
     report: FeedbackReport,
@@ -1403,7 +1418,8 @@ async def record_feedback(
         request = build_tool_call_request(tool_name, arguments)
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_FEEDBACK,
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "session_source": session.source,
             "conversation_id": conversation_id,
             "resource_name": tool_name,
             "client_name": client_name,
@@ -1436,7 +1452,7 @@ async def record_feedback(
 
 async def record_tools_list(
     data: MCPAnalyticsData,
-    session_id: str,
+    session: ResolvedSession,
     *,
     names: List[str],
     request: Dict[str, Any],
@@ -1454,7 +1470,8 @@ async def record_tools_list(
     try:
         event: Dict[str, Any] = {
             "event_type": MCPAnalyticsEventType.MCP_TOOLS_LIST,
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "session_source": session.source,
             "listed_tool_names": names,
             "parameters": build_captured_mcp_parameters(request),
             "response": tools_list_envelope(result),
@@ -1486,7 +1503,7 @@ def resource_listing_response(event_type: str, result: Any) -> Any:
 
 async def record_resource_request(
     data: MCPAnalyticsData,
-    session_id: str,
+    session: ResolvedSession,
     *,
     event_type: str,
     request: Dict[str, Any],
@@ -1504,7 +1521,8 @@ async def record_resource_request(
         uri = params.get("uri") if isinstance(params, dict) else None
         event: Dict[str, Any] = {
             "event_type": event_type,
-            "session_id": session_id,
+            "session_id": session.session_id,
+            "session_source": session.source,
             "resource_name": uri
             if event_type == MCPAnalyticsEventType.MCP_RESOURCES_READ
             else None,

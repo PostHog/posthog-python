@@ -65,9 +65,9 @@ MCPAnalyticsModelSource = Literal["client_metadata", "self_reported"]
 # ``posthog_events``. Known keys: client_name, client_version, conversation_id,
 # duration, error, error_type, event_name, event_type, groups, id, identify_actor_data,
 # identify_actor_given_id, is_error, listed_tool_names, parameters, properties,
-# resource_name, response, server_name, server_version, session_id, timestamp,
-# tool_category, tool_description, user_intent, user_intent_source, llm_model,
-# llm_model_source.
+# resource_name, response, server_name, server_version, session_id, session_source,
+# timestamp, tool_category, tool_description, user_intent, user_intent_source,
+# llm_model, llm_model_source.
 Event = Dict[str, Any]
 McpEvent = Dict[str, Any]
 

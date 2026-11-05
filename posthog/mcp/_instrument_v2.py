@@ -77,7 +77,7 @@ from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
 from .request_headers import get_request_headers
-from .session import handshake_session_id
+from .session import handshake_session
 from .session_token import SessionTokenPayload, read_mcp_session_header
 from .tools import (
     get_more_tools_result_text,
@@ -206,7 +206,7 @@ async def _record_v2_initialize(
         mcp_session_id, token = _initialize_session(ctx)
         await record_initialize(
             data,
-            session_id=await handshake_session_id(data, mcp_session_id, token),
+            session=await handshake_session(data, mcp_session_id, token),
             params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
@@ -709,7 +709,7 @@ def _wrap_v2_resource_request(
         request = params_to_request_dict(method, params, by_alias=True)
         extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
         try:
-            session_id = await prepare_request(
+            session = await prepare_request(
                 data,
                 mcp_session_id=mcp_session_id,
                 client_name=client_name,
@@ -729,7 +729,7 @@ def _wrap_v2_resource_request(
         except Exception as error:
             await record_resource_request(
                 data,
-                session_id,
+                session,
                 event_type=event_type,
                 request=request,
                 error=error,
@@ -743,7 +743,7 @@ def _wrap_v2_resource_request(
 
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request=request,
             response=resource_listing_response(event_type, result),

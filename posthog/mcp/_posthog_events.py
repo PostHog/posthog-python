@@ -33,6 +33,11 @@ _BUILT_IN_EVENT_NAME_BY_TYPE = {
 
 _P = PostHogMCPAnalyticsProperty
 
+# `$mcp_session_source` is `conversation`, `transport`, `client_metadata` or
+# `generated`. A session token and a transport MCP session id are both transport
+# carried, so they share one value.
+_WIRE_SESSION_SOURCE = {"token": "transport", "mcp": "transport"}
+
 
 def _get_distinct_id(event: Event) -> str:
     return (
@@ -85,6 +90,11 @@ def _add_session_id(event: Event, properties: Dict[str, Any]) -> None:
     session_id = event.get("session_id")
     if isinstance(session_id, str) and len(session_id) > 0:
         properties[_P.SESSION_ID] = session_id
+    session_source = event.get("session_source")
+    if session_source:
+        properties[_P.SESSION_SOURCE] = _WIRE_SESSION_SOURCE.get(
+            session_source, session_source
+        )
 
 
 def _add_conversation_id(event: Event, properties: Dict[str, Any]) -> None:

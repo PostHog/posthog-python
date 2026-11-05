@@ -374,7 +374,7 @@ alias posthog.mcp.asgi.MCP_SESSION_HEADER -> posthog.mcp.session_token.MCP_SESSI
 alias posthog.mcp.asgi.SessionTokenPayload -> posthog.mcp.session_token.SessionTokenPayload
 alias posthog.mcp.asgi.decode_session_id -> posthog.mcp.session_token.decode_session_id
 alias posthog.mcp.asgi.encode_session_id -> posthog.mcp.session_token.encode_session_id
-alias posthog.mcp.asgi.handshake_session_id -> posthog.mcp.session.handshake_session_id
+alias posthog.mcp.asgi.handshake_session -> posthog.mcp.session.handshake_session
 alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
 alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
 alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header
@@ -1055,6 +1055,7 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SERVER_BUILD = '$mcp
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SERVER_NAME = '$mcp_server_name'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SERVER_VERSION = '$mcp_server_version'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SESSION_ID = '$session_id'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SESSION_SOURCE = '$mcp_session_source'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.SOURCE = '$mcp_source'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_CATEGORY = '$mcp_tool_category'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.TOOL_DESCRIPTION = '$mcp_tool_description'
@@ -1582,6 +1583,7 @@ function posthog.mcp.get_tool_input_properties(input_value: Any, input_schema: A
 function posthog.mcp.instrument(server: Any, posthog_client: Optional[Client] = None, options: Optional[MCPAnalyticsOptions] = None) -> McpAnalytics
 function posthog.mcp.logger.set_logger(logger: Optional[LoggerFn]) -> None
 function posthog.mcp.request_headers.get_request_headers(extra: Any) -> Optional[RequestHeaderBag]
+function posthog.mcp.session.derive_session_id_from_client_conversation(key: str, id: str) -> str
 function posthog.mcp.session.derive_session_id_from_conversation(conversation_id: str) -> str
 function posthog.mcp.session.derive_session_id_from_mcp_session(mcp_session_id: str) -> str
 function posthog.mcp.session_token.decode_session_id(value: Any) -> Optional[SessionTokenPayload]

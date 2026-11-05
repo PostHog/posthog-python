@@ -101,6 +101,7 @@ class PostHogMCPAnalyticsProperty:
     SERVER_BUILD = "$mcp_server_build"
     SERVER_VERSION = "$mcp_server_version"
     SESSION_ID = "$session_id"
+    SESSION_SOURCE = "$mcp_session_source"
     SOURCE = "$mcp_source"
     TOOL_CATEGORY = "$mcp_tool_category"
     TOOL_DESCRIPTION = "$mcp_tool_description"

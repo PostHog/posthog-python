@@ -70,7 +70,11 @@ from .feedback import (
     resolve_collect_feedback_options,
     resolve_send_feedback_tool_name,
 )
-from .session import derive_session_id_from_conversation
+from .session import (
+    derive_session_id_from_client_conversation,
+    derive_session_id_from_conversation,
+    read_client_conversation,
+)
 from .tools import build_report_missing_descriptor
 from .types import (
     CollectFeedbackOptions,
@@ -564,7 +568,11 @@ class PostHogMCP(Client):
 
         ``session_id`` is a session carried by the request or transport. A valid
         echoed ``conversation_id`` takes precedence. Otherwise the carried session
-        stays, and no new handle is minted."""
+        stays, and no new handle is minted.
+
+        ``request_meta`` is the request's ``_meta``. A host client's own
+        conversation id in it (ChatGPT's ``openai/session``) groups the call after
+        a carried ``session_id``, and a call it groups mints no handle."""
         raw_context = (args or {}).get("context")
         intent = (
             raw_context.strip()
@@ -597,15 +605,24 @@ class PostHogMCP(Client):
         can_read_conversation = self._enable_conversation_id and (
             ownership is None or ownership.conversation_id
         )
+        client_conversation = read_client_conversation(request_meta)
+        carried_session_id = session_id or (
+            derive_session_id_from_client_conversation(*client_conversation)
+            if client_conversation
+            else None
+        )
         resolved_conversation_id, minted = resolve_conversation_id(
             can_read_conversation, args
         )
         minted_conversation_id = (
-            resolved_conversation_id if minted and not session_id else None
+            resolved_conversation_id if minted and not carried_session_id else None
         )
         conversation_id = None if minted else resolved_conversation_id
-        if conversation_id:
-            session_id = derive_session_id_from_conversation(conversation_id)
+        session_id = (
+            derive_session_id_from_conversation(conversation_id)
+            if conversation_id
+            else carried_session_id
+        )
         if (
             self._enable_conversation_id
             and ownership is not None
