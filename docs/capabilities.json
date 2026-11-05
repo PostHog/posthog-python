@@ -62,6 +62,7 @@
   "utils": [
     "Client.consumers",
     "Client.feature_flags",
+    "Client.get_context_options",
     "Client.get_feature_flag_evaluation_runtime",
     "Client.get_feature_flag_keys_by_evaluation_runtime",
     "Client.get_feature_payloads",
@@ -74,6 +75,7 @@
     "Client.queue",
     "Client.scoped",
     "Client.set_context_device_id",
+    "Client.set_context_option",
     "Client.set_context_session",
     "Client.tag"
   ]
