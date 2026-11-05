@@ -124,6 +124,9 @@ test = [
     "opentelemetry-instrumentation-django>=0.60b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
+    # posthog/test/test_reference_markdown.py checks the reference generator's output.
+    "griffe",
+    "griffe2md",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.
     "gevent>=25.4.1; implementation_name == 'cpython'",
 ]
