@@ -36,6 +36,7 @@ def test_unannotated_parameters_get_no_annotation(pkg):
     line = declaration(pkg, "client.Client.__init__")
     assert "debug=False" in line
     assert "debug: str" not in line
+    assert "_use_ai_lane" not in line, "private parameters stay out of the signature"
 
 
 def test_coroutines_are_marked_async(pkg):
