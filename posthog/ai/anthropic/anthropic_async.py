@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 
 from posthog import setup
 
-log = logging.getLogger("posthog")
 from ..stream import AsyncStreamWrapper as AsyncStreamWrapper
 from ..types import (
     StreamingContentBlock as StreamingContentBlock,
@@ -33,6 +32,8 @@ from .anthropic_converter import (
     handle_anthropic_tool_delta as handle_anthropic_tool_delta,
 )
 from posthog.client import Client as PostHogClient
+
+_log = logging.getLogger("posthog")
 
 
 class AsyncAnthropic(anthropic.AsyncAnthropic):
@@ -185,7 +186,7 @@ class AsyncWrappedMessages(AsyncMessages):
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error.
-                log.exception("Failed to capture streaming connect error")
+                _log.warning("[PostHog] Failed to capture streaming connect error")
             raise
         return self._track_streaming_response(
             response,

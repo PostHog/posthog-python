@@ -32,7 +32,7 @@ from .anthropic_converter import (
 from posthog.client import Client as PostHogClient
 from posthog import setup
 
-log = logging.getLogger("posthog")
+_log = logging.getLogger("posthog")
 
 
 class Anthropic(anthropic.Anthropic):
@@ -185,7 +185,7 @@ class WrappedMessages(Messages):
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error.
-                log.exception("Failed to capture streaming connect error")
+                _log.warning("[PostHog] Failed to capture streaming connect error")
             raise
         return self._track_streaming_response(
             response,

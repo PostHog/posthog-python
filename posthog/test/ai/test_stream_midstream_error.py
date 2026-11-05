@@ -480,3 +480,53 @@ async def test_anthropic_stream_connect_error_survives_unformattable_input_async
                 max_tokens=5,
                 stream=True,
             )
+
+
+def test_openai_chat_stream_connect_error_survives_unformattable_input(mock_client):
+    from posthog.ai.openai import OpenAI
+
+    with patch("openai.resources.chat.completions.Completions.create") as create:
+        create.side_effect = _ConnectError("bad request")
+        client = OpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.chat.completions.create(model="gpt-4", messages=123, stream=True)
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_stream_connect_error_survives_unformattable_input_async(
+    mock_client,
+):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async def create(**kwargs):
+        raise _ConnectError("bad request")
+
+    with patch(
+        "openai.resources.chat.completions.AsyncCompletions.create", side_effect=create
+    ):
+        client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.chat.completions.create(
+                model="gpt-4", messages=123, stream=True
+            )
+
+
+def test_anthropic_connect_error_fallback_does_not_log_error_text(mock_client, caplog):
+    from posthog.ai.anthropic import Anthropic
+
+    with patch("anthropic.resources.messages.Messages.create") as create:
+        create.side_effect = _ConnectError("rejected PRIVATE_CANARY")
+        client = Anthropic(api_key="k", posthog_client=mock_client)
+        with caplog.at_level("DEBUG", logger="posthog"):
+            with pytest.raises(_ConnectError):
+                client.messages.create(
+                    model="claude-3-opus-20240229",
+                    messages=[None],
+                    max_tokens=5,
+                    stream=True,
+                    posthog_privacy_mode=True,
+                )
+
+    assert "Failed to capture streaming connect error" in caplog.text
+    assert "PRIVATE_CANARY" not in caplog.text
+    assert all(r.exc_info is None for r in caplog.records)
