@@ -187,6 +187,8 @@ jobs:
           persist-credentials: false
 
       - name: Generate references
+        # Best-effort: a failure never blocks the release. Run generate-references.yml to retry.
+        continue-on-error: true
         if: steps.commit-release.outputs.commit-hash != ''
         run: |
           uv run bin/docs --sdk-specs .sdk-specs
