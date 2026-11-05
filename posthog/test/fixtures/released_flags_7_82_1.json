@@ -1,0 +1,2258 @@
+{
+  "description": "Results of the scenarios in posthog/test/released_flags_scenarios.py, recorded with posthog 7.82.1 from the v2 response shape. See that module to regenerate.",
+  "results": {
+    "cache histories": {
+      "good, disabled, timeout": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": false,
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": false,
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": false,
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_response": false,
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            false,
+            null,
+            null,
+            "Matched condition set 1"
+          ],
+          [
+            false,
+            null,
+            null,
+            "Matched condition set 1"
+          ]
+        ]
+      },
+      "good, each request failure": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "connection_error",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "api_error_500",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "quota_limited",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "unknown_error",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ]
+        ]
+      },
+      "good, missing with errors, timeout": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": null,
+              "$feature_flag": "cached",
+              "$feature_flag_error": "errors_while_computing_flags,flag_missing",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": null,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          null,
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ]
+        ]
+      },
+      "good, other variant, timeout": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "green",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "green",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "green",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_response": "green",
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "green",
+            null,
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "green",
+            null,
+            "Matched condition set 1"
+          ]
+        ]
+      },
+      "good, server failed, timeout": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": false,
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": false,
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": false,
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": false,
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            false,
+            null,
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            false,
+            null,
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ]
+        ]
+      },
+      "good, unreadable record, timeout": {
+        "events": [
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_evaluated_at": 1800000000000,
+              "$feature_flag_has_experiment": false,
+              "$feature_flag_id": 700,
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_reason": "Matched condition set 1",
+              "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+              "$feature_flag_response": "blue",
+              "$feature_flag_version": 3,
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "unknown_error",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ],
+          [
+            "$feature_flag_called",
+            {
+              "$feature/cached": "blue",
+              "$feature_flag": "cached",
+              "$feature_flag_error": "timeout",
+              "$feature_flag_payload": {
+                "theme": "dark"
+              },
+              "$feature_flag_response": "blue",
+              "locally_evaluated": false
+            }
+          ]
+        ],
+        "results": [
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ],
+          [
+            true,
+            "blue",
+            {
+              "theme": "dark"
+            },
+            "Matched condition set 1"
+          ]
+        ]
+      }
+    },
+    "getters": {
+      "events": [
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-on": true,
+            "$feature_flag": "bool-on",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-on": true,
+            "$feature_flag": "bool-on",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-on": true,
+            "$feature_flag": "bool-on",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-off": false,
+            "$feature_flag": "bool-off",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-off": false,
+            "$feature_flag": "bool-off",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-off": false,
+            "$feature_flag": "bool-off",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-bool-payload": true,
+            "$feature_flag": "v1-bool-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "cta": "Try it",
+              "n": 1
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-bool-payload": true,
+            "$feature_flag": "v1-bool-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "cta": "Try it",
+              "n": 1
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-bool-payload": true,
+            "$feature_flag": "v1-bool-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "cta": "Try it",
+              "n": 1
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-string-payload": true,
+            "$feature_flag": "v1-string-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": "plain",
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-string-payload": true,
+            "$feature_flag": "v1-string-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": "plain",
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-string-payload": true,
+            "$feature_flag": "v1-string-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": "plain",
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-string": "compact",
+            "$feature_flag": "v2-string",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-string": "compact",
+            "$feature_flag": "v2-string",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-string": "compact",
+            "$feature_flag": "v2-string",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-null": false,
+            "$feature_flag": "v2-null",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-null": false,
+            "$feature_flag": "v2-null",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-null": false,
+            "$feature_flag": "v2-null",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-number": true,
+            "$feature_flag": "v2-number",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": 12.5,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-number": true,
+            "$feature_flag": "v2-number",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": 12.5,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-number": true,
+            "$feature_flag": "v2-number",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": 12.5,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-object": true,
+            "$feature_flag": "v2-object",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "layout": "compact",
+              "n": [
+                1,
+                true
+              ]
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-object": true,
+            "$feature_flag": "v2-object",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "layout": "compact",
+              "n": [
+                1,
+                true
+              ]
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-object": true,
+            "$feature_flag": "v2-object",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "layout": "compact",
+              "n": [
+                1,
+                true
+              ]
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/sparse": "compact",
+            "$feature_flag": "sparse",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/sparse": "compact",
+            "$feature_flag": "sparse",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/sparse": "compact",
+            "$feature_flag": "sparse",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/server-failed": false,
+            "$feature_flag": "server-failed",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/server-failed": false,
+            "$feature_flag": "server-failed",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/server-failed": false,
+            "$feature_flag": "server-failed",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-on": true,
+            "$feature_flag": "bool-on",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/bool-off": false,
+            "$feature_flag": "bool-off",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-bool-payload": true,
+            "$feature_flag": "v1-bool-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "cta": "Try it",
+              "n": 1
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-string-payload": true,
+            "$feature_flag": "v1-string-payload",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": "plain",
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-string": "compact",
+            "$feature_flag": "v2-string",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-null": false,
+            "$feature_flag": "v2-null",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-number": true,
+            "$feature_flag": "v2-number",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": 12.5,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v2-object": true,
+            "$feature_flag": "v2-object",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "layout": "compact",
+              "n": [
+                1,
+                true
+              ]
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": true,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/sparse": "compact",
+            "$feature_flag": "sparse",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "compact",
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/server-failed": false,
+            "$feature_flag": "server-failed",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": false,
+            "$feature_flag_id": 700,
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "$feature_flag_version": 3,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "snapshot-event",
+          {
+            "$active_feature_flags": [
+              "bool-on",
+              "sparse",
+              "v1-bool-payload",
+              "v1-string-payload",
+              "v1-variant",
+              "v2-number",
+              "v2-object",
+              "v2-string"
+            ],
+            "$feature/bool-off": false,
+            "$feature/bool-on": true,
+            "$feature/server-failed": false,
+            "$feature/sparse": "compact",
+            "$feature/v1-bool-payload": true,
+            "$feature/v1-string-payload": true,
+            "$feature/v1-variant": "control",
+            "$feature/v2-null": false,
+            "$feature/v2-number": true,
+            "$feature/v2-object": true,
+            "$feature/v2-string": "compact"
+          }
+        ],
+        [
+          "fetched-event",
+          {
+            "$active_feature_flags": [
+              "bool-on",
+              "v1-variant",
+              "v1-bool-payload",
+              "v1-string-payload",
+              "v2-string",
+              "v2-number",
+              "v2-object",
+              "sparse"
+            ],
+            "$feature/bool-off": false,
+            "$feature/bool-on": true,
+            "$feature/server-failed": false,
+            "$feature/sparse": "compact",
+            "$feature/v1-bool-payload": true,
+            "$feature/v1-string-payload": true,
+            "$feature/v1-variant": "control",
+            "$feature/v2-null": false,
+            "$feature/v2-number": true,
+            "$feature/v2-object": true,
+            "$feature/v2-string": "compact"
+          }
+        ]
+      ],
+      "feature_enabled:bool-off": false,
+      "feature_enabled:bool-on": true,
+      "feature_enabled:missing": null,
+      "feature_enabled:server-failed": false,
+      "feature_enabled:sparse": true,
+      "feature_enabled:v1-bool-payload": true,
+      "feature_enabled:v1-string-payload": true,
+      "feature_enabled:v1-variant": true,
+      "feature_enabled:v2-null": false,
+      "feature_enabled:v2-number": true,
+      "feature_enabled:v2-object": true,
+      "feature_enabled:v2-string": true,
+      "get_all_flags": {
+        "bool-off": false,
+        "bool-on": true,
+        "server-failed": false,
+        "sparse": "compact",
+        "v1-bool-payload": true,
+        "v1-string-payload": true,
+        "v1-variant": "control",
+        "v2-null": false,
+        "v2-number": true,
+        "v2-object": true,
+        "v2-string": "compact"
+      },
+      "get_all_flags_and_payloads": {
+        "featureFlagPayloads": {
+          "v1-bool-payload": "{\"cta\": \"Try it\", \"n\": 1}",
+          "v1-string-payload": "\"plain\"",
+          "v1-variant": "{\"columns\": 2}",
+          "v2-number": "12.5",
+          "v2-object": "{\"layout\":\"compact\",\"n\":[1,true]}"
+        },
+        "featureFlags": {
+          "bool-off": false,
+          "bool-on": true,
+          "server-failed": false,
+          "sparse": "compact",
+          "v1-bool-payload": true,
+          "v1-string-payload": true,
+          "v1-variant": "control",
+          "v2-null": false,
+          "v2-number": true,
+          "v2-object": true,
+          "v2-string": "compact"
+        }
+      },
+      "get_feature_flag:bool-off": false,
+      "get_feature_flag:bool-on": true,
+      "get_feature_flag:missing": null,
+      "get_feature_flag:server-failed": false,
+      "get_feature_flag:sparse": "compact",
+      "get_feature_flag:v1-bool-payload": true,
+      "get_feature_flag:v1-string-payload": true,
+      "get_feature_flag:v1-variant": "control",
+      "get_feature_flag:v2-null": false,
+      "get_feature_flag:v2-number": true,
+      "get_feature_flag:v2-object": true,
+      "get_feature_flag:v2-string": "compact",
+      "get_feature_flag_payload:bool-off": null,
+      "get_feature_flag_payload:bool-on": null,
+      "get_feature_flag_payload:missing": null,
+      "get_feature_flag_payload:server-failed": null,
+      "get_feature_flag_payload:sparse": null,
+      "get_feature_flag_payload:v1-bool-payload": {
+        "cta": "Try it",
+        "n": 1
+      },
+      "get_feature_flag_payload:v1-string-payload": "plain",
+      "get_feature_flag_payload:v1-variant": {
+        "columns": 2
+      },
+      "get_feature_flag_payload:v2-null": null,
+      "get_feature_flag_payload:v2-number": 12.5,
+      "get_feature_flag_payload:v2-object": {
+        "layout": "compact",
+        "n": [
+          1,
+          true
+        ]
+      },
+      "get_feature_flag_payload:v2-string": null,
+      "get_feature_flag_result:bool-off": [
+        false,
+        null,
+        null,
+        ""
+      ],
+      "get_feature_flag_result:bool-on": [
+        true,
+        null,
+        null,
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:missing": null,
+      "get_feature_flag_result:server-failed": [
+        false,
+        null,
+        null,
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:sparse": [
+        true,
+        "compact",
+        null,
+        null
+      ],
+      "get_feature_flag_result:v1-bool-payload": [
+        true,
+        null,
+        {
+          "cta": "Try it",
+          "n": 1
+        },
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v1-string-payload": [
+        true,
+        null,
+        "plain",
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v1-variant": [
+        true,
+        "control",
+        {
+          "columns": 2
+        },
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v2-null": [
+        false,
+        null,
+        null,
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v2-number": [
+        true,
+        null,
+        12.5,
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v2-object": [
+        true,
+        null,
+        {
+          "layout": "compact",
+          "n": [
+            1,
+            true
+          ]
+        },
+        "Matched condition set 1"
+      ],
+      "get_feature_flag_result:v2-string": [
+        true,
+        "compact",
+        null,
+        "Matched condition set 1"
+      ],
+      "get_feature_flags_and_payloads": {
+        "featureFlagPayloads": {
+          "v1-bool-payload": "{\"cta\": \"Try it\", \"n\": 1}",
+          "v1-string-payload": "\"plain\"",
+          "v1-variant": "{\"columns\": 2}",
+          "v2-number": "12.5",
+          "v2-object": "{\"layout\":\"compact\",\"n\":[1,true]}"
+        },
+        "featureFlags": {
+          "bool-off": false,
+          "bool-on": true,
+          "server-failed": false,
+          "sparse": "compact",
+          "v1-bool-payload": true,
+          "v1-string-payload": true,
+          "v1-variant": "control",
+          "v2-null": false,
+          "v2-number": true,
+          "v2-object": true,
+          "v2-string": "compact"
+        }
+      },
+      "get_feature_payloads": {
+        "v1-bool-payload": "{\"cta\": \"Try it\", \"n\": 1}",
+        "v1-string-payload": "\"plain\"",
+        "v1-variant": "{\"columns\": 2}",
+        "v2-number": "12.5",
+        "v2-object": "{\"layout\":\"compact\",\"n\":[1,true]}"
+      },
+      "get_feature_variants": {
+        "bool-off": false,
+        "bool-on": true,
+        "server-failed": false,
+        "sparse": "compact",
+        "v1-bool-payload": true,
+        "v1-string-payload": true,
+        "v1-variant": "control",
+        "v2-null": false,
+        "v2-number": true,
+        "v2-object": true,
+        "v2-string": "compact"
+      },
+      "get_flags_decision": {
+        "errorsWhileComputingFlags": false,
+        "evaluatedAt": 1800000000000,
+        "flags": {
+          "bool-off": {
+            "__class__": "FeatureFlag",
+            "enabled": false,
+            "key": "bool-off",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": null,
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "no_condition_match",
+              "condition_index": null,
+              "description": ""
+            },
+            "variant": null
+          },
+          "bool-on": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "bool-on",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": null,
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "server-failed": {
+            "__class__": "FeatureFlag",
+            "enabled": false,
+            "key": "server-failed",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": null,
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "sparse": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "sparse",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": "",
+              "has_experiment": null,
+              "id": 0,
+              "payload": null,
+              "version": 0
+            },
+            "reason": null,
+            "variant": "compact"
+          },
+          "v1-bool-payload": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v1-bool-payload",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": "{\"cta\": \"Try it\", \"n\": 1}",
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "v1-string-payload": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v1-string-payload",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": "\"plain\"",
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "v1-variant": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v1-variant",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": "A variant flag",
+              "has_experiment": true,
+              "id": 701,
+              "payload": "{\"columns\": 2}",
+              "version": 4
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": "control"
+          },
+          "v2-null": {
+            "__class__": "FeatureFlag",
+            "enabled": false,
+            "key": "v2-null",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": null,
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "v2-number": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v2-number",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": "12.5",
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "v2-object": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v2-object",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": "{\"layout\":\"compact\",\"n\":[1,true]}",
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": null
+          },
+          "v2-string": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v2-string",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": null,
+              "has_experiment": false,
+              "id": 700,
+              "payload": null,
+              "version": 3
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": "compact"
+          }
+        },
+        "requestId": "60000000-0000-4000-8000-000000000000"
+      },
+      "snapshot.get_flag:bool-off": false,
+      "snapshot.get_flag:bool-on": true,
+      "snapshot.get_flag:missing": null,
+      "snapshot.get_flag:server-failed": false,
+      "snapshot.get_flag:sparse": "compact",
+      "snapshot.get_flag:v1-bool-payload": true,
+      "snapshot.get_flag:v1-string-payload": true,
+      "snapshot.get_flag:v1-variant": "control",
+      "snapshot.get_flag:v2-null": false,
+      "snapshot.get_flag:v2-number": true,
+      "snapshot.get_flag:v2-object": true,
+      "snapshot.get_flag:v2-string": "compact",
+      "snapshot.get_flag_payload:bool-off": null,
+      "snapshot.get_flag_payload:bool-on": null,
+      "snapshot.get_flag_payload:missing": null,
+      "snapshot.get_flag_payload:server-failed": null,
+      "snapshot.get_flag_payload:sparse": null,
+      "snapshot.get_flag_payload:v1-bool-payload": {
+        "cta": "Try it",
+        "n": 1
+      },
+      "snapshot.get_flag_payload:v1-string-payload": "plain",
+      "snapshot.get_flag_payload:v1-variant": {
+        "columns": 2
+      },
+      "snapshot.get_flag_payload:v2-null": null,
+      "snapshot.get_flag_payload:v2-number": 12.5,
+      "snapshot.get_flag_payload:v2-object": {
+        "layout": "compact",
+        "n": [
+          1,
+          true
+        ]
+      },
+      "snapshot.get_flag_payload:v2-string": null,
+      "snapshot.is_enabled:bool-off": false,
+      "snapshot.is_enabled:bool-on": true,
+      "snapshot.is_enabled:missing": false,
+      "snapshot.is_enabled:server-failed": false,
+      "snapshot.is_enabled:sparse": true,
+      "snapshot.is_enabled:v1-bool-payload": true,
+      "snapshot.is_enabled:v1-string-payload": true,
+      "snapshot.is_enabled:v1-variant": true,
+      "snapshot.is_enabled:v2-null": false,
+      "snapshot.is_enabled:v2-number": true,
+      "snapshot.is_enabled:v2-object": true,
+      "snapshot.is_enabled:v2-string": true,
+      "snapshot.keys": [
+        "bool-off",
+        "bool-on",
+        "server-failed",
+        "sparse",
+        "v1-bool-payload",
+        "v1-string-payload",
+        "v1-variant",
+        "v2-null",
+        "v2-number",
+        "v2-object",
+        "v2-string"
+      ]
+    },
+    "getters with an unreadable record": {
+      "events": [
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": null,
+            "$feature_flag": "v1-variant",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": null,
+            "$feature_flag": "v1-variant",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": null,
+            "$feature_flag": "v1-variant",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": null,
+            "$feature_flag": "unreadable",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": null,
+            "$feature_flag": "unreadable",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": null,
+            "$feature_flag": "unreadable",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "unknown_error",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": null,
+            "$feature_flag": "v1-variant",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": null,
+            "$feature_flag": "unreadable",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "snapshot-event",
+          {}
+        ],
+        [
+          "fetched-event",
+          {}
+        ]
+      ],
+      "feature_enabled:missing": null,
+      "feature_enabled:unreadable": null,
+      "feature_enabled:v1-variant": null,
+      "get_all_flags": {},
+      "get_all_flags_and_payloads": {
+        "featureFlagPayloads": {},
+        "featureFlags": {}
+      },
+      "get_feature_flag:missing": null,
+      "get_feature_flag:unreadable": null,
+      "get_feature_flag:v1-variant": null,
+      "get_feature_flag_payload:missing": null,
+      "get_feature_flag_payload:unreadable": null,
+      "get_feature_flag_payload:v1-variant": null,
+      "get_feature_flag_result:missing": null,
+      "get_feature_flag_result:unreadable": null,
+      "get_feature_flag_result:v1-variant": null,
+      "get_feature_flags_and_payloads": {
+        "featureFlagPayloads": {},
+        "featureFlags": {}
+      },
+      "get_feature_payloads": {},
+      "get_feature_variants": {},
+      "get_flags_decision": {
+        "flags": {},
+        "requestId": null
+      },
+      "snapshot.get_flag:missing": null,
+      "snapshot.get_flag:unreadable": null,
+      "snapshot.get_flag:v1-variant": null,
+      "snapshot.get_flag_payload:missing": null,
+      "snapshot.get_flag_payload:unreadable": null,
+      "snapshot.get_flag_payload:v1-variant": null,
+      "snapshot.is_enabled:missing": false,
+      "snapshot.is_enabled:unreadable": false,
+      "snapshot.is_enabled:v1-variant": false,
+      "snapshot.keys": []
+    },
+    "getters with the unreadable record read as disabled": {
+      "events": [
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": false,
+            "$feature_flag": "unreadable",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": false,
+            "$feature_flag": "unreadable",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": false,
+            "$feature_flag": "unreadable",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/v1-variant": "control",
+            "$feature_flag": "v1-variant",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_has_experiment": true,
+            "$feature_flag_id": 701,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
+            "$feature_flag_reason": "Matched condition set 1",
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": "control",
+            "$feature_flag_version": 4,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/unreadable": false,
+            "$feature_flag": "unreadable",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": false,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "$feature_flag_called",
+          {
+            "$feature/missing": null,
+            "$feature_flag": "missing",
+            "$feature_flag_error": "flag_missing",
+            "$feature_flag_evaluated_at": 1800000000000,
+            "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
+            "$feature_flag_response": null,
+            "locally_evaluated": false
+          }
+        ],
+        [
+          "snapshot-event",
+          {
+            "$active_feature_flags": [
+              "v1-variant"
+            ],
+            "$feature/unreadable": false,
+            "$feature/v1-variant": "control"
+          }
+        ],
+        [
+          "fetched-event",
+          {
+            "$active_feature_flags": [
+              "v1-variant"
+            ],
+            "$feature/unreadable": false,
+            "$feature/v1-variant": "control"
+          }
+        ]
+      ],
+      "feature_enabled:missing": null,
+      "feature_enabled:unreadable": false,
+      "feature_enabled:v1-variant": true,
+      "get_all_flags": {
+        "unreadable": false,
+        "v1-variant": "control"
+      },
+      "get_all_flags_and_payloads": {
+        "featureFlagPayloads": {
+          "v1-variant": "{\"columns\": 2}"
+        },
+        "featureFlags": {
+          "unreadable": false,
+          "v1-variant": "control"
+        }
+      },
+      "get_feature_flag:missing": null,
+      "get_feature_flag:unreadable": false,
+      "get_feature_flag:v1-variant": "control",
+      "get_feature_flag_payload:missing": null,
+      "get_feature_flag_payload:unreadable": null,
+      "get_feature_flag_payload:v1-variant": {
+        "columns": 2
+      },
+      "get_feature_flag_result:missing": null,
+      "get_feature_flag_result:unreadable": [
+        false,
+        null,
+        null,
+        null
+      ],
+      "get_feature_flag_result:v1-variant": [
+        true,
+        "control",
+        {
+          "columns": 2
+        },
+        "Matched condition set 1"
+      ],
+      "get_feature_flags_and_payloads": {
+        "featureFlagPayloads": {
+          "v1-variant": "{\"columns\": 2}"
+        },
+        "featureFlags": {
+          "unreadable": false,
+          "v1-variant": "control"
+        }
+      },
+      "get_feature_payloads": {
+        "v1-variant": "{\"columns\": 2}"
+      },
+      "get_feature_variants": {
+        "unreadable": false,
+        "v1-variant": "control"
+      },
+      "get_flags_decision": {
+        "errorsWhileComputingFlags": false,
+        "evaluatedAt": 1800000000000,
+        "flags": {
+          "unreadable": {
+            "__class__": "FeatureFlag",
+            "enabled": false,
+            "key": "unreadable",
+            "metadata": {
+              "__class__": "LegacyFlagMetadata",
+              "payload": null
+            },
+            "reason": null,
+            "variant": null
+          },
+          "v1-variant": {
+            "__class__": "FeatureFlag",
+            "enabled": true,
+            "key": "v1-variant",
+            "metadata": {
+              "__class__": "FlagMetadata",
+              "description": "A variant flag",
+              "has_experiment": true,
+              "id": 701,
+              "payload": "{\"columns\": 2}",
+              "version": 4
+            },
+            "reason": {
+              "__class__": "FlagReason",
+              "code": "condition_match",
+              "condition_index": 0,
+              "description": "Matched condition set 1"
+            },
+            "variant": "control"
+          }
+        },
+        "requestId": "60000000-0000-4000-8000-000000000000"
+      },
+      "snapshot.get_flag:missing": null,
+      "snapshot.get_flag:unreadable": false,
+      "snapshot.get_flag:v1-variant": "control",
+      "snapshot.get_flag_payload:missing": null,
+      "snapshot.get_flag_payload:unreadable": null,
+      "snapshot.get_flag_payload:v1-variant": {
+        "columns": 2
+      },
+      "snapshot.is_enabled:missing": false,
+      "snapshot.is_enabled:unreadable": false,
+      "snapshot.is_enabled:v1-variant": true,
+      "snapshot.keys": [
+        "unreadable",
+        "v1-variant"
+      ]
+    }
+  }
+}

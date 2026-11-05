@@ -429,3 +429,54 @@ async def test_gemini_stream_connect_error_async(mock_client):
     props = _props(mock_client)
     assert props["$ai_is_error"] is True
     assert props["$ai_http_status"] == 401
+
+
+@pytest.mark.parametrize(
+    ("cls_name", "code"), [("ClientError", 429), ("ServerError", 503)]
+)
+def test_capture_streaming_event_records_google_genai_error_status(
+    mock_client, cls_name, code
+):
+    errors = pytest.importorskip("google.genai.errors")
+    error = getattr(errors, cls_name)(
+        code, {"error": {"code": code, "message": "nope", "status": "ERROR"}}
+    )
+    capture_streaming_event(mock_client, _event_data(error=error))
+    props = _props(mock_client)
+    assert props["$ai_http_status"] == code
+    assert props["$ai_is_error"] is True
+
+
+def test_anthropic_stream_connect_error_survives_unformattable_input(mock_client):
+    from posthog.ai.anthropic import Anthropic
+
+    with patch("anthropic.resources.messages.Messages.create") as create:
+        create.side_effect = _ConnectError("bad request")
+        client = Anthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[None],
+                max_tokens=5,
+                stream=True,
+            )
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_connect_error_survives_unformattable_input_async(
+    mock_client,
+):
+    from posthog.ai.anthropic import AsyncAnthropic
+
+    async def create(**kwargs):
+        raise _ConnectError("bad request")
+
+    with patch("anthropic.resources.messages.AsyncMessages.create", side_effect=create):
+        client = AsyncAnthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_ConnectError):
+            await client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[None],
+                max_tokens=5,
+                stream=True,
+            )

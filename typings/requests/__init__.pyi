@@ -1,6 +1,7 @@
 from typing import Any
 
 from . import adapters as adapters, auth as auth, exceptions as exceptions
+from .auth import AuthBase as _AuthBase
 
 class PreparedRequest:
     headers: dict[str, str]
@@ -27,6 +28,7 @@ class Session:
         params: dict[str, str | int] | None = ...,
         timeout: float | None = ...,
         allow_redirects: bool = ...,
+        auth: _AuthBase | None = ...,
     ) -> Response: ...
     def post(
         self,

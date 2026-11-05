@@ -25,6 +25,7 @@ from .gemini_converter import (
     extract_gemini_embedding_token_count as extract_gemini_embedding_token_count,
     extract_gemini_stop_reason_from_chunk,
     extract_gemini_usage_from_chunk,
+    has_gemini_url_context,
     format_gemini_streaming_output as format_gemini_streaming_output,
 )
 
@@ -287,10 +288,14 @@ class Models(_GeminiModelsPolicy):
             nonlocal accumulated_content
             nonlocal stop_reason
             stream_error: Optional[BaseException] = None
+            url_context_seen = False
             try:
                 for chunk in response:
                     # Extract usage stats from chunk
-                    chunk_usage = extract_gemini_usage_from_chunk(chunk)
+                    url_context_seen = url_context_seen or has_gemini_url_context(chunk)
+                    chunk_usage = extract_gemini_usage_from_chunk(
+                        chunk, url_context_seen=url_context_seen
+                    )
 
                     if chunk_usage:
                         # Gemini reports cumulative totals, not incremental values

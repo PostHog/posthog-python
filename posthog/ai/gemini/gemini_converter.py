@@ -40,6 +40,18 @@ def _format_media_payload(payload: Any) -> Dict[str, Any]:
     return payload
 
 
+def _function_call_block(name: Any, arguments: Any, call_id: Any) -> Dict[str, Any]:
+    block: Dict[str, Any] = {
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }
+    # Only a real string ID: Gemini omits it for some calls, and mocked parts
+    # answer any attribute.
+    if isinstance(call_id, str):
+        block["id"] = call_id
+    return block
+
+
 def _format_part(part: Any) -> Optional[FormattedContentItem]:
     if isinstance(part, str):
         return {"type": "text", "text": part}
@@ -64,20 +76,26 @@ def _format_part(part: Any) -> Optional[FormattedContentItem]:
     # shape leaves them unrenderable and invisible to evals.
     if "function_call" in plain:
         call = to_plain(plain["function_call"]) or {}
-        return {
+        block: Dict[str, Any] = {
             "type": "function",
             "function": {
                 "name": call.get("name"),
                 "arguments": call.get("args"),
             },
         }
+        if isinstance(call.get("id"), str):
+            block["id"] = call["id"]
+        return block
     if "function_response" in plain:
         response = to_plain(plain["function_response"]) or {}
-        return {
+        response_block: Dict[str, Any] = {
             "type": "function",
             "tool_name": response.get("name") or "",
             "content": response.get("response"),
         }
+        if isinstance(response.get("id"), str):
+            response_block["tool_use_id"] = response["id"]
+        return response_block
     if not plain:
         return None
     key = next(iter(plain))
@@ -269,13 +287,11 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
                         if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             content.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
+                                _function_call_block(
+                                    function_call.name,
+                                    function_call.args,
+                                    getattr(function_call, "id", None),
+                                )
                             )
                             continue
 
@@ -501,19 +517,42 @@ def extract_gemini_web_search_count(response: Any) -> int:
     return 0
 
 
-def _extract_usage_from_metadata(metadata: Any) -> TokenUsage:
+def has_gemini_url_context(response: Any) -> bool:
+    """Whether a response or chunk carries URL context retrieval metadata."""
+    candidates = getattr(response, "candidates", None)
+    if not isinstance(candidates, (list, tuple)):
+        return False
+    return any(getattr(c, "url_context_metadata", None) for c in candidates)
+
+
+def _extract_usage_from_metadata(
+    metadata: Any, bill_tool_use_tokens: bool = False
+) -> TokenUsage:
     """
     Common logic to extract usage from Gemini metadata.
     Used by both streaming and non-streaming paths.
 
     Args:
         metadata: usage_metadata from Gemini response or chunk
+        bill_tool_use_tokens: whether tool_use_prompt_token_count is billed as
+            input (URL context). Google Search retrieval is not billed as input.
 
     Returns:
         TokenUsage with standardized usage
     """
+    input_tokens = getattr(metadata, "prompt_token_count", 0)
+
+    # Built-in tools report the retrieved content separately from
+    # prompt_token_count. URL context content is billed as input; Google Search
+    # retrieval is not, so only add it when the response used URL context.
+    # (A response that used both tools cannot be split from these counts.)
+    if bill_tool_use_tokens:
+        tool_use_tokens = getattr(metadata, "tool_use_prompt_token_count", 0)
+        if isinstance(tool_use_tokens, int) and tool_use_tokens > 0:
+            input_tokens += tool_use_tokens
+
     usage = TokenUsage(
-        input_tokens=getattr(metadata, "prompt_token_count", 0),
+        input_tokens=input_tokens,
         output_tokens=getattr(metadata, "candidates_token_count", 0),
     )
 
@@ -557,7 +596,9 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     if not hasattr(response, "usage_metadata") or not response.usage_metadata:
         return TokenUsage()
 
-    usage = _extract_usage_from_metadata(response.usage_metadata)
+    usage = _extract_usage_from_metadata(
+        response.usage_metadata, bill_tool_use_tokens=has_gemini_url_context(response)
+    )
 
     # Add web search count if present
     web_search_count = extract_gemini_web_search_count(response)
@@ -567,12 +608,17 @@ def extract_gemini_usage_from_response(response: Any) -> TokenUsage:
     return usage
 
 
-def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
+def extract_gemini_usage_from_chunk(
+    chunk: Any, url_context_seen: bool = False
+) -> TokenUsage:
     """
     Extract usage statistics from a Gemini streaming chunk.
 
     Args:
         chunk: Streaming chunk from Gemini API
+        url_context_seen: whether an earlier chunk of the same stream carried
+            URL context metadata. Tool indicators can arrive on a different
+            chunk than the final usage_metadata, so callers carry this flag.
 
     Returns:
         TokenUsage with standardized usage statistics
@@ -589,7 +635,10 @@ def extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage:
     if not hasattr(chunk, "usage_metadata") or not chunk.usage_metadata:
         return usage
 
-    usage_from_metadata = _extract_usage_from_metadata(chunk.usage_metadata)
+    usage_from_metadata = _extract_usage_from_metadata(
+        chunk.usage_metadata,
+        bill_tool_use_tokens=url_context_seen or has_gemini_url_context(chunk),
+    )
 
     # Merge the usage from metadata with any web search count we found
     usage.update(usage_from_metadata)
@@ -622,13 +671,11 @@ def extract_gemini_content_from_chunk(
                         if hasattr(part, "function_call") and part.function_call:
                             function_call = part.function_call
                             blocks.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": function_call.name,
-                                        "arguments": function_call.args,
-                                    },
-                                }
+                                _function_call_block(
+                                    function_call.name,
+                                    function_call.args,
+                                    getattr(function_call, "id", None),
+                                )
                             )
                             continue
 
@@ -689,12 +736,13 @@ def format_gemini_streaming_output(
                         text_parts = []
 
                     # Add the function call
-                    content.append(
-                        {
-                            "type": "function",
-                            "function": item.get("function", {}),
-                        }
-                    )
+                    function_block: Dict[str, Any] = {
+                        "type": "function",
+                        "function": item.get("function", {}),
+                    }
+                    if isinstance(item.get("id"), str):
+                        function_block["id"] = item["id"]
+                    content.append(function_block)
                 else:
                     if text_parts:
                         content.append(

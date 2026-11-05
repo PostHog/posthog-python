@@ -1192,6 +1192,78 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 1)
 
+    @parameterized.expand(
+        [
+            ("enrollment not passed", {}, 0, "flags-fallback-value", 1, False),
+            (
+                "enrolled",
+                {"$feature_enrollment/beta-feature": "true"},
+                0,
+                True,
+                0,
+                False,
+            ),
+            (
+                "opted out",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "not a true value",
+                {"$feature_enrollment/beta-feature": 1},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "group flag",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                "flags-fallback-value",
+                1,
+                True,
+            ),
+        ]
+    )
+    def test_feature_enrollment_flag(
+        self, _name, person_properties, rollout, expected, flags_calls, group
+    ):
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "beta-feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": rollout}],
+                    "feature_enrollment": True,
+                    "aggregation_group_type_index": 0 if group else None,
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+        with mock.patch("posthog.client.flags") as patch_flags:
+            patch_flags.return_value = {
+                "featureFlags": {"beta-feature": "flags-fallback-value"}
+            }
+            value = client.get_feature_flag(
+                "beta-feature",
+                "distinct_id",
+                person_properties=person_properties,
+                groups={"company": "acme"} if group else None,
+                group_properties={
+                    "company": {"$feature_enrollment/beta-feature": "true"}
+                }
+                if group
+                else None,
+            )
+
+        self.assertEqual((value, patch_flags.call_count), (expected, flags_calls))
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_get_all_flags_with_fallback(self, patch_flags, patch_capture):
@@ -5871,6 +5943,25 @@ class TestMatchProperties(unittest.TestCase):
 
         self.assertFalse(match_property(property_d, {"key": "value"}))
 
+    @parameterized.expand(
+        [
+            ("list", r"\[1,2\]", [1, 2], True),
+            ("bool", "^true$", True, True),
+            ("python_bool_spelling", "True", True, False),
+            ("object", r'^\{"a":1,"b":\[null\]\}$', {"b": [None], "a": 1}, True),
+            ("python_object_spelling", "'a'", {"a": 1}, False),
+        ]
+    )
+    def test_regex_stringifies_non_string_properties_as_compact_json(
+        self, _name, pattern, property_value, expected
+    ):
+        regex = self.property("key", pattern, "regex")
+        not_regex = self.property("key", pattern, "not_regex")
+        self.assertEqual(expected, match_property(regex, {"key": property_value}))
+        self.assertEqual(
+            not expected, match_property(not_regex, {"key": property_value})
+        )
+
     def test_match_properties_math_operators(self):
         property_a = self.property(key="key", value=1, operator="gt")
         self.assertTrue(match_property(property_a, {"key": 2}))
@@ -7181,6 +7272,41 @@ class TestRelativeDateParsing(unittest.TestCase):
 
 
 class TestCaptureCalls(unittest.TestCase):
+    @parameterized.expand(
+        [
+            ("get_feature_flag", lambda c: c.get_feature_flag),
+            ("feature_enabled", lambda c: c.feature_enabled),
+            ("get_feature_flag_result", lambda c: c.get_feature_flag_result),
+        ]
+    )
+    @mock.patch.object(Client, "capture")
+    @mock.patch("posthog.client.flags")
+    def test_locally_evaluated_flag_called_event_carries_definition_id_and_version(
+        self, _name, getter, patch_flags, patch_capture
+    ):
+        client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
+        client.feature_flags = [
+            {
+                "id": 4211,
+                "version": 7,
+                "name": "Local Feature",
+                "key": "local-flag",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+
+        self.assertTrue(getter(client)("local-flag", "some-distinct-id"))
+
+        patch_flags.assert_not_called()
+        patch_capture.assert_called_once()
+        properties = patch_capture.call_args[1]["properties"]
+        self.assertTrue(properties["locally_evaluated"])
+        self.assertEqual(properties["$feature_flag_id"], 4211)
+        self.assertEqual(properties["$feature_flag_version"], 7)
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_capture_is_called(self, patch_flags, patch_capture):
@@ -7219,6 +7345,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=None,
@@ -7253,6 +7380,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=None,
@@ -7591,6 +7719,7 @@ class TestCaptureCalls(unittest.TestCase):
                 "$feature_flag_response": True,
                 "locally_evaluated": True,
                 "$feature/complex-flag": True,
+                "$feature_flag_id": 1,
             },
             groups={},
             disable_geoip=False,
@@ -7713,6 +7842,7 @@ class TestCaptureCalls(unittest.TestCase):
                         "$feature_flag_response": True,
                         "locally_evaluated": True,
                         "$feature/complex-flag": True,
+                        "$feature_flag_id": 1,
                     },
                     groups={},
                     disable_geoip=None,

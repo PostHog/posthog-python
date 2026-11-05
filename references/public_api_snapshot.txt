@@ -113,6 +113,7 @@ alias posthog.ai.gemini.gemini.extract_gemini_stop_reason_from_chunk -> posthog.
 alias posthog.ai.gemini.gemini.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini.setup -> posthog.setup
@@ -129,6 +130,7 @@ alias posthog.ai.gemini.gemini_async.extract_gemini_stop_reason_from_chunk -> po
 alias posthog.ai.gemini.gemini_async.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini_async.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini_async.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini_async.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini_async.setup -> posthog.setup
@@ -246,6 +248,7 @@ alias posthog.client.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 alias posthog.client.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
+alias posthog.client.Emails -> posthog.emails.Emails
 alias posthog.client.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.client.ExceptionCapture -> posthog.exception_capture.ExceptionCapture
 alias posthog.client.FeatureFlag -> posthog.types.FeatureFlag
@@ -730,6 +733,7 @@ attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
 attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.async_client.AsyncClient.api_key = (project_api_key or '').strip()
+attribute posthog.async_client.AsyncClient.app_host = app_host
 attribute posthog.async_client.AsyncClient.before_send = before_send
 attribute posthog.async_client.AsyncClient.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
 attribute posthog.async_client.AsyncClient.capture_exception_code_variables = capture_exception_code_variables
@@ -743,6 +747,9 @@ attribute posthog.async_client.AsyncClient.debug = debug
 attribute posthog.async_client.AsyncClient.disable_geoip = disable_geoip
 attribute posthog.async_client.AsyncClient.disabled = disabled or not self.api_key
 attribute posthog.async_client.AsyncClient.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+attribute posthog.async_client.AsyncClient.email_request_max_retries = email_request_max_retries
+attribute posthog.async_client.AsyncClient.email_request_timeout_seconds = email_request_timeout_seconds
+attribute posthog.async_client.AsyncClient.emails: AsyncEmails
 attribute posthog.async_client.AsyncClient.feature_flags_request_max_retries = max(0, feature_flags_request_max_retries)
 attribute posthog.async_client.AsyncClient.feature_flags_request_timeout_seconds = feature_flags_request_timeout_seconds
 attribute posthog.async_client.AsyncClient.gzip = gzip
@@ -753,6 +760,7 @@ attribute posthog.async_client.AsyncClient.is_server = is_server
 attribute posthog.async_client.AsyncClient.log = logging.getLogger('posthog')
 attribute posthog.async_client.AsyncClient.log_captured_exceptions = log_captured_exceptions
 attribute posthog.async_client.AsyncClient.max_retries = max(0, max_retries)
+attribute posthog.async_client.AsyncClient.migrated_from = migrated_from
 attribute posthog.async_client.AsyncClient.on_error = on_error
 attribute posthog.async_client.AsyncClient.personal_api_key = self.secret_key
 attribute posthog.async_client.AsyncClient.project_root = os.getcwd()
@@ -780,6 +788,7 @@ attribute posthog.capture_v1.CaptureV1Error.drops = drops or []
 attribute posthog.capture_v1.CaptureV1Error.request_id = request_id
 attribute posthog.capture_v1.CaptureV1Error.retry_exhausted = retry_exhausted or []
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
+attribute posthog.client.Client.app_host = app_host
 attribute posthog.client.Client.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.capture_mode = _resolve_capture_mode(capture_mode)
@@ -794,6 +803,9 @@ attribute posthog.client.Client.debug = debug
 attribute posthog.client.Client.disable_geoip = disable_geoip
 attribute posthog.client.Client.disabled = disabled or not self.api_key
 attribute posthog.client.Client.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+attribute posthog.client.Client.email_request_max_retries = email_request_max_retries
+attribute posthog.client.Client.email_request_timeout_seconds = email_request_timeout_seconds
+attribute posthog.client.Client.emails: Emails
 attribute posthog.client.Client.enable_exception_autocapture = enable_exception_autocapture
 attribute posthog.client.Client.enable_exception_autocapture_rate_limiting = enable_exception_autocapture_rate_limiting
 attribute posthog.client.Client.enable_full_ai_capture = enable_full_ai_capture is True or _use_ai_lane is True or _enable_multimodal_capture is True
@@ -819,6 +831,7 @@ attribute posthog.client.Client.log = logging.getLogger('posthog')
 attribute posthog.client.Client.log_captured_exceptions = log_captured_exceptions
 attribute posthog.client.Client.max_retries = max(0, max_retries)
 attribute posthog.client.Client.metrics: PostHogMetrics
+attribute posthog.client.Client.migrated_from = migrated_from
 attribute posthog.client.Client.on_error = on_error
 attribute posthog.client.Client.personal_api_key = self.secret_key
 attribute posthog.client.Client.poll_interval = poll_interval
@@ -875,6 +888,35 @@ attribute posthog.debug = False
 attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
+attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
+attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
+attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+attribute posthog.emails.CodeEmailArgs.subject: str
+attribute posthog.emails.CodeEmailArgs.template_key: str
+attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.EmailError.code = code
+attribute posthog.emails.EmailError.docs_url = docs_url
+attribute posthog.emails.EmailError.field = field
+attribute posthog.emails.EmailError.fix = fix
+attribute posthog.emails.EmailError.message = message
+attribute posthog.emails.EmailError.name = name
+attribute posthog.emails.EmailError.retry_after = retry_after
+attribute posthog.emails.EmailError.status_code = status_code
+attribute posthog.emails.EmailError.why = why
+attribute posthog.emails.EmailStatus.created_at: datetime
+attribute posthog.emails.EmailStatus.id: str
+attribute posthog.emails.EmailStatus.reason: Optional[str] = None
+attribute posthog.emails.EmailStatus.status: str
+attribute posthog.emails.EmailStatus.status_at: datetime
+attribute posthog.emails.EmailWarning.code: str
+attribute posthog.emails.EmailWarning.fix: Optional[str] = None
+attribute posthog.emails.EmailWarning.message: str
+attribute posthog.emails.SendEmailResult.id: str
+attribute posthog.emails.SendEmailResult.replayed: bool = False
+attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
+attribute posthog.emails.TemplateEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
+attribute posthog.emails.TemplateEmailArgs.template_id: Union[str, UUID]
 attribute posthog.enable_exception_autocapture = False
 attribute posthog.enable_exception_autocapture_rate_limiting = False
 attribute posthog.enable_full_ai_capture = False
@@ -1105,6 +1147,7 @@ attribute posthog.request.APIError.message = message
 attribute posthog.request.APIError.retry_after = retry_after
 attribute posthog.request.APIError.status = status
 attribute posthog.request.DEFAULT_HOST = US_INGESTION_ENDPOINT
+attribute posthog.request.EU_APP_ENDPOINT = 'https://eu.posthog.com'
 attribute posthog.request.EU_INGESTION_ENDPOINT = 'https://eu.i.posthog.com'
 attribute posthog.request.EVENTS_ENDPOINT = '/batch/'
 attribute posthog.request.GetResponse.data: Any
@@ -1119,6 +1162,7 @@ attribute posthog.request.RequestsConnectionError = requests.exceptions.Connecti
 attribute posthog.request.RequestsTimeout = requests.exceptions.Timeout
 attribute posthog.request.SocketOptions = List[Tuple[int, int, Union[int, bytes]]]
 attribute posthog.request.USER_AGENT = 'posthog-python/' + VERSION
+attribute posthog.request.US_APP_ENDPOINT = 'https://us.posthog.com'
 attribute posthog.request.US_INGESTION_ENDPOINT = 'https://us.i.posthog.com'
 attribute posthog.secret_key = None
 attribute posthog.send = True
@@ -1149,9 +1193,9 @@ attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
 attribute posthog.types.FlagMetadata.description: str
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
-attribute posthog.types.FlagMetadata.id: int
+attribute posthog.types.FlagMetadata.id: Optional[int]
 attribute posthog.types.FlagMetadata.payload: Optional[str]
-attribute posthog.types.FlagMetadata.version: int
+attribute posthog.types.FlagMetadata.version: Optional[int]
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
 attribute posthog.types.FlagReason.description: str
@@ -1289,15 +1333,23 @@ class posthog.ai.types.TokenUsage
 class posthog.ai.types.ToolInProgress 
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
-class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1)
+class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 class posthog.async_client.AsyncPosthog 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.capture_compression.CaptureCompression 
 class posthog.capture_mode.CaptureMode 
 class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None)
+class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout: float = 15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
+class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
+class posthog.emails.CodeEmailArgs 
+class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
+class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
+class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
+class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
+class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
+class posthog.emails.TemplateEmailArgs 
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
@@ -1339,7 +1391,7 @@ class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str],
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
@@ -1377,13 +1429,14 @@ function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason(response:
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_system_instruction(config: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]
-function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage
+function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any, url_context_seen: bool = False) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_response(response: Any) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_web_search_count(response: Any) -> int
 function posthog.ai.gemini.gemini_converter.format_gemini_input(contents: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_response(response: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_streaming_output(accumulated_content: Union[str, List[Any]]) -> List[FormattedMessage]
+function posthog.ai.gemini.gemini_converter.has_gemini_url_context(response: Any) -> bool
 function posthog.ai.media.bytes_to_base64(data: bytes) -> str
 function posthog.ai.media.ensure_serializable(obj: Any) -> Any
 function posthog.ai.media.normalize_part_keys(d: dict) -> dict
@@ -1537,6 +1590,7 @@ function posthog.mcp.session_token.read_mcp_session_header(headers: Any) -> Opti
 function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
 function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: float = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
+function posthog.request.determine_app_host(host: Optional[str]) -> str
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
@@ -1793,6 +1847,12 @@ method posthog.contexts.ContextScope.set_code_variables_mask_url_credentials(ena
 method posthog.contexts.ContextScope.set_device_id(device_id: str)
 method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)
+method posthog.emails.AsyncEmails.aclose() -> None
+method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
+method posthog.emails.AsyncEmails.send(**kwargs: Any) -> SendEmailResult
+method posthog.emails.Emails.close() -> None
+method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
+method posthog.emails.Emails.send(**kwargs: Any) -> SendEmailResult
 method posthog.exception_capture.ExceptionCapture.capture_exception(exception, metadata=None)
 method posthog.exception_capture.ExceptionCapture.close()
 method posthog.exception_capture.ExceptionCapture.exception_handler(exc_type, exc_value, exc_traceback)
@@ -1804,9 +1864,9 @@ method posthog.exception_utils.AnnotatedValue.substituted_because_contains_sensi
 method posthog.exception_utils.VariableSizeLimiter.add(size)
 method posthog.exception_utils.VariableSizeLimiter.can_add(size)
 method posthog.exception_utils.VariableSizeLimiter.get_remaining_space()
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str) -> Optional[FlagValue]
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag(key: str, *, send_feature_flag_events: bool = True) -> Optional[FlagValue]
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.get_flag_payload(key: str) -> Optional[Any]
-method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False) -> bool
+method posthog.feature_flag_evaluations.FeatureFlagEvaluations.is_enabled(key: str, default_value: bool = False, *, send_feature_flag_events: bool = True) -> bool
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only(keys: List[str]) -> FeatureFlagEvaluations
 method posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed() -> FeatureFlagEvaluations
 method posthog.flag_definition_cache.FlagDefinitionCacheProvider.get_flag_definitions() -> Union[Optional[FlagDefinitionCacheData], Awaitable[Optional[FlagDefinitionCacheData]]]
@@ -1927,6 +1987,7 @@ module posthog.capture_v1
 module posthog.client
 module posthog.consumer
 module posthog.contexts
+module posthog.emails
 module posthog.exception_capture
 module posthog.exception_utils
 module posthog.feature_flag_evaluations

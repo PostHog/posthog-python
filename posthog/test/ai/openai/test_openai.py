@@ -2028,6 +2028,59 @@ def test_streaming_chat_extracts_model_from_chunk_when_not_in_kwargs(mock_client
         assert props["$ai_model"] == "gpt-4o-stored-prompt"
 
 
+def test_streaming_chat_keeps_n_choices_apart(mock_client):
+    # With n=2 each chunk carries one choice's delta, named by its index.
+    def chunk(index, content=None, finish_reason=None):
+        return ChatCompletionChunk(
+            id="chunk",
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            created=1234567890,
+            choices=[
+                ChoiceChunk(
+                    index=index,
+                    delta=ChoiceDelta(content=content),
+                    finish_reason=finish_reason,
+                )
+            ],
+        )
+
+    chunks = [
+        chunk(0, "Hello"),
+        chunk(1, "Bonjour"),
+        chunk(0, " world"),
+        chunk(1, " le monde"),
+        chunk(1, finish_reason="length"),
+        chunk(0, finish_reason="stop"),
+    ]
+
+    with patch("openai.resources.chat.completions.Completions.create") as mock_create:
+        mock_create.return_value = chunks
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        list(
+            client.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": "Hello"}],
+                n=2,
+                stream=True,
+                posthog_distinct_id="test-id",
+            )
+        )
+
+    props = mock_client.capture.call_args[1]["properties"]
+    # The same shape a non-streamed n=2 completion is captured with.
+    assert props["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Hello world"},
+                {"type": "text", "text": "Bonjour le monde"},
+            ],
+        }
+    ]
+    assert props["$ai_stop_reason"] == "stop"
+
+
 def test_streaming_chat_prefers_kwargs_model_over_chunk_model(mock_client):
     """Test that model from kwargs takes precedence over model from chunk."""
     chunks = [

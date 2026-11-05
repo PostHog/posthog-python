@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FlagValue, UnresolvedFlagReason
+from .types import FeatureFlag as _FeatureFlag
+from .types import FlagMetadata as _FlagMetadata
+from .types import FlagValue, UnresolvedFlagReason, _parse_flag_payload
 
 
 @dataclass(frozen=True)
-class _EvaluatedFlagRecord:
-    """Internal per-flag record stored by a FeatureFlagEvaluations instance."""
+class _LocalFlagRecord:
+    """Internal per-flag record of a locally evaluated flag."""
 
     key: str
     enabled: bool
@@ -27,6 +29,70 @@ class _EvaluatedFlagRecord:
     # Server-reported signal for whether the flag is linked to an experiment.
     # ``None`` when the server did not report it (older deployments).
     has_experiment: Optional[bool] = None
+
+
+_UNDECODED: Any = object()
+
+
+class _RemoteFlagRecord:
+    """Internal per-flag record of a remotely evaluated flag.
+
+    The parsed ``/flags`` record is the only copy of the flag: the record fields are
+    read from it, and the payload is decoded on its first read and then kept.
+    """
+
+    __slots__ = ("details", "_payload")
+
+    locally_evaluated = False
+
+    def __init__(self, details: _FeatureFlag) -> None:
+        # The parsed /flags record, with its typed value, reason and metadata.
+        self.details = details
+        self._payload: Any = _UNDECODED
+
+    @property
+    def key(self) -> str:
+        return self.details.key
+
+    @property
+    def enabled(self) -> bool:
+        return self.details.enabled
+
+    @property
+    def variant(self) -> Optional[str]:
+        return self.details.variant
+
+    @property
+    def payload(self) -> Optional[Any]:
+        if self._payload is _UNDECODED:
+            self._payload = _parse_flag_payload(
+                getattr(self.details.metadata, "payload", None)
+            )
+        return self._payload
+
+    @property
+    def id(self) -> Optional[int]:
+        metadata = self.details.metadata
+        return metadata.id if isinstance(metadata, _FlagMetadata) else None
+
+    @property
+    def version(self) -> Optional[int]:
+        metadata = self.details.metadata
+        return metadata.version if isinstance(metadata, _FlagMetadata) else None
+
+    @property
+    def reason(self) -> Optional[str]:
+        reason = self.details.reason
+        return reason.description if reason and reason.description else None
+
+    @property
+    def has_experiment(self) -> Optional[bool]:
+        metadata = self.details.metadata
+        return metadata.has_experiment if isinstance(metadata, _FlagMetadata) else None
+
+
+# The per-flag record stored by a FeatureFlagEvaluations instance.
+_EvaluatedFlagRecord = Union[_LocalFlagRecord, _RemoteFlagRecord]
 
 
 @dataclass
@@ -95,7 +161,13 @@ class FeatureFlagEvaluations:
             unresolved_flags or {}
         )
 
-    def is_enabled(self, key: str, default_value: bool = False) -> bool:
+    def is_enabled(
+        self,
+        key: str,
+        default_value: bool = False,
+        *,
+        send_feature_flag_events: bool = True,
+    ) -> bool:
         """Return whether the flag is enabled. Fires ``$feature_flag_called`` on the
         first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
 
@@ -105,23 +177,31 @@ class FeatureFlagEvaluations:
                 the key was not part of the evaluated set, or the evaluation itself
                 came back empty (failed ``/flags`` request, quota limit, or no
                 resolvable ``distinct_id``). Defaults to ``False``.
+            send_feature_flag_events: Whether this read sends ``$feature_flag_called``.
+                When ``False``, no event is sent and the dedupe cache is left alone,
+                but the key still counts as accessed for :meth:`only_accessed`.
 
         A flag that has a value always wins over ``default_value``, including a
         disabled flag, which returns ``False`` even when ``default_value=True``.
         """
         flag = self._flags.get(key)
-        self._record_access(key)
+        self._record_access(key, send_feature_flag_events)
         return bool(flag.enabled) if flag else default_value
 
-    def get_flag(self, key: str) -> Optional[FlagValue]:
+    def get_flag(
+        self, key: str, *, send_feature_flag_events: bool = True
+    ) -> Optional[FlagValue]:
         """Return the flag value. Fires ``$feature_flag_called`` on first access.
 
         Returns the variant string for multivariate flags, ``True`` for enabled flags
         without a variant, ``False`` for disabled flags, and ``None`` for flags that
         were not returned by the evaluation.
+
+        Pass ``send_feature_flag_events=False`` to skip the event for this read, as
+        with :meth:`is_enabled`.
         """
         flag = self._flags.get(key)
-        self._record_access(key)
+        self._record_access(key, send_feature_flag_events)
         if not flag:
             return None
         if not flag.enabled:
@@ -236,8 +316,13 @@ class FeatureFlagEvaluations:
             accessed=set(self._accessed),
         )
 
-    def _record_access(self, key: str) -> None:
+    def _record_access(self, key: str, send_feature_flag_events: bool) -> None:
         self._accessed.add(key)
+
+        # A suppressed read skips the dedupe cache too, so a later read that sends
+        # events still reports this flag.
+        if not send_feature_flag_events:
+            return
 
         # Empty snapshots (no resolvable distinct_id) are returned by ``evaluate_flags()``
         # as a safety fallback. Firing $feature_flag_called for them would emit events
