@@ -178,7 +178,12 @@ async def test_client_conversation_groups_calls_on_fresh_servers(
 ):
     client = FakeClient()
     context = SimpleNamespace(
-        request_context=SimpleNamespace(meta={"openai/session": "v1/aBcDeF123"})
+        request_context=SimpleNamespace(
+            meta={
+                "sessionId": "019a4f2e-1c3d-7b8a-9e0f-1a2b3c4d5e6f",
+                "io.modelcontextprotocol/clientInfo": {"name": "codex-mcp-client"},
+            }
+        )
     )
     results = []
     for _ in range(2):
@@ -198,7 +203,7 @@ async def test_client_conversation_groups_calls_on_fresh_servers(
     calls = _events(client, "$mcp_tool_call")
     assert results == [5, 5]
     assert [c["properties"]["$session_id"] for c in calls] == [
-        "ses_35e4cc45ea3e5e1282c3f091de632132"
+        "ses_0fdf126b8e2c1f9689ca12f3dd3383e6"
     ] * 2
     assert {c["properties"]["$mcp_session_source"] for c in calls} == {
         "client_metadata"

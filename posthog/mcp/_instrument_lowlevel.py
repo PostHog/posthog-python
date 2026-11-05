@@ -37,7 +37,6 @@ from ._instrumentation import (
     extract_tools,
     is_first_listing_page,
     mutate_tool_schema,
-    params_client_conversation,
     prepare_request,
     raw_listing_owns_tool_name,
     record_resource_request,
@@ -142,9 +141,6 @@ def _wrap_resource_request(
                 request=request,
                 extra=extra,
                 token=token,
-                client_conversation=params_client_conversation(
-                    getattr(req, "params", None)
-                ),
             )
         except Exception as error:  # noqa: BLE001 - analytics must not break resources
             log(f"Warning: could not prepare resource analytics: {error}")
@@ -309,7 +305,7 @@ def _wrap_call_tool(
         # when the agent needs the handle, or the retry starts a fresh conversation.
         delivered = False
         if lifecycle.conversation_id:
-            if data.tool_output_instructions.get(name):
+            if lifecycle.mirrors_output_instructions:
                 call_result, delivered = mirror_instructions_into_structured_content(
                     call_result, lifecycle.conversation_id
                 )
@@ -355,6 +351,7 @@ def _inject_tool_schemas(
     *,
     context_required: bool,
     high_level: Any = None,
+    advertise_conversation_id: bool = True,
 ) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
@@ -377,6 +374,7 @@ def _inject_tool_schemas(
             context_required=context_required,
             is_sdk_virtual_tool=False,
             inject_model=inject_model,
+            advertise_conversation_id=advertise_conversation_id,
         )
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
@@ -491,9 +489,6 @@ def _wrap_list_tools(
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            client_conversation=params_client_conversation(
-                getattr(req, "params", None)
-            ),
         )
 
         start = time.monotonic()
@@ -520,10 +515,16 @@ def _wrap_list_tools(
             tools,
             context_required=context_required,
             high_level=high_level,
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="inputSchema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="inputSchema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

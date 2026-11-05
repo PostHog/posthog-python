@@ -35,7 +35,6 @@ from ._instrumentation import (
     extract_tools,
     is_first_listing_page,
     mutate_tool_schema,
-    params_client_conversation,
     request_to_dict,
     resolve_virtual_tool_injection,
     resolve_session_and_client,
@@ -180,7 +179,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         # block on the minting response only.
         delivered = False
         if lifecycle.conversation_id:
-            if data.tool_output_instructions.get(name):
+            if lifecycle.mirrors_output_instructions:
                 result, delivered = mirror_instructions_into_structured_content(
                     result, lifecycle.conversation_id
                 )
@@ -204,7 +203,13 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
 # --- tools/list seam ---------------------------------------------------------
 
 
-def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> None:
+def _inject_tool_schemas(
+    server: Any,
+    data: MCPAnalyticsData,
+    tools: list,
+    *,
+    advertise_conversation_id: bool = True,
+) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
     Runs on both the client-facing listing and the SDK's internal cache-
@@ -219,6 +224,7 @@ def _inject_tool_schemas(server: Any, data: MCPAnalyticsData, tools: list) -> No
             owns_context=_tool_owns_context(server, tool.name),
             context_required=True,
             is_sdk_virtual_tool=False,
+            advertise_conversation_id=advertise_conversation_id,
         )
 
 
@@ -269,9 +275,6 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            client_conversation=params_client_conversation(
-                getattr(req, "params", None)
-            ),
         )
 
         start = time.monotonic()
@@ -290,10 +293,20 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
             is_first_page=is_first_listing_page(getattr(req, "params", None)),
         )
 
-        _inject_tool_schemas(server, data, tools)
+        _inject_tool_schemas(
+            server,
+            data,
+            tools,
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
+        )
 
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="inputSchema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="inputSchema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

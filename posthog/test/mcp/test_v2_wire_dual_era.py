@@ -74,7 +74,9 @@ def rpc(method, params, request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
-async def modern_call(http, name, arguments, request_id=1, model=None, meta=None):
+async def modern_call(
+    http, name, arguments, request_id=1, model=None, meta=None, user_agent=None
+):
     body = rpc(
         "tools/call",
         {
@@ -84,9 +86,10 @@ async def modern_call(http, name, arguments, request_id=1, model=None, meta=None
         },
         request_id,
     )
-    return await http.post(
-        "/mcp", json=body, headers=modern_headers("tools/call", name)
-    )
+    headers = modern_headers("tools/call", name)
+    if user_agent:
+        headers = {**headers, "user-agent": user_agent}
+    return await http.post("/mcp", json=body, headers=headers)
 
 
 # --- modern era (2026-07-28) ---------------------------------------------------
@@ -230,9 +233,9 @@ async def test_modern_conversation_anchors_session_across_instances():
 async def test_modern_client_conversation_groups_calls_across_instances(
     enable_conversation_id,
 ):
-    """A host client's own conversation id (ADR-0014) groups fresh per-request
-    instances with no handle and no result change: ``openai/session`` survives the
-    SDK lifting the reserved envelope keys out of ``_meta``."""
+    """ChatGPT's own conversation id groups fresh per-request instances with no
+    handle and no result change: ``openai/session`` survives the SDK lifting the
+    reserved envelope keys out of ``_meta``."""
     client = FakeClient()
     options = MCPAnalyticsOptions(enable_conversation_id=enable_conversation_id)
     responses = []
@@ -245,14 +248,15 @@ async def test_modern_client_conversation_groups_calls_across_instances(
                     http,
                     "add",
                     {"a": 1, "b": 1},
-                    meta={"openai/session": "v1/aBcDeF123"},
+                    meta={"openai/session": "v1/conv-example-0001"},
+                    user_agent="openai-mcp/1.0.0 (ChatGPT)",
                 )
             )
     await _flush()
 
     calls = _events(client, "$mcp_tool_call")
     assert [c["properties"]["$session_id"] for c in calls] == [
-        "ses_35e4cc45ea3e5e1282c3f091de632132"
+        "ses_2f5d35b7108d17c807766f2f769a1e8c"
     ] * 2
     assert {c["properties"]["$mcp_session_source"] for c in calls} == {
         "client_metadata"

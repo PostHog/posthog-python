@@ -40,15 +40,15 @@ Use a client dedicated to MCP analytics if the application also captures unrelat
 
 A valid echoed conversation handle takes precedence over transport sessions. A request that already carries a transport session or a PostHog session token does not mint a new handle or append a prompt-back block. Requests carrying neither use the conversation fallback.
 
-Some host clients send their own conversation id in each request's `params._meta`. The SDK reads
-ChatGPT's `openai/session` and derives `$session_id` from it when the call carries no conversation
-handle and no transport session. Such a call mints no handle and gets no prompt-back block, so a
-server with `enable_conversation_id=False` still groups ChatGPT calls with tool schemas and results
-left unchanged. Each event records which source grouped it in `$mcp_session_source`:
-`conversation`, `transport`, `client_metadata`, or `generated`. Every request that resolves a
-session reads it (`tools/call`, `tools/list`, resource requests and `initialize`), and custom
-events from `McpAnalytics.capture()` carry the instance's own source. The reasoning is recorded in
-posthog-js `docs/adr/0014`.
+Some MCP clients name the conversation in each tool call's `params._meta`: ChatGPT's
+`openai/session`, Codex's `sessionId`, and VS Code's `vscode.conversationId`. The SDK reads each key
+only from a request whose `User-Agent` or client name identifies that client, and derives
+`$session_id` from it ahead of any conversation handle or transport session. ChatGPT sends its id on
+every call, so its `tools/list` has no `conversation_id` argument and its results get no handle, even
+with `enable_conversation_id` on. Each event records which source grouped it in
+`$mcp_session_source`: `client_metadata`, `conversation`, `transport`, or `generated`. Custom events
+from `McpAnalytics.capture()` carry the instance's own source. The rules are the sdk-specs "Session
+identity" requirement, and posthog-js `docs/adr/0014` records the reasoning.
 
 
 Intent, model capture, conversation correlation, MCP exception capture, and `$mcp_initialize`
@@ -243,12 +243,12 @@ Model and conversation injection copy tool objects instead of changing their ori
 Always advertise the returned list and pass the original application tool to
 `prepare_tool_call()`. Repeatedly preparing the original list preserves ownership.
 
-Pass `request_meta` whenever the request supplies `_meta`; this enables recognized client metadata,
-including a host client's conversation id, without changing the arguments sent to the tool. Pass an
-existing transport or request session as `session_id`. A valid echoed
-`conversation_id` takes precedence. Otherwise the existing session stays, and no new handle is
-minted. A client conversation id groups the call only when no `session_id` is passed, and also
-mints no handle. `prepare_tool_result()` appends a new handle to the result's `content` and mirrors it
+Pass `request_meta` whenever the request supplies `_meta`, and `headers` (plus `client_info` from a
+handshake bound to the request, if you hold one) so the SDK can recognize the client; this enables
+recognized client metadata and client conversation ids without changing the arguments sent to the
+tool. Pass the same `headers` to `prepare_tool_list()`. Pass an existing transport or request
+session as `session_id`. A client conversation id or a valid echoed `conversation_id` takes
+precedence. Otherwise the existing session stays, and no new handle is minted. `prepare_tool_result()` appends a new handle to the result's `content` and mirrors it
 into `structuredContent` when the tool declares an output schema. If the result has no channel
 that can carry a new handle, `conversation_id` is `None` and the derived `session_id` is kept.
 Set `enable_conversation_id=False` on `PostHogMCP` to keep the previous custom-dispatcher
@@ -460,9 +460,8 @@ Prefer it if you're on a recent client.
 The `get_more_tools` and `send_feedback` virtual tools also use the conversation
 handle when this option is enabled.
 
-A host client's own conversation id in `params._meta` (ChatGPT's `openai/session`) also groups
-calls on per-request servers, with or without this option. It ranks below the handle, the session
-token and the transport session id.
+A recognized client's own conversation id in `params._meta` (such as ChatGPT's `openai/session`)
+also groups calls on per-request servers, with or without this option, and wins over the handle.
 
 ### How the SDK tells you it's misconfigured
 

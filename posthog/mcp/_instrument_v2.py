@@ -55,7 +55,6 @@ from ._instrumentation import (
     is_first_listing_page,
     mutate_tool_schema,
     params_to_request_dict,
-    params_client_conversation,
     prepare_request,
     raw_listing_owns_tool_name,
     record_initialize,
@@ -208,7 +207,7 @@ async def _record_v2_initialize(
         params = dict(ctx.params) if isinstance(ctx.params, Mapping) else {}
         await record_initialize(
             data,
-            session=await handshake_session(data, mcp_session_id, token, params),
+            session=await handshake_session(data, mcp_session_id, token),
             params=params,
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
@@ -477,11 +476,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         delivered = False
         if lifecycle.conversation_id:
             result, delivered = _deliver_conversation_id(
-                data,
                 result,
-                name,
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
+                mirror=lifecycle.mirrors_output_instructions,
             )
 
         await lifecycle.record_result(
@@ -524,7 +522,7 @@ def _append_prompt_back(result: Any, conversation_id: str) -> Tuple[Any, bool]:
 
 
 def _deliver_conversation_id(
-    data: MCPAnalyticsData, result: Any, name: str, conversation_id: str, minted: bool
+    result: Any, conversation_id: str, minted: bool, *, mirror: bool
 ) -> Tuple[Any, bool]:
     """Hand the conversation handle back over both channels a result has:
     mirrored into ``structuredContent`` on every response (for tools whose
@@ -532,7 +530,7 @@ def _deliver_conversation_id(
     the minting response only. Returns ``(result, delivered)`` — a minted handle
     the agent never received must not be stamped on the event."""
     delivered = False
-    if data.tool_output_instructions.get(name):
+    if mirror:
         result, delivered = mirror_instructions_into_structured_content(
             result, conversation_id
         )
@@ -696,11 +694,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         delivered = False
         if lifecycle.conversation_id:
             result, delivered = _deliver_conversation_id(
-                data,
                 result,
-                name,
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
+                mirror=lifecycle.mirrors_output_instructions,
             )
 
         await lifecycle.record_result(
@@ -736,7 +733,6 @@ def _wrap_v2_resource_request(
                 request=request,
                 extra=extra,
                 token=token,
-                client_conversation=params_client_conversation(params),
             )
         except Exception as error:  # noqa: BLE001 - analytics must not break resources
             log(f"Warning: could not prepare resource analytics: {error}")
@@ -820,7 +816,6 @@ def _wrap_v2_list_tools(
             client_name=client_name,
             client_version=client_version,
             protocol_version=protocol_version,
-            client_conversation=params_client_conversation(params),
         )
 
         start = time.monotonic()
@@ -853,9 +848,15 @@ def _wrap_v2_list_tools(
                 owns_context=owns_context,
                 context_required=context_required,
                 is_sdk_virtual_tool=False,
+                advertise_conversation_id=lifecycle.advertises_conversation_id,
             )
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="input_schema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="input_schema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

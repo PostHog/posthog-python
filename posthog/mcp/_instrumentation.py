@@ -47,7 +47,6 @@ from ._model_parameters import (
     add_model_parameter_to_schema,
     get_model_description,
     is_capture_model_enabled,
-    request_meta_from_context,
     resolve_model,
 )
 from ._output_instructions import add_instructions_to_output_schema
@@ -55,10 +54,16 @@ from .logger import log, warn
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
-from .session import (
+from ._client_conversation import (
     ClientConversation,
-    ResolvedSession,
+    ClientConversationRow,
+    meta_client_name,
     read_client_conversation,
+    recognize_client,
+    request_user_agent,
+)
+from .session import (
+    ResolvedSession,
     resolve_session_id,
     resolve_session_id_with_source,
 )
@@ -528,6 +533,7 @@ class ToolCallLifecycle:
     name: str
     arguments: Optional[Dict[str, Any]]
     request_meta: Optional[Dict[str, Any]]
+    client: Optional[ClientConversationRow]
     client_conversation: Optional[ClientConversation]
     allow_self_reported_model: bool
     analytics_owned_parameters: Optional[FrozenSet[str]]
@@ -554,6 +560,15 @@ class ToolCallLifecycle:
     @property
     def is_feedback(self) -> bool:
         return self.feedback_name is not None and self.name == self.feedback_name
+
+    @property
+    def mirrors_output_instructions(self) -> bool:
+        """Whether a handle goes into ``structuredContent`` too. A handle-free
+        client's listing never declared ``_mcp_instructions``."""
+        handle_free = self.client is not None and self.client.handle_free
+        return not handle_free and bool(
+            self.data.tool_output_instructions.get(self.name)
+        )
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
         return await prepare_request(
@@ -708,19 +723,28 @@ def start_tool_call_lifecycle(
         ),
         arguments,
     )
-    # A carried session stays stable until the agent supplies its own handle. The
-    # client's own conversation id counts: it already groups this call.
-    client_conversation = read_client_conversation(request_meta)
-    has_carried_session = (
-        token is not None or bool(mcp_session_id) or client_conversation is not None
+    client = recognize_client(
+        request_user_agent(extra), meta_client_name(request_meta) or client_name
     )
-    if minted and has_carried_session:
+    client_conversation = read_client_conversation(client, request_meta)
+    # The client's own id wins, so a handle the agent echoes alongside it is
+    # ignored. A carried session stays stable until the agent supplies its own
+    # handle, and a handle-free client names its conversation itself, so neither
+    # is minted one.
+    if client_conversation is not None:
+        conversation_id, minted = None, False
+    elif minted and (
+        token is not None
+        or bool(mcp_session_id)
+        or (client is not None and client.handle_free)
+    ):
         conversation_id, minted = None, False
     return ToolCallLifecycle(
         data=data,
         name=name,
         arguments=arguments,
         request_meta=request_meta,
+        client=client,
         client_conversation=client_conversation,
         allow_self_reported_model=allow_self_reported_model,
         analytics_owned_parameters=analytics_owned_parameters,
@@ -908,7 +932,13 @@ def virtual_tool_descriptor(
 
 
 def append_virtual_tool_by_kind(
-    result: Any, kind: str, name: str, data: MCPAnalyticsData, *, schema_field: str
+    result: Any,
+    kind: str,
+    name: str,
+    data: MCPAnalyticsData,
+    *,
+    schema_field: str,
+    advertise_conversation_id: bool = True,
 ) -> Any:
     """Add a virtual tool to a ``tools/list`` result and return the result to
     serve. ``schema_field`` is the SDK major's spelling of the input schema
@@ -936,6 +966,7 @@ def append_virtual_tool_by_kind(
         owns_context=True,
         context_required=True,
         is_sdk_virtual_tool=True,
+        advertise_conversation_id=advertise_conversation_id,
     )
     return append_virtual_tool(result, tool)
 
@@ -947,6 +978,7 @@ def apply_virtual_tool_injection(
     data: MCPAnalyticsData,
     *,
     schema_field: str,
+    advertise_conversation_id: bool = True,
 ) -> Any:
     """Append every virtual tool this page won, recording each name for the
     ``$mcp_tools_list`` event. Missing-capability first: every call path tests
@@ -957,7 +989,12 @@ def apply_virtual_tool_injection(
         if name is None:
             continue
         result = append_virtual_tool_by_kind(
-            result, kind, name, data, schema_field=schema_field
+            result,
+            kind,
+            name,
+            data,
+            schema_field=schema_field,
+            advertise_conversation_id=advertise_conversation_id,
         )
         names.append(name)
     return result
@@ -1180,8 +1217,12 @@ def mutate_tool_schema(
     context_required: bool,
     is_sdk_virtual_tool: bool,
     inject_model: bool = True,
+    advertise_conversation_id: bool = True,
 ) -> None:
     """Apply the common analytics schema pipeline and write it back in place.
+
+    ``advertise_conversation_id`` is False for a handle-free client's listing
+    (see :func:`lists_conversation_id`).
 
     The adapter explicitly supplies its SDK model's schema attribute and its own
     ownership decision. Those are the parts that differ across MCP generations;
@@ -1208,19 +1249,28 @@ def mutate_tool_schema(
         # Discard any earlier registered-tool verdict: middleware may now
         # advertise or dispatch an application-owned field with the same name.
         data.tool_model_parameter_injected[tool.name] = False
-    if data.options.enable_conversation_id and not schema_has_param(
-        schema, "conversation_id"
-    ):
+    advertises_conversation_id = (
+        advertise_conversation_id and data.options.enable_conversation_id
+    )
+    if advertises_conversation_id and not schema_has_param(schema, "conversation_id"):
         schema = add_conversation_id_to_schema(schema, tool.name)
     if schema is not original_schema:
         try:
             setattr(tool, schema_attribute, schema)
         except Exception:  # noqa: BLE001 - some schema attrs may be read-only
             log(f"WARN: could not set {schema_attribute} on tool {tool.name}")
-    if data.options.enable_conversation_id:
+    if advertises_conversation_id:
         data.tool_output_instructions[tool.name] = add_instructions_to_output_schema(
             tool
         )
+
+
+def lists_conversation_id(extra: Any, client_name: Optional[str]) -> bool:
+    """Whether a listing advertises ``conversation_id``. A handle-free client
+    names the conversation in ``_meta``, so the argument would only add a second,
+    weaker grouping key."""
+    client = recognize_client(request_user_agent(extra), client_name)
+    return client is None or not client.handle_free
 
 
 def _mutate_model_schema(
@@ -1279,6 +1329,10 @@ class ToolsListLifecycle:
     client_version: Optional[str]
     protocol_version: Optional[str]
 
+    @property
+    def advertises_conversation_id(self) -> bool:
+        return lists_conversation_id(self.extra, self.client_name)
+
     async def record_error(self, error: Any, duration_ms: float) -> None:
         await record_tools_list(
             self.data,
@@ -1318,12 +1372,6 @@ class ToolsListLifecycle:
         )
 
 
-def params_client_conversation(params: Any) -> Optional[ClientConversation]:
-    """The client's own conversation id on a request's ``params`` object, which both
-    MCP SDK majors expose as ``params.meta``."""
-    return read_client_conversation(request_meta_from_context(params))
-
-
 async def start_tools_list_lifecycle(
     data: MCPAnalyticsData,
     *,
@@ -1334,7 +1382,6 @@ async def start_tools_list_lifecycle(
     client_name: Optional[str],
     client_version: Optional[str],
     protocol_version: Optional[str],
-    client_conversation: Optional[ClientConversation] = None,
 ) -> ToolsListLifecycle:
     session = await prepare_request(
         data,
@@ -1345,7 +1392,6 @@ async def start_tools_list_lifecycle(
         request=request,
         extra=extra,
         token=token,
-        client_conversation=client_conversation,
     )
     return ToolsListLifecycle(
         data=data,
