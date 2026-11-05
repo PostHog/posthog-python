@@ -66,6 +66,7 @@ from .session import (
     ResolvedSession,
     resolve_session_id,
     resolve_session_id_with_source,
+    touch_connection_session,
 )
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import resolve_missing_capability_tool_name
@@ -591,6 +592,13 @@ class ToolCallLifecycle:
             token=self.token,
             client_conversation=self.client_conversation,
         )
+        on_one_client_connection = (
+            get_request(self.extra) is None
+            and self.token is None
+            and not self.mcp_session_id
+        )
+        if self.client_conversation is not None and on_one_client_connection:
+            await touch_connection_session(self.data)
 
     def virtual_result_texts(self, primary_text: str) -> List[str]:
         """Build the text payload for an SDK virtual-tool result."""

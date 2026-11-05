@@ -59,6 +59,9 @@ class FakeServer:
 
 
 def http_extra(user_agent=None, **headers):
+    """An HTTP request's ``extra``, or a stdio one (no request) without a user agent."""
+    if not user_agent and not headers:
+        return {}
     if user_agent:
         headers["user-agent"] = user_agent
     return {"ctx": SimpleNamespace(request=SimpleNamespace(headers=headers))}
@@ -292,7 +295,7 @@ async def test_calls_grouped_by_a_client_id_count_as_connection_activity(gaps, r
     data = fresh_data(client, enable_conversation_id=False)
 
     async def call(meta=None):
-        lifecycle = start_call(data, user_agent=CODEX, meta=meta)
+        lifecycle = start_call(data, client_name="codex-mcp-client", meta=meta)
         await lifecycle.prime_session()
         await lifecycle.record_result(
             {"content": []}, 1.0, conversation_id_delivered=False
@@ -309,6 +312,28 @@ async def test_calls_grouped_by_a_client_id_count_as_connection_activity(gaps, r
     assert grouped["$session_id"] == CODEX_SESSION
     assert last["$mcp_session_source"] == "generated"
     assert (last["$session_id"] == first["$session_id"]) is not rotated
+
+
+async def test_chatgpt_calls_on_a_shared_http_pod_keep_no_session_alive():
+    client = FakeClient()
+    data = fresh_data(client, enable_conversation_id=False)
+
+    async def call(**call_input):
+        lifecycle = start_call(data, **call_input)
+        await lifecycle.prime_session()
+        await lifecycle.record_result(
+            {"content": []}, 1.0, conversation_id_delivered=False
+        )
+
+    await call(user_agent=OTHER)
+    for _ in range(3):
+        data.last_activity -= timedelta(minutes=20)
+        await call(user_agent=CHATGPT, meta=CHATGPT_META)
+    await call(user_agent="another-client/2.0")
+    await _flush()
+
+    calls = [e["properties"] for e in _events(client, "$mcp_tool_call")]
+    assert calls[0]["$session_id"] != calls[-1]["$session_id"]
 
 
 async def test_a_client_conversation_session_is_not_a_synthesized_handshake():
@@ -464,6 +489,22 @@ def test_prepare_tool_list_advertises_conversation_id(user_agent, advertised):
     )
 
     assert ("conversation_id" in prepared["inputSchema"]["properties"]) is advertised
+
+
+def test_a_chatgpt_listing_still_lets_prepare_tool_call_strip_the_handle():
+    client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
+    tool = {"name": "search_docs", "inputSchema": {"type": "object", "properties": {}}}
+    client.prepare_tool_list([tool], headers={"user-agent": CHATGPT})
+
+    call = client.prepare_tool_call(
+        "search_docs",
+        {"query": "flags", "conversation_id": HANDLE},
+        headers={"user-agent": CHATGPT},
+        request_meta=CHATGPT_META,
+    )
+
+    assert call.args == {"query": "flags"}
+    assert call.session_id == CHATGPT_SESSION
 
 
 # --- over HTTP, on every server kind -------------------------------------------

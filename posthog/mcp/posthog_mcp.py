@@ -529,9 +529,8 @@ class PostHogMCP(Client):
         # A handle-free client (ChatGPT, by its ``User-Agent`` in ``headers``)
         # names the conversation in ``_meta`` instead.
         client = recognize_manual_client(headers, None, None)
-        if client is None or not client.handle_free:
-            prepared = self._inject_conversation(prepared, conversation_ownership)
-        return prepared
+        advertise = client is None or not client.handle_free
+        return self._inject_conversation(prepared, conversation_ownership, advertise)
 
     def _warn_virtual_tool_collision(
         self,
@@ -882,8 +881,15 @@ class PostHogMCP(Client):
         return tool
 
     def _inject_conversation(
-        self, tools: List[Any], ownership: Dict[str, _ConversationOwnership]
+        self,
+        tools: List[Any],
+        ownership: Dict[str, _ConversationOwnership],
+        advertise: bool = True,
     ) -> List[Any]:
+        """Add the conversation fields to ``tools`` and record which ones the SDK
+        owns. A listing that does not ``advertise`` them still records
+        ``conversation_id`` ownership, so a later call strips an echoed handle, but
+        declares no ``_mcp_instructions`` and so records none."""
         if not self._enable_conversation_id:
             self._conversation_ownership = {}
             return tools
@@ -894,6 +900,14 @@ class PostHogMCP(Client):
                     previous.conversation_id and current.conversation_id,
                     previous.output_instructions and current.output_instructions,
                 )
+        if not advertise:
+            self._conversation_ownership.update(
+                {
+                    name: _ConversationOwnership(owned.conversation_id, False)
+                    for name, owned in ownership.items()
+                }
+            )
+            return tools
         prepared = []
         for tool in tools:
             name = _tool_name(tool)

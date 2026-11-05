@@ -150,9 +150,6 @@ async def resolve_session_id_with_source(
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
     """
-    if client_conversation is not None or conversation_id:
-        await _touch_connection_session(data, mcp_session_id, token)
-
     if client_conversation is not None:
         return ResolvedSession(
             derive_session_id_from_client_conversation(*client_conversation),
@@ -205,17 +202,14 @@ def _is_stale(data: MCPAnalyticsData, now: datetime) -> bool:
     return (now - data.last_activity).total_seconds() > timeout_seconds
 
 
-async def _touch_connection_session(
-    data: MCPAnalyticsData,
-    mcp_session_id: Optional[str],
-    token: Optional[SessionTokenPayload],
-) -> None:
+async def touch_connection_session(data: MCPAnalyticsData) -> None:
     """A one-client connection's id rotates on the first tool call that arrives 30
     minutes or more after the previous one, whichever source grouped that call. So
-    a call grouped by the client or the agent still rotates a stale id and resets
-    the clock, or a later call without either would rotate early."""
-    if token is not None or mcp_session_id:
-        return
+    a call grouped by the client still rotates a stale id and resets the clock, or
+    a later call without one would rotate early.
+
+    Only for a one-client connection (stdio): on a shared HTTP instance, keeping
+    the instance's own session alive would group unrelated clients' requests."""
     async with data.session_lock:
         if data.session_source != "generated":
             return
