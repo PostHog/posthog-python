@@ -115,12 +115,13 @@ def _raw(pages, *, reject_with_result=False, stall_listing=False):
     know. ``pages`` are the tools/list pages of tool names, chained by cursor;
     ``None`` registers no tools/list handler at all. On MCP 2.x the rejection
     raises unless ``reject_with_result``; 1.x's decorator always turns it into
-    an ``isError`` result. With ``stall_listing``, a client's tools/list never
-    answers; the server's own cache refresh, which passes no request, does."""
+    an ``isError`` result. With ``stall_listing``, tools/list never answers on
+    MCP 2.x; on 1.x only a client's does, the server's own cache refresh, which
+    passes no request, still does."""
     from mcp.server.lowlevel import Server
 
-    async def stall_for_a_client(request):
-        if stall_listing and request is not None:
+    async def stall_unless_cache_refresh(request):
+        if stall_listing and (request is not None or MCP_MAJOR >= 2):
             await asyncio.Event().wait()
 
     registered = {name for page in pages or [] for name in page}
@@ -159,7 +160,7 @@ def _raw(pages, *, reject_with_result=False, stall_listing=False):
                 )
 
         async def on_list_tools(ctx, params):
-            await stall_for_a_client(params)
+            await stall_unless_cache_refresh(params)
             return page_at(getattr(params, "cursor", None))
 
         handlers = {"on_call_tool": on_call_tool}
@@ -176,7 +177,7 @@ def _raw(pages, *, reject_with_result=False, stall_listing=False):
     if pages is not None:
 
         async def list_tools(req):
-            await stall_for_a_client(req)
+            await stall_unless_cache_refresh(req)
             params = getattr(req, "params", None) if req else None
             return mcp_types.ServerResult(page_at(getattr(params, "cursor", None)))
 
