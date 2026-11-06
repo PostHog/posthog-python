@@ -19,6 +19,7 @@ from posthog.request import GetResponse
 from posthog.test.capture_helpers import record_sync_capture_sends
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.utils import system_context
+from posthog.version import VERSION
 
 
 def _flags_response(has_experiment, gate):
@@ -85,6 +86,12 @@ class _CapturedEventsMixin:
         assert events, "no $feature_flag_called event captured"
         return events[index]["properties"]
 
+    def _assert_wire_sdk_library(self, captured):
+        events = [m for m in captured if m["event"] == "$feature_flag_called"]
+        properties = _to_v1_event(events[0])["properties"]
+        self.assertEqual(properties["$lib"], "posthog-python")
+        self.assertEqual(properties["$lib_version"], VERSION)
+
 
 class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
     """Gate sourced from the top-level ``minimalFlagCalledEvents`` field of the v2
@@ -121,6 +128,7 @@ class TestMinimizationViaFlagsResponse(_CapturedEventsMixin, unittest.TestCase):
             | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self._assert_wire_sdk_library(captured)
         self.assertIs(properties["$is_server"], True)
         self.assertEqual(properties["$feature_flag"], "person-flag")
         self.assertEqual(properties["$feature_flag_response"], True)
@@ -332,6 +340,7 @@ class TestMinimizationViaLocalEvaluationPayload(
             | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self._assert_wire_sdk_library(captured)
         self.assertEqual(properties["$feature_flag_response"], True)
         self.assertIs(properties["locally_evaluated"], True)
 
@@ -533,6 +542,7 @@ class TestMinimizationViaEvaluateFlagsSnapshot(_CapturedEventsMixin, unittest.Te
             | set(system_context()),
         )
         self.assertLessEqual(set(properties), _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES)
+        self._assert_wire_sdk_library(captured)
         self.assertEqual(properties["$feature_flag_response"], "variant-value")
         self.assertIs(properties["$feature_flag_has_experiment"], False)
 

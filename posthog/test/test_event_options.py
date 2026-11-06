@@ -14,6 +14,7 @@ from posthog.test.capture_helpers import (
     sent_events,
 )
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.version import VERSION
 
 OPTIONS = {"cookieless_mode": True, "future_option": "kept"}
 
@@ -35,6 +36,7 @@ CAPTURE_CALLS = {
     ),
 }
 ASYNC_CAPTURE_CALLS = {k: v for k, v in CAPTURE_CALLS.items() if k != "capture_ai"}
+ASYNC_LIBRARY_CALLS = {**ASYNC_CAPTURE_CALLS, "capture_ai": CAPTURE_CALLS["capture_ai"]}
 
 
 def _sync_wire_events(call, before_send=None, **config) -> list[dict]:
@@ -386,8 +388,16 @@ async def test_async_nested_properties_fill_one_level_deep():
     _assert_nested_properties(events)
 
 
-CALLER_SDK_VALUES = {"$is_server": False, "$geoip_disable": False, "$os": "caller-os"}
+CALLER_SDK_VALUES = {
+    "$is_server": False,
+    "$geoip_disable": False,
+    "$os": "caller-os",
+    "$lib": "caller-lib",
+    "$lib_version": "caller-version",
+}
 SDK_FLAGS = {"$is_server": False, "$geoip_disable": False}
+SDK_LIBRARY = {"$lib": "posthog-python", "$lib_version": VERSION}
+CALLER_LIBRARY = {"$lib": "caller-lib", "$lib_version": "caller-version"}
 
 
 def _capture_with_caller_sdk_values(source):
@@ -645,21 +655,198 @@ async def test_async_call_disable_geoip_is_an_event_value(
     assert events[0]["properties"]["$geoip_disable"] is expected
 
 
+EVERY_PATH_CASES = [
+    pytest.param(None, SDK_LIBRARY, id="sdk_library"),
+    pytest.param(SDK_FLAGS, SDK_FLAGS, id="super_flags"),
+    pytest.param(CALLER_LIBRARY, CALLER_LIBRARY, id="super_library"),
+]
+
+
 @pytest.mark.parametrize("method", list(CAPTURE_CALLS))
-def test_sync_super_properties_beat_sdk_values_on_every_path(method):
+@pytest.mark.parametrize("super_properties, expected", EVERY_PATH_CASES)
+def test_sync_super_properties_beat_sdk_values_on_every_path(
+    method, super_properties, expected
+):
     events = _sync_wire_events(
-        lambda c: CAPTURE_CALLS[method](c, None), super_properties=SDK_FLAGS
+        lambda c: CAPTURE_CALLS[method](c, None), super_properties=super_properties
     )
-    _assert_caller_values(events, SDK_FLAGS)
+    _assert_caller_values(events, expected)
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", list(ASYNC_CAPTURE_CALLS))
-async def test_async_super_properties_beat_sdk_values_on_every_path(method):
+@pytest.mark.parametrize("method", list(ASYNC_LIBRARY_CALLS))
+@pytest.mark.parametrize("super_properties, expected", EVERY_PATH_CASES)
+async def test_async_super_properties_beat_sdk_values_on_every_path(
+    method, super_properties, expected
+):
     events = await _async_wire_events(
-        lambda c: ASYNC_CAPTURE_CALLS[method](c, None), super_properties=SDK_FLAGS
+        lambda c: ASYNC_LIBRARY_CALLS[method](c, None),
+        super_properties=super_properties,
     )
-    _assert_caller_values(events, SDK_FLAGS)
+    _assert_caller_values(events, expected)
+
+
+def _library(properties):
+    return {k: properties[k] for k in SDK_LIBRARY if k in properties}
+
+
+# Layers, lowest first: super, context, event. Only a non-empty string sets
+# $lib or $lib_version, so a null, empty or non-string value counts as unset.
+LIBRARY_CASES = [
+    pytest.param({}, {}, {}, SDK_LIBRARY, id="no_layer"),
+    pytest.param(
+        {}, {}, {"$lib": "caller-lib"}, {"$lib": "caller-lib"}, id="caller_lib_alone"
+    ),
+    pytest.param(
+        {},
+        {},
+        {"$lib": "caller-lib", "$lib_version": None},
+        {"$lib": "caller-lib", "$lib_version": None},
+        id="caller_lib_keeps_null_version",
+    ),
+    pytest.param({}, {}, {"$lib": "posthog-python"}, SDK_LIBRARY, id="sdk_lib_alone"),
+    pytest.param(
+        {},
+        {},
+        {"$lib": "posthog-python", "$lib_version": ""},
+        SDK_LIBRARY,
+        id="sdk_lib_empty_version",
+    ),
+    pytest.param(
+        {},
+        {},
+        {"$lib": "posthog-python", "$lib_version": "1.0.0"},
+        {"$lib": "posthog-python", "$lib_version": "1.0.0"},
+        id="sdk_lib_caller_version",
+    ),
+    *(
+        pytest.param({}, {}, {"$lib": value}, SDK_LIBRARY, id=f"{name}_lib")
+        for name, value in [
+            ("null", None),
+            ("empty", ""),
+            ("number", 5),
+            ("bool", True),
+            ("dict", {}),
+        ]
+    ),
+    pytest.param(
+        {}, {}, {"$lib_version": "caller-version"}, SDK_LIBRARY, id="lone_version"
+    ),
+    pytest.param(
+        {},
+        {},
+        {"$lib": None, "$lib_version": "caller-version"},
+        SDK_LIBRARY,
+        id="null_lib_with_version",
+    ),
+    pytest.param(
+        {"$lib_version": "super-version"},
+        {},
+        {},
+        SDK_LIBRARY,
+        id="super_lone_version",
+    ),
+    pytest.param(
+        CALLER_LIBRARY, {}, {"$lib": None}, CALLER_LIBRARY, id="super_fills_null_lib"
+    ),
+    pytest.param(
+        {},
+        {"$lib": "context-lib"},
+        {"$lib": ""},
+        {"$lib": "context-lib"},
+        id="context_fills_empty_lib",
+    ),
+    pytest.param(
+        CALLER_LIBRARY,
+        {"$lib": "context-lib"},
+        {},
+        {"$lib": "context-lib", "$lib_version": "caller-version"},
+        id="context_beats_super_by_key",
+    ),
+    pytest.param(
+        {"$lib": "super-lib"},
+        {},
+        {"$lib": "posthog-python"},
+        SDK_LIBRARY,
+        id="event_sdk_lib_beats_super",
+    ),
+]
+
+
+def _library_capture(context, event):
+    def call(client):
+        with new_context(fresh=True):
+            for key, value in context.items():
+                tag(key, value)
+            return client.capture("e", distinct_id="u", properties=dict(event))
+
+    return call
+
+
+@pytest.mark.parametrize("super_properties, context, event, expected", LIBRARY_CASES)
+def test_sync_sdk_library_fills_as_a_pair(super_properties, context, event, expected):
+    events = _sync_wire_events(
+        _library_capture(context, event), super_properties=super_properties
+    )
+    assert _library(events[0]["properties"]) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("super_properties, context, event, expected", LIBRARY_CASES)
+async def test_async_sdk_library_fills_as_a_pair(
+    super_properties, context, event, expected
+):
+    events = await _async_wire_events(
+        _library_capture(context, event), super_properties=super_properties
+    )
+    assert _library(events[0]["properties"]) == expected
+
+
+def _without_library(properties):
+    return {k: v for k, v in properties.items() if k not in SDK_LIBRARY}
+
+
+LIBRARY_HOOKS = {
+    "change": (
+        lambda p: {**_without_library(p), "$lib": "hook-lib"},
+        {"$lib": "hook-lib"},
+    ),
+    "remove": (_without_library, {}),
+    "null": (lambda p: {**p, "$lib": None}, {**SDK_LIBRARY, "$lib": None}),
+}
+
+
+def _library_hook(seen, change):
+    def hook(msg):
+        seen.append(_library(msg["properties"]))
+        return {**msg, "properties": change(msg["properties"])}
+
+    return hook
+
+
+@pytest.mark.parametrize("hook", list(LIBRARY_HOOKS))
+def test_sync_before_send_sees_and_changes_the_sdk_library(hook):
+    change, expected = LIBRARY_HOOKS[hook]
+    seen: list = []
+    events = _sync_wire_events(
+        lambda c: c.capture("e", distinct_id="u"),
+        before_send=_library_hook(seen, change),
+    )
+    assert seen == [SDK_LIBRARY]
+    assert _library(events[0]["properties"]) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("hook", list(LIBRARY_HOOKS))
+async def test_async_before_send_sees_and_changes_the_sdk_library(hook):
+    change, expected = LIBRARY_HOOKS[hook]
+    seen: list = []
+    events = await _async_wire_events(
+        lambda c: c.capture("e", distinct_id="u"),
+        before_send=_library_hook(seen, change),
+    )
+    assert seen == [SDK_LIBRARY]
+    assert _library(events[0]["properties"]) == expected
 
 
 @pytest.mark.parametrize("method", ["set", "set_once"])

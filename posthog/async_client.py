@@ -550,9 +550,7 @@ class AsyncClient:
             msg["timestamp"] = _rfc3339_timestamp(datetime.now(tz=timezone.utc))
 
         sent_uuid = self._normalize_uuid(msg)
-        properties = msg.setdefault("properties", {})
-        properties["$lib"] = "posthog-python"
-        properties["$lib_version"] = VERSION
+        msg.setdefault("properties", {})
 
         msg["options"] = msg.get("options") or {}
         if property_allowlist is not None:
@@ -625,6 +623,8 @@ class AsyncClient:
             system_properties=system_properties,
             flag_properties=flag_properties,
             trace_properties=trace_properties,
+            library_id="posthog-python",
+            library_version=VERSION,
         )
 
     def _build_capture_event(
