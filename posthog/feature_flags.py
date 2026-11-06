@@ -99,6 +99,9 @@ class InconclusiveMatchError(Exception):
     """
     Raised when local evaluation can't determine a flag's value. ``reason`` says
     why, as reported by ``FeatureFlagEvaluations.unresolved_flags``.
+
+    Attributes:
+        reason: Why local evaluation couldn't resolve the flag.
     """
 
     reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
@@ -116,6 +119,9 @@ class RequiresServerEvaluation(Exception):
 
     This error should propagate immediately to trigger API fallback, unlike
     InconclusiveMatchError which allows trying other conditions.
+
+    Attributes:
+        reason: Why the flag needs server-side evaluation.
     """
 
     reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION

@@ -84,6 +84,11 @@ class FeatureFlagEvaluationRuntime(str, Enum):
     ``ALL`` means the flag suits both client-side and server-side evaluation, so
     it matches either runtime. Inheriting from ``str`` keeps the members directly
     comparable to their ``"all"`` / ``"client"`` / ``"server"`` values.
+
+    Values:
+        ALL: The flag suits both client-side and server-side evaluation.
+        CLIENT: The flag is meant for client-side evaluation.
+        SERVER: The flag is meant for server-side evaluation.
     """
 
     ALL = "all"
@@ -278,6 +283,7 @@ class FeatureFlag:
         )
 
     def get_value(self) -> FlagValue:
+        """Return the variant for a multivariate flag, otherwise whether the flag is enabled."""
         return self.variant or self.enabled
 
     @classmethod
@@ -294,6 +300,7 @@ class FeatureFlag:
     def from_value_and_payload(
         cls, key: str, value: FlagValue, payload: Any
     ) -> "FeatureFlag":
+        """Build a flag from its value and payload. A string value is a variant, so the flag is enabled."""
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
         return cls(
             key=key,
@@ -542,7 +549,12 @@ class FlagsResponse(TypedDict, total=False):
 
 
 class FlagsAndPayloads(TypedDict, total=True):
-    """Feature flag values and payloads keyed by feature flag key."""
+    """Feature flag values and payloads keyed by feature flag key.
+
+    Attributes:
+        featureFlags: Each flag's value, keyed by flag key.
+        featureFlagPayloads: Each flag's payload, keyed by flag key.
+    """
 
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]
