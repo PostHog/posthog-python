@@ -44,7 +44,6 @@ from .feedback import (
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import (
-    FirstListingPage,
     MCPAnalyticsData,
     handle_identify,
     resolve_event_properties,
@@ -1000,23 +999,6 @@ def is_first_listing_page(params: Any) -> bool:
     return getattr(params, "cursor", None) is None
 
 
-def first_listing_page(result: Any) -> FirstListingPage:
-    """The names a host's first ``tools/list`` page advertises, and whether a
-    cursor leads to more. 1.x wraps the result in a ``ServerResult`` and spells
-    the cursor ``nextCursor``; 2.x returns it bare as ``next_cursor``."""
-    root = getattr(result, "root", result)
-    # fastmcp 4 bridges the 1.x spelling onto 2.x results with a warning.
-    cursor = (
-        root.next_cursor
-        if hasattr(root, "next_cursor")
-        else getattr(root, "nextCursor", None)
-    )
-    return FirstListingPage(
-        advertised_tool_names(list(getattr(root, "tools", []) or [])),
-        cursor is not None,
-    )
-
-
 def advertised_tool_names(tools: list) -> Set[str]:
     """The names a listing page advertises. The virtual tools are appended to a
     *copy* of the host's result, so a page always reads back as the host wrote
@@ -1094,60 +1076,37 @@ def resolve_virtual_tool_injection(
     return injectable
 
 
-LISTING_PROBE_DEADLINE_SECONDS = 1.0
-
-
 async def raw_listing_owns_tool_name(
-    data: MCPAnalyticsData, name: str, ctx: Any = None, *, whole_catalogue: bool = False
+    data: MCPAnalyticsData, name: str, ctx: Any = None
 ) -> Optional[bool]:
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
     first page, asked at call time. For the raw low-level paths, 1.x and v2,
-    which have no tool registry to query instead. With ``whole_catalogue``, a
-    name missing from a page that has more pages after it is unanswered.
+    which have no tool registry to query instead.
 
     Tri-state. ``True``/``False`` are answers; ``None`` means the question could
     not be asked, and callers must not intercept on it -- guessing "not owned"
     would swallow a real tool of the host's. Runs once per call to a virtual
-    tool's name and per failed call, never for ordinary traffic. A listing that
-    takes longer than ``LISTING_PROBE_DEADLINE_SECONDS`` is unanswered, so a
-    stalled handler cannot hold the client's response.
+    tool's name, never for ordinary traffic.
     """
     probe = data.raw_tool_names_probe
     if probe is None:
         return None
     try:
-        page = await asyncio.wait_for(probe(ctx), LISTING_PROBE_DEADLINE_SECONDS)
-    except asyncio.TimeoutError:
-        log(f"PostHog MCP: tools/list did not answer in time to look up {name!r}")
-        return None
+        names = await probe(ctx)
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
-    if page is None:
-        return None
-    if name in page.names:
-        return True
-    return None if whole_catalogue and page.has_more else False
+    return None if names is None else name in names
 
 
-async def registered_tool_exists(
-    data: MCPAnalyticsData, standalone: Any, name: str, ctx: Any = None
-) -> Optional[bool]:
-    """Whether the server registers ``name`` at all, asked after a failed call
-    to tell an unknown tool from a failed one. jlowin's standalone FastMCP asks
-    its registry; a raw low-level server asks its whole ``tools/list``
-    catalogue. ``None`` when neither can say."""
-    if standalone is not None:
-        return await _standalone_tool_exists(standalone, name)
-    return await raw_listing_owns_tool_name(data, name, ctx, whole_catalogue=True)
-
-
-async def _standalone_tool_exists(server: Any, name: str) -> Optional[bool]:
-    """Whether jlowin's FastMCP registers ``name``, enabled or not. A disabled
-    tool still exists: calling it is a failed call. Middleware that can serve
-    tools the registry lacks makes the registry no witness, and so does a
+async def registered_tool_exists(server: Any, name: str) -> Optional[bool]:
+    """Whether jlowin's FastMCP registers ``name``, enabled or not, asked after a
+    failed call to tell an unknown tool from a failed one. A disabled tool still
+    exists: calling it is a failed call. ``None`` when nothing authoritative can
+    say: no registry (a raw low-level server, whose listing may hide tools its
+    dispatcher serves), middleware that can serve tools the registry lacks, or a
     mounted server or other provider, which hides its disabled tools."""
-    if _dispatch_can_differ(server):
+    if server is None or _dispatch_can_differ(server):
         return None
     try:
         from fastmcp import FastMCP

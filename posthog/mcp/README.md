@@ -351,10 +351,9 @@ registry:
 
 - High-level servers and standalone `fastmcp.FastMCP` ask their registry. A
   disabled tool still exists, so calling it is a failed tool call.
-- A raw low-level server's registry is its own `tools/list` handler. A failed
-  call to a name that handler does not list is unknown. With no `tools/list`
-  handler, or a name missing from a first page that has more pages after it, the
-  SDK cannot tell and records a failed tool call.
+- A raw low-level server has no registry the SDK can read, and its own
+  dispatcher decides which names exist, so a failed call there is always a
+  failed tool call, including one to a name the dispatcher does not know.
 - On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
   listing or dispatch hook can serve tools the registry lacks, so the SDK
   records a failed tool call. FastMCP's stock middleware, other than its

@@ -34,7 +34,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, Optional, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
@@ -46,12 +46,12 @@ from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
+    advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
     _is_sse_request,
     _to_jsonable,
     copy_tools_list_result,
-    first_listing_page,
     is_first_listing_page,
     is_tool_result_error,
     mutate_tool_schema,
@@ -68,7 +68,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
-from ._internal import FirstListingPage, MCPAnalyticsData
+from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
     is_capture_model_enabled,
@@ -676,7 +676,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             result = await original(ctx, params)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
-                await registered_tool_exists(data, standalone, name, ctx)
+                await registered_tool_exists(standalone, name)
             ):
                 raise
             # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
@@ -696,7 +696,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             )
 
         if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(data, standalone, name, ctx),
+            await registered_tool_exists(standalone, name),
             conversation_id_delivered=delivered,
         ):
             return result
@@ -790,10 +790,11 @@ def _wrap_v2_list_tools(
         return
     original = entry.handler
 
-    async def probe_raw_tool_names(ctx: Any = None) -> Optional[FirstListingPage]:
-        """The host's own first page — ``original``, not the wrapper, so the
-        probe never recurses or appends a virtual tool."""
-        return first_listing_page(await original(ctx, None))
+    async def probe_raw_tool_names(ctx: Any = None) -> Optional[Set[str]]:
+        """The host's own first-page tool names — ``original``, not the wrapper,
+        so the probe never recurses or appends a virtual tool."""
+        result = await original(ctx, None)
+        return advertised_tool_names(list(getattr(result, "tools", []) or []))
 
     data.raw_tool_names_probe = probe_raw_tool_names
 

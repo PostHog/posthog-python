@@ -16,26 +16,11 @@ import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import (
-    Any,
-    Awaitable,
-    Callable,
-    Dict,
-    FrozenSet,
-    NamedTuple,
-    Optional,
-    Set,
-    Tuple,
-)
+from typing import Any, Awaitable, Callable, Dict, FrozenSet, Optional, Set, Tuple
 
 from .logger import log
 from ._sink import McpEventSink
 from .types import MCPAnalyticsOptions, UserIdentity
-
-
-class FirstListingPage(NamedTuple):
-    names: Set[str]
-    has_more: bool
 
 
 class IdentityCache:
@@ -90,14 +75,14 @@ class MCPAnalyticsData:
     warned_virtual_tool_collisions: Set[Tuple[str, str, str]] = field(
         default_factory=set
     )
-    # Adapter-supplied probe returning the first page the host's own (original,
-    # un-instrumented) tools/list handler serves, or None when it can't be
-    # determined. Registered by the adapters with no tool registry to query —
-    # raw low-level servers. Takes the adapter's request context, which the 1.x
-    # handler shape ignores.
-    raw_tool_names_probe: Optional[
-        Callable[[Any], Awaitable[Optional[FirstListingPage]]]
-    ] = None
+    # Adapter-supplied probe returning the names the host's own (original,
+    # un-instrumented) tools/list handler advertises on its first page, or None
+    # when it can't be determined. Registered by the adapters with no tool
+    # registry to query — raw low-level servers. Takes the adapter's request
+    # context, which the 1.x handler shape ignores.
+    raw_tool_names_probe: Optional[Callable[[Any], Awaitable[Optional[Set[str]]]]] = (
+        None
+    )
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
     tool_categories: Dict[str, str] = field(default_factory=dict)

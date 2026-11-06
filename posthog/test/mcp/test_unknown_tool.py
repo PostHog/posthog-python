@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 import mcp.types as mcp_types
 import pytest
 
-from posthog.mcp import PostHogMCP, _instrumentation as instrumentation, instrument
+from posthog.mcp import PostHogMCP, instrument
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     MCP_MAJOR,
@@ -110,39 +110,29 @@ def _mounted():
     return parent
 
 
-def _raw(pages, *, reject_with_result=False, stall_listing=False):
+def _raw(listed, *, hidden=(), reject_with_result=False, listing_seconds=0.0):
     """A raw low-level server whose own dispatcher rejects names it does not
-    know. ``pages`` are the tools/list pages of tool names, chained by cursor;
-    ``None`` registers no tools/list handler at all. On MCP 2.x the rejection
-    raises unless ``reject_with_result``; 1.x's decorator always turns it into
-    an ``isError`` result. With ``stall_listing``, tools/list never answers on
-    MCP 2.x; on 1.x only a client's does, the server's own cache refresh, which
-    passes no request, still does."""
+    know. tools/list advertises ``listed`` and takes ``listing_seconds`` to
+    answer; ``hidden`` tools are dispatched but never listed, and fail. On MCP
+    2.x a rejection raises unless ``reject_with_result``; 1.x's decorator
+    always turns it into an ``isError`` result."""
     from mcp.server.lowlevel import Server
 
-    async def stall_unless_cache_refresh(request):
-        if stall_listing and (request is not None or MCP_MAJOR >= 2):
-            await asyncio.Event().wait()
-
-    registered = {name for page in pages or [] for name in page}
     schema = {"type": "object", "properties": {"query": {"type": "string"}}}
-
-    def page_at(cursor):
-        index = int(cursor) if cursor else 0
-        tools = [
+    listing = mcp_types.ListToolsResult(
+        tools=[
             mcp_types.Tool(
                 name=name,
                 **{"input_schema" if MCP_MAJOR >= 2 else "inputSchema": schema},
             )
-            for name in pages[index]
+            for name in listed
         ]
-        next_cursor = str(index + 1) if index + 1 < len(pages) else None
-        if MCP_MAJOR >= 2:
-            return mcp_types.ListToolsResult(tools=tools, next_cursor=next_cursor)
-        return mcp_types.ListToolsResult(tools=tools, nextCursor=next_cursor)
+    )
 
     def reply(name):
-        if name not in registered:
+        if name in hidden:
+            raise ValueError(f"Tool disabled for this user: {name}")
+        if name not in listed:
             raise ValueError(f"Unknown tool: {name}")
         return [mcp_types.TextContent(type="text", text="ok")]
 
@@ -160,13 +150,12 @@ def _raw(pages, *, reject_with_result=False, stall_listing=False):
                 )
 
         async def on_list_tools(ctx, params):
-            await stall_unless_cache_refresh(params)
-            return page_at(getattr(params, "cursor", None))
+            await asyncio.sleep(listing_seconds)
+            return listing
 
-        handlers = {"on_call_tool": on_call_tool}
-        if pages is not None:
-            handlers["on_list_tools"] = on_list_tools
-        return Server("unknown-tool", **handlers)
+        return Server(
+            "unknown-tool", on_call_tool=on_call_tool, on_list_tools=on_list_tools
+        )
 
     server = Server("unknown-tool")
 
@@ -174,14 +163,11 @@ def _raw(pages, *, reject_with_result=False, stall_listing=False):
     async def call_tool(name, arguments):
         return reply(name)
 
-    if pages is not None:
+    async def list_tools(req):
+        await asyncio.sleep(listing_seconds)
+        return mcp_types.ServerResult(listing)
 
-        async def list_tools(req):
-            await stall_unless_cache_refresh(req)
-            params = getattr(req, "params", None) if req else None
-            return mcp_types.ServerResult(page_at(getattr(params, "cursor", None)))
-
-        server.request_handlers[mcp_types.ListToolsRequest] = list_tools
+    server.request_handlers[mcp_types.ListToolsRequest] = list_tools
     return server
 
 
@@ -231,7 +217,6 @@ async def _response(server, name, arguments):
                 "error_handling.ErrorHandlingMiddleware",
             )
         ),
-        pytest.param(lambda: _raw([["search_docs"]]), id="raw-low-level"),
     ],
 )
 async def test_a_call_to_a_tool_that_does_not_exist_is_recorded_as_unknown(build):
@@ -283,13 +268,16 @@ async def test_a_call_to_a_tool_that_does_not_exist_is_recorded_as_unknown(build
             marks=_needs_standalone,
         ),
         pytest.param(
-            lambda: _raw(None), "no_such_tool", {}, id="raw-low-level-without-listing"
-        ),
-        pytest.param(
-            lambda: _raw([["search_docs"], ["export"]]),
+            lambda: _raw(["search_docs"]),
             "no_such_tool",
             {},
-            id="raw-low-level-with-more-pages",
+            id="raw-low-level-unknown-name",
+        ),
+        pytest.param(
+            lambda: _raw(["search_docs"], hidden=["export"]),
+            "export",
+            {"query": "q"},
+            id="raw-low-level-hidden-tool",
         ),
     ],
 )
@@ -328,11 +316,12 @@ async def test_a_custom_dispatcher_captures_an_unknown_tool():
 _SHAPES = [
     pytest.param(_high_level, id="high-level"),
     pytest.param(_standalone, id="standalone-fastmcp", marks=_needs_standalone),
-    pytest.param(lambda: _raw([["search_docs"]]), id="raw-low-level"),
 ]
 
 
-@pytest.mark.parametrize("build", _SHAPES)
+@pytest.mark.parametrize(
+    "build", [*_SHAPES, pytest.param(lambda: _raw(["search_docs"]), id="raw-low-level")]
+)
 async def test_a_call_naming_no_tool_emits_nothing(build):
     expected = await _response(build(), "", {})
     client = FakeClient()
@@ -387,9 +376,7 @@ def test_a_custom_dispatcher_follows_the_unknown_tool_name_rules(
     "build, delivers_handle",
     [
         pytest.param(
-            lambda: _raw([["search_docs"]], reject_with_result=True),
-            True,
-            id="raw-low-level-error-result",
+            _standalone, True, id="standalone-error-result", marks=_needs_standalone
         ),
         pytest.param(_high_level, False, id="high-level-raise"),
     ],
@@ -416,50 +403,40 @@ async def test_an_unknown_tool_result_carries_the_conversation_handle_it_deliver
     )
 
 
-@pytest.mark.skipif(MCP_MAJOR < 2, reason="MCP 2 renamed nextCursor to next_cursor")
-async def test_checking_the_host_listing_never_reads_the_deprecated_cursor(
-    monkeypatch,
-):
-    """fastmcp 4 installs a ``nextCursor`` property on MCP 2 results that warns
-    on first read; this one stands in for it and counts the reads."""
-    reads = []
-
-    def deprecated_cursor(result):
-        reads.append(result)
-        return result.next_cursor
-
-    monkeypatch.setattr(
-        mcp_types.ListToolsResult,
-        "nextCursor",
-        property(deprecated_cursor),
-        raising=False,
-    )
+@pytest.mark.parametrize(
+    "name, arguments, event",
+    [
+        pytest.param(
+            "get_more_tools",
+            {"context": "bulk export"},
+            "$mcp_missing_capability",
+            id="get-more-tools",
+        ),
+        pytest.param(
+            "send_feedback",
+            {"feedback_type": "other", "summary": "Slow export."},
+            "$mcp_feedback",
+            id="send-feedback",
+        ),
+    ],
+)
+async def test_a_slow_listing_still_answers_a_virtual_tool_call(name, arguments, event):
     client = FakeClient()
-    server = _raw([["search_docs"]], reject_with_result=True)
-    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
+    server = _raw(["search_docs"], reject_with_result=True, listing_seconds=1.1)
+    instrument(
+        server,
+        client,
+        MCPAnalyticsOptions(
+            enable_conversation_id=False, report_missing=True, collect_feedback=True
+        ),
+    )
 
-    await _response(server, "no_such_tool", {})
+    is_error, _ = await _response(server, name, arguments)
     await flush_background()
 
-    assert reads == []
-    assert len(events_named(client, "$mcp_unknown_tool")) == 1
-
-
-async def test_a_stalled_listing_does_not_delay_a_failed_calls_error(monkeypatch):
-    monkeypatch.setattr(instrumentation, "LISTING_PROBE_DEADLINE_SECONDS", 0.05)
-    client = FakeClient()
-    server = _raw([["search_docs"]], reject_with_result=True, stall_listing=True)
-    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
-
-    is_error, _ = await asyncio.wait_for(
-        _response(server, "no_such_tool", {}), timeout=5
-    )
-    await flush_background()
-
-    assert is_error is True
-    [call] = events_named(client, "$mcp_tool_call")
-    assert call["properties"]["$mcp_is_error"] is True
-    assert events_named(client, "$mcp_unknown_tool") == []
+    assert is_error is False
+    assert len(events_named(client, event)) == 1
+    assert events_named(client, "$mcp_tool_call") == []
 
 
 @pytest.mark.parametrize(

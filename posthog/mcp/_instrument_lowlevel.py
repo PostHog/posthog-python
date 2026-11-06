@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import mcp.types as mcp_types
 
@@ -28,11 +28,11 @@ from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
+    advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
     copy_tools_list_result,
     extract_tools,
-    first_listing_page,
     is_first_listing_page,
     is_tool_result_error,
     mutate_tool_schema,
@@ -50,7 +50,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
-from ._internal import FirstListingPage, MCPAnalyticsData
+from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
@@ -285,7 +285,7 @@ def _wrap_call_tool(
             result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
-                await registered_tool_exists(data, high_level, name)
+                await registered_tool_exists(high_level, name)
             ):
                 raise
             # The @server.call_tool() decorator converts raises into
@@ -340,7 +340,7 @@ def _wrap_call_tool(
                 )
 
         if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(data, high_level, name),
+            await registered_tool_exists(high_level, name),
             conversation_id_delivered=delivered,
         ):
             return result
@@ -413,8 +413,8 @@ def _wrap_list_tools(
     if original is None or getattr(original, _WRAPPED_FLAG, False):
         return
 
-    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[FirstListingPage]:
-        """The first page the host's own handler serves. Calls
+    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[Set[str]]:
+        """The names the host's own handler advertises on its first page. Calls
         ``original``, not the wrapper, so the probe never recurses into
         instrumentation or appends a virtual tool. Read by
         ``_name_owned_by_real_tool`` on raw low-level servers, which have no
@@ -454,7 +454,7 @@ def _wrap_list_tools(
             context_required=context_required,
             high_level=high_level,
         )
-        return first_listing_page(result)
+        return advertised_tool_names(tools)
 
     data.raw_tool_names_probe = probe_raw_tool_names
 
