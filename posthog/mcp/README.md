@@ -36,6 +36,10 @@ Request headers use the same identity and package version, so SDK Health can com
 Because `$lib` is a client-level identity, `instrument()` relabels every event sent by the client passed to it.
 Use a client dedicated to MCP analytics if the application also captures unrelated events.
 
+## Versioning
+
+`posthog.mcp` is stable. It ships inside the `posthog` package, so it follows that package's version rather than its own. A minor or patch release of `posthog` doesn't change the `posthog.mcp` API in a breaking way, and doesn't rename or remove a `$mcp_*` event or property, change its type, or change which requests send an event, so saved insights keep working across upgrades. It may add events and properties, and redact more of a captured value. The rules come from the [MCP analytics spec](https://github.com/PostHog/sdk-specs/blob/main/openspec/specs/mcp-analytics/spec.md), section "Event schema stability".
+
 ## Defaults and opt-outs
 
 A valid echoed conversation handle takes precedence over transport sessions. A request that already carries a transport session or a PostHog session token does not mint a new handle or append a prompt-back block. Requests carrying neither use the conversation fallback.
