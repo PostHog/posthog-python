@@ -955,6 +955,7 @@ class Client(object):
             )
         self._flags_etag: Optional[str] = None
         self._flag_definition_fetch_generation = 0
+        self._reported_rejected_secret_key = False
         self._flag_definition_published_generation = 0
         self._flag_definition_cache_generation = 0
         self._flag_definition_publication_lock = threading.RLock()
@@ -3707,6 +3708,7 @@ class Client(object):
                     self._flags_etag = response.etag
                     self._flag_definition_published_generation = fetch_generation
                     self._flag_definition_cache_generation = fetch_generation
+                    self._reported_rejected_secret_key = False
                     self.log.debug(
                         "[FEATURE FLAGS] Flags not modified (304), using cached data"
                     )
@@ -3722,6 +3724,7 @@ class Client(object):
                 old_fingerprint = self._update_flag_state(
                     response.data, _fingerprint=fingerprint
                 )
+                self._reported_rejected_secret_key = False
 
                 if self._flag_definition_cache_provider:
                     cache_data_to_store = {
@@ -3766,12 +3769,7 @@ class Client(object):
                 if fetch_generation <= self._flag_definition_published_generation:
                     self.log.debug("[FEATURE FLAGS] Ignoring stale API error response")
                 elif e.status == 401:
-                    detail = (
-                        f"Error loading feature flags: {e.message}. "
-                        "Please verify both your project_api_key and secret_key. "
-                        "More information: https://posthog.com/docs/api/overview"
-                    )
-                    self.log.error("[FEATURE FLAGS] %s", detail)
+                    detail = self._report_rejected_secret_key_once(e)
                     self.feature_flags = []
                     self.group_type_mapping = {}
                     self.cohorts = {}
@@ -3819,6 +3817,8 @@ class Client(object):
                             status=402,
                             message="PostHog feature flags quota limited",
                         )
+                elif e.status == 403:
+                    self._report_rejected_secret_key_once(e)
                 else:
                     self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
         except Exception as e:
@@ -3834,6 +3834,22 @@ class Client(object):
                 self.flag_cache._invalidate_snapshot(old_fingerprint)
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+
+    def _report_rejected_secret_key_once(self, error: APIError) -> str:
+        detail = (
+            f"Your secret key can't load feature flag definitions for local evaluation "
+            f"({error.status}: {error.message}). The key is invalid or lacks the "
+            "Feature flags: Read scope. Add the scope to the key, or pass "
+            "enable_local_evaluation=False if you don't evaluate flags locally. "
+            "This warning won't repeat until definitions load. "
+            "More information: https://posthog.com/docs/feature-flags/local-evaluation"
+        )
+        if self._reported_rejected_secret_key:
+            self.log.debug("[FEATURE FLAGS] %s", detail)
+        else:
+            self._reported_rejected_secret_key = True
+            self.log.warning("[FEATURE FLAGS] %s", detail)
+        return detail
 
     def load_feature_flags(self):
         """

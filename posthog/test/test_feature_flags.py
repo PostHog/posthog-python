@@ -3911,17 +3911,53 @@ class TestLocalEvaluation(unittest.TestCase):
         self.assertEqual(client.feature_flags[0]["key"], "new-flag")
         self.assertEqual(client._flags_etag, '"new-etag"')
 
+    @parameterized.expand([(401,), (403,)])
+    @mock.patch("posthog.client.get")
+    def test_rejected_secret_key_warns_once_across_polls(self, status, patch_get):
+        patch_get.side_effect = APIError(status, "rejected")
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            for _ in range(5):
+                client._load_feature_flags()
+
+        self.assertEqual(patch_get.call_count, 5)
+        self.assertEqual(len(logs.records), 1)
+        self.assertEqual(logs.records[0].levelname, "WARNING")
+        self.assertIn("Feature flags: Read", logs.output[0])
+        self.assertIn("enable_local_evaluation=False", logs.output[0])
+
+    @mock.patch("posthog.client.get")
+    def test_rejected_secret_key_warns_again_after_definitions_load(self, patch_get):
+        loaded = GetResponse(
+            data={"flags": [], "group_type_mapping": {}, "cohorts": {}},
+            etag=None,
+        )
+        patch_get.side_effect = [
+            APIError(401, "rejected"),
+            APIError(401, "rejected"),
+            loaded,
+            APIError(401, "rejected"),
+            APIError(401, "rejected"),
+        ]
+        client = Client(FAKE_TEST_API_KEY, secret_key="test", send=False)
+
+        with self.assertLogs("posthog", level="WARNING") as logs:
+            for _ in range(5):
+                client._load_feature_flags()
+
+        self.assertEqual(len(logs.records), 2)
+
     @mock.patch("posthog.client.Poller")
     @mock.patch("posthog.client.get")
     def test_load_feature_flags_wrong_key(self, patch_get, _patch_poll):
         patch_get.side_effect = APIError(401, "Unauthorized")
         client = Client(FAKE_TEST_API_KEY, secret_key=FAKE_TEST_API_KEY)
 
-        with self.assertLogs("posthog", level="ERROR") as logs:
+        with self.assertLogs("posthog", level="WARNING") as logs:
             client.load_feature_flags()
             self.assertIn("Unauthorized", logs.output[0])
-            self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("secret_key", logs.output[0])
+            self.assertIn("Feature flags: Read", logs.output[0])
         client.debug = True
         with self.assertRaisesRegex(APIError, "Unauthorized"):
             client.load_feature_flags()
