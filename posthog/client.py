@@ -86,6 +86,7 @@ from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
     _get_definition_unresolved_reason,
+    _group_key_to_string,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -3945,7 +3946,7 @@ class Client(object):
                     reason=UnresolvedFlagReason.MISSING_CONTEXT,
                 )
             focused_group_properties = group_properties[group_name]
-            group_key = groups[group_name]
+            group_key = _group_key_to_string(groups[group_name])
             return match_feature_flag_properties(
                 feature_flag,
                 group_key,
