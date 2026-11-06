@@ -28,14 +28,14 @@ from posthog.test.mcp._helpers_v2 import fake_ctx
 
 def make_server(*, resource_error: bool = False, listing: str = "resources") -> Server:
     async def on_call_tool(ctx, params):
-        args = params.arguments or {}
-        if args.get("fail") == "raise":
+        if params.name == "boom":
             raise ValueError("explode")
-        if args.get("fail") == "result":
+        if params.name == "soft-fail":
             return mcp_types.CallToolResult(
                 content=[mcp_types.TextContent(type="text", text="failed politely")],
                 is_error=True,
             )
+        args = params.arguments or {}
         return mcp_types.CallToolResult(
             content=[
                 mcp_types.TextContent(
@@ -410,11 +410,7 @@ async def test_raised_error_is_captured_and_reraised():
     instrument(server, client)
 
     with pytest.raises(ValueError):
-        await _call_tool(
-            server,
-            "add",
-            {"fail": "raise", "context": "attempting the risky operation"},
-        )
+        await _call_tool(server, "boom", {"context": "attempting the risky operation"})
     await _flush()
 
     calls = _events(client, "$mcp_tool_call")
@@ -430,7 +426,7 @@ async def test_is_error_result_is_captured():
     instrument(server, client)
 
     result = await _call_tool(
-        server, "add", {"fail": "result", "context": "expecting a polite failure"}
+        server, "soft-fail", {"context": "expecting a polite failure"}
     )
     await _flush()
 

@@ -29,7 +29,7 @@ _BUILT_IN_EVENT_NAME_BY_TYPE = {
     MCPAnalyticsEventType.MCP_RESOURCES_READ: PostHogMCPAnalyticsEvent.RESOURCE_READ,
     MCPAnalyticsEventType.MCP_TOOLS_CALL: PostHogMCPAnalyticsEvent.TOOL_CALL,
     MCPAnalyticsEventType.MCP_TOOLS_LIST: PostHogMCPAnalyticsEvent.TOOLS_LIST,
-    MCPAnalyticsEventType.MCP_UNKNOWN_TOOL: PostHogMCPAnalyticsEvent.UNKNOWN_TOOL,
+    MCPAnalyticsEventType.MCP_UNKNOWN_TOOL: "$mcp_unknown_tool",
 }
 
 _P = PostHogMCPAnalyticsProperty

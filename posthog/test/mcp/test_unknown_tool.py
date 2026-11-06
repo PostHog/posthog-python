@@ -2,7 +2,6 @@
 not a tool call. Runs under both MCP SDK majors over an in-process client, so
 the response compared against an uninstrumented twin is the one an agent gets."""
 
-import asyncio
 import importlib
 import importlib.util
 import json
@@ -11,7 +10,7 @@ from contextlib import asynccontextmanager
 import mcp.types as mcp_types
 import pytest
 
-from posthog.mcp import PostHogMCP, instrument
+from posthog.mcp import instrument
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     MCP_MAJOR,
@@ -110,12 +109,9 @@ def _mounted():
     return parent
 
 
-def _raw(listed, *, hidden=(), reject_with_result=False, listing_seconds=0.0):
+def _raw(listed):
     """A raw low-level server whose own dispatcher rejects names it does not
-    know. tools/list advertises ``listed`` and takes ``listing_seconds`` to
-    answer; ``hidden`` tools are dispatched but never listed, and fail. On MCP
-    2.x a rejection raises unless ``reject_with_result``; 1.x's decorator
-    always turns it into an ``isError`` result."""
+    know and advertises ``listed`` on tools/list."""
     from mcp.server.lowlevel import Server
 
     schema = {"type": "object", "properties": {"query": {"type": "string"}}}
@@ -130,8 +126,6 @@ def _raw(listed, *, hidden=(), reject_with_result=False, listing_seconds=0.0):
     )
 
     def reply(name):
-        if name in hidden:
-            raise ValueError(f"Tool disabled for this user: {name}")
         if name not in listed:
             raise ValueError(f"Unknown tool: {name}")
         return [mcp_types.TextContent(type="text", text="ok")]
@@ -139,18 +133,9 @@ def _raw(listed, *, hidden=(), reject_with_result=False, listing_seconds=0.0):
     if MCP_MAJOR >= 2:
 
         async def on_call_tool(ctx, params):
-            try:
-                return mcp_types.CallToolResult(content=reply(params.name))
-            except ValueError as error:
-                if not reject_with_result:
-                    raise
-                return mcp_types.CallToolResult(
-                    content=[mcp_types.TextContent(type="text", text=str(error))],
-                    is_error=True,
-                )
+            return mcp_types.CallToolResult(content=reply(params.name))
 
         async def on_list_tools(ctx, params):
-            await asyncio.sleep(listing_seconds)
             return listing
 
         return Server(
@@ -164,7 +149,6 @@ def _raw(listed, *, hidden=(), reject_with_result=False, listing_seconds=0.0):
         return reply(name)
 
     async def list_tools(req):
-        await asyncio.sleep(listing_seconds)
         return mcp_types.ServerResult(listing)
 
     server.request_handlers[mcp_types.ListToolsRequest] = list_tools
@@ -273,12 +257,6 @@ async def test_a_call_to_a_tool_that_does_not_exist_is_recorded_as_unknown(build
             {},
             id="raw-low-level-unknown-name",
         ),
-        pytest.param(
-            lambda: _raw(["search_docs"], hidden=["export"]),
-            "export",
-            {"query": "q"},
-            id="raw-low-level-hidden-tool",
-        ),
     ],
 )
 async def test_a_call_the_sdk_cannot_rule_out_is_a_failed_tool_call(
@@ -296,21 +274,6 @@ async def test_a_call_the_sdk_cannot_rule_out_is_a_failed_tool_call(
     assert call["properties"]["$mcp_tool_name"] == name
     assert call["properties"]["$mcp_is_error"] is True
     assert events_named(client, "$mcp_unknown_tool") == []
-
-
-async def test_a_custom_dispatcher_captures_an_unknown_tool():
-    posthog = PostHogMCP("phc_test")
-    captured = []
-    posthog.capture = lambda event, **kw: captured.append({"event": event, **kw})
-
-    posthog.capture_unknown_tool("export for jane@example.com", session_id="ses_1")
-    posthog.flush()
-
-    [unknown] = events_named(captured, "$mcp_unknown_tool")
-    assert unknown["properties"]["$mcp_tool_name"] == "export for [redacted]"
-    assert unknown["properties"]["$session_id"] == "ses_1"
-    assert "$mcp_resource_name" not in unknown["properties"]
-    assert events_named(captured, "$mcp_tool_call") == []
 
 
 _SHAPES = [
@@ -350,29 +313,6 @@ async def test_an_unknown_tool_name_is_cut_to_256_characters(build):
 
 
 @pytest.mark.parametrize(
-    "tool_name, expected_names",
-    [
-        pytest.param("", [], id="no-tool"),
-        pytest.param("y" * 5000, [256], id="long-name"),
-    ],
-)
-def test_a_custom_dispatcher_follows_the_unknown_tool_name_rules(
-    tool_name, expected_names
-):
-    posthog = PostHogMCP("phc_test")
-    captured = []
-    posthog.capture = lambda event, **kw: captured.append({"event": event, **kw})
-
-    posthog.capture_unknown_tool(tool_name, session_id="ses_1")
-    posthog.flush()
-
-    assert [
-        len(e["properties"]["$mcp_tool_name"])
-        for e in events_named(captured, "$mcp_unknown_tool")
-    ] == expected_names
-
-
-@pytest.mark.parametrize(
     "build, delivers_handle",
     [
         pytest.param(
@@ -401,64 +341,3 @@ async def test_an_unknown_tool_result_carries_the_conversation_handle_it_deliver
     assert unknown["properties"].get("$mcp_conversation_id") == next(
         iter(handles), None
     )
-
-
-@pytest.mark.parametrize(
-    "name, arguments, event",
-    [
-        pytest.param(
-            "get_more_tools",
-            {"context": "bulk export"},
-            "$mcp_missing_capability",
-            id="get-more-tools",
-        ),
-        pytest.param(
-            "send_feedback",
-            {"feedback_type": "other", "summary": "Slow export."},
-            "$mcp_feedback",
-            id="send-feedback",
-        ),
-    ],
-)
-async def test_a_slow_listing_still_answers_a_virtual_tool_call(name, arguments, event):
-    client = FakeClient()
-    server = _raw(["search_docs"], reject_with_result=True, listing_seconds=1.1)
-    instrument(
-        server,
-        client,
-        MCPAnalyticsOptions(
-            enable_conversation_id=False, report_missing=True, collect_feedback=True
-        ),
-    )
-
-    is_error, _ = await _response(server, name, arguments)
-    await flush_background()
-
-    assert is_error is False
-    assert len(events_named(client, event)) == 1
-    assert events_named(client, "$mcp_tool_call") == []
-
-
-@pytest.mark.parametrize(
-    "capture",
-    [
-        pytest.param(lambda posthog: posthog.capture_tool_call("t"), id="tool-call"),
-        pytest.param(
-            lambda posthog: posthog.capture_unknown_tool("t"), id="unknown-tool"
-        ),
-    ],
-)
-def test_manual_capture_without_a_session_gets_a_fresh_one_per_call(capture):
-    posthog = PostHogMCP("phc_test")
-    captured = []
-    posthog.capture = lambda event, **kw: captured.append({"event": event, **kw})
-
-    capture(posthog)
-    capture(posthog)
-    posthog.flush()
-
-    first, second = captured
-    session = first["properties"]["$session_id"]
-    assert session.startswith("ses_")
-    assert first["distinct_id"] == session
-    assert second["properties"]["$session_id"] != session

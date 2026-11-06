@@ -55,7 +55,6 @@ class PostHogMCPAnalyticsEvent:
     RESOURCES_LIST = "$mcp_resources_list"
     TOOL_CALL = "$mcp_tool_call"
     TOOLS_LIST = "$mcp_tools_list"
-    UNKNOWN_TOOL = "$mcp_unknown_tool"
 
 
 class PostHogMCPAnalyticsProperty:

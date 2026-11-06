@@ -343,40 +343,25 @@ call = posthog.prepare_tool_call(
 
 ## Calls to tools your server does not have
 
-A `tools/call` that names a tool your server never registered is not a tool
-call. `instrument()` sends `$mcp_unknown_tool` with the requested name as
+A `tools/call` naming a tool your server never registered is not a tool call.
+`instrument()` sends `$mcp_unknown_tool` with the requested name as
 `$mcp_tool_name`, and no `$mcp_tool_call` or `$exception`. The agent gets the
-same error as before. The SDK decides only after the call fails, from the tool
-registry:
+same error as before. A call naming no tool sends nothing.
 
-- High-level servers and standalone `fastmcp.FastMCP` ask their registry. A
-  disabled tool still exists, so calling it is a failed tool call.
-- A raw low-level server has no registry the SDK can read, and its own
-  dispatcher decides which names exist, so a failed call there is always a
-  failed tool call, including one to a name the dispatcher does not know.
+The SDK asks the tool registry only after the call fails, and records a failed
+tool call whenever the registry can't rule the tool out:
+
+- A disabled tool, or a tool called with invalid arguments, still exists.
+- A raw low-level server has no registry the SDK can read.
 - On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
-  listing or dispatch hook can serve tools the registry lacks, so the SDK
-  records a failed tool call. FastMCP's stock middleware, other than its
-  tool-injection middleware, does not count.
-- On standalone `fastmcp.FastMCP` 3 and later with a mounted server, a proxy,
-  or another provider, the provider hides its disabled tools, so a name the SDK
-  can't find is a failed tool call.
-
-A call naming no tool sends nothing.
-
-Invalid arguments for a tool that exists are a failed tool call. A custom
-dispatcher calls `posthog.capture_unknown_tool(tool_name, session_id=...)` in
-place of `capture_tool_call` when its own lookup finds no tool.
+  listing or dispatch hook can serve tools the registry lacks.
+- On standalone `fastmcp.FastMCP` 3 and later, a mounted server, proxy, or
+  other provider hides its disabled tools.
 
 ## Virtual tools on a paginated `tools/list`
 
 `instrument()` advertises up to two tools of its own: `get_more_tools`
 (`report_missing=True`) and `send_feedback` (`collect_feedback=True`).
-
-Both declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, and
-`openWorldHint` as `false`, and no option changes that. A call records one event
-in your PostHog project: it writes outside the conversation, deletes nothing,
-records again on every repeat, and reaches nothing else.
 
 A client concatenates every `tools/list` page into one list, so each virtual tool
 is appended to the **first page only** — the page every client reads, including

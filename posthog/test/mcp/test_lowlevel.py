@@ -36,7 +36,7 @@ def make_server(*, resource_error: bool = False, listing: str = "resources") -> 
 
     @server.call_tool()
     async def call_tool(name, arguments):
-        if name == "echo" and arguments.get("msg") != "boom":
+        if name == "echo":
             return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
         raise ValueError("boom")
 
@@ -350,8 +350,9 @@ async def test_tool_call_error_captured_from_is_error_result():
     instrument(server, client)
 
     handler = server.request_handlers[mcp_types.CallToolRequest]
+    # "fail" is unlisted -> no validation -> handler raises -> isError result
     result = await handler(
-        _call_request("echo", {"msg": "boom", "context": "trying a tool that errors"})
+        _call_request("fail", {"context": "trying a tool that errors"})
     )
     await _flush()
 

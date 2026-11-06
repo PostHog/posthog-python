@@ -58,7 +58,6 @@ from ._instrumentation import (
     params_to_request_dict,
     prepare_request,
     raw_listing_owns_tool_name,
-    registered_tool_exists,
     record_initialize,
     record_resource_request,
     resource_listing_response,
@@ -68,6 +67,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
+from ._instrument_lowlevel import registered_tool_exists
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,

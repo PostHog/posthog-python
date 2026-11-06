@@ -14,9 +14,12 @@ server's ``request_context`` contextvar (the handler receives only the request).
 
 from __future__ import annotations
 
+import functools
+import importlib
 import inspect
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 import mcp.types as mcp_types
 
@@ -37,10 +40,7 @@ from ._instrumentation import (
     is_tool_result_error,
     mutate_tool_schema,
     prepare_request,
-    _dispatch_can_differ,
-    _tool_lookup_not_found_errors,
     raw_listing_owns_tool_name,
-    registered_tool_exists,
     record_resource_request,
     request_to_dict,
     resource_listing_response,
@@ -584,6 +584,26 @@ async def _name_owned_by_real_tool(
     return await raw_listing_owns_tool_name(data, name, server)
 
 
+@lru_cache(maxsize=1)
+def _tool_lookup_not_found_errors() -> Tuple[Type[BaseException], ...]:
+    """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
+    Anything else out of ``get_tool`` is the lookup itself failing. Empty when
+    fastmcp is absent or has moved them, which makes every failure delegate:
+    the safe direction."""
+    try:
+        from fastmcp import exceptions
+    except Exception:  # noqa: BLE001 - no fastmcp on this path
+        return ()
+    return tuple(
+        err
+        for err in (
+            getattr(exceptions, "NotFoundError", None),
+            getattr(exceptions, "DisabledError", None),
+        )
+        if isinstance(err, type) and issubclass(err, BaseException)
+    )
+
+
 _INJECTED_KEYS = ("context", "conversation_id", "llm_model")
 
 
@@ -759,6 +779,105 @@ def _server_dereferences(server: Any) -> bool:
         type(middleware).__module__.endswith(".dereference")
         for middleware in getattr(server, "middleware", ())
     )
+
+
+_DISPATCH_HOOKS = ("on_message", "on_request", "on_list_tools", "on_call_tool")
+
+
+def _dispatch_can_differ(server: Any) -> bool:
+    """Whether application middleware can provide, shadow, or reroute a tool,
+    making the registry an unreliable witness for what actually runs. Any
+    override of a listing or dispatch hook can; FastMCP's own built-ins are
+    excluded. Without a trustworthy registry a cold instance keeps ``llm_model``
+    (strips fail closed), which is exactly what it did before this path."""
+    try:
+        from fastmcp.server.middleware import Middleware
+    except ImportError:  # FastMCP before middleware existed: nothing can differ
+        return False
+
+    return any(
+        type(middleware) not in _builtin_middleware_types()  # subclasses are the app's
+        and any(
+            getattr(type(middleware), hook) is not getattr(Middleware, hook)
+            for hook in _DISPATCH_HOOKS
+        )
+        for middleware in getattr(server, "middleware", ())
+    )
+
+
+# Stock fastmcp middleware that observes, times, retries, throttles, denies,
+# caches, or trims a call to the tool it names, and never provides, renames, or
+# reroutes one. The tool-injection family is left out on purpose.
+_STOCK_DISPATCH_PRESERVING_MIDDLEWARE = (
+    ("logging", "LoggingMiddleware"),
+    ("logging", "StructuredLoggingMiddleware"),
+    ("timing", "TimingMiddleware"),
+    ("timing", "DetailedTimingMiddleware"),
+    ("error_handling", "ErrorHandlingMiddleware"),
+    ("error_handling", "RetryMiddleware"),
+    ("rate_limiting", "RateLimitingMiddleware"),
+    ("rate_limiting", "SlidingWindowRateLimitingMiddleware"),
+    ("ping", "PingMiddleware"),
+    ("authorization", "AuthMiddleware"),
+    ("caching", "ResponseCachingMiddleware"),
+    ("response_limiting", "ResponseLimitingMiddleware"),
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _builtin_middleware_types() -> tuple:
+    """The middleware a bare ``FastMCP()`` installs on its own, probed rather
+    than named so a new built-in in a later release is still recognised, plus
+    the stock middleware above that this fastmcp release ships."""
+    from fastmcp import FastMCP
+
+    stock = []
+    for module, name in _STOCK_DISPATCH_PRESERVING_MIDDLEWARE:
+        try:
+            stock.append(
+                getattr(
+                    importlib.import_module(f"fastmcp.server.middleware.{module}"), name
+                )
+            )
+        except (ImportError, AttributeError):
+            continue
+    return tuple(
+        type(middleware) for middleware in FastMCP("posthog-probe").middleware
+    ) + tuple(stock)
+
+
+async def registered_tool_exists(server: Any, name: str) -> Optional[bool]:
+    """Whether jlowin's FastMCP registers ``name``, enabled or not, asked after a
+    failed call to tell an unknown tool from a failed one. A disabled tool still
+    exists: calling it is a failed call. ``None`` when nothing authoritative can
+    say: no registry (a raw low-level server, whose listing may hide tools its
+    dispatcher serves), middleware that can serve tools the registry lacks, or a
+    mounted server or other provider, which hides its disabled tools."""
+    if server is None or _dispatch_can_differ(server):
+        return None
+    try:
+        from fastmcp import FastMCP
+
+        # From 3.x, get_tool hides a disabled tool; the providers still hold it.
+        found = (
+            await server.get_tool(name) is not None
+            or await super(FastMCP, server).get_tool(name) is not None
+        )
+    except _tool_lookup_not_found_errors():
+        found = False
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(f"PostHog MCP: could not look up tool {name!r} - {err}")
+        return None
+    if found:
+        return True
+    return None if _serves_other_providers(server) else False
+
+
+def _serves_other_providers(server: Any) -> bool:
+    """Whether a FastMCP 3+ server serves tools from anywhere but its own
+    registry: a mounted server, a proxy, or a custom provider."""
+    local = getattr(server, "_local_provider", None)
+    return any(provider is not local for provider in getattr(server, "providers", ()))
 
 
 def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:

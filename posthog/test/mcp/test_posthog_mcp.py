@@ -783,3 +783,17 @@ async def test_capture_tool_call_records_prepared_conversation_and_session():
     props = _events(captured, "$mcp_tool_call")[0]["properties"]
     assert props["$mcp_conversation_id"] == prepared.conversation_id
     assert props["$session_id"] == prepared.session_id
+
+
+def test_capture_without_a_session_gets_a_fresh_one_per_call():
+    client, captured = make_client()
+
+    client.capture_tool_call("t")
+    client.capture_tool_call("t")
+    client.flush()
+
+    first, second = captured
+    session = first["properties"]["$session_id"]
+    assert session.startswith("ses_")
+    assert first["distinct_id"] == session
+    assert second["properties"]["$session_id"] != session
