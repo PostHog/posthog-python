@@ -1,5 +1,11 @@
 # posthog
 
+## 7.84.3 — 2026-11-06
+
+### Patch changes
+
+- [3f93a34](https://github.com/posthog/posthog-python/commit/3f93a347939779e63f0176bf0a1396b07f98002c) Exclude client-only feature flags from definition-load warnings about experience continuity and unsupported definitions, without changing local evaluation. — Thanks @marandaneto!
+
 ## 7.84.2 — 2026-11-06
 
 ### Patch changes
