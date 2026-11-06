@@ -16,6 +16,16 @@ __all__ = ["get_more_tools_result"]
 
 GET_MORE_TOOLS_NAME = "get_more_tools"
 
+# A call records one event in the server owner's PostHog project: a write
+# outside the conversation that deletes nothing, repeats on every call, and
+# reaches only that project. Fixed so host configuration cannot misdeclare it.
+VIRTUAL_TOOL_HINTS = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
 _GET_MORE_TOOLS_RESULT_TEXT = (
     "Unfortunately, we have shown you the full tool list. We have noted your feedback "
     "and will work to improve the tool list in the future."
@@ -52,13 +62,7 @@ def build_report_missing_descriptor(name: str = GET_MORE_TOOLS_NAME) -> Dict[str
             },
             "required": ["context"],
         },
-        "annotations": {
-            "title": "Get More Tools",
-            "readOnlyHint": True,
-            "openWorldHint": True,
-            "idempotentHint": True,
-            "destructiveHint": False,
-        },
+        "annotations": dict(VIRTUAL_TOOL_HINTS),
     }
 
 

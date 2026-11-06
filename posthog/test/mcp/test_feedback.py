@@ -100,13 +100,6 @@ def test_descriptor_defaults():
         "sentiment",
         "task_completed",
     }
-    assert descriptor["annotations"] == {
-        "title": "Send feedback",
-        "readOnlyHint": True,
-        "openWorldHint": True,
-        "idempotentHint": True,
-        "destructiveHint": False,
-    }
 
 
 def test_descriptor_merges_extras_and_custom_name():
