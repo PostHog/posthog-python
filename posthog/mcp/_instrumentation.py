@@ -12,6 +12,7 @@ import asyncio
 import concurrent.futures
 import copy
 import functools
+import importlib
 import os
 import threading
 from dataclasses import dataclass
@@ -621,13 +622,18 @@ class ToolCallLifecycle:
         )
         return await handle_feedback(report, self.feedback_options)
 
-    async def record_if_unknown_tool(self, tool_exists: Optional[bool]) -> bool:
+    async def record_if_unknown_tool(
+        self, tool_exists: Optional[bool], *, conversation_id_delivered: bool = False
+    ) -> bool:
         """Record the failed call as ``$mcp_unknown_tool`` when ``tool_exists``
-        proves the server has no tool by that name, and say whether it did. The
-        adapter then re-raises or returns the host's response unchanged."""
+        proves the server has no tool by that name, and say whether the call is
+        settled that way. A call naming no tool is settled with no event. The
+        adapter then re-raises or returns its response."""
+        if not self.name:
+            return True
         if tool_exists is not False:
             return False
-        conversation_id = self._anchored_conversation_id(False)
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
         await record_unknown_tool(
             self.data,
@@ -999,7 +1005,12 @@ def first_listing_page(result: Any) -> FirstListingPage:
     cursor leads to more. 1.x wraps the result in a ``ServerResult`` and spells
     the cursor ``nextCursor``; 2.x returns it bare as ``next_cursor``."""
     root = getattr(result, "root", result)
-    cursor = getattr(root, "next_cursor", getattr(root, "nextCursor", None))
+    # fastmcp 4 bridges the 1.x spelling onto 2.x results with a warning.
+    cursor = (
+        root.next_cursor
+        if hasattr(root, "next_cursor")
+        else getattr(root, "nextCursor", None)
+    )
     return FirstListingPage(
         advertised_tool_names(list(getattr(root, "tools", []) or [])),
         cursor is not None,
@@ -1126,21 +1137,33 @@ async def registered_tool_exists(
 async def _standalone_tool_exists(server: Any, name: str) -> Optional[bool]:
     """Whether jlowin's FastMCP registers ``name``, enabled or not. A disabled
     tool still exists: calling it is a failed call. Middleware that can serve
-    tools the registry lacks makes the registry no witness."""
+    tools the registry lacks makes the registry no witness, and so does a
+    mounted server or other provider, which hides its disabled tools."""
     if _dispatch_can_differ(server):
         return None
     try:
-        if await server.get_tool(name) is not None:
-            return True
         from fastmcp import FastMCP
 
         # From 3.x, get_tool hides a disabled tool; the providers still hold it.
-        return await super(FastMCP, server).get_tool(name) is not None
+        found = (
+            await server.get_tool(name) is not None
+            or await super(FastMCP, server).get_tool(name) is not None
+        )
     except _tool_lookup_not_found_errors():
-        return False
+        found = False
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         log(f"PostHog MCP: could not look up tool {name!r} - {err}")
         return None
+    if found:
+        return True
+    return None if _serves_other_providers(server) else False
+
+
+def _serves_other_providers(server: Any) -> bool:
+    """Whether a FastMCP 3+ server serves tools from anywhere but its own
+    registry: a mounted server, a proxy, or a custom provider."""
+    local = getattr(server, "_local_provider", None)
+    return any(provider is not local for provider in getattr(server, "providers", ()))
 
 
 @functools.lru_cache(maxsize=1)
@@ -1178,7 +1201,8 @@ def _dispatch_can_differ(server: Any) -> bool:
         return False
 
     return any(
-        type(middleware) not in _builtin_middleware_types()  # subclasses are the app's
+        type(middleware)
+        not in _dispatch_preserving_middleware_types()  # subclasses are the app's
         and any(
             getattr(type(middleware), hook) is not getattr(Middleware, hook)
             for hook in _DISPATCH_HOOKS
@@ -1187,13 +1211,44 @@ def _dispatch_can_differ(server: Any) -> bool:
     )
 
 
+# Stock fastmcp middleware that observes, times, retries, throttles, denies,
+# caches, or trims a call to the tool it names, and never provides, renames, or
+# reroutes one. The tool-injection family is left out on purpose.
+_STOCK_DISPATCH_PRESERVING_MIDDLEWARE = (
+    ("logging", "LoggingMiddleware"),
+    ("logging", "StructuredLoggingMiddleware"),
+    ("timing", "TimingMiddleware"),
+    ("timing", "DetailedTimingMiddleware"),
+    ("error_handling", "ErrorHandlingMiddleware"),
+    ("error_handling", "RetryMiddleware"),
+    ("rate_limiting", "RateLimitingMiddleware"),
+    ("rate_limiting", "SlidingWindowRateLimitingMiddleware"),
+    ("ping", "PingMiddleware"),
+    ("authorization", "AuthMiddleware"),
+    ("caching", "ResponseCachingMiddleware"),
+    ("response_limiting", "ResponseLimitingMiddleware"),
+)
+
+
 @functools.lru_cache(maxsize=1)
-def _builtin_middleware_types() -> tuple:
+def _dispatch_preserving_middleware_types() -> FrozenSet[type]:
     """The middleware a bare ``FastMCP()`` installs on its own, probed rather
-    than named so a new built-in in a later release is still recognised."""
+    than named so a new built-in in a later release is still recognised, plus
+    the stock middleware above that this fastmcp release ships."""
     from fastmcp import FastMCP
 
-    return tuple(type(middleware) for middleware in FastMCP("posthog-probe").middleware)
+    stock = set()
+    for module, name in _STOCK_DISPATCH_PRESERVING_MIDDLEWARE:
+        try:
+            found = getattr(
+                importlib.import_module(f"fastmcp.server.middleware.{module}"), name
+            )
+        except (ImportError, AttributeError):
+            continue
+        stock.add(found)
+    return frozenset(
+        {type(middleware) for middleware in FastMCP("posthog-probe").middleware} | stock
+    )
 
 
 def warn_ownership_lookup_failed(name: str, err: Exception) -> None:

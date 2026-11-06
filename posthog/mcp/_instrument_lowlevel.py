@@ -300,10 +300,6 @@ def _wrap_call_tool(
         # The low-level handler already converted any exception to a
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
-        if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(data, high_level, name)
-        ):
-            return result
 
         # Deliver the handle before capture, over both channels a result has:
         # mirrored into structuredContent on every response (for tools whose
@@ -342,6 +338,12 @@ def _wrap_call_tool(
                     if hasattr(result, "root")
                     else call_result
                 )
+
+        if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(data, high_level, name),
+            conversation_id_delivered=delivered,
+        ):
+            return result
 
         await lifecycle.record_result(
             call_result,

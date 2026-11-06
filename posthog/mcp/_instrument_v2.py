@@ -684,10 +684,6 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
-        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(data, standalone, name, ctx)
-        ):
-            return result
 
         delivered = False
         if lifecycle.conversation_id:
@@ -698,6 +694,12 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
             )
+
+        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(data, standalone, name, ctx),
+            conversation_id_delivered=delivered,
+        ):
+            return result
 
         await lifecycle.record_result(
             result, duration_ms, conversation_id_delivered=delivered

@@ -391,7 +391,9 @@ class PostHogMCP(Client):
         ``$mcp_unknown_tool`` with the requested name as ``$mcp_tool_name``.
         Capture it instead of :meth:`capture_tool_call`, not as well: it is
         not a tool call. A tool that exists, disabled or called with invalid
-        arguments, is a failed tool call."""
+        arguments, is a failed tool call. A call naming no tool emits nothing."""
+        if not tool_name:
+            return
         event = self._base_event(
             MCPAnalyticsEventType.MCP_UNKNOWN_TOOL,
             distinct_id,

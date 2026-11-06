@@ -191,8 +191,10 @@ On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute
 When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
 replica cannot safely distinguish that field from a replacement tool's own argument.
 Client metadata capture remains enabled. This also applies to pass-through logging or
-authorization middleware with those hooks; argument-based model capture is skipped so an
-application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
+authorization middleware of your own with those hooks; argument-based model capture is skipped
+so an application-owned value cannot be mistaken for analytics. FastMCP's stock middleware,
+such as `LoggingMiddleware`, `TimingMiddleware`, and `ErrorHandlingMiddleware`, never reroutes a
+tool and does not count; its tool-injection middleware does. No additional catalog lookup runs
 during a tool call.
 
 For a custom dispatcher, `PostHogMCP` enables model capture and conversation correlation
@@ -353,9 +355,15 @@ registry:
   call to a name that handler does not list is unknown. With no `tools/list`
   handler, or a name missing from a first page that has more pages after it, the
   SDK cannot tell and records a failed tool call.
-- On standalone `fastmcp.FastMCP`, middleware that overrides a listing or
-  dispatch hook can serve tools the registry lacks, so the SDK records a failed
-  tool call.
+- On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
+  listing or dispatch hook can serve tools the registry lacks, so the SDK
+  records a failed tool call. FastMCP's stock middleware, other than its
+  tool-injection middleware, does not count.
+- On standalone `fastmcp.FastMCP` 3 and later with a mounted server, a proxy,
+  or another provider, the provider hides its disabled tools, so a name the SDK
+  can't find is a failed tool call.
+
+A call naming no tool sends nothing.
 
 Invalid arguments for a tool that exists are a failed tool call. A custom
 dispatcher calls `posthog.capture_unknown_tool(tool_name, session_id=...)` in

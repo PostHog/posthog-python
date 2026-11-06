@@ -85,9 +85,7 @@ def _visit(
                 return "[Infinity]" if value > 0 else "[-Infinity]"
         return value
     if isinstance(value, str):
-        if len(value) > max_string_length:
-            return value[:max_string_length] + _TRUNCATION_SUFFIX
-        return value
+        return truncate_text(value, max_string_length)
     if isinstance(value, datetime):
         return value.isoformat()
     if callable(value):
@@ -161,12 +159,18 @@ def _visit_object(
 # --- field-level helpers -----------------------------------------------------
 
 
+def truncate_text(value: str, max_length: int) -> str:
+    """``value`` cut to at most ``max_length`` characters, the truncation marker
+    included, keeping its start."""
+    if len(value) <= max_length:
+        return value
+    return value[: max_length - len(_TRUNCATION_SUFFIX)] + _TRUNCATION_SUFFIX
+
+
 def _truncate_string(value: Optional[str], max_length: int) -> Optional[str]:
     if not isinstance(value, str):
         return value
-    if len(value) <= max_length:
-        return value
-    return value[:max_length] + _TRUNCATION_SUFFIX
+    return truncate_text(value, max_length)
 
 
 def _truncate_stack_frames(frames: Optional[List[Any]]) -> Optional[List[Any]]:
@@ -214,8 +218,7 @@ def _truncate_response_content(response: Any) -> Any:
                 new_content.append(
                     {
                         **block,
-                        "text": block["text"][:_MAX_CONTENT_TEXT_LENGTH]
-                        + _TRUNCATION_SUFFIX,
+                        "text": truncate_text(block["text"], _MAX_CONTENT_TEXT_LENGTH),
                     }
                 )
             else:
