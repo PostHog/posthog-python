@@ -89,6 +89,8 @@ works too. A disabled client sends nothing and raises ``client_disabled``.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import importlib
 import json
 import logging
@@ -129,6 +131,7 @@ from .version import VERSION
 __all__ = [
     "AsyncEmails",
     "CodeEmailArgs",
+    "EmailAttachment",
     "EmailError",
     "EmailStatus",
     "EmailWarning",
@@ -198,6 +201,25 @@ class SendEmailResult:
     warnings: tuple[EmailWarning, ...] = ()
 
 
+class EmailAttachment(TypedDict):
+    """A file sent with the email.
+
+    Args:
+        filename: The file name the recipient sees, such as ``invite.ics``.
+        content: The file as ``bytes``, ``bytearray`` or ``memoryview``, which
+            the client encodes as Base64, or already Base64 encoded as a string.
+            PostHog can't fetch a file from a path or URL.
+        content_type: The MIME type. Without it, the type follows the file name.
+        content_id: Shows the file inline: reference it in ``html`` as
+            ``<img src="cid:logo">`` with ``content_id`` ``logo``.
+    """
+
+    filename: str
+    content: Union[bytes, bytearray, memoryview, str]
+    content_type: NotRequired[str]
+    content_id: NotRequired[str]
+
+
 class _RecipientArgs(TypedDict):
     to: str
     distinct_id: NotRequired[Optional[str]]
@@ -231,6 +253,10 @@ class CodeEmailArgs(_RecipientArgs):
 
     An optional field passed as ``None`` counts as left out.
 
+    A PostHog version that doesn't take a field yet, such as ``cc``, refuses
+    the send with an error that names the field in ``EmailError.field``. It
+    never drops the field and sends the rest.
+
     Args:
         to: One recipient email address.
         template_key: Names the email, so its metrics, logs and status group
@@ -242,6 +268,13 @@ class CodeEmailArgs(_RecipientArgs):
             without a plain-text part.
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
         reply_to: One address or a list of addresses. An empty list sends no reply-to.
+        cc: One address or a list of addresses that get a visible copy, at
+            most 10.
+        bcc: One address or a list of addresses that get a hidden copy, at
+            most 10.
+        attachments: Files sent with the email, at most 10 and 512 KB in
+            total. A file the client can't send raises :class:`EmailError`
+            with ``code`` ``invalid_attachment``.
         capture_engagement: Capture the email's opens and clicks as events of
             the recipient. Defaults to ``True``. A project whose admin turned
             engagement capture off captures nothing, whatever the send asks. A
@@ -263,15 +296,22 @@ class CodeEmailArgs(_RecipientArgs):
     text: NotRequired[Optional[str]]
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+    cc: NotRequired[Optional[Union[str, Sequence[str]]]]
+    bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
+    attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
     capture_engagement: NotRequired[Optional[bool]]
 
 
+_ATTACHMENT_FIELDS = frozenset(EmailAttachment.__annotations__)
 _OPTIONAL_CODE_FIELDS = frozenset(
     {
         "html",
         "text",
         "from_",
         "reply_to",
+        "cc",
+        "bcc",
+        "attachments",
         "capture_engagement",
     }
 )
@@ -378,9 +418,13 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     sender: dict[str, Any] = {}
     if "from_" in args:
         sender["from"] = _nonempty_text(args, "from_")
-    reply_to = _addresses("reply_to", args["reply_to"]) if "reply_to" in args else []
-    if reply_to:
-        sender["reply_to"] = reply_to
+    for field in ("reply_to", "cc", "bcc"):
+        addresses = _addresses(field, args[field]) if field in args else []
+        if addresses:
+            sender[field] = addresses
+    attachments = _attachments(args["attachments"]) if "attachments" in args else []
+    if attachments:
+        sender["attachments"] = attachments
     capture_engagement = args.get("capture_engagement", True)
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")
@@ -397,6 +441,83 @@ def _addresses(field: str, value: Any) -> list[str]:
     if not all(address.strip() for address in addresses):
         raise ValueError(f"{field} must not hold a blank address.")
     return list(addresses)
+
+
+def _invalid_attachment(message: str, field: str) -> EmailError:
+    return EmailError(
+        name="validation_error",
+        code="invalid_attachment",
+        message=message,
+        field=field,
+    )
+
+
+def _attachments(attachments: Any) -> list[dict[str, str]]:
+    if isinstance(
+        attachments, (str, bytes, bytearray, memoryview, Mapping)
+    ) or not isinstance(attachments, Sequence):
+        raise _invalid_attachment("attachments must be a list of files.", "attachments")
+    return [_attachment(index, file) for index, file in enumerate(attachments)]
+
+
+def _attachment(index: int, file: Any) -> dict[str, str]:
+    field = f"attachments__{index}"
+    if not isinstance(file, Mapping):
+        raise _invalid_attachment(
+            "An attachment is a mapping with filename and content. "
+            "Pass the file's bytes as its content.",
+            field,
+        )
+    if "path" in file:
+        raise _invalid_attachment(
+            "PostHog can't fetch an attachment from a path or URL. "
+            "Read the file and pass its bytes as content instead.",
+            f"{field}__path",
+        )
+    unknown = [name for name in file if name not in _ATTACHMENT_FIELDS]
+    if unknown:
+        raise _invalid_attachment(
+            "An attachment takes filename, content, content_type and content_id, "
+            f"not {unknown[0]}.",
+            f"{field}__{unknown[0]}",
+        )
+    if not isinstance(file.get("filename"), str) or not file["filename"]:
+        raise _invalid_attachment(
+            "An attachment needs a filename, such as 'invoice.pdf'.",
+            f"{field}__filename",
+        )
+    attachment = {
+        "filename": file["filename"],
+        "content": _base64_content(field, file.get("content")),
+    }
+    for name in ("content_type", "content_id"):
+        if name in file:
+            if not isinstance(file[name], str):
+                raise _invalid_attachment(
+                    f"An attachment's {name} must be a string.", f"{field}__{name}"
+                )
+            attachment[name] = file[name]
+    return attachment
+
+
+def _base64_content(field: str, content: Any) -> str:
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(content)).decode("ascii")
+    if isinstance(content, str):
+        try:
+            base64.b64decode(content, validate=True)
+        except (binascii.Error, ValueError):
+            raise _invalid_attachment(
+                "An attachment's content string must be Base64. "
+                "Pass the file's bytes instead, such as text.encode() for text.",
+                f"{field}__content",
+            ) from None
+        return content
+    raise _invalid_attachment(
+        "An attachment needs content: bytes or a Base64 string. "
+        "Convert a list of byte values with bytes(content).",
+        f"{field}__content",
+    )
 
 
 def _string(args: Mapping[str, Any], name: str) -> str:
@@ -850,6 +971,8 @@ class Emails(_EmailsBase):
         Raises:
             EmailError: PostHog did not queue the email, or the client could
                 not tell whether it did.
+                ``code`` is ``invalid_attachment`` for an attachment the
+                client can't send, before any request.
             TypeError, ValueError: An argument has the wrong type or format.
 
         Examples:
