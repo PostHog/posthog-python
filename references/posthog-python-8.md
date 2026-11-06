@@ -123,7 +123,7 @@ In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [
 ### `Client(...)`
 
 ```python
-__init__(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
+Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
 ```
 
 Initialize a new PostHog client instance.
@@ -145,7 +145,7 @@ Name | Type | Description | Default
 `timeout` | `float` | HTTP request timeout in seconds for event uploads. | `15`
 `thread` |  | Number of background consumer threads. | `1`
 `poll_interval` |  | Seconds between local feature flag definition refreshes. | `30`
-`secret_key` |  | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. Example::<br />    posthog.Client(project_api_key, secret_key="phx_...") | `None`
+`secret_key` |  | A Personal API Key or Project Secret API Key, used to authenticate local feature flag evaluation, remote config payloads, and decrypted flag payloads. For example, `posthog.Client(project_api_key, secret_key="phx_...")`. | `None`
 `personal_api_key` |  | Deprecated alias for `secret_key`. Still honored for backwards compatibility; prefer `secret_key`, which also accepts a Project Secret API Key. | `None`
 `disabled` |  | If True, disable captures and API requests. Useful in tests. | `False`
 `disable_geoip` |  | Whether to disable server-side GeoIP enrichment. Defaults to True. Events get `$geoip_disable` only when the event, context tags and `super_properties` leave it unset. | `True`
@@ -446,7 +446,7 @@ try:
     # Some code that might fail
     pass
 except Exception as e:
-    posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+    posthog.capture_exception(e, distinct_id='user_distinct_id', properties=additional_properties)
 ```
 
 ## Emails
@@ -575,9 +575,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`Optional[object]` | The payload associated with the matched feature flag value, or None.
-`Optional[object]` | This method returns the payload only, not the FeatureFlagResult wrapper
-`Optional[object]` | used internally to compute it.
+`Optional[object]` | The payload associated with the matched feature flag value, or None. This method returns the payload only, not the FeatureFlagResult wrapper used internally to compute it.
 
 **Examples:**
 
@@ -941,8 +939,7 @@ Return feature flag definitions loaded for local evaluation.
 
 Type | Description
 ---- | -----------
- | The currently loaded feature flag definitions, or `None` before
- | local evaluation has loaded definitions.
+ | The currently loaded feature flag definitions, or `None` before local evaluation has loaded definitions.
 
 ## SDK utils
 
@@ -1205,10 +1202,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
- | The payload associated with the feature flag, or `None` if the
- | client is disabled, no personal API key is configured, or the request
- | fails. Encrypted payloads are decrypted by PostHog before being
- | returned.
+ | The payload associated with the feature flag, or `None` if the client is disabled, no personal API key is configured, or the request fails. Encrypted payloads are decrypted by PostHog before being returned.
 
 <details class="note" open markdown="1">
 <summary>Note</summary>
@@ -1235,10 +1229,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`Optional[FeatureFlagEvaluationRuntime]` | The flag's evaluation runtime, or `None` when local evaluation has
-`Optional[FeatureFlagEvaluationRuntime]` | not loaded a definition for this key. A definition that carries no
-`Optional[FeatureFlagEvaluationRuntime]` | runtime reports `FeatureFlagEvaluationRuntime.ALL`, the default
-`Optional[FeatureFlagEvaluationRuntime]` | PostHog applies.
+`Optional[FeatureFlagEvaluationRuntime]` | The flag's evaluation runtime, or `None` when local evaluation has not loaded a definition for this key. A definition that carries no runtime reports `FeatureFlagEvaluationRuntime.ALL`, the default PostHog applies.
 
 **Examples:**
 
@@ -1273,8 +1264,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`list[str]` | The matching flag keys, in the order local evaluation loaded them.
-`list[str]` | Empty when no definitions are loaded.
+`list[str]` | The matching flag keys, in the order local evaluation loaded them. Empty when no definitions are loaded.
 
 **Examples:**
 
@@ -1713,8 +1703,8 @@ Name | Type | Description | Default
 
 Name | Description
 ---- | -----------
-`instrument` | Connect Celery signal handlers to capture task events and exceptions.
-`shutdown` | Disconnect all signal handlers registered by `instrument()`, flush all pending events
+`instrument` | Connect Celery signal handlers to capture task events and exceptions. Call this after initializing the PostHog client and this integration.
+`shutdown` | Disconnect all signal handlers registered by `instrument()`, flush all pending events and cleanly shutdown the integration.
 `uninstrument` | Disconnect Celery signal handlers and unregister exit cleanup.
 
 **Attributes:**
@@ -1851,7 +1841,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-__init__(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
+AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -2276,7 +2266,7 @@ Capture allows you to capture anything a user does within your system, which you
 
 ```python
 # Context and capture usage
-from posthog import new_context, identify_context, tag_context, capture
+from posthog import new_context, identify_context, tag, capture
 # Enter a new context (e.g. a request/response cycle, an instance of a background job, etc)
 with new_context():
     # Associate this context with some user, by distinct_id
@@ -2297,7 +2287,7 @@ with new_context():
     capture('purchase', groups={'company': 'id:5'})
 
     # Adding a tag to the current context will cause it to appear on all subsequent events
-    tag_context('some-tag', 'some-value')
+    tag('some-tag', 'some-value')
 
     capture('another-event') # Will be captured with `'some-tag': 'some-value'` in the properties dict
 ```
@@ -2692,9 +2682,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`Optional[object]` | The payload associated with the matched feature flag value, or None.
-`Optional[object]` | This function returns the payload only, not the FeatureFlagResult wrapper
-`Optional[object]` | used internally to compute it.
+`Optional[object]` | The payload associated with the matched feature flag value, or None. This function returns the payload only, not the FeatureFlagResult wrapper used internally to compute it.
 
 ### `posthog.get_remote_config_payload`
 
@@ -3036,9 +3024,7 @@ Most applications should either instantiate `Posthog` directly or set
 
 Type | Description
 ---- | -----------
-`Client` | The global `Client` instance. If both `api_key` and
-`Client` | `project_api_key` are missing or blank, the client is disabled and
-`Client` | module-level calls become no-ops.
+`Client` | The global `Client` instance. If both `api_key` and `project_api_key` are missing or blank, the client is disabled and module-level calls become no-ops.
 
 ## Types
 
@@ -3143,12 +3129,12 @@ Returned by `Client.evaluate_flags` — branch on `is_enabled` /
 `flags` option so the captured event carries the exact flag values the code
 branched on.
 
-Example::
-
-    flags = posthog.evaluate_flags(distinct_id, person_properties={"plan": "enterprise"})
-    if flags.is_enabled("new-dashboard"):
-        render_new_dashboard()
-    posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
+```python
+flags = posthog.evaluate_flags(distinct_id, person_properties={"plan": "enterprise"})
+if flags.is_enabled("new-dashboard"):
+    render_new_dashboard()
+posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
+```
 
 To narrow the set of flags that get attached to a captured event, use the in-memory
 helpers `only` and `only_accessed`. To narrow the set of flags requested
@@ -3160,16 +3146,16 @@ Name | Description
 ---- | -----------
 `get_flag` | Return the flag value. Fires `$feature_flag_called` on first access.
 `get_flag_payload` | Return the payload associated with a flag.
-`is_enabled` | Return whether the flag is enabled. Fires `$feature_flag_called` on the
-`only` | Return a filtered copy containing only flags with the given keys. Keys that
-`only_accessed` | Return a filtered copy containing only flags accessed via `is_enabled`
+`is_enabled` | Return whether the flag is enabled. Fires `$feature_flag_called` on the first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
+`only` | Return a filtered copy containing only flags with the given keys. Keys that are not present in the evaluation are dropped and logged as a warning.
+`only_accessed` | Return a filtered copy containing only flags accessed via `is_enabled` or `get_flag` before this call.
 
 **Attributes:**
 
 Name | Type | Description
 ---- | ---- | -----------
 `keys` | `List[str]` | Return the flag keys that are part of this evaluation.
-`unresolved_flags` | `Mapping[str, UnresolvedFlagReason]` | Return a read-only mapping of flag key to the reason local evaluation
+`unresolved_flags` | `Mapping[str, UnresolvedFlagReason]` | Return a read-only mapping of flag key to the reason local evaluation left it without a value.
 
 Internal — instances are created by the SDK via `Client.evaluate_flags()`.
 
@@ -3289,7 +3275,7 @@ Name | Description
 ---- | -----------
 `from_flag_details` | Create a FeatureFlagResult from a FeatureFlag object.
 `from_value_and_payload` | Creates a FeatureFlagResult from a flag value and payload.
-`get_value` | Returns the value of the flag. This is the variant if it exists, otherwise the enabled value.
+`get_value` | Returns the value of the flag. This is the variant if it exists, otherwise the enabled value. This is the value we report as `$feature_flag_response` in the `$feature_flag_called` event.
 
 #### `posthog.types.FeatureFlagResult.enabled`
 
@@ -3622,7 +3608,7 @@ attempt that reached them failed as a whole request.
 
 Name | Description
 ---- | -----------
-`verdict_summary` | Count the undelivered events by verdict and reason, for example
+`verdict_summary` | Count the undelivered events by verdict and reason, for example `drop/llm_events_over_quota=2, retry/not_persisted=1`.
 
 **Attributes:**
 
@@ -4014,8 +4000,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`SendEmailResult` | The queued email. A result means PostHog queued the email, not that
-`SendEmailResult` | it was delivered.
+`SendEmailResult` | The queued email. A result means PostHog queued the email, not that it was delivered.
 
 **Raises:**
 
