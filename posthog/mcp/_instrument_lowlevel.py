@@ -707,13 +707,12 @@ async def _listed_input_schema(
     try:
         version = _requested_tool_version(meta)
         list_tools = getattr(high_level, "list_tools", None)
-        if list_tools is not None:
-            listed = await list_tools()
-        else:
-            # FastMCP 2.x only offers its listing through request middleware,
-            # which can consume rate limits, so read the registry instead.
-            listed = (await high_level.get_tools()).values()
-        candidates = [tool for tool in listed if tool.name == name]
+        if list_tools is None:
+            # FastMCP 2.x only lists through request middleware, which can
+            # spend rate limits, and its registry can disagree with what that
+            # middleware advertises, so the advertised schema is unknown.
+            return None
+        candidates = [tool for tool in await list_tools() if tool.name == name]
         if version is not None:
             candidates = [
                 tool

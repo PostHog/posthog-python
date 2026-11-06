@@ -220,7 +220,10 @@ async def test_jlowin_middleware_defaults_work_across_fresh_instances(monkeypatc
     event = _events(client, "$mcp_tool_call")[0]["properties"]
     assert event["$mcp_llm_model"] == "gpt-5"
     assert event["$mcp_llm_model_source"] == "client_metadata"
-    assert event["$mcp_input_keys"] == ["a", "b"]
+    # FastMCP 2.x can only list through request middleware, so the advertised
+    # schema is unknown there and the undeclared names stay redacted.
+    expected_keys = ["a", "b"] if hasattr(FastMCP, "list_tools") else ["[redacted]"]
+    assert event["$mcp_input_keys"] == expected_keys
 
 
 _OWN_MODEL = {"llm_model": {"type": "string"}}
@@ -704,7 +707,7 @@ async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
 @pytest.mark.skipif(
     hasattr(FastMCP, "list_tools"), reason="FastMCP 2.x has no public list_tools"
 )
-async def test_schema_lookup_on_fastmcp_2_runs_no_request_middleware():
+async def test_schema_lookup_on_fastmcp_2_runs_no_request_middleware_and_trusts_no_schema():
     from fastmcp.server.middleware import Middleware
 
     from posthog.mcp._instrument_lowlevel import _listed_input_schema
@@ -721,5 +724,5 @@ async def test_schema_lookup_on_fastmcp_2_runs_no_request_middleware():
 
     schema = await _listed_input_schema(server, "add", None)
 
-    assert schema is not None and set(schema["properties"]) >= {"a", "b"}
+    assert schema is None
     assert listings == []
