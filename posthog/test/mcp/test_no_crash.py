@@ -61,7 +61,7 @@ def test_low_level_server_detected_on_installed_major():
     assert compat.is_low_level_server(object()) is False
 
 
-def test_instrument_keeps_the_host_client_identity():
+def test_instrument_relabels_the_host_client():
     from mcp.server.lowlevel import Server
 
     captured = []
@@ -74,7 +74,7 @@ def test_instrument_keeps_the_host_client_identity():
     instrument(Server("probe-lib-identity"), client)
     client.capture("after instrumentation")
 
-    assert captured[0]["properties"]["$lib"] == "posthog-python"
+    assert captured[0]["properties"]["$lib"] == "posthog-python-mcp"
     assert captured[0]["properties"]["$lib_version"] == VERSION
 
 

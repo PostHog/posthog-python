@@ -43,6 +43,7 @@ DEFAULT_MODEL_PARAMETER_DESCRIPTION = (
 )
 
 POSTHOG_MCP_ANALYTICS_SOURCE = "posthog_mcp_analytics"
+POSTHOG_MCP_LIB_NAME = "posthog-python-mcp"
 
 
 class PostHogMCPAnalyticsEvent:

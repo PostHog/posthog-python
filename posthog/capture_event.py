@@ -137,6 +137,7 @@ class _EventDefaults:
     property_allowlist: Optional[Collection[str]] = None
     trace_properties: Optional[Mapping[str, Any]] = None
     library: Optional[tuple[str, str]] = None
+    library_label: Optional[tuple[str, str]] = None
 
 
 def _is_library_value(value: Any) -> bool:
@@ -161,6 +162,7 @@ def _build_event_defaults(
     trace_properties: Optional[Mapping[str, Any]] = None,
     library_id: str,
     library_version: str,
+    library_label: Optional[tuple[str, str]] = None,
 ) -> _EventDefaults:
     """Order the layers: per-call arguments, context, global, then SDK values.
 
@@ -173,6 +175,9 @@ def _build_event_defaults(
     active OpenTelemetry span) are SDK values that fill as a pair.
     ``library_id`` and ``library_version`` are the SDK's own ``$lib`` and
     ``$lib_version``. They fill as a pair below every other layer.
+    ``library_label`` is an integration's ``$lib`` and ``$lib_version``, such
+    as MCP's. It fills as a pair above every layer when the event sets no
+    ``$lib``.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
@@ -201,6 +206,7 @@ def _build_event_defaults(
         property_allowlist=property_allowlist,
         trace_properties=trace_properties,
         library=(library_id, library_version),
+        library_label=library_label,
     )
 
 
@@ -215,7 +221,8 @@ def _fill_event_defaults(
     uses. ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill one
     level deep when the event's value and the default are both dicts.
     ``trace_properties`` fill last, and only when the event and every layer
-    leave all their keys unset. The SDK's ``library`` fills after every layer.
+    leave all their keys unset. A ``library_label`` fills before every layer
+    and the SDK's ``library`` after every layer.
     """
     if defaults is None:
         return
@@ -224,6 +231,12 @@ def _fill_event_defaults(
     if not isinstance(properties, dict):
         properties = {}
         msg["properties"] = properties
+    if defaults.library_label is not None and not _is_library_value(
+        properties.get("$lib")
+    ):
+        for key, value in zip(_LIBRARY_PROPERTIES, defaults.library_label):
+            if allowlist is None or key in allowlist:
+                properties[key] = value
     for property_layer in defaults.property_layers:
         for key, value in property_layer.items():
             if allowlist is not None and key not in allowlist:
