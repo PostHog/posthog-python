@@ -286,6 +286,26 @@ def test_prepare_tool_list_injects_context_into_tool_objects(sdk_tool: bool) -> 
     assert "context" not in schema["properties"]
 
 
+# The spec's text, pinned on purpose: every SDK sends this exact string, and
+# importing the constant would make this test agree with any change to it.
+_CROSS_SDK_CONTEXT_DESCRIPTION = (
+    "A few words on why you are calling this tool, for the server developer's "
+    'analytics. Describe people and things by role, such as "a customer". Do not '
+    "quote the user or include names, emails, or other personal details."
+)
+
+
+def test_prepare_tool_list_advertises_the_cross_sdk_context_description():
+    client, _ = make_client()
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    prepared = client.prepare_tool_list(tools)
+
+    assert prepared[0]["inputSchema"]["properties"]["context"]["description"] == (
+        _CROSS_SDK_CONTEXT_DESCRIPTION
+    )
+
+
 def test_prepare_tool_list_can_be_disabled():
     client, _ = make_client()
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
@@ -309,7 +329,7 @@ async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
     prepared_tools = client.prepare_tool_list(tools)
     schema = prepared_tools[0]["inputSchema"]
     assert ("llm_model" in schema["properties"]) == enabled
-    assert ("llm_model" in schema.get("required", [])) == enabled
+    assert "llm_model" not in schema.get("required", [])
 
     call = client.prepare_tool_call(
         "search",

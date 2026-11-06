@@ -145,9 +145,9 @@ contains the sanitized tool arguments and their original names.
 Custom dispatchers can call `get_tool_input_properties()` and add its result to
 the `properties` argument of `capture_tool_call()`.
 
-Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
-high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
-strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.
+Model capture adds an optional `llm_model` argument to compatible tool schemas. Dispatch never
+enforces it, so servers keep working; strict-schema clients see the new field. Set
+`capture_model=False` to leave schemas untouched.
 Conversation correlation adds an optional `conversation_id` argument and returns a handle in
 eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
 Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
@@ -161,11 +161,9 @@ The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
 string to each compatible tool schema as a fallback, recorded with source
-`self_reported`. It is required for custom dispatchers and the official high-level
-MCP SDK adapters. Raw low-level servers and standalone `fastmcp.FastMCP` advertise
-it as optional; the standalone adapter strips it before input validation, so
-requiring it would reject calls. Existing schema strictness is preserved when
-analytics fields are added.
+`self_reported`. It is always optional: an agent that does not know its model would
+otherwise guess one. Existing schema strictness is preserved when analytics fields
+are added.
 
 The recognized metadata path is Codex's `x-codex-turn-metadata.model` field in
 request `_meta`. Other clients, including Claude Code, use the self-report path

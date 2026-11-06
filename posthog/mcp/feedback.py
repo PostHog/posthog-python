@@ -13,6 +13,7 @@ from ._internal import _maybe_await
 from ._sanitization import sanitize_free_text, sanitize_free_text_value
 from .constants import PostHogMCPAnalyticsProperty
 from .logger import log
+from .tools import VIRTUAL_TOOL_HINTS
 from .types import CollectFeedbackOptions, FeedbackReport, JsonRecord
 
 __all__ = ["SEND_FEEDBACK_TOOL_NAME", "send_feedback_result"]
@@ -168,17 +169,7 @@ def get_feedback_tool_descriptor(
             "properties": properties,
             "required": ["feedback_type", "summary", *extra_required],
         },
-        "annotations": {
-            "title": "Send feedback",
-            "readOnlyHint": True,
-            # Interacts with an external entity: the report lands in analytics.
-            "openWorldHint": True,
-            # Only records the feedback, so repeat calls are harmless — and
-            # advertising it as idempotent makes agents more willing to call it
-            # proactively.
-            "idempotentHint": True,
-            "destructiveHint": False,
-        },
+        "annotations": dict(VIRTUAL_TOOL_HINTS),
     }
 
 

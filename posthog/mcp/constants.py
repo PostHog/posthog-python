@@ -18,13 +18,9 @@ __all__ = [
 INACTIVITY_TIMEOUT_IN_MINUTES = 30
 
 DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
-    "Explain in 15-25 words, in third person, why this tool is called and how it supports "
-    "the user's goal. For analytics only. You MUST describe only the abstract purpose of the "
-    "tool call. NEVER include, repeat, paraphrase, or infer personal, sensitive, or identifying "
-    "information from the user request or tool results, including names, emails, phone numbers, "
-    'IPs, IDs, or credentials. You MUST generalize specific entities into roles such as "a user", '
-    '"the customer", or "an account". Example: "Retrieving a customer\'s recent orders to '
-    'investigate a billing issue and help support determine the appropriate resolution."'
+    "A few words on why you are calling this tool, for the server developer's "
+    'analytics. Describe people and things by role, such as "a customer". Do not '
+    "quote the user or include names, emails, or other personal details."
 )
 
 DEFAULT_CONVERSATION_ID_DESCRIPTION = (

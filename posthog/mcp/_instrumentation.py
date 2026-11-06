@@ -1180,9 +1180,7 @@ def mutate_tool_schema(
             required=context_required,
         )
     if inject_model:
-        schema = _mutate_model_schema(
-            data, tool.name, schema, required=context_required
-        )
+        schema = _mutate_model_schema(data, tool.name, schema)
     else:
         # Discard any earlier registered-tool verdict: middleware may now
         # advertise or dispatch an application-owned field with the same name.
@@ -1202,9 +1200,7 @@ def mutate_tool_schema(
         )
 
 
-def _mutate_model_schema(
-    data: MCPAnalyticsData, name: str, schema: Any, *, required: bool
-) -> Any:
+def _mutate_model_schema(data: MCPAnalyticsData, name: str, schema: Any) -> Any:
     if not is_capture_model_enabled(data.options.capture_model):
         return schema
     model_was_injected = data.tool_model_parameter_injected.get(name, False)
@@ -1214,7 +1210,6 @@ def _mutate_model_schema(
             schema,
             name,
             get_model_description(data.options.capture_model),
-            required=required,
         )
     data.tool_model_parameter_injected[name] = not app_owns_model and schema_has_param(
         schema, "llm_model"

@@ -82,7 +82,7 @@ async def test_list_tools_injects_model_into_real_and_virtual_tools():
 
     for name in ("add", "boom", "get_more_tools"):
         assert "llm_model" in tools[name].inputSchema["properties"]
-        assert "llm_model" in tools[name].inputSchema["required"]
+        assert "llm_model" not in tools[name].inputSchema.get("required", [])
 
 
 async def test_virtual_tool_uses_conversation_id():

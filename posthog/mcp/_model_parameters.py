@@ -33,9 +33,10 @@ def add_model_parameter_to_schema(
     input_schema: Optional[Dict[str, Any]],
     tool_name: str = "unknown",
     description_override: Optional[str] = None,
-    required: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Return a copied schema with an SDK-owned ``llm_model`` field.
+    """Return a copied schema with an optional, SDK-owned ``llm_model`` field.
+    Never required: an agent that does not know its model would guess one, and
+    a model the client sends in request ``_meta`` wins anyway.
 
     Existing application fields and complex schemas fail closed: the SDK must
     never overwrite or later strip a value that belongs to the tool itself.
@@ -58,13 +59,6 @@ def add_model_parameter_to_schema(
         "type": "string",
         "description": description_override or DEFAULT_MODEL_PARAMETER_DESCRIPTION,
     }
-    if required:
-        required_list = schema.get("required")
-        if isinstance(required_list, list):
-            if "llm_model" not in required_list:
-                required_list.append("llm_model")
-        else:
-            schema["required"] = ["llm_model"]
     return schema
 
 
