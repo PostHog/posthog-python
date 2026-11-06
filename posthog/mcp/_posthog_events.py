@@ -29,6 +29,7 @@ _BUILT_IN_EVENT_NAME_BY_TYPE = {
     MCPAnalyticsEventType.MCP_RESOURCES_READ: PostHogMCPAnalyticsEvent.RESOURCE_READ,
     MCPAnalyticsEventType.MCP_TOOLS_CALL: PostHogMCPAnalyticsEvent.TOOL_CALL,
     MCPAnalyticsEventType.MCP_TOOLS_LIST: PostHogMCPAnalyticsEvent.TOOLS_LIST,
+    MCPAnalyticsEventType.MCP_UNKNOWN_TOOL: PostHogMCPAnalyticsEvent.UNKNOWN_TOOL,
 }
 
 _P = PostHogMCPAnalyticsProperty
@@ -112,8 +113,12 @@ def _is_tool_call(event: Event) -> bool:
 
 def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
     if event.get("resource_name"):
-        properties[_P.RESOURCE_NAME] = event["resource_name"]
-        if _is_tool_call(event):
+        is_unknown_tool = (
+            event.get("event_type") == MCPAnalyticsEventType.MCP_UNKNOWN_TOOL
+        )
+        if not is_unknown_tool:
+            properties[_P.RESOURCE_NAME] = event["resource_name"]
+        if is_unknown_tool or _is_tool_call(event):
             properties[_P.TOOL_NAME] = event["resource_name"]
     if event.get("tool_description") and _is_tool_call(event):
         properties[_P.TOOL_DESCRIPTION] = event["tool_description"]

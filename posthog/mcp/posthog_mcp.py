@@ -105,6 +105,7 @@ _NOT_OWNED = _ConversationOwnership(conversation_id=False, output_instructions=F
 class PostHogMCP(Client):
     """A drop-in posthog ``Client`` with ``capture_tool_call`` / ``capture_initialize``
     / ``capture_tools_list`` / ``capture_missing_capability`` / ``capture_feedback``
+    / ``capture_unknown_tool``
     plus ``prepare_tool_list``, ``prepare_tool_call`` and ``prepare_tool_result``
     helpers. ``capture`` adds the configured server build to custom events.
     Other inherited methods work unchanged."""
@@ -369,6 +370,42 @@ class PostHogMCP(Client):
         event["parameters"] = parameters
         _apply_intent(event, context, "context_parameter")
         _apply_model(event, llm_model, llm_model_source)
+        self._emit(event)
+
+    def capture_unknown_tool(
+        self,
+        tool_name: str,
+        *,
+        protocol_version: Optional[str] = None,
+        distinct_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
+        set_properties: Optional[JsonRecord] = None,
+        groups: Optional[Dict[str, str]] = None,
+        properties: Optional[JsonRecord] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Capture a call naming a tool your server does not have. Emits
+        ``$mcp_unknown_tool`` with the requested name as ``$mcp_tool_name``.
+        Capture it instead of :meth:`capture_tool_call`, not as well: it is
+        not a tool call. A tool that exists, disabled or called with invalid
+        arguments, is a failed tool call."""
+        event = self._base_event(
+            MCPAnalyticsEventType.MCP_UNKNOWN_TOOL,
+            distinct_id,
+            session_id,
+            conversation_id,
+            set_properties,
+            groups,
+            properties,
+            timestamp,
+            client_user_agent,
+            vendor_client,
+        )
+        event["resource_name"] = tool_name
+        event["protocol_version"] = protocol_version
         self._emit(event)
 
     def capture_feedback(

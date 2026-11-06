@@ -339,10 +339,37 @@ call = posthog.prepare_tool_call(
 )
 ```
 
+## Calls to tools your server does not have
+
+A `tools/call` that names a tool your server never registered is not a tool
+call. `instrument()` sends `$mcp_unknown_tool` with the requested name as
+`$mcp_tool_name`, and no `$mcp_tool_call` or `$exception`. The agent gets the
+same error as before. The SDK decides only after the call fails, from the tool
+registry:
+
+- High-level servers and standalone `fastmcp.FastMCP` ask their registry. A
+  disabled tool still exists, so calling it is a failed tool call.
+- A raw low-level server's registry is its own `tools/list` handler. A failed
+  call to a name that handler does not list is unknown. With no `tools/list`
+  handler, or a name missing from a first page that has more pages after it, the
+  SDK cannot tell and records a failed tool call.
+- On standalone `fastmcp.FastMCP`, middleware that overrides a listing or
+  dispatch hook can serve tools the registry lacks, so the SDK records a failed
+  tool call.
+
+Invalid arguments for a tool that exists are a failed tool call. A custom
+dispatcher calls `posthog.capture_unknown_tool(tool_name, session_id=...)` in
+place of `capture_tool_call` when its own lookup finds no tool.
+
 ## Virtual tools on a paginated `tools/list`
 
 `instrument()` advertises up to two tools of its own: `get_more_tools`
 (`report_missing=True`) and `send_feedback` (`collect_feedback=True`).
+
+Both declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, and
+`openWorldHint` as `false`, and no option changes that. A call records one event
+in your PostHog project: it writes outside the conversation, deletes nothing,
+records again on every repeat, and reaches nothing else.
 
 A client concatenates every `tools/list` page into one list, so each virtual tool
 is appended to the **first page only** — the page every client reads, including

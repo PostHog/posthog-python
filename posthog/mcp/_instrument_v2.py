@@ -34,7 +34,7 @@ import time
 from collections.abc import Mapping
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, Optional, Set, Tuple
+from typing import Any, Dict, FrozenSet, Optional, Tuple
 
 import mcp.types as mcp_types
 
@@ -46,17 +46,19 @@ from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
-    advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
     _is_sse_request,
     _to_jsonable,
     copy_tools_list_result,
+    first_listing_page,
     is_first_listing_page,
+    is_tool_result_error,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
     raw_listing_owns_tool_name,
+    registered_tool_exists,
     record_initialize,
     record_resource_request,
     resource_listing_response,
@@ -66,7 +68,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
-from ._internal import MCPAnalyticsData
+from ._internal import FirstListingPage, MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
     is_capture_model_enabled,
@@ -450,6 +452,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 name, call_arguments, context=context, convert_result=convert_result
             )
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                _name_owned_by_real_tool_v2(server, name)
+            ):
+                raise
             # The outer MCPServer layer converts the raise after this seam; no
             # freshly minted handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
@@ -669,11 +675,19 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         try:
             result = await original(ctx, params)
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(data, standalone, name, ctx)
+            ):
+                raise
             # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
             # handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
+        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(data, standalone, name, ctx)
+        ):
+            return result
 
         delivered = False
         if lifecycle.conversation_id:
@@ -774,11 +788,10 @@ def _wrap_v2_list_tools(
         return
     original = entry.handler
 
-    async def probe_raw_tool_names(ctx: Any = None) -> Optional[Set[str]]:
-        """The host's own first-page tool names — ``original``, not the wrapper,
-        so the probe never recurses or appends a virtual tool."""
-        result = await original(ctx, None)
-        return advertised_tool_names(list(getattr(result, "tools", []) or []))
+    async def probe_raw_tool_names(ctx: Any = None) -> Optional[FirstListingPage]:
+        """The host's own first page — ``original``, not the wrapper, so the
+        probe never recurses or appends a virtual tool."""
+        return first_listing_page(await original(ctx, None))
 
     data.raw_tool_names_probe = probe_raw_tool_names
 

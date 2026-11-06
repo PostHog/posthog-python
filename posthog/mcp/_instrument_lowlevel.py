@@ -14,11 +14,9 @@ server's ``request_context`` contextvar (the handler receives only the request).
 
 from __future__ import annotations
 
-import functools
 import inspect
 import time
-from functools import lru_cache
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import mcp.types as mcp_types
 
@@ -30,15 +28,19 @@ from ._context_parameters import is_context_enabled, schema_has_param
 from ._conversation_id import build_prompt_back
 from ._event_types import MCPAnalyticsEventType
 from ._instrumentation import (
-    advertised_tool_names,
     apply_virtual_tool_injection,
     collect_listed_tools,
     copy_tools_list_result,
     extract_tools,
+    first_listing_page,
     is_first_listing_page,
+    is_tool_result_error,
     mutate_tool_schema,
     prepare_request,
+    _dispatch_can_differ,
+    _tool_lookup_not_found_errors,
     raw_listing_owns_tool_name,
+    registered_tool_exists,
     record_resource_request,
     request_to_dict,
     resource_listing_response,
@@ -48,7 +50,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
-from ._internal import MCPAnalyticsData
+from ._internal import FirstListingPage, MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
@@ -282,6 +284,10 @@ def _wrap_call_tool(
         try:
             result = await original(req)
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(data, high_level, name)
+            ):
+                raise
             # The @server.call_tool() decorator converts raises into
             # CallToolResult(isError=True), but a handler wired straight into
             # request_handlers can raise — capture before re-raising so the failed
@@ -294,6 +300,10 @@ def _wrap_call_tool(
         # The low-level handler already converted any exception to a
         # CallToolResult(isError=True); record_tool_call detects that from the result.
         call_result = getattr(result, "root", result)
+        if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(data, high_level, name)
+        ):
+            return result
 
         # Deliver the handle before capture, over both channels a result has:
         # mirrored into structuredContent on every response (for tools whose
@@ -401,8 +411,8 @@ def _wrap_list_tools(
     if original is None or getattr(original, _WRAPPED_FLAG, False):
         return
 
-    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[Set[str]]:
-        """The names the host's own handler advertises on its first page. Calls
+    async def probe_raw_tool_names(_ctx: Any = None) -> Optional[FirstListingPage]:
+        """The first page the host's own handler serves. Calls
         ``original``, not the wrapper, so the probe never recurses into
         instrumentation or appends a virtual tool. Read by
         ``_name_owned_by_real_tool`` on raw low-level servers, which have no
@@ -442,7 +452,7 @@ def _wrap_list_tools(
             context_required=context_required,
             high_level=high_level,
         )
-        return advertised_tool_names(tools)
+        return first_listing_page(result)
 
     data.raw_tool_names_probe = probe_raw_tool_names
 
@@ -570,26 +580,6 @@ async def _name_owned_by_real_tool(
     # May be None: see `raw_listing_owns_tool_name`. Callers intercept only on a
     # definite False.
     return await raw_listing_owns_tool_name(data, name, server)
-
-
-@lru_cache(maxsize=1)
-def _tool_lookup_not_found_errors() -> Tuple[type, ...]:
-    """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
-    Anything else out of ``get_tool`` is the lookup itself failing. Empty when
-    fastmcp is absent or has moved them, which makes every failure delegate:
-    the safe direction."""
-    try:
-        from fastmcp import exceptions
-    except Exception:  # noqa: BLE001 - no fastmcp on this path
-        return ()
-    return tuple(
-        err
-        for err in (
-            getattr(exceptions, "NotFoundError", None),
-            getattr(exceptions, "DisabledError", None),
-        )
-        if isinstance(err, type) and issubclass(err, BaseException)
-    )
 
 
 _INJECTED_KEYS = ("context", "conversation_id", "llm_model")
@@ -767,39 +757,6 @@ def _server_dereferences(server: Any) -> bool:
         type(middleware).__module__.endswith(".dereference")
         for middleware in getattr(server, "middleware", ())
     )
-
-
-_DISPATCH_HOOKS = ("on_message", "on_request", "on_list_tools", "on_call_tool")
-
-
-def _dispatch_can_differ(server: Any) -> bool:
-    """Whether application middleware can provide, shadow, or reroute a tool,
-    making the registry an unreliable witness for what actually runs. Any
-    override of a listing or dispatch hook can; FastMCP's own built-ins are
-    excluded. Without a trustworthy registry a cold instance keeps ``llm_model``
-    (strips fail closed), which is exactly what it did before this path."""
-    try:
-        from fastmcp.server.middleware import Middleware
-    except ImportError:  # FastMCP before middleware existed: nothing can differ
-        return False
-
-    return any(
-        type(middleware) not in _builtin_middleware_types()  # subclasses are the app's
-        and any(
-            getattr(type(middleware), hook) is not getattr(Middleware, hook)
-            for hook in _DISPATCH_HOOKS
-        )
-        for middleware in getattr(server, "middleware", ())
-    )
-
-
-@functools.lru_cache(maxsize=1)
-def _builtin_middleware_types() -> tuple:
-    """The middleware a bare ``FastMCP()`` installs on its own, probed rather
-    than named so a new built-in in a later release is still recognised."""
-    from fastmcp import FastMCP
-
-    return tuple(type(middleware) for middleware in FastMCP("posthog-probe").middleware)
 
 
 def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:

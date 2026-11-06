@@ -11,11 +11,12 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import copy
+import functools
 import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, List, Literal, Optional, Set
+from typing import Any, Dict, FrozenSet, List, Literal, Optional, Set, Tuple, Type
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -41,7 +42,12 @@ from .feedback import (
     resolve_send_feedback_tool_name,
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
-from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._internal import (
+    FirstListingPage,
+    MCPAnalyticsData,
+    handle_identify,
+    resolve_event_properties,
+)
 from ._tool_input import get_tool_input_properties
 from ._model_parameters import (
     add_model_parameter_to_schema,
@@ -615,6 +621,27 @@ class ToolCallLifecycle:
         )
         return await handle_feedback(report, self.feedback_options)
 
+    async def record_if_unknown_tool(self, tool_exists: Optional[bool]) -> bool:
+        """Record the failed call as ``$mcp_unknown_tool`` when ``tool_exists``
+        proves the server has no tool by that name, and say whether it did. The
+        adapter then re-raises or returns the host's response unchanged."""
+        if tool_exists is not False:
+            return False
+        conversation_id = self._anchored_conversation_id(False)
+        session_id = await self.prepare_session(conversation_id)
+        await record_unknown_tool(
+            self.data,
+            session_id,
+            conversation_id=conversation_id,
+            name=self.name,
+            arguments=self.arguments,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+        return True
+
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
@@ -967,6 +994,18 @@ def is_first_listing_page(params: Any) -> bool:
     return getattr(params, "cursor", None) is None
 
 
+def first_listing_page(result: Any) -> FirstListingPage:
+    """The names a host's first ``tools/list`` page advertises, and whether a
+    cursor leads to more. 1.x wraps the result in a ``ServerResult`` and spells
+    the cursor ``nextCursor``; 2.x returns it bare as ``next_cursor``."""
+    root = getattr(result, "root", result)
+    cursor = getattr(root, "next_cursor", getattr(root, "nextCursor", None))
+    return FirstListingPage(
+        advertised_tool_names(list(getattr(root, "tools", []) or [])),
+        cursor is not None,
+    )
+
+
 def advertised_tool_names(tools: list) -> Set[str]:
     """The names a listing page advertises. The virtual tools are appended to a
     *copy* of the host's result, so a page always reads back as the host wrote
@@ -1045,26 +1084,116 @@ def resolve_virtual_tool_injection(
 
 
 async def raw_listing_owns_tool_name(
-    data: MCPAnalyticsData, name: str, ctx: Any = None
+    data: MCPAnalyticsData, name: str, ctx: Any = None, *, whole_catalogue: bool = False
 ) -> Optional[bool]:
     """Whether the host's *own* ``tools/list`` handler advertises ``name`` on its
     first page, asked at call time. For the raw low-level paths, 1.x and v2,
-    which have no tool registry to query instead.
+    which have no tool registry to query instead. With ``whole_catalogue``, a
+    name missing from a page that has more pages after it is unanswered.
 
     Tri-state. ``True``/``False`` are answers; ``None`` means the question could
     not be asked, and callers must not intercept on it -- guessing "not owned"
     would swallow a real tool of the host's. Runs once per call to a virtual
-    tool's name, never for ordinary traffic.
+    tool's name and per failed call, never for ordinary traffic.
     """
     probe = data.raw_tool_names_probe
     if probe is None:
         return None
     try:
-        names = await probe(ctx)
+        page = await probe(ctx)
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
-    return None if names is None else name in names
+    if page is None:
+        return None
+    if name in page.names:
+        return True
+    return None if whole_catalogue and page.has_more else False
+
+
+async def registered_tool_exists(
+    data: MCPAnalyticsData, standalone: Any, name: str, ctx: Any = None
+) -> Optional[bool]:
+    """Whether the server registers ``name`` at all, asked after a failed call
+    to tell an unknown tool from a failed one. jlowin's standalone FastMCP asks
+    its registry; a raw low-level server asks its whole ``tools/list``
+    catalogue. ``None`` when neither can say."""
+    if standalone is not None:
+        return await _standalone_tool_exists(standalone, name)
+    return await raw_listing_owns_tool_name(data, name, ctx, whole_catalogue=True)
+
+
+async def _standalone_tool_exists(server: Any, name: str) -> Optional[bool]:
+    """Whether jlowin's FastMCP registers ``name``, enabled or not. A disabled
+    tool still exists: calling it is a failed call. Middleware that can serve
+    tools the registry lacks makes the registry no witness."""
+    if _dispatch_can_differ(server):
+        return None
+    try:
+        if await server.get_tool(name) is not None:
+            return True
+        from fastmcp import FastMCP
+
+        # From 3.x, get_tool hides a disabled tool; the providers still hold it.
+        return await super(FastMCP, server).get_tool(name) is not None
+    except _tool_lookup_not_found_errors():
+        return False
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(f"PostHog MCP: could not look up tool {name!r} - {err}")
+        return None
+
+
+@functools.lru_cache(maxsize=1)
+def _tool_lookup_not_found_errors() -> Tuple[Type[BaseException], ...]:
+    """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
+    Anything else out of ``get_tool`` is the lookup itself failing. Empty when
+    fastmcp is absent or has moved them, which makes every failure delegate:
+    the safe direction."""
+    try:
+        from fastmcp import exceptions
+    except Exception:  # noqa: BLE001 - no fastmcp on this path
+        return ()
+    return tuple(
+        err
+        for err in (
+            getattr(exceptions, "NotFoundError", None),
+            getattr(exceptions, "DisabledError", None),
+        )
+        if isinstance(err, type) and issubclass(err, BaseException)
+    )
+
+
+_DISPATCH_HOOKS = ("on_message", "on_request", "on_list_tools", "on_call_tool")
+
+
+def _dispatch_can_differ(server: Any) -> bool:
+    """Whether application middleware can provide, shadow, or reroute a tool,
+    making the registry an unreliable witness for what actually runs. Any
+    override of a listing or dispatch hook can; FastMCP's own built-ins are
+    excluded. Without a trustworthy registry a cold instance keeps ``llm_model``
+    (strips fail closed), which is exactly what it did before this path."""
+    try:
+        from fastmcp.server.middleware import Middleware
+    except ImportError:  # FastMCP before middleware existed: nothing can differ
+        return False
+
+    return any(
+        type(middleware) not in _builtin_middleware_types()  # subclasses are the app's
+        and any(
+            getattr(type(middleware), hook) is not getattr(Middleware, hook)
+            for hook in _DISPATCH_HOOKS
+        )
+        for middleware in getattr(server, "middleware", ())
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _builtin_middleware_types() -> tuple:
+    """The middleware a bare ``FastMCP()`` installs on its own, probed rather
+    than named so a new built-in in a later release is still recognised."""
+    from fastmcp import FastMCP
+
+    return tuple(type(middleware) for middleware in FastMCP("posthog-probe").middleware)
 
 
 def warn_ownership_lookup_failed(name: str, err: Exception) -> None:
@@ -1372,6 +1501,39 @@ async def record_missing_capability(
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
+
+
+async def record_unknown_tool(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    conversation_id: Optional[str],
+    name: str,
+    arguments: Optional[Dict[str, Any]],
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Record a call naming a tool the server never registered as
+    ``$mcp_unknown_tool``. It is not a tool call, so it carries no outcome."""
+    try:
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_UNKNOWN_TOOL,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "resource_name": name,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+        }
+        await _apply_event_properties(
+            data, event, build_tool_call_request(name, arguments), extra
+        )
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_unknown_tool failed (event dropped): {err}")
 
 
 async def record_feedback(
