@@ -1094,6 +1094,9 @@ def resolve_virtual_tool_injection(
     return injectable
 
 
+LISTING_PROBE_DEADLINE_SECONDS = 1.0
+
+
 async def raw_listing_owns_tool_name(
     data: MCPAnalyticsData, name: str, ctx: Any = None, *, whole_catalogue: bool = False
 ) -> Optional[bool]:
@@ -1105,13 +1108,18 @@ async def raw_listing_owns_tool_name(
     Tri-state. ``True``/``False`` are answers; ``None`` means the question could
     not be asked, and callers must not intercept on it -- guessing "not owned"
     would swallow a real tool of the host's. Runs once per call to a virtual
-    tool's name and per failed call, never for ordinary traffic.
+    tool's name and per failed call, never for ordinary traffic. A listing that
+    takes longer than ``LISTING_PROBE_DEADLINE_SECONDS`` is unanswered, so a
+    stalled handler cannot hold the client's response.
     """
     probe = data.raw_tool_names_probe
     if probe is None:
         return None
     try:
-        page = await probe(ctx)
+        page = await asyncio.wait_for(probe(ctx), LISTING_PROBE_DEADLINE_SECONDS)
+    except asyncio.TimeoutError:
+        log(f"PostHog MCP: tools/list did not answer in time to look up {name!r}")
+        return None
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None

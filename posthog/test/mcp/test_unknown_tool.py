@@ -2,6 +2,7 @@
 not a tool call. Runs under both MCP SDK majors over an in-process client, so
 the response compared against an uninstrumented twin is the one an agent gets."""
 
+import asyncio
 import importlib
 import importlib.util
 import json
@@ -10,7 +11,7 @@ from contextlib import asynccontextmanager
 import mcp.types as mcp_types
 import pytest
 
-from posthog.mcp import PostHogMCP, instrument
+from posthog.mcp import PostHogMCP, _instrumentation as instrumentation, instrument
 from posthog.mcp.types import MCPAnalyticsOptions
 from posthog.test.mcp._helpers import (
     MCP_MAJOR,
@@ -109,13 +110,18 @@ def _mounted():
     return parent
 
 
-def _raw(pages, *, reject_with_result=False):
+def _raw(pages, *, reject_with_result=False, stall_listing=False):
     """A raw low-level server whose own dispatcher rejects names it does not
     know. ``pages`` are the tools/list pages of tool names, chained by cursor;
     ``None`` registers no tools/list handler at all. On MCP 2.x the rejection
     raises unless ``reject_with_result``; 1.x's decorator always turns it into
-    an ``isError`` result."""
+    an ``isError`` result. With ``stall_listing``, a client's tools/list never
+    answers; the server's own cache refresh, which passes no request, does."""
     from mcp.server.lowlevel import Server
+
+    async def stall_for_a_client(request):
+        if stall_listing and request is not None:
+            await asyncio.Event().wait()
 
     registered = {name for page in pages or [] for name in page}
     schema = {"type": "object", "properties": {"query": {"type": "string"}}}
@@ -153,6 +159,7 @@ def _raw(pages, *, reject_with_result=False):
                 )
 
         async def on_list_tools(ctx, params):
+            await stall_for_a_client(params)
             return page_at(getattr(params, "cursor", None))
 
         handlers = {"on_call_tool": on_call_tool}
@@ -169,6 +176,7 @@ def _raw(pages, *, reject_with_result=False):
     if pages is not None:
 
         async def list_tools(req):
+            await stall_for_a_client(req)
             params = getattr(req, "params", None) if req else None
             return mcp_types.ServerResult(page_at(getattr(params, "cursor", None)))
 
@@ -434,3 +442,45 @@ async def test_checking_the_host_listing_never_reads_the_deprecated_cursor(
 
     assert reads == []
     assert len(events_named(client, "$mcp_unknown_tool")) == 1
+
+
+async def test_a_stalled_listing_does_not_delay_a_failed_calls_error(monkeypatch):
+    monkeypatch.setattr(instrumentation, "LISTING_PROBE_DEADLINE_SECONDS", 0.05)
+    client = FakeClient()
+    server = _raw([["search_docs"]], reject_with_result=True, stall_listing=True)
+    instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
+
+    is_error, _ = await asyncio.wait_for(
+        _response(server, "no_such_tool", {}), timeout=5
+    )
+    await flush_background()
+
+    assert is_error is True
+    [call] = events_named(client, "$mcp_tool_call")
+    assert call["properties"]["$mcp_is_error"] is True
+    assert events_named(client, "$mcp_unknown_tool") == []
+
+
+@pytest.mark.parametrize(
+    "capture",
+    [
+        pytest.param(lambda posthog: posthog.capture_tool_call("t"), id="tool-call"),
+        pytest.param(
+            lambda posthog: posthog.capture_unknown_tool("t"), id="unknown-tool"
+        ),
+    ],
+)
+def test_manual_capture_without_a_session_gets_a_fresh_one_per_call(capture):
+    posthog = PostHogMCP("phc_test")
+    captured = []
+    posthog.capture = lambda event, **kw: captured.append({"event": event, **kw})
+
+    capture(posthog)
+    capture(posthog)
+    posthog.flush()
+
+    first, second = captured
+    session = first["properties"]["$session_id"]
+    assert session.startswith("ses_")
+    assert first["distinct_id"] == session
+    assert second["properties"]["$session_id"] != session
