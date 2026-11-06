@@ -1,3 +1,4 @@
+import json
 import logging
 import unittest
 import warnings
@@ -1253,6 +1254,178 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
         self.assertEqual(
             len(self._warnings(logs, "checkout", "experience_continuity")), 2
         )
+
+    def _refresh_from(self, client, source, *flags):
+        definitions = json.loads(json.dumps(self._definitions(*flags)))
+        if source == "api":
+            self._refresh(
+                client,
+                GetResponse(data=definitions, etag="etag-1", not_modified=False),
+            )
+        else:
+            cache_provider = mock.Mock()
+            cache_provider.should_fetch_flag_definitions.return_value = False
+            cache_provider.get_flag_definitions.return_value = definitions
+            with (
+                mock.patch.object(
+                    client, "_flag_definition_cache_provider", cache_provider
+                ),
+                mock.patch("posthog.client.get") as get,
+            ):
+                client._load_feature_flags()
+                get.assert_not_called()
+
+    @staticmethod
+    def _never_resolvable_flag(key, reason, **kwargs):
+        flag = (
+            _always_on_flag(key, ensure_experience_continuity=True)
+            if reason == "experience_continuity"
+            else _flag_with(key, _STATIC_COHORT)
+        )
+        return {**flag, "version": 7, **kwargs}
+
+    @parameterized.expand(
+        [
+            (source, reason, runtime_name, runtime_fields)
+            for source in ("api", "cache")
+            for reason in ("experience_continuity", "unsupported_definition")
+            for runtime_name, runtime_fields in (
+                ("client", {"evaluation_runtime": "client"}),
+                ("server", {"evaluation_runtime": "server"}),
+                ("all", {"evaluation_runtime": "all"}),
+                ("null", {"evaluation_runtime": None}),
+                ("absent", {}),
+            )
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_warning_runtime_json_semantics_and_deduplication(
+        self, source, reason, runtime_name, runtime_fields, patch_flags
+    ):
+        client = self._client()
+        checkout = self._never_resolvable_flag("checkout", reason, **runtime_fields)
+        with self.assertLogs("posthog", level=logging.DEBUG) as logs:
+            self._refresh_from(client, source, checkout)
+            self._refresh_from(client, source, checkout)
+            if source == "api":
+                self._refresh(
+                    client,
+                    GetResponse(data=None, etag="etag-1", not_modified=True),
+                )
+
+        self.assertEqual(
+            len(self._warnings(logs, "checkout", reason)),
+            0 if runtime_name == "client" else 1,
+        )
+        self.assertEqual(client.feature_flags, [checkout])
+        self.assertEqual(
+            set(client._warned_unresolvable_flags),
+            set() if runtime_name == "client" else {"checkout"},
+        )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand([("api",), ("cache",)])
+    @mock.patch("posthog.client.flags")
+    def test_mixed_runtime_warning_counts_and_names(self, source, patch_flags):
+        client = self._client()
+        definitions = [
+            self._never_resolvable_flag(f"{reason}-{runtime_name}", reason, **fields)
+            for reason in ("experience_continuity", "unsupported_definition")
+            for runtime_name, fields in (
+                ("client", {"evaluation_runtime": "client"}),
+                ("server", {"evaluation_runtime": "server"}),
+                ("all", {"evaluation_runtime": "all"}),
+                ("null", {"evaluation_runtime": None}),
+                ("absent", {}),
+            )
+        ]
+        with self.assertLogs("posthog", level=logging.WARNING) as logs:
+            self._refresh_from(client, source, *definitions)
+            self._refresh_from(client, source, *definitions)
+
+        self.assertEqual(len(logs.records), 2)
+        for reason in ("experience_continuity", "unsupported_definition"):
+            messages = self._warnings(logs, reason, reason)
+            self.assertEqual(len(messages), 1)
+            message = messages[0].getMessage()
+            self.assertIn("4 flag(s)", message)
+            self.assertNotIn(f"{reason}-client", message)
+            for runtime_name in ("server", "all", "null", "absent"):
+                self.assertIn(f"{reason}-{runtime_name}", message)
+        self.assertEqual(client.feature_flags, definitions)
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(
+        [
+            (source, reason, runtime_name, runtime_fields)
+            for source in ("api", "cache")
+            for reason in ("experience_continuity", "unsupported_definition")
+            for runtime_name, runtime_fields in (
+                ("server", {"evaluation_runtime": "server"}),
+                ("all", {"evaluation_runtime": "all"}),
+                ("null", {"evaluation_runtime": None}),
+                ("absent", {}),
+            )
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_client_runtime_forgets_history_before_nonclient_return(
+        self, source, reason, runtime_name, runtime_fields, patch_flags
+    ):
+        client = self._client()
+        server = self._never_resolvable_flag(
+            "checkout", reason, evaluation_runtime="server"
+        )
+        client_only = {**server, "evaluation_runtime": "client"}
+        returning = self._never_resolvable_flag("checkout", reason, **runtime_fields)
+        with self.assertLogs("posthog", level=logging.DEBUG) as logs:
+            self._refresh_from(client, source, server)
+            self.assertEqual(len(self._warnings(logs, "checkout", reason)), 1)
+            for expected_count in (2, 3):
+                self._refresh_from(client, source, client_only)
+                self._refresh_from(client, source, client_only)
+                self.assertEqual(client._warned_unresolvable_flags, {})
+                self.assertEqual(
+                    len(self._warnings(logs, "checkout", reason)), expected_count - 1
+                )
+                self._refresh_from(client, source, returning)
+                self._refresh_from(client, source, returning)
+                self.assertEqual(
+                    len(self._warnings(logs, "checkout", reason)), expected_count
+                )
+                self.assertEqual(client.feature_flags, [returning])
+        patch_flags.assert_not_called()
+
+    @parameterized.expand([("api",), ("cache",)])
+    @mock.patch("posthog.client.flags")
+    def test_client_runtime_preserves_local_value_and_unresolved_reasons(
+        self, source, patch_flags
+    ):
+        client = self._client()
+        definitions = [
+            _always_on_flag("client-flag", evaluation_runtime="client"),
+            self._never_resolvable_flag(
+                "continuity", "experience_continuity", evaluation_runtime="client"
+            ),
+            self._never_resolvable_flag(
+                "unsupported", "unsupported_definition", evaluation_runtime="client"
+            ),
+        ]
+        with self.assertNoLogs("posthog", level=logging.WARNING):
+            self._refresh_from(client, source, *definitions)
+            snapshot = client.evaluate_flags("user-123", only_evaluate_locally=True)
+
+        self.assertEqual(snapshot.keys, ["client-flag"])
+        self.assertIs(snapshot.get_flag("client-flag"), True)
+        self.assertEqual(
+            dict(snapshot.unresolved_flags),
+            {
+                "continuity": UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+                "unsupported": UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            },
+        )
+        self.assertEqual(client.feature_flags, definitions)
+        patch_flags.assert_not_called()
 
     def test_classifies_and_logs_outside_the_publication_lock(self):
         client = self._client()
