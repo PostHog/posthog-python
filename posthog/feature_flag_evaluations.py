@@ -115,12 +115,12 @@ class FeatureFlagEvaluations:
     ``flags`` option so the captured event carries the exact flag values the code
     branched on.
 
-    Example::
-
-        flags = posthog.evaluate_flags(distinct_id, person_properties={"plan": "enterprise"})
-        if flags.is_enabled("new-dashboard"):
-            render_new_dashboard()
-        posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
+    ```python
+    flags = posthog.evaluate_flags(distinct_id, person_properties={"plan": "enterprise"})
+    if flags.is_enabled("new-dashboard"):
+        render_new_dashboard()
+    posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
+    ```
 
     To narrow the set of flags that get attached to a captured event, use the in-memory
     helpers :meth:`only` and :meth:`only_accessed`. To narrow the set of flags requested

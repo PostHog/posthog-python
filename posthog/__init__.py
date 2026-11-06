@@ -493,7 +493,7 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
     Examples:
         ```python
         # Context and capture usage
-        from posthog import new_context, identify_context, tag_context, capture
+        from posthog import new_context, identify_context, tag, capture
         # Enter a new context (e.g. a request/response cycle, an instance of a background job, etc)
         with new_context():
             # Associate this context with some user, by distinct_id
@@ -514,7 +514,7 @@ def capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]:
             capture('purchase', groups={'company': 'id:5'})
 
             # Adding a tag to the current context will cause it to appear on all subsequent events
-            tag_context('some-tag', 'some-value')
+            tag('some-tag', 'some-value')
 
             capture('another-event') # Will be captured with `'some-tag': 'some-value'` in the properties dict
         ```
