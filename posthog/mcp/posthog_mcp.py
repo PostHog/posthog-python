@@ -14,7 +14,7 @@ from __future__ import annotations
 import copy
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Mapping, Optional, Set, Tuple, Union
 
 from typing_extensions import Unpack
 
@@ -70,7 +70,16 @@ from .feedback import (
     resolve_collect_feedback_options,
     resolve_send_feedback_tool_name,
 )
-from .session import derive_session_id_from_conversation
+from ._client_conversation import (
+    meta_client_name,
+    read_client_conversation,
+    recognize_client,
+    recognize_manual_client,
+)
+from .session import (
+    derive_session_id_from_client_conversation,
+    derive_session_id_from_conversation,
+)
 from .tools import build_report_missing_descriptor
 from .types import (
     CollectFeedbackOptions,
@@ -213,8 +222,14 @@ class PostHogMCP(Client):
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
         timestamp: Optional[datetime] = None,
+        request_meta: Optional[JsonRecord] = None,
     ) -> None:
-        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error)."""
+        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error).
+
+        ``request_meta`` is the ``tools/call`` request's ``_meta``. With the
+        ``client_user_agent`` or ``_meta`` client name that recognizes the client,
+        its conversation id (such as ChatGPT's ``openai/session``) sets
+        ``$session_id`` in place of ``session_id``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_TOOLS_CALL,
             distinct_id,
@@ -227,6 +242,16 @@ class PostHogMCP(Client):
             client_user_agent,
             vendor_client,
         )
+        client_conversation = read_client_conversation(
+            recognize_client(client_user_agent, meta_client_name(request_meta)),
+            request_meta,
+        )
+        if client_conversation is not None:
+            event["session_id"] = derive_session_id_from_client_conversation(
+                *client_conversation
+            )
+            event["session_source"] = "client_metadata"
+            event["conversation_id"] = None
         event["resource_name"] = tool_name
         event["tool_description"] = tool_description
         event["tool_category"] = category
@@ -428,6 +453,7 @@ class PostHogMCP(Client):
         context: Union[bool, MCPAnalyticsContextOptions] = True,
         report_missing: bool = False,
         collect_feedback: bool = False,
+        headers: Any = None,
     ) -> List[Any]:
         """Inject the ``context`` argument into every tool so agents state their
         intent (captured as ``$mcp_intent``), and optionally append the
@@ -500,8 +526,11 @@ class PostHogMCP(Client):
         # Read ownership before any analytics field lands on the schemas.
         conversation_ownership = _collect_conversation_ownership(prepared)
         prepared = self._inject_models(prepared)
-        prepared = self._inject_conversation(prepared, conversation_ownership)
-        return prepared
+        # A handle-free client (ChatGPT, by its ``User-Agent`` in ``headers``)
+        # names the conversation in ``_meta`` instead.
+        client = recognize_manual_client(headers, None, None)
+        advertise = client is None or not client.handle_free
+        return self._inject_conversation(prepared, conversation_ownership, advertise)
 
     def _warn_virtual_tool_collision(
         self,
@@ -530,6 +559,8 @@ class PostHogMCP(Client):
         request_meta: Optional[JsonRecord] = None,
         original_tool: Any = None,
         session_id: Optional[str] = None,
+        headers: Any = None,
+        client_info: Optional[Mapping[str, Any]] = None,
     ) -> PreparedToolCall:
         """Pull the agent's intent off the injected ``context`` argument, strip
         ``context`` from the arguments, and flag the ``get_more_tools`` and
@@ -564,7 +595,14 @@ class PostHogMCP(Client):
 
         ``session_id`` is a session carried by the request or transport. A valid
         echoed ``conversation_id`` takes precedence. Otherwise the carried session
-        stays, and no new handle is minted."""
+        stays, and no new handle is minted.
+
+        ``request_meta`` is the request's ``_meta``. With the request's
+        ``headers`` (its ``User-Agent``) or ``client_info`` (the ``initialize``
+        ``clientInfo`` bound to its transport session) recognizing the client, a
+        client conversation id in it (such as ChatGPT's ``openai/session``) sets
+        the session ahead of an echoed handle and ``session_id``, and mints no
+        handle."""
         raw_context = (args or {}).get("context")
         intent = (
             raw_context.strip()
@@ -597,14 +635,30 @@ class PostHogMCP(Client):
         can_read_conversation = self._enable_conversation_id and (
             ownership is None or ownership.conversation_id
         )
-        resolved_conversation_id, minted = resolve_conversation_id(
-            can_read_conversation, args
+        client = recognize_manual_client(
+            headers, request_meta, (client_info or {}).get("name")
+        )
+        handle_free = client is not None and client.handle_free
+        client_conversation = read_client_conversation(client, request_meta)
+        # Same order as instrument(): the client's id, then the handle, then the
+        # carried session. A carried session or a handle-free client is minted
+        # no handle.
+        resolved_conversation_id, minted = (
+            (None, False)
+            if client_conversation is not None
+            else resolve_conversation_id(can_read_conversation, args)
         )
         minted_conversation_id = (
-            resolved_conversation_id if minted and not session_id else None
+            resolved_conversation_id
+            if minted and not session_id and not handle_free
+            else None
         )
         conversation_id = None if minted else resolved_conversation_id
-        if conversation_id:
+        if client_conversation is not None:
+            session_id = derive_session_id_from_client_conversation(
+                *client_conversation
+            )
+        elif conversation_id:
             session_id = derive_session_id_from_conversation(conversation_id)
         if (
             self._enable_conversation_id
@@ -650,6 +704,7 @@ class PostHogMCP(Client):
             _conversation_state=PreparedConversationState(
                 minted_conversation_id=minted_conversation_id,
                 output_instructions=self._enable_conversation_id
+                and not handle_free
                 and ownership is not None
                 and ownership.output_instructions,
             ),
@@ -826,8 +881,15 @@ class PostHogMCP(Client):
         return tool
 
     def _inject_conversation(
-        self, tools: List[Any], ownership: Dict[str, _ConversationOwnership]
+        self,
+        tools: List[Any],
+        ownership: Dict[str, _ConversationOwnership],
+        advertise: bool = True,
     ) -> List[Any]:
+        """Add the conversation fields to ``tools`` and record which ones the SDK
+        owns. A listing that does not ``advertise`` them still records
+        ``conversation_id`` ownership, so a later call strips an echoed handle, but
+        declares no ``_mcp_instructions`` and so records none."""
         if not self._enable_conversation_id:
             self._conversation_ownership = {}
             return tools
@@ -838,6 +900,14 @@ class PostHogMCP(Client):
                     previous.conversation_id and current.conversation_id,
                     previous.output_instructions and current.output_instructions,
                 )
+        if not advertise:
+            self._conversation_ownership.update(
+                {
+                    name: _ConversationOwnership(owned.conversation_id, False)
+                    for name, owned in ownership.items()
+                }
+            )
+            return tools
         prepared = []
         for tool in tools:
             name = _tool_name(tool)

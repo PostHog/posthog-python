@@ -132,7 +132,7 @@ def _wrap_resource_request(
         request = request_to_dict(req)
         extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         try:
-            session_id = await prepare_request(
+            session = await prepare_request(
                 data,
                 mcp_session_id=mcp_session_id,
                 client_name=client_name,
@@ -152,7 +152,7 @@ def _wrap_resource_request(
         except Exception as error:
             await record_resource_request(
                 data,
-                session_id,
+                session,
                 event_type=event_type,
                 request=request,
                 error=error,
@@ -166,7 +166,7 @@ def _wrap_resource_request(
 
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request=request,
             response=resource_listing_response(event_type, result),
@@ -305,7 +305,7 @@ def _wrap_call_tool(
         # when the agent needs the handle, or the retry starts a fresh conversation.
         delivered = False
         if lifecycle.conversation_id:
-            if data.tool_output_instructions.get(name):
+            if lifecycle.mirrors_output_instructions:
                 call_result, delivered = mirror_instructions_into_structured_content(
                     call_result, lifecycle.conversation_id
                 )
@@ -351,6 +351,7 @@ def _inject_tool_schemas(
     *,
     context_required: bool,
     high_level: Any = None,
+    advertise_conversation_id: bool = True,
 ) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
@@ -373,6 +374,7 @@ def _inject_tool_schemas(
             context_required=context_required,
             is_sdk_virtual_tool=False,
             inject_model=inject_model,
+            advertise_conversation_id=advertise_conversation_id,
         )
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
@@ -513,10 +515,16 @@ def _wrap_list_tools(
             tools,
             context_required=context_required,
             high_level=high_level,
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="inputSchema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="inputSchema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

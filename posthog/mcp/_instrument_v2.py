@@ -77,7 +77,7 @@ from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
 from .request_headers import get_request_headers
-from .session import handshake_session_id
+from .session import handshake_session
 from .session_token import SessionTokenPayload, read_mcp_session_header
 from .tools import (
     get_more_tools_result_text,
@@ -204,10 +204,11 @@ async def _record_v2_initialize(
 ) -> None:
     try:
         mcp_session_id, token = _initialize_session(ctx)
+        params = dict(ctx.params) if isinstance(ctx.params, Mapping) else {}
         await record_initialize(
             data,
-            session_id=await handshake_session_id(data, mcp_session_id, token),
-            params=dict(ctx.params) if isinstance(ctx.params, Mapping) else {},
+            session=await handshake_session(data, mcp_session_id, token),
+            params=params,
             result=_to_jsonable(result),
             extra={"session_id": mcp_session_id, "ctx": ctx},
             timestamp=started,
@@ -301,6 +302,22 @@ def _ctx_mcp_session_id(ctx: Any) -> Optional[str]:
     public ``get_request_headers``/``read_mcp_session_header`` helpers already
     provide, instead of a second hand-rolled ``ctx.request.headers`` read."""
     return read_mcp_session_header(get_request_headers(ctx))
+
+
+def _is_internal_dispatch(ctx: Any) -> bool:
+    """True when the SDK invoked this handler itself, not for a client request.
+
+    On the 2026-07-28 streamable-HTTP path the SDK runs the ``tools/list`` handler
+    while serving a ``tools/call`` (to validate ``Mcp-Param-*`` headers against the
+    tool's input schema). That call shares the inbound HTTP request, whose required
+    ``Mcp-Method`` header still names the outer method, so it gives the call away."""
+    try:
+        declared_method = ctx.request.headers.get("mcp-method")
+    except Exception:  # noqa: BLE001 - no HTTP request (stdio, legacy era) means a client call
+        return False
+    return declared_method is not None and declared_method != getattr(
+        ctx, "method", declared_method
+    )
 
 
 def _resolve_ctx(
@@ -459,11 +476,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         delivered = False
         if lifecycle.conversation_id:
             result, delivered = _deliver_conversation_id(
-                data,
                 result,
-                name,
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
+                mirror=lifecycle.mirrors_output_instructions,
             )
 
         await lifecycle.record_result(
@@ -506,7 +522,7 @@ def _append_prompt_back(result: Any, conversation_id: str) -> Tuple[Any, bool]:
 
 
 def _deliver_conversation_id(
-    data: MCPAnalyticsData, result: Any, name: str, conversation_id: str, minted: bool
+    result: Any, conversation_id: str, minted: bool, *, mirror: bool
 ) -> Tuple[Any, bool]:
     """Hand the conversation handle back over both channels a result has:
     mirrored into ``structuredContent`` on every response (for tools whose
@@ -514,7 +530,7 @@ def _deliver_conversation_id(
     the minting response only. Returns ``(result, delivered)`` — a minted handle
     the agent never received must not be stamped on the event."""
     delivered = False
-    if data.tool_output_instructions.get(name):
+    if mirror:
         result, delivered = mirror_instructions_into_structured_content(
             result, conversation_id
         )
@@ -678,11 +694,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         delivered = False
         if lifecycle.conversation_id:
             result, delivered = _deliver_conversation_id(
-                data,
                 result,
-                name,
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
+                mirror=lifecycle.mirrors_output_instructions,
             )
 
         await lifecycle.record_result(
@@ -709,7 +724,7 @@ def _wrap_v2_resource_request(
         request = params_to_request_dict(method, params, by_alias=True)
         extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
         try:
-            session_id = await prepare_request(
+            session = await prepare_request(
                 data,
                 mcp_session_id=mcp_session_id,
                 client_name=client_name,
@@ -729,7 +744,7 @@ def _wrap_v2_resource_request(
         except Exception as error:
             await record_resource_request(
                 data,
-                session_id,
+                session,
                 event_type=event_type,
                 request=request,
                 error=error,
@@ -743,7 +758,7 @@ def _wrap_v2_resource_request(
 
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request=request,
             response=resource_listing_response(event_type, result),
@@ -783,6 +798,8 @@ def _wrap_v2_list_tools(
     data.raw_tool_names_probe = probe_raw_tool_names
 
     async def handler(ctx: Any, params: Any) -> Any:
+        if _is_internal_dispatch(ctx):
+            return await original(ctx, params)
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
@@ -831,9 +848,15 @@ def _wrap_v2_list_tools(
                 owns_context=owns_context,
                 context_required=context_required,
                 is_sdk_virtual_tool=False,
+                advertise_conversation_id=lifecycle.advertises_conversation_id,
             )
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="input_schema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="input_schema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(
