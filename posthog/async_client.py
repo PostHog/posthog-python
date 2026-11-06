@@ -139,6 +139,7 @@ class AsyncClient:
         email_request_max_retries: int = 2,
         migrated_from: Optional[str] = None,
     ) -> None:
+        """posthog-capability: setup"""
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
         if flush_interval <= 0:
@@ -287,6 +288,8 @@ class AsyncClient:
                 distinct_id="user_123",
             )
             ```
+
+        posthog-capability: emails
         """
         if self._emails is None:
             self._emails = _client_emails(
@@ -572,7 +575,10 @@ class AsyncClient:
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Queue an event without blocking for network delivery."""
+        """Queue an event without blocking for network delivery.
+
+        posthog-capability: capture
+        """
         try:
             msg, disable_geoip, property_allowlist = self._build_capture_event(
                 event, kwargs
@@ -612,7 +618,10 @@ class AsyncClient:
     async def capture_immediate(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Capture one event and wait until its delivery attempt completes."""
+        """Capture one event and wait until its delivery attempt completes.
+
+        posthog-capability: capture
+        """
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - async functions always have a task
             return None
@@ -695,6 +704,7 @@ class AsyncClient:
         }
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """posthog-capability: identify"""
         try:
             msg = self._build_person_properties_event("$set", "$set", kwargs)
             if msg is None:
@@ -707,6 +717,7 @@ class AsyncClient:
             return None
 
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
+        """posthog-capability: identify"""
         try:
             msg = self._build_person_properties_event("$set_once", "$set_once", kwargs)
             if msg is None:
@@ -728,6 +739,7 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
     ) -> Optional[str]:
+        """posthog-capability: group-identify"""
         try:
             if not _stringify_id(group_type):
                 self.log.warning(
@@ -770,6 +782,7 @@ class AsyncClient:
         uuid: Optional[str] = None,
         disable_geoip: Optional[bool] = None,
     ) -> Optional[str]:
+        """posthog-capability: alias"""
         try:
             resolved_previous_id = _stringify_id(previous_id)
             if not resolved_previous_id:
@@ -817,7 +830,10 @@ class AsyncClient:
         exception: Optional[ExceptionArg] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
-        """Capture an exception. This method never raises, including in debug mode."""
+        """Capture an exception. This method never raises, including in debug mode.
+
+        posthog-capability: capture-exception
+        """
         try:
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
@@ -962,6 +978,8 @@ class AsyncClient:
         ``capture(flags=...)`` to attach the exact values used for branching.
         This client does not evaluate flags locally, so the snapshot's
         ``unresolved_flags`` is always empty.
+
+        posthog-capability: evaluate-flags
         """
         host = self._get_feature_flag_evaluations_host()
         if distinct_id is None:
@@ -1189,6 +1207,7 @@ class AsyncClient:
             await asyncio.gather(queue_join, workers_finished, return_exceptions=True)
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
+        """posthog-capability: flush"""
         if asyncio.current_task() in self._worker_tasks or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
             return
@@ -1219,6 +1238,7 @@ class AsyncClient:
             await http_client.aclose()
 
     async def shutdown(self) -> None:
+        """posthog-capability: shutdown"""
         current = asyncio.current_task()
         if (
             current in self._worker_tasks
@@ -1288,6 +1308,7 @@ class AsyncClient:
                 raise errors[0]
 
     async def join(self) -> None:
+        """posthog-capability: shutdown"""
         await self.shutdown()
 
 
