@@ -718,9 +718,13 @@ async def _listed_input_schema(
     """Return the schema that middleware advertises for the current request."""
     try:
         version = _requested_tool_version(meta)
-        candidates = [
-            tool for tool in await high_level.list_tools() if tool.name == name
-        ]
+        list_tools = getattr(high_level, "list_tools", None)
+        if list_tools is None:
+            # FastMCP 2.x only lists through request middleware, which can
+            # spend rate limits, and its registry can disagree with what that
+            # middleware advertises, so the advertised schema is unknown.
+            return None
+        candidates = [tool for tool in await list_tools() if tool.name == name]
         if version is not None:
             candidates = [
                 tool
