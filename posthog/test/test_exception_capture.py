@@ -1,3 +1,5 @@
+import copy
+import importlib.util
 import pickle
 import subprocess
 import sys
@@ -633,3 +635,71 @@ def test_never_raised_exception_is_not_synthetic_once_raised():
         exceptions = exceptions_from_error_tuple(exc_info_from_error(raised))
 
     assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def _pickle_round_trip(error):
+    return pickle.loads(pickle.dumps(error))
+
+
+@pytest.mark.parametrize("duplicate", [_pickle_round_trip, copy.copy, copy.deepcopy])
+def test_copy_of_captured_exception_is_not_synthetic_once_raised(duplicate):
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    # Capture inline, so no application frame keeps the exception alive and the
+    # synthesized traceback is freed as soon as the original goes away. Its
+    # address is then free for the traceback of the raise below.
+    for _ in range(50):
+        error = ValueError("never raised")
+        exc_info_from_error(error)
+        duplicated = duplicate(error)
+        del error
+
+        try:
+            raise duplicated
+        except ValueError as raised:
+            exceptions = exceptions_from_error_tuple(exc_info_from_error(raised))
+
+        assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def test_captured_exception_can_be_unpickled_without_the_sdk():
+    from posthog.exception_utils import exc_info_from_error
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import pickle, sys; print(pickle.loads(sys.stdin.buffer.read()))",
+        ],
+        input=pickle.dumps(error),
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == b"never raised"
+
+
+def test_never_raised_exception_stack_omits_sdk_frames_in_renamed_package():
+    import posthog.exception_utils as exception_utils
+
+    # The posthoganalytics mirror ships this module under another package name.
+    spec = importlib.util.spec_from_file_location(
+        "posthoganalytics.exception_utils", exception_utils.__file__
+    )
+    mirror = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {spec.name: mirror}):
+        spec.loader.exec_module(mirror)
+        exception = mirror.exceptions_from_error_tuple(
+            _call_from_app_module(
+                mirror.exc_info_from_error, ValueError("never raised")
+            )
+        )[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert functions[-1] == "handler"
+    assert exception["mechanism"]["synthetic"] is True
