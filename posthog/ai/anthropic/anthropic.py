@@ -6,6 +6,7 @@ except ImportError:
         "Please install the Anthropic SDK to use this feature: 'pip install anthropic'"
     )
 
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,8 @@ from .anthropic_converter import (
 )
 from posthog.client import Client as PostHogClient
 from posthog import setup
+
+_log = logging.getLogger("posthog")
 
 
 class Anthropic(anthropic.Anthropic):
@@ -162,7 +165,28 @@ class WrappedMessages(Messages):
         **kwargs: Any,
     ):
         start_time = time.time()
-        response = super().create(**kwargs)
+        try:
+            response = super().create(**kwargs)
+        except Exception as exc:
+            accumulator = _AnthropicStreamAccumulator()
+            try:
+                self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    accumulator.usage_stats,
+                    time.time() - start_time,
+                    accumulator.content_blocks,
+                    accumulator.accumulated_content,
+                    error=exc,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
         return self._track_streaming_response(
             response,
             posthog_distinct_id,
