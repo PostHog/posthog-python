@@ -697,6 +697,9 @@ class TestSendV1Batch(unittest.TestCase):
         )
         self.assertEqual(len(stub.calls), 2)
         self.assertEqual(exc.status, status)
+        self.assertEqual(exc.attempts, 2)
+        # One 1s backoff between the two attempts, none after the final one.
+        self.assertEqual([c.args[0] for c in self.sleep.call_args_list], [1])
 
     def test_transport_error_then_success(self) -> None:
         stub = self._run(
