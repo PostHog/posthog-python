@@ -14,6 +14,8 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
+from ._event_types import MCPAnalyticsEventType
+
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
@@ -628,8 +630,15 @@ def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
     if result.get("parameters") is not None:
         result["parameters"] = sanitize_captured_value(result["parameters"])
 
+    # An unknown tool's name is whatever the agent sent, not one of the
+    # server's identifiers, so it gets the free-text pass.
     if result.get("resource_name") is not None:
-        result["resource_name"] = _sanitize_resource_name(result["resource_name"])
+        sanitize_name = (
+            sanitize_free_text
+            if result.get("event_type") == MCPAnalyticsEventType.MCP_UNKNOWN_TOOL
+            else _sanitize_resource_name
+        )
+        result["resource_name"] = sanitize_name(result["resource_name"])
 
     # The intent comes straight from an agent-narrated `context` string, so it
     # can contain a secret the LLM read aloud or personal data it narrated about

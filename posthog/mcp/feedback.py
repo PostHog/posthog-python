@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional, Union
 
 from ._internal import _maybe_await
 from ._sanitization import sanitize_free_text, sanitize_free_text_value
+from ._truncation import truncate_text
 from .constants import PostHogMCPAnalyticsProperty
 from .logger import log
 from .tools import VIRTUAL_TOOL_HINTS
@@ -26,7 +27,6 @@ _SENTIMENTS = ("positive", "neutral", "negative", "mixed")
 # Free-text fields are agent-narrated, like `$mcp_intent`; bound them the same way.
 _MAX_FEEDBACK_TEXT_LENGTH = 2048
 _MAX_FEEDBACK_TOOL_NAME_LENGTH = 256
-_TRUNCATION_SUFFIX = "..."
 
 _DEFAULT_FEEDBACK_DESCRIPTION = (
     "Send feedback about this server to its developers: a capability you needed that no tool "
@@ -247,10 +247,6 @@ def build_feedback_intent(report: FeedbackReport) -> str:
     return "\n\n".join(part for part in (report.summary, report.details) if part)
 
 
-def _truncate_feedback_text(value: str, max_length: int) -> str:
-    return value[:max_length] + _TRUNCATION_SUFFIX if len(value) > max_length else value
-
-
 def _capture_free_text(value: str) -> str:
     """Agent-narrated free text can contain a secret the LLM read aloud or personal
     data it narrated, so it gets exactly the ``$mcp_intent`` pass
@@ -258,7 +254,7 @@ def _capture_free_text(value: str) -> str:
     load-bearing, the URL rewrite would percent-encode the ``@`` the email pattern
     anchors on), then a length bound. The event pipeline does not process
     ``event["properties"]``, so this happens here."""
-    return _truncate_feedback_text(sanitize_free_text(value), _MAX_FEEDBACK_TEXT_LENGTH)
+    return truncate_text(sanitize_free_text(value), _MAX_FEEDBACK_TEXT_LENGTH)
 
 
 def _capture_extra_value(value: Any) -> Any:
@@ -268,11 +264,11 @@ def _capture_extra_value(value: Any) -> Any:
     JSON-stringified and everything is bounded. Unserializable values are dropped."""
     sanitized = sanitize_free_text_value(value)
     if isinstance(sanitized, str):
-        return _truncate_feedback_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
+        return truncate_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
     if sanitized is None or isinstance(sanitized, (bool, int, float)):
         return sanitized
     try:
-        return _truncate_feedback_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
+        return truncate_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
     except Exception:  # noqa: BLE001 - capture must never raise into the tool path
         return None
 
@@ -305,7 +301,7 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
         # Nominally an identifier, but the schema can't stop an agent from
         # writing prose into it — so it gets the same free-text pass as the
         # other fields.
-        properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = _truncate_feedback_text(
+        properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = truncate_text(
             sanitize_free_text(report.tool_name),
             _MAX_FEEDBACK_TOOL_NAME_LENGTH,
         )

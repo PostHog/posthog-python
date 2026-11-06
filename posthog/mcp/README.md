@@ -191,8 +191,10 @@ On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute
 When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
 replica cannot safely distinguish that field from a replacement tool's own argument.
 Client metadata capture remains enabled. This also applies to pass-through logging or
-authorization middleware with those hooks; argument-based model capture is skipped so an
-application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
+authorization middleware of your own with those hooks; argument-based model capture is skipped
+so an application-owned value cannot be mistaken for analytics. FastMCP's stock middleware,
+such as `LoggingMiddleware`, `TimingMiddleware`, and `ErrorHandlingMiddleware`, never reroutes a
+tool and does not count; its tool-injection middleware does. No additional catalog lookup runs
 during a tool call.
 
 For a custom dispatcher, `PostHogMCP` enables model capture and conversation correlation
@@ -338,6 +340,23 @@ call = posthog.prepare_tool_call(
     tool_name, raw_args, original_tool=my_tools.get(tool_name)
 )
 ```
+
+## Calls to tools your server does not have
+
+A `tools/call` naming a tool your server never registered is not a tool call.
+`instrument()` sends `$mcp_unknown_tool` with the requested name as
+`$mcp_tool_name`, and no `$mcp_tool_call` or `$exception`. The agent gets the
+same error as before. A call naming no tool sends nothing.
+
+The SDK asks the tool registry only after the call fails, and records a failed
+tool call whenever the registry can't rule the tool out:
+
+- A disabled tool, or a tool called with invalid arguments, still exists.
+- A raw low-level server has no registry the SDK can read.
+- On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
+  listing or dispatch hook can serve tools the registry lacks.
+- On standalone `fastmcp.FastMCP` 3 and later, a mounted server, proxy, or
+  other provider hides its disabled tools.
 
 ## Virtual tools on a paginated `tools/list`
 

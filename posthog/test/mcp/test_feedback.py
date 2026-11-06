@@ -237,9 +237,9 @@ def test_properties_bound_free_text_and_tool_name():
         {"feedback_type": "issue", "summary": "s" * 5000, "tool_name": "t" * 500}
     )
     props = build_feedback_event_properties(report)
-    assert len(props["$mcp_feedback_summary"]) == 2048 + 3
+    assert len(props["$mcp_feedback_summary"]) == 2048
     assert props["$mcp_feedback_summary"].endswith("...")
-    assert len(props["$mcp_feedback_tool"]) == 256 + 3
+    assert len(props["$mcp_feedback_tool"]) == 256
 
 
 def test_properties_capture_declared_extras_only():
