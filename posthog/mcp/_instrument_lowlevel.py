@@ -874,8 +874,11 @@ async def registered_tool_exists(server: Any, name: str) -> Optional[bool]:
 
 
 def _serves_other_providers(server: Any) -> bool:
-    """Whether a FastMCP 3+ server serves tools from anywhere but its own
-    registry: a mounted server, a proxy, or a custom provider."""
+    """Whether a FastMCP server serves tools from anywhere but its own
+    registry: a mounted server, a proxy, or a custom provider. FastMCP 2.x
+    keeps mounts in ``_mounted_servers``; 3.x lists them in ``providers``."""
+    if getattr(server, "_mounted_servers", None):
+        return True
     local = getattr(server, "_local_provider", None)
     return any(provider is not local for provider in getattr(server, "providers", ()))
 

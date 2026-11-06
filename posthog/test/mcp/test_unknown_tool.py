@@ -109,6 +109,25 @@ def _mounted():
     return parent
 
 
+def _with_mounted_server():
+    """A parent serving a sub-server's tools under the ``ns`` prefix, on every
+    fastmcp major (2.x spells the argument ``prefix``, 3.x ``namespace``)."""
+    from fastmcp import FastMCP
+
+    sub = FastMCP("sub")
+
+    @sub.tool
+    def lookup(query: str) -> str:
+        return query
+
+    parent = _standalone()
+    try:
+        parent.mount(sub, namespace="ns")
+    except TypeError:
+        parent.mount(sub, prefix="ns")
+    return parent
+
+
 def _raw(listed):
     """A raw low-level server whose own dispatcher rejects names it does not
     know and advertises ``listed`` on tools/list."""
@@ -243,6 +262,13 @@ async def test_a_call_to_a_tool_that_does_not_exist_is_recorded_as_unknown(build
             {},
             id="server-with-mounted-provider",
             marks=_needs_server_disable,
+        ),
+        pytest.param(
+            _with_mounted_server,
+            "ns_no_such_tool",
+            {},
+            id="server-with-mounted-server",
+            marks=_needs_standalone,
         ),
         pytest.param(
             _standalone_with_application_middleware,
