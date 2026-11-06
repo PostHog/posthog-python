@@ -1223,8 +1223,8 @@ class TestLocalEvaluation(unittest.TestCase):
                 "group flag",
                 {"$feature_enrollment/beta-feature": False},
                 100,
-                "flags-fallback-value",
-                1,
+                False,
+                0,
                 True,
             ),
         ]
@@ -1263,6 +1263,120 @@ class TestLocalEvaluation(unittest.TestCase):
             )
 
         self.assertEqual((value, patch_flags.call_count), (expected, flags_calls))
+
+    @parameterized.expand(
+        [
+            ("enrolled without group", True, False, None, True),
+            ("string enrolled without group", "true", False, None, True),
+            ("opted out without group", False, False, None, False),
+            ("enrolled despite group opt-out", True, True, False, True),
+            ("opted out despite group enrollment", False, True, True, False),
+            ("missing enrollment without group", None, False, None, None),
+            ("missing enrollment with group enrollment", None, True, True, None),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_group_feature_enrollment_uses_person_context(
+        self, _name, enrollment, has_group, group_enrollment, expected, patch_flags
+    ):
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "beta-feature",
+                "active": True,
+                "filters": {
+                    "feature_enrollment": True,
+                    "aggregation_group_type_index": 0,
+                    "groups": [{"properties": [], "rollout_percentage": 0}],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+        person_properties = (
+            {"$feature_enrollment/beta-feature": enrollment}
+            if enrollment is not None
+            else {}
+        )
+        groups = {"company": "acme"} if has_group else {}
+        group_properties = (
+            {"company": {"$feature_enrollment/beta-feature": group_enrollment}}
+            if has_group
+            else {}
+        )
+        patch_flags.return_value = {
+            "featureFlags": {"beta-feature": "flags-fallback-value"}
+        }
+
+        value = client.get_feature_flag(
+            "beta-feature",
+            "distinct_id",
+            person_properties=person_properties,
+            groups=groups,
+            group_properties=group_properties,
+        )
+        self.assertEqual(
+            value, expected if expected is not None else "flags-fallback-value"
+        )
+        self.assertEqual(patch_flags.call_count, int(expected is None))
+        patch_flags.reset_mock()
+
+        snapshot = client.evaluate_flags(
+            "distinct_id",
+            person_properties=person_properties,
+            groups=groups,
+            group_properties=group_properties,
+            only_evaluate_locally=True,
+        )
+        self.assertEqual(snapshot.get_flag("beta-feature"), expected)
+        self.assertEqual(
+            snapshot.unresolved_flags,
+            {"beta-feature": UnresolvedFlagReason.MISSING_CONTEXT}
+            if expected is None
+            else {},
+        )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(
+        [
+            ("inactive", False, False, {}, False, {}),
+            (
+                "experience continuity",
+                True,
+                True,
+                {"$feature_enrollment/beta-feature": True},
+                None,
+                {"beta-feature": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_group_feature_enrollment_preserves_evaluation_guards(
+        self, _name, active, continuity, properties, expected, unresolved, patch_flags
+    ):
+        client = self.client
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "beta-feature",
+                "active": active,
+                "ensure_experience_continuity": continuity,
+                "filters": {
+                    "feature_enrollment": True,
+                    "aggregation_group_type_index": 0,
+                    "groups": [{"properties": [], "rollout_percentage": 100}],
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+
+        snapshot = client.evaluate_flags(
+            "distinct_id", person_properties=properties, only_evaluate_locally=True
+        )
+
+        self.assertEqual(snapshot.get_flag("beta-feature"), expected)
+        self.assertEqual(snapshot.unresolved_flags, unresolved)
+        patch_flags.assert_not_called()
 
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
