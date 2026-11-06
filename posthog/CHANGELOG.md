@@ -1,5 +1,11 @@
 # posthog
 
+## 7.84.2 — 2026-11-06
+
+### Patch changes
+
+- [11585fb](https://github.com/posthog/posthog-python/commit/11585fba6517aa3c33e657e5b94103e65469563e) Stop retrying `/flags` requests when the connection is refused, so the flag error surfaces right away instead of after the retry backoff. — Thanks @luantaraschi!
+
 ## 7.84.1 — 2026-11-05
 
 ### Patch changes
