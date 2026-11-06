@@ -389,13 +389,15 @@ def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
         if raw_metadata is None:
             metadata = LegacyFlagMetadata(payload=encoded_payload)
         else:
+            # A number or object value is its own payload; a payload the record also
+            # carries is ignored. A failed record reads as disabled, so it has no
+            # payload, even when the record carries one.
+            payload = encoded_payload
+            if payload is None and not failed:
+                payload = raw_metadata.get("payload")
             metadata = FlagMetadata(
                 id=_read_int(raw_metadata.get("id"), "metadata.id"),
-                # A number or object value is its own payload; a payload the record
-                # also carries is ignored.
-                payload=encoded_payload
-                if encoded_payload is not None
-                else raw_metadata.get("payload"),
+                payload=payload,
                 version=_read_int(raw_metadata.get("version"), "metadata.version"),
                 description=_read_typed(
                     raw_metadata.get("description", ""), "metadata.description", str
@@ -469,6 +471,10 @@ def _parse_older_record(cls: Type[_F], key: str, resp: Dict[str, Any]) -> _F:
     except _MalformedRecord as error:
         return _malformed_record(cls, key, str(error))
 
+    failed = resp.get("failed") is True
+    if failed and raw_metadata:
+        # A failed record has no payload, even when the record carries one.
+        raw_metadata = {**raw_metadata, "payload": None}
     flag = cls(
         key=key,
         # An older server always sends ``enabled``; a record without it keeps
@@ -478,7 +484,7 @@ def _parse_older_record(cls: Type[_F], key: str, resp: Dict[str, Any]) -> _F:
         reason=FlagReason.from_json(raw_reason),
         metadata=FlagMetadata.from_json(raw_metadata),
     )
-    return _set_private_fields(flag, _failed=resp.get("failed") is True)
+    return _set_private_fields(flag, _failed=failed)
 
 
 def _read_record_key(resp: Dict[str, Any]) -> None:
