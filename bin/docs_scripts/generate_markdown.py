@@ -58,11 +58,32 @@ def signature(name, function, *_, **__) -> str:
     public.parameters = griffe.Parameters(
         *(p for p in function.parameters if not p.name.startswith("_"))
     )
-    return prefix + public.signature(name=str(name).strip())
+    # A constructor is called by its class's name.
+    name = function.parent.name if function.name == "__init__" else str(name).strip()
+    return prefix + public.signature(name=name)
+
+
+def whole_summaries(build):
+    """griffe2md's summary tables keep the first line of each docstring, which can stop
+    mid-sentence, so they keep the whole first paragraph instead."""
+
+    def section(objects, **kwargs):
+        out = build(objects, **kwargs)
+        docstrings = {o.name: o.docstring for o in objects}
+        for item in out.value:
+            if docstring := docstrings[item.name]:
+                item.description = " ".join(docstring.value.split("\n\n", 1)[0].split())
+        return out
+
+    return section
 
 
 ENV = griffe2md.prepare_env()
 ENV.filters["format_signature"] = signature
+for kind in ("functions", "classes", "attributes"):
+    ENV.filters[f"as_{kind}_section"] = whole_summaries(
+        ENV.filters[f"as_{kind}_section"]
+    )
 
 
 def entry(obj, name: str) -> str:
@@ -210,6 +231,8 @@ def main() -> None:
         "posthog",
         search_paths=[str(ROOT)],
         docstring_parser="google",
+        # A Returns section is one return value, even when its description wraps.
+        docstring_options={"returns_multiple_items": False},
         resolve_aliases=False,
     )
     declared = int(
