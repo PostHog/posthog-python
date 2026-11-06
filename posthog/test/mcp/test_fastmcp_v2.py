@@ -699,3 +699,27 @@ async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
     assert "real tool ran" in str(out.root.content[0].text)
     assert _events(client, "$mcp_missing_capability") == []
     assert any("delegating the call to your server" in m for m in messages)
+
+
+@pytest.mark.skipif(
+    hasattr(FastMCP, "list_tools"), reason="FastMCP 2.x has no public list_tools"
+)
+async def test_schema_lookup_on_fastmcp_2_runs_no_request_middleware():
+    from fastmcp.server.middleware import Middleware
+
+    from posthog.mcp._instrument_lowlevel import _listed_input_schema
+
+    listings = []
+
+    class CountListings(Middleware):
+        async def on_list_tools(self, context, call_next):
+            listings.append(context)
+            return await call_next(context)
+
+    server = make_server()
+    server.add_middleware(CountListings())
+
+    schema = await _listed_input_schema(server, "add", None)
+
+    assert schema is not None and set(schema["properties"]) >= {"a", "b"}
+    assert listings == []
