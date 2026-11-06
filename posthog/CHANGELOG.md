@@ -1,5 +1,21 @@
 # posthog
 
+## 7.86.0 — 2026-11-06
+
+### Minor changes
+
+- [0aa5df1](https://github.com/posthog/posthog-python/commit/0aa5df18d1c60769de1307677b1e0e649eb023e8) MCP analytics now matches the cross-SDK MCP spec ahead of 1.0:
+  
+  - `instrument()` sends `$mcp_unknown_tool` instead of a failed `$mcp_tool_call` and `$exception` when a `tools/call` names a tool your server never registered. Insights that count failed tool calls stop counting these. A call naming no tool sends nothing. A raw low-level server has no registry the SDK can read, so a failed call there stays a failed tool call.
+  - FastMCP's stock logging, timing, error-handling, and similar middleware no longer turns off `llm_model` injection on standalone `fastmcp.FastMCP`.
+  - Manual capture without a `session_id` now sends a fresh `ses_` session id and uses it as the `distinct_id`, instead of no `$session_id` and an `anonymous` person.
+  - Truncated string properties now fit their limit with the `...` marker included, so `$mcp_tool_name` and other names stop at 256 characters instead of 259. — Thanks @lucasheriques!
+- [5f2ee56](https://github.com/posthog/posthog-python/commit/5f2ee56bb0f2b3815e863045c6506a35ae4053b8) `posthog.mcp` is now stable. From this release, a minor or patch release of `posthog` no longer makes breaking changes to the `posthog.mcp` API, renames or removes a `$mcp_*` event or property, changes its type, or changes which requests send an event, so your saved insights keep working across upgrades. New events and properties can still arrive in minor releases. Upgrading needs no code change. — Thanks @lucasheriques!
+
+### Patch changes
+
+- [d8a7ff0](https://github.com/posthog/posthog-python/commit/d8a7ff0efa49eb4cf0be8a1b30c1370d6e322553) On FastMCP 2.x servers with middleware, `posthog.mcp` no longer tries to read the advertised tool schema on each call. FastMCP 2.x can only list tools through request middleware, which can spend rate limits, so the lookup failed and logged an error on every call. Argument names there stay redacted in `$mcp_input_keys`, as before. — Thanks @lucasheriques!
+
 ## 7.85.0 — 2026-11-06
 
 ### Minor changes
