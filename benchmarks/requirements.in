@@ -1,0 +1,3 @@
+# Benchmark-only instrumentation. Regenerate requirements.txt with uv pip compile.
+memray==1.20.0
+psutil==7.2.2

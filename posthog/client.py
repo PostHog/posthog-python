@@ -77,7 +77,9 @@ from posthog.exception_utils import (
 )
 from posthog.feature_flag_evaluations import (
     FeatureFlagEvaluations,
+    _LocalFlagRecord,
     _EvaluatedFlagRecord,
+    _RemoteFlagRecord,
     _FeatureFlagEvaluationsHost,
 )
 from posthog.feature_flags import (
@@ -123,6 +125,8 @@ from .types import (
     FlagValue,
     SendFeatureFlagsOptions,
     UnresolvedFlagReason,
+    _has_untyped_flag_records,
+    _UNTYPED_FLAGS_RESPONSE_MESSAGE,
     normalize_flags_response,
     to_flags_and_payloads,
     to_payloads,
@@ -1019,6 +1023,8 @@ class Client(object):
         # the /flags v2 response and the local-evaluation payload. False until the
         # server reports it, so full events are the fail-safe.
         self._minimal_flag_called_events: bool = False
+        # Whether this client has logged that /flags sent records without typed values.
+        self._logged_untyped_flags_response = False
 
         self.capture_trace_context = capture_trace_context
         self.capture_exception_code_variables = capture_exception_code_variables
@@ -1259,7 +1265,7 @@ class Client(object):
         Send transactional email from PostHog email templates or from content
         in your code, and read the status of each email sent with ``get``.
 
-        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        Needs ``secret_key``, a project secret API key with the ``transactional_email:write``
         scope. Sends go to ``app_host``, or to the PostHog Cloud app host of
         ``host``. ``email_request_timeout_seconds`` and ``email_request_max_retries``
         configure each send. A disabled or shut-down client sends nothing. See
@@ -1723,6 +1729,11 @@ class Client(object):
             **request_data,
         )
 
+        if not self._logged_untyped_flags_response and _has_untyped_flag_records(
+            resp_data
+        ):
+            self._logged_untyped_flags_response = True
+            self.log.info(_UNTYPED_FLAGS_RESPONSE_MESSAGE)
         response = normalize_flags_response(resp_data)
         # Server-controlled gate for minimal $feature_flag_called events. Only the
         # v2 response shape carries it; absent (legacy shape, older server, team
@@ -4179,9 +4190,23 @@ class Client(object):
                     flag_details, override_match_value
                 )
 
+                if (
+                    flag_details is not None
+                    and flag_details._malformed_field is not None
+                ):
+                    # The record could not be read, so it reads as disabled. It must
+                    # not replace the last good cached value, which it falls back to
+                    # like a failed request, and it reports what a failed request
+                    # reports: an unknown error and no request details.
+                    feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
+                    request_id = None
+                    evaluated_at = None
+                    flag_result = (
+                        self._get_stale_flag_fallback(distinct_id, key) or flag_result
+                    )
                 # The request-start generation is an invalidation boundary, not
                 # a claim about the server's definitions. Refresh rejects late writes.
-                if self.flag_cache and flag_result:
+                elif self.flag_cache and flag_result:
                     self.flag_cache._set_cached_remote_flag(
                         distinct_id, key, flag_result, local_definition_version
                     )
@@ -4998,7 +5023,7 @@ class Client(object):
 
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
-            records[key] = _EvaluatedFlagRecord(
+            records[key] = _LocalFlagRecord(
                 key=key,
                 enabled=value is not False,
                 variant=value if isinstance(value, str) else None,
@@ -5041,34 +5066,7 @@ class Client(object):
                         continue
                     if key in locally_evaluated_keys:
                         continue
-                    payload = _parse_flag_payload(
-                        detail.metadata.payload
-                        if isinstance(detail.metadata, FlagMetadata)
-                        else getattr(detail.metadata, "payload", None)
-                    )
-                    records[key] = _EvaluatedFlagRecord(
-                        key=key,
-                        enabled=detail.enabled,
-                        variant=detail.variant,
-                        payload=payload,
-                        id=(
-                            detail.metadata.id
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        version=(
-                            detail.metadata.version
-                            if isinstance(detail.metadata, FlagMetadata)
-                            else None
-                        ),
-                        reason=(
-                            detail.reason.description
-                            if detail.reason and detail.reason.description
-                            else None
-                        ),
-                        locally_evaluated=False,
-                        has_experiment=_metadata_has_experiment(detail.metadata),
-                    )
+                    records[key] = _RemoteFlagRecord(detail)
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 quota_limited = True

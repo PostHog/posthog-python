@@ -113,6 +113,7 @@ alias posthog.ai.gemini.gemini.extract_gemini_stop_reason_from_chunk -> posthog.
 alias posthog.ai.gemini.gemini.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini.setup -> posthog.setup
@@ -129,6 +130,7 @@ alias posthog.ai.gemini.gemini_async.extract_gemini_stop_reason_from_chunk -> po
 alias posthog.ai.gemini.gemini_async.extract_gemini_usage_from_chunk -> posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk
 alias posthog.ai.gemini.gemini_async.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.gemini.gemini_async.format_gemini_streaming_output -> posthog.ai.gemini.gemini_converter.format_gemini_streaming_output
+alias posthog.ai.gemini.gemini_async.has_gemini_url_context -> posthog.ai.gemini.gemini_converter.has_gemini_url_context
 alias posthog.ai.gemini.gemini_async.merge_system_prompt -> posthog.ai.utils.merge_system_prompt
 alias posthog.ai.gemini.gemini_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
 alias posthog.ai.gemini.gemini_async.setup -> posthog.setup
@@ -1198,9 +1200,9 @@ attribute posthog.types.FeatureFlagResult.reason: Optional[str]
 attribute posthog.types.FeatureFlagResult.variant: Optional[str]
 attribute posthog.types.FlagMetadata.description: str
 attribute posthog.types.FlagMetadata.has_experiment: Optional[bool] = None
-attribute posthog.types.FlagMetadata.id: int
+attribute posthog.types.FlagMetadata.id: Optional[int]
 attribute posthog.types.FlagMetadata.payload: Optional[str]
-attribute posthog.types.FlagMetadata.version: int
+attribute posthog.types.FlagMetadata.version: Optional[int]
 attribute posthog.types.FlagReason.code: str
 attribute posthog.types.FlagReason.condition_index: Optional[int]
 attribute posthog.types.FlagReason.description: str
@@ -1397,7 +1399,7 @@ class posthog.types.FeatureFlag(key: str, enabled: bool, variant: Optional[str],
 class posthog.types.FeatureFlagError 
 class posthog.types.FeatureFlagEvaluationRuntime 
 class posthog.types.FeatureFlagResult(key: str, enabled: bool, variant: Optional[str], payload: Optional[Any], reason: Optional[str])
-class posthog.types.FlagMetadata(id: int, payload: Optional[str], version: int, description: str, has_experiment: Optional[bool] = None)
+class posthog.types.FlagMetadata(id: Optional[int], payload: Optional[str], version: Optional[int], description: str, has_experiment: Optional[bool] = None)
 class posthog.types.FlagReason(code: str, condition_index: Optional[int], description: str)
 class posthog.types.FlagsAndPayloads 
 class posthog.types.FlagsResponse 
@@ -1435,13 +1437,14 @@ function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason(response:
 function posthog.ai.gemini.gemini_converter.extract_gemini_stop_reason_from_chunk(chunk: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_system_instruction(config: Any) -> Optional[str]
 function posthog.ai.gemini.gemini_converter.extract_gemini_tools(kwargs: Dict[str, Any]) -> Optional[Any]
-function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any) -> TokenUsage
+function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_chunk(chunk: Any, url_context_seen: bool = False) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_usage_from_response(response: Any) -> TokenUsage
 function posthog.ai.gemini.gemini_converter.extract_gemini_web_search_count(response: Any) -> int
 function posthog.ai.gemini.gemini_converter.format_gemini_input(contents: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_input_with_system(contents: Any, config: Any = None) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_response(response: Any) -> List[FormattedMessage]
 function posthog.ai.gemini.gemini_converter.format_gemini_streaming_output(accumulated_content: Union[str, List[Any]]) -> List[FormattedMessage]
+function posthog.ai.gemini.gemini_converter.has_gemini_url_context(response: Any) -> bool
 function posthog.ai.media.bytes_to_base64(data: bytes) -> str
 function posthog.ai.media.ensure_serializable(obj: Any) -> Any
 function posthog.ai.media.normalize_part_keys(d: dict) -> dict

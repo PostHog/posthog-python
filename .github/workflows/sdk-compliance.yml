@@ -33,7 +33,7 @@ jobs:
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile"
       adapter-context: "."
-      test-harness-version: "1.1.1"
+      test-harness-version: "1.23.0"
       continue-on-error: false
       report-name: "sdk-compliance-report-v0"
 
@@ -43,6 +43,6 @@ jobs:
     with:
       adapter-dockerfile: "sdk_compliance_adapter/Dockerfile.v1"
       adapter-context: "."
-      test-harness-version: "1.1.1"
+      test-harness-version: "1.23.0"
       continue-on-error: false
       report-name: "sdk-compliance-report-v1"

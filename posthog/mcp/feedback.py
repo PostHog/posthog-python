@@ -28,11 +28,9 @@ _MAX_FEEDBACK_TOOL_NAME_LENGTH = 256
 _TRUNCATION_SUFFIX = "..."
 
 _DEFAULT_FEEDBACK_DESCRIPTION = (
-    "Send feedback about this server to its developers. Most important: report a missing "
-    "capability whenever no available tool fits your task, even if you can work around it "
-    '(feedback_type "missing_capability"). Also welcome: a tool that failed or confused you, '
-    "an unhelpful error, or something that worked well. This records the feedback; it does "
-    "not add or change tools. Do not include user PII or sensitive content."
+    "Send feedback about this server to its developers: a capability you needed that no tool "
+    "provides, a tool that failed or misled you, or something that worked well. Records the "
+    "feedback; it does not add or change tools. Leave out personal or sensitive details."
 )
 
 _SEND_FEEDBACK_RESULT_TEXT = (
@@ -47,8 +45,7 @@ _CORE_FEEDBACK_SCHEMA_PROPERTIES: Dict[str, Dict[str, Any]] = {
         "description": (
             "What kind of feedback this is. Use 'missing_capability' when the tool you "
             "needed does not exist in the tool list - nothing failed, the capability is "
-            "absent (this is the most valuable report; send it even if you found a "
-            "workaround). Use 'issue' when an existing tool behaved badly: it failed, "
+            "absent. Use 'issue' when an existing tool behaved badly: it failed, "
             "returned a confusing error, or its description or schema misled you. Use "
             "'praise' when something worked notably well. Use 'other' for anything else."
         ),

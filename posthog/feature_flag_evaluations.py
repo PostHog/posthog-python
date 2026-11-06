@@ -9,12 +9,14 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
-from posthog.types import FlagValue, UnresolvedFlagReason
+from .types import FeatureFlag as _FeatureFlag
+from .types import FlagMetadata as _FlagMetadata
+from .types import FlagValue, UnresolvedFlagReason, _parse_flag_payload
 
 
 @dataclass(frozen=True)
-class _EvaluatedFlagRecord:
-    """Internal per-flag record stored by a FeatureFlagEvaluations instance."""
+class _LocalFlagRecord:
+    """Internal per-flag record of a locally evaluated flag."""
 
     key: str
     enabled: bool
@@ -27,6 +29,70 @@ class _EvaluatedFlagRecord:
     # Server-reported signal for whether the flag is linked to an experiment.
     # ``None`` when the server did not report it (older deployments).
     has_experiment: Optional[bool] = None
+
+
+_UNDECODED: Any = object()
+
+
+class _RemoteFlagRecord:
+    """Internal per-flag record of a remotely evaluated flag.
+
+    The parsed ``/flags`` record is the only copy of the flag: the record fields are
+    read from it, and the payload is decoded on its first read and then kept.
+    """
+
+    __slots__ = ("details", "_payload")
+
+    locally_evaluated = False
+
+    def __init__(self, details: _FeatureFlag) -> None:
+        # The parsed /flags record, with its typed value, reason and metadata.
+        self.details = details
+        self._payload: Any = _UNDECODED
+
+    @property
+    def key(self) -> str:
+        return self.details.key
+
+    @property
+    def enabled(self) -> bool:
+        return self.details.enabled
+
+    @property
+    def variant(self) -> Optional[str]:
+        return self.details.variant
+
+    @property
+    def payload(self) -> Optional[Any]:
+        if self._payload is _UNDECODED:
+            self._payload = _parse_flag_payload(
+                getattr(self.details.metadata, "payload", None)
+            )
+        return self._payload
+
+    @property
+    def id(self) -> Optional[int]:
+        metadata = self.details.metadata
+        return metadata.id if isinstance(metadata, _FlagMetadata) else None
+
+    @property
+    def version(self) -> Optional[int]:
+        metadata = self.details.metadata
+        return metadata.version if isinstance(metadata, _FlagMetadata) else None
+
+    @property
+    def reason(self) -> Optional[str]:
+        reason = self.details.reason
+        return reason.description if reason and reason.description else None
+
+    @property
+    def has_experiment(self) -> Optional[bool]:
+        metadata = self.details.metadata
+        return metadata.has_experiment if isinstance(metadata, _FlagMetadata) else None
+
+
+# The per-flag record stored by a FeatureFlagEvaluations instance.
+_EvaluatedFlagRecord = Union[_LocalFlagRecord, _RemoteFlagRecord]
 
 
 @dataclass
