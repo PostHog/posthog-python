@@ -24,7 +24,7 @@ You need to change code if your app does any of these:
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
-- sets `$lib` or `$lib_version`, or filters on `$lib = "posthog-python-mcp"`
+- sets `$lib` or `$lib_version` in a call's `properties` or a context tag, or in `super_properties` on an MCP client
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
@@ -56,15 +56,23 @@ If a proxy redirects capture requests to another host, point `host` at the final
 
 ## SDK identity
 
-PostHog sets `$lib` and `$lib_version` on every event from the `PostHog-Sdk-Info` request header, which is always `posthog-python/<version>`.
-The SDK removes `$lib` and `$lib_version` from the properties it sends.
-A value you set in a call, in `super_properties` or in `before_send` does not reach PostHog.
+Every event carries `$lib` and `$lib_version` in its properties.
+By default they are `posthog-python` and the installed package version.
+PostHog stores the values the event is sent with.
 
-MCP instrumentation no longer relabels the client.
-In 7.x, `posthog.mcp.instrument()` and `PostHogMCP` set the client's identity to `posthog-python-mcp`.
-With the default client, or any client the app also used, every event and feature flag request from the app then reported `posthog-python-mcp`, not only the MCP events.
-In 8.0, MCP events report `posthog-python` like all other events.
-To find MCP traffic, filter on the `$mcp_*` events and properties instead of `$lib`.
+You can set them in a call's `properties`, a context tag or `super_properties`. Like any other property, each one comes from the most specific place that sets it, so set both in the same place.
+A `$lib` counts as set only when it is a non-empty string.
+The SDK adds its own version only when `$lib` is `posthog-python`.
+A `$lib_version` without a `$lib` is replaced with the SDK's.
+`before_send` sees both and can change or remove them.
+In 7.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context tag.
+
+If an event reaches PostHog without `$lib`, PostHog sets both from the `PostHog-Sdk-Info` request header.
+
+On a client passed to `posthog.mcp.instrument()` or created by `PostHogMCP`, events report `posthog-python-mcp` and the installed package version, as in 7.x.
+The request headers use the same identity.
+Only a `$lib` in a call's `properties` replaces it. A context tag or `super_properties` no longer does.
+Because the identity belongs to the client, use a client dedicated to MCP analytics if the app also captures other events.
 
 ## Removed options and APIs
 
@@ -201,10 +209,10 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
+1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`, then on an MCP client the `posthog-python-mcp` identity, which fills `$lib` and `$lib_version` when the call sets no `$lib`
 2. context options and tags
 3. `super_options` and `super_properties`
-4. values the SDK sets: `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span (in `capture` and `capture_ai` only with `capture_trace_context=True`, and always in `capture_exception`), `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
+4. values the SDK sets: `$lib` and `$lib_version` as a pair (see [SDK identity](#sdk-identity)), `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span (in `capture` and `capture_ai` only with `capture_trace_context=True`, and always in `capture_exception`), `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
 5. `before_send`, which sees the result of steps 1 to 4 and can change or remove any of it
 6. legacy properties, which fill unset options and are then removed
 
@@ -215,8 +223,8 @@ For example, `super_properties={"$set": {"plan": "free", "source": "web"}}` and 
 
 These changes follow from this order:
 
-- Properties passed to a call now override `super_properties`. `super_properties` can no longer change `$lib` or `$lib_version`.
-- A `$is_server`, `$geoip_disable` or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x the SDK overwrote it. `super_properties` win over the SDK's value too, so `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
+- Properties passed to a call now override `super_properties`.
+- A `$is_server`, `$geoip_disable`, `$lib`, `$lib_version` or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x the SDK overwrote it. `super_properties` win over the SDK's value too, so `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
 - Feature flag properties from `flags` or `send_feature_flags` still lose to the same key in the call's `properties`, a context tag or `super_properties`, as in 7.x.
 - A `$trace_id` or `$span_id` in a context tag or `super_properties` now replaces the active OpenTelemetry span's IDs. In 7.x the span's IDs beat context tags. Setting either key in the call's `properties`, a context tag or `super_properties` stops the SDK adding both. In 7.x the SDK still added the other key.
 - A `disable_geoip` argument to a call belongs to that event, so it wins over context tags and `super_properties`. A `$geoip_disable` in the call's own `properties` still wins over it. `disable_geoip=False` now sends `$geoip_disable: false`. In 7.x it sent no `$geoip_disable` property.
