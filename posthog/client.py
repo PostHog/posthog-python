@@ -876,9 +876,7 @@ class Client(object):
                 ``{"cookieless_mode": True}``. They fill only options the event
                 leaves unset, before ``before_send`` runs. An event's own
                 ``options`` and context options override them, and
-                ``before_send`` can change them. They also win over an event's legacy property
-                for the same key, such as ``$cookieless_mode``, so pass
-                per-event overrides of that key as ``options``.
+                ``before_send`` can change them.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1889,9 +1887,8 @@ class Client(object):
                 ``{"process_person_profile": False}``. Sent as given, for
                 PostHog to validate. They override context options and
                 ``super_options``, which fill in before ``before_send`` runs.
-                An option set at any layer wins over its
-                legacy ``$`` property, such as ``$process_person_profile``,
-                set at any layer. A ``None`` option counts as unset.
+                An option overrides its legacy ``$`` property, such as
+                ``$process_person_profile``. A ``None`` option counts as unset.
 
         Examples:
             ```python
