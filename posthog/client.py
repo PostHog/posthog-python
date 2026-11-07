@@ -2744,8 +2744,6 @@ class Client(object):
 
         if not msg.get("properties"):
             msg["properties"] = {}
-        msg["properties"]["$lib"] = self._library_id
-        msg["properties"]["$lib_version"] = self._library_version
 
         msg["options"] = msg.get("options") or {}
 
@@ -2765,6 +2763,8 @@ class Client(object):
                 system_properties=system_properties,
                 flag_properties=flag_properties,
                 trace_properties=trace_properties,
+                library_id=self._library_id,
+                library_version=self._library_version,
             ),
         )
 

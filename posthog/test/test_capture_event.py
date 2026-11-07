@@ -79,10 +79,16 @@ class TestToV1Event(unittest.TestCase):
         self.assertEqual(event["distinct_id"], "user-1")
         self.assertEqual(event["timestamp"], "2026-06-27T12:00:00.000000+00:00")
 
-    def test_strips_lib_and_lib_version(self) -> None:
-        event = _to_v1_event(_legacy_msg())
-        self.assertNotIn("$lib", event["properties"])
-        self.assertNotIn("$lib_version", event["properties"])
+    @parameterized.expand(
+        [
+            ("sdk", {"$lib": "posthog-python", "$lib_version": "9.9.9"}),
+            ("caller_lib_alone", {"$lib": "caller-lib"}),
+            ("null", {"$lib": None, "$lib_version": None}),
+        ]
+    )
+    def test_sends_lib_and_lib_version_as_given(self, _name, library) -> None:
+        event = _to_v1_event(_legacy_msg(properties=dict(library)))
+        self.assertEqual(event["properties"], library)
 
     def test_options_empty_dict_when_no_sentinels(self) -> None:
         event = _to_v1_event(_legacy_msg(properties={"plain": "value"}))

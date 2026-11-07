@@ -10,10 +10,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
-from posthog.capture_event import _merge_groups
+from posthog.capture_event import _fill_library, _merge_groups
+from posthog.version import VERSION
 
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
+    POSTHOG_MCP_LIB_NAME,
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
@@ -56,6 +58,8 @@ def build_posthog_capture_events(
         and enable_exception_autocapture is not False
     ):
         batch.append(_build_exception_event(event))
+    for capture in batch:
+        _fill_library(capture["properties"], (POSTHOG_MCP_LIB_NAME, VERSION), None)
     return batch
 
 

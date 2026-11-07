@@ -14,8 +14,10 @@ encodes:
 - ``$set``/``$set_once`` have no top-level form in v1; the server reads them
   from ``properties``. The legacy ``set()``/``set_once()`` builders emit them at
   the top level, so they are relocated into ``properties`` here.
-- ``$lib``/``$lib_version`` are injected server-side from the required
-  ``PostHog-Sdk-Info`` header and are stripped from v1 properties.
+- ``$lib``/``$lib_version`` are sent as they are at send time. The SDK fills
+  them as a pair below every other layer, and ``before_send`` can change or
+  remove them. The ``PostHog-Sdk-Info`` header is only a server-side fallback
+  for events that don't name their library.
 """
 
 import logging
@@ -43,8 +45,8 @@ _RELOCATE_TO_PROPERTIES = ("$set", "$set_once")
 # Properties that defaults fill one level deep when both values are dicts.
 _NESTED_FILL_PROPERTIES = frozenset({"$set", "$set_once", "$groups", "$group_set"})
 
-# Properties dropped from v1 events (server injects them from PostHog-Sdk-Info).
-_STRIP_FROM_PROPERTIES = ("$lib", "$lib_version")
+# The library identity pair. Only a non-empty string counts as set.
+_LIBRARY_PROPERTIES = ("$lib", "$lib_version")
 
 # Legacy properties and the option each one fills. The order matches posthog-rs
 # and posthog-go.
@@ -134,6 +136,12 @@ class _EventDefaults:
     option_layers: tuple[Mapping[str, Any], ...] = ()
     property_allowlist: Optional[Collection[str]] = None
     trace_properties: Optional[Mapping[str, Any]] = None
+    library: Optional[tuple[str, str]] = None
+
+
+def _is_library_value(value: Any) -> bool:
+    """Whether ``value`` sets ``$lib`` or ``$lib_version``: a non-empty string."""
+    return isinstance(value, str) and value != ""
 
 
 def _build_event_defaults(
@@ -151,6 +159,8 @@ def _build_event_defaults(
     system_properties: Optional[Mapping[str, Any]] = None,
     flag_properties: Optional[Mapping[str, Any]] = None,
     trace_properties: Optional[Mapping[str, Any]] = None,
+    library_id: str,
+    library_version: str,
 ) -> _EventDefaults:
     """Order the layers: per-call arguments, context, global, then SDK values.
 
@@ -161,6 +171,8 @@ def _build_event_defaults(
     ``send_feature_flags``) are SDK values, so context and super properties
     beat them. ``trace_properties`` (``$trace_id`` and ``$span_id`` from the
     active OpenTelemetry span) are SDK values that fill as a pair.
+    ``library_id`` and ``library_version`` are the SDK's own ``$lib`` and
+    ``$lib_version``. They fill as a pair below every other layer.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
@@ -188,6 +200,7 @@ def _build_event_defaults(
         ),
         property_allowlist=property_allowlist,
         trace_properties=trace_properties,
+        library=(library_id, library_version),
     )
 
 
@@ -196,11 +209,13 @@ def _fill_event_defaults(
 ) -> None:
     """Fill the keys an event left unset from ``defaults``, layer by layer.
 
-    A property is unset only when its key is missing. An option is unset when
-    it is missing or ``None``, the same rule hoisting uses. ``$set``,
-    ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep when the
-    event's value and the default are both dicts. ``trace_properties`` fill
-    last, and only when the event and every layer leave all their keys unset.
+    A property is unset only when its key is missing, except ``$lib`` and
+    ``$lib_version``, which are unset unless they hold a non-empty string. An
+    option is unset when it is missing or ``None``, the same rule hoisting
+    uses. ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill one
+    level deep when the event's value and the default are both dicts.
+    ``trace_properties`` fill last, and only when the event and every layer
+    leave all their keys unset. The SDK's ``library`` fills after every layer.
     """
     if defaults is None:
         return
@@ -213,7 +228,11 @@ def _fill_event_defaults(
         for key, value in property_layer.items():
             if allowlist is not None and key not in allowlist:
                 continue
-            if key not in properties:
+            if key not in properties or (
+                key in _LIBRARY_PROPERTIES
+                and _is_library_value(value)
+                and not _is_library_value(properties[key])
+            ):
                 properties[key] = _clean(value)
                 continue
             existing = properties[key]
@@ -230,12 +249,40 @@ def _fill_event_defaults(
         for key, value in trace_properties.items():
             if allowlist is None or key in allowlist:
                 properties[key] = _clean(value)
+    if defaults.library is not None:
+        _fill_library(properties, defaults.library, allowlist)
     options = _event_options(msg.get("options"))
     for option_layer in defaults.option_layers:
         for key, value in option_layer.items():
             if options.get(key) is None:
                 options[key] = _clean(value)
     msg["options"] = options
+
+
+def _fill_library(
+    properties: dict[str, Any],
+    library: tuple[str, str],
+    allowlist: Optional[Collection[str]],
+) -> None:
+    """Fill the SDK's ``$lib`` and ``$lib_version`` as a pair.
+
+    With no ``$lib`` set, both are filled, replacing a lone ``$lib_version``.
+    A ``$lib`` naming this SDK with no ``$lib_version`` gets the SDK version.
+    A ``$lib`` naming another library keeps whatever ``$lib_version`` it has,
+    because the SDK version would misdescribe it.
+    """
+    library_id, library_version = library
+    if not _is_library_value(properties.get("$lib")):
+        fill = {"$lib": library_id, "$lib_version": library_version}
+    elif properties["$lib"] == library_id and not _is_library_value(
+        properties.get("$lib_version")
+    ):
+        fill = {"$lib_version": library_version}
+    else:
+        return
+    for key, value in fill.items():
+        if allowlist is None or key in allowlist:
+            properties[key] = value
 
 
 def _merge_groups(properties: dict[str, Any], groups: Mapping[str, Any]) -> None:
@@ -281,9 +328,6 @@ def _to_v1_event(msg: dict) -> dict:
             properties[key] = {**existing, **top_val}
         else:
             properties[key] = top_val
-
-    for key in _STRIP_FROM_PROPERTIES:
-        properties.pop(key, None)
 
     options = _event_options(msg.get("options"))
     for prop_key, option_key in _LEGACY_OPTION_PROPERTIES:
