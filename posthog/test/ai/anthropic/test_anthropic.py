@@ -907,6 +907,70 @@ async def test_streaming_takes_cumulative_message_delta_usage_async(mock_client)
     assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs["properties"])
 
 
+def anthropic_stream_with_thinking_tokens():
+    from types import SimpleNamespace
+
+    events = anthropic_stream_with_server_tool_usage()
+    events[1] = SimpleNamespace(
+        type="message_delta",
+        delta=events[1].delta,
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=110,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            server_tool_use=None,
+            output_tokens_details=SimpleNamespace(thinking_tokens=40),
+        ),
+    )
+    return events
+
+
+def test_streaming_reports_thinking_tokens_as_reasoning_tokens(mock_client):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=iter(anthropic_stream_with_thinking_tokens()),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        list(response)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_output_tokens"] == 110
+    assert props["$ai_reasoning_tokens"] == 40
+
+
+@pytest.mark.asyncio
+async def test_streaming_reports_thinking_tokens_as_reasoning_tokens_async(
+    mock_client,
+):
+    async def mock_async_stream():
+        for event in anthropic_stream_with_thinking_tokens():
+            yield event
+
+    async def mock_async_create(**kwargs):
+        return mock_async_stream()
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        [event async for event in response]
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_reasoning_tokens"] == 40
+
+
 def anthropic_stream_with_two_cumulative_deltas():
     # Server tools can emit more than one message_delta in a single stream,
     # and each delta's usage is cumulative: later values replace earlier ones
