@@ -19,12 +19,15 @@ You need to change code if your app does any of these:
 - sends events through a proxy that redirects capture requests to another host
 - reuses one event `uuid` for more than one event
 - sets `$process_person_profile` to turn person processing on for events without a distinct ID
-- passes strings such as `"true"` for `$cookieless_mode`, `$ignore_sent_at` or `$process_person_profile`
+- passes a value other than `True` or `False` for `$cookieless_mode`, `$ignore_sent_at` or `$process_person_profile`
 - expects `super_properties` to override properties passed to a single call, including `$set` and `$groups`
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
+- has a `before_send` hook that returns a new dict: copy `options`, or the event is sent without them, including the `process_person_profile=False` the SDK sets for events without a distinct ID (see [Event options](#event-options))
+- captures `$ai_` events with `capture()`: send them with `capture_ai()`
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
-- sets `$lib` or `$lib_version` in a call's `properties` or a context tag, or in `super_properties` and expects MCP analytics events to carry it
+- sets `$lib` or `$lib_version` in a call's `properties`, a context tag or `super_properties`
+- filters insights or dashboards on `$lib = posthog-python-mcp`
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
@@ -34,11 +37,12 @@ You need to change code if your app does any of these:
 
 | Method | Endpoint |
 | --- | --- |
-| `capture`, `set`, `set_once`, `alias`, `group_identify`, `capture_exception` | `/i/v1/analytics/events` |
+| `capture`, `set`, `set_once`, `alias`, `group_identify`, `capture_exception`, `AsyncPosthog.capture_immediate` | `/i/v1/analytics/events` |
 | `capture_ai`, `capture_ai_immediate`, and the AI wrapper integrations | `/i/v1/ai/events` |
 | OpenTelemetry (`posthog.ai.otel`) | `/i/v0/ai/otel`, unchanged |
 
-If you send events to a self-hosted PostHog, check that it serves both endpoints before you upgrade.
+If you send events to a self-hosted PostHog, check that it serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before you upgrade.
+Self-hosted PostHog serves the AI endpoint from a separate capture service, so check each route.
 An endpoint that is not served drops every event sent to it.
 
 If you send events through your own reverse proxy, update it before you upgrade:
@@ -60,18 +64,28 @@ By default every event carries `$lib: "posthog-python"` and the installed packag
 PostHog stores the values the event is sent with.
 
 You can set them in a call's `properties`, a context tag or `super_properties`. Like any other property, each one comes from the most specific place that sets it, so set both in the same place.
-A `$lib` counts as set only when it is a non-empty string.
+`$lib` and `$lib_version` count as set only when they are non-empty strings.
 If you set `$lib` without `$lib_version`, the SDK adds its own version only when `$lib` is `posthog-python`.
 A `$lib_version` without a `$lib` is replaced with the SDK's.
 `before_send` sees both and can change or remove them.
 In 7.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context tag.
 
-If an event reaches PostHog without `$lib`, PostHog sets both from the `PostHog-Sdk-Info` request header.
+This changes `super_properties` too:
+
+- `super_properties={"$lib": "my-lib"}` sends no `$lib_version`. In 7.x it sent the SDK version.
+- `super_properties={"$lib_version": "1.0"}` without a `$lib` sends the SDK's `$lib` and version. In 7.x it sent `1.0`.
+
+If an event reaches PostHog without `$lib`, PostHog fills both from the SDK name and version your request sends.
+If `$lib` is that SDK name and `$lib_version` is missing, empty or not a string, PostHog fills `$lib_version` the same way.
 
 MCP analytics events from `posthog.mcp.instrument()` or `PostHogMCP` report `posthog-python-mcp` and the installed package version.
 The integration sets both in each event's own properties, so neither a context tag nor `super_properties` replaces them. `before_send` can.
 In 7.x the MCP integration relabeled the whole client, or the default client when `instrument()` got none: the app's own events, the request headers and feature flag requests.
 In 8.0 those report `posthog-python`, so one client can serve both.
+
+Custom events from `PostHogMCP.capture()` now report `posthog-python`. In 7.x they reported `posthog-python-mcp`.
+Custom events from `McpAnalytics.capture()`, the handle `instrument()` returns, still report `posthog-python-mcp`.
+If an insight or dashboard filters on `$lib = posthog-python-mcp`, check that it still finds the events you expect.
 
 ## Removed options and APIs
 
@@ -194,7 +208,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them. It drops an event with an option value it cannot read, such as a list for `cookieless_mode`, as `invalid_options`, and `on_error` reports it.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
-- The legacy option properties, the `$`-prefixed properties legacy capture reads as settings, still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are no longer converted, so pass `True` or `False`, not `"true"`.
+- The legacy option properties, the `$`-prefixed properties legacy capture reads as settings, still work. They fill the matching option only when it is unset, and the SDK always removes them from `properties`. Their values are sent as given, and PostHog drops an event with an option value it cannot read as `invalid_options`, so pass `True` or `False`.
 
   | Legacy option property | Option |
   | --- | --- |
@@ -203,6 +217,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
   | `$product_tour_id` | `product_tour_id` |
   | `$process_person_profile` | `process_person_profile` |
 
+- These four options are the full set. PostHog ignores any other key in `options`. Session and window IDs stay `$session_id` and `$window_id` properties (see [Session and window IDs](#session-and-window-ids)).
 - An option set at any layer wins over its legacy property set at any layer. For example, `super_options={"cookieless_mode": True}` wins over an event's `$cookieless_mode: False`. When you move a default to options, move the per-event overrides of that key to options too.
 - A `None` option counts as unset, so a later step can fill it.
 
@@ -216,6 +231,7 @@ Values apply in this order. Steps 2 to 4 fill only the options and properties th
 6. legacy properties, which fill unset options and are then removed
 
 A property set to `None` counts as set, so no later step fills it.
+`$lib` and `$lib_version` are the exception: they count as set only when they are non-empty strings (see [SDK identity](#sdk-identity)).
 `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep.
 When the call and a later step both set one of them to a dict, the later step adds only the keys the call left out.
 For example, `super_properties={"$set": {"plan": "free", "source": "web"}}` and a call with `properties={"$set": {"plan": "pro"}}` send `{"plan": "pro", "source": "web"}`.
@@ -236,7 +252,7 @@ These changes follow from this order:
 ## AI capture
 
 - `capture_ai` and the AI wrapper integrations send to `/i/v1/ai/events`. The AI endpoint accepts events up to 8 MiB.
-- Send `$ai_` events with `capture_ai`. `capture()` sends every event to `/i/v1/analytics/events`, including `$ai_` events, which PostHog accepts there for now.
+- Send `$ai_` events with `capture_ai`. `capture()` sends every event to `/i/v1/analytics/events`, including `$ai_` events. PostHog accepts them there for now, but this is temporary.
 - `capture_ai` sends any event name to the AI endpoint. PostHog drops an event whose name does not start with `$ai_` as `misrouted_event`, and `on_error` reports it. The SDK writes only a debug log.
 - The OpenTelemetry integration (`PostHogSpanProcessor`, `PostHogTraceExporter`) is unchanged: it still exports spans over OTLP to `/i/v0/ai/otel`.
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
