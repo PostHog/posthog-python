@@ -176,11 +176,11 @@ class TestPostV1(unittest.TestCase):
         self.assertEqual(request_timestamp.utcoffset(), timedelta(0))
 
     def test_custom_sdk_info_headers(self) -> None:
-        headers = self._post(
-            _results_response({}), sdk_info="posthog-python-mcp/0.3.0"
-        )["headers"]
-        self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python-mcp/0.3.0")
-        self.assertEqual(headers["User-Agent"], "posthog-python-mcp/0.3.0")
+        headers = self._post(_results_response({}), sdk_info="posthog-python/9.9.9")[
+            "headers"
+        ]
+        self.assertEqual(headers[_HEADER_SDK_INFO], "posthog-python/9.9.9")
+        self.assertEqual(headers["User-Agent"], "posthog-python/9.9.9")
 
     def test_non_finite_floats_are_sent_as_null(self) -> None:
         session = _RecordingSession(_results_response({}))
@@ -449,9 +449,9 @@ class TestSendV1Batch(unittest.TestCase):
         stub = self._run(
             [_msg("u-1")],
             [_results_response({"u-1": "ok"})],
-            sdk_info="posthog-python-mcp/0.3.0",
+            sdk_info="posthog-python/9.9.9",
         )
-        self.assertEqual(stub.calls[0]["sdk_info"], "posthog-python-mcp/0.3.0")
+        self.assertEqual(stub.calls[0]["sdk_info"], "posthog-python/9.9.9")
 
     def test_absent_uuid_treated_as_accepted(self) -> None:
         # Empty results map: the event is neither retried nor errored.

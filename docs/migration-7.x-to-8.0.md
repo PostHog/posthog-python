@@ -69,10 +69,9 @@ In 7.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context t
 
 If an event reaches PostHog without `$lib`, PostHog sets both from the `PostHog-Sdk-Info` request header.
 
-On a client passed to `posthog.mcp.instrument()` or created by `PostHogMCP`, events report `posthog-python-mcp` and the installed package version, as in 7.x.
-The request headers use the same identity.
-Only a `$lib` in a call's `properties` replaces it. A context tag or `super_properties` no longer does.
-Because the identity belongs to the client, use a client dedicated to MCP analytics if the app also captures other events.
+MCP analytics events from `posthog.mcp.instrument()` or `PostHogMCP` report `posthog-python-mcp` and the installed package version.
+In 7.x the MCP integration relabeled the whole client: the app's own events, the request headers and feature flag requests.
+In 8.0 those report `posthog-python`, so one client can serve both.
 
 ## Removed options and APIs
 
@@ -209,7 +208,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`, then on an MCP client the `posthog-python-mcp` identity, which fills `$lib` and `$lib_version` when the call sets no `$lib`
+1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
 2. context options and tags
 3. `super_options` and `super_properties`
 4. values the SDK sets: `$lib` and `$lib_version` as a pair (see [SDK identity](#sdk-identity)), `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span (in `capture` and `capture_ai` only with `capture_trace_context=True`, and always in `capture_exception`), `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`

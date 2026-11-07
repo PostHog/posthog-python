@@ -31,11 +31,8 @@ analytics = instrument(server, posthog)
 Install is just `pip install posthog`. `instrument()` needs the MCP SDK at runtime,
 but anyone wrapping a server already has it.
 
-MCP analytics events report `$lib: "posthog-python-mcp"` and the installed `posthog` package version in `$lib_version`.
-Request headers use the same identity and package version, so SDK Health can compare MCP traffic with Python SDK releases.
-Because `$lib` is a client-level identity, `instrument()` relabels every event sent by the client passed to it.
-A `$lib` in a call's `properties` still replaces it for that event.
-Use a client dedicated to MCP analytics if the application also captures unrelated events.
+MCP analytics events report `$lib: "posthog-python-mcp"` and the installed `posthog` package version in `$lib_version`, so SDK Health can compare MCP traffic with Python SDK releases.
+The client's other events, request headers and feature flag requests keep reporting `posthog-python`, so one client can serve both.
 
 ## Defaults and opt-outs
 
