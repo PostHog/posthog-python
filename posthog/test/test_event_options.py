@@ -715,6 +715,21 @@ LIBRARY_CASES = [
     pytest.param(
         {},
         {},
+        {"$lib": "posthog-python", "$lib_version": 5},
+        SDK_LIBRARY,
+        id="sdk_lib_number_version",
+    ),
+    pytest.param({}, {}, {"$lib": " "}, {"$lib": " "}, id="whitespace_lib_is_set"),
+    pytest.param(
+        {"$lib": 5, "$lib_version": "super-version"},
+        {},
+        {},
+        SDK_LIBRARY,
+        id="super_number_lib",
+    ),
+    pytest.param(
+        {},
+        {},
         {"$lib": "posthog-python", "$lib_version": "1.0.0"},
         {"$lib": "posthog-python", "$lib_version": "1.0.0"},
         id="sdk_lib_caller_version",

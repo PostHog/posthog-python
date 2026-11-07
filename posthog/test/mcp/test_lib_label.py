@@ -8,6 +8,7 @@ import pytest
 from posthog.async_client import AsyncClient
 from posthog.capture_event import _to_v1_event
 from posthog.client import Client
+from posthog.contexts import new_context, tag
 from posthog.mcp import instrument
 from posthog.mcp._event_types import MCPAnalyticsEventType
 from posthog.mcp._sink import McpCaptureOptions, McpEventSink
@@ -152,7 +153,9 @@ def test_instrument_without_a_client_leaves_the_default_client_unlabeled():
         ({"$lib_version": "9.9.9"}, MCP_LIB),
         ({"$lib": ""}, MCP_LIB),
         ({"$lib": None, "$lib_version": "9.9.9"}, MCP_LIB),
+        ({"$lib": 5}, MCP_LIB),
         ({"$lib": "posthog-python-mcp"}, MCP_LIB),
+        ({"$lib": "posthog-python"}, SDK_LIB),
     ],
     ids=[
         "app_pair_wins",
@@ -160,7 +163,9 @@ def test_instrument_without_a_client_leaves_the_default_client_unlabeled():
         "lone_version_replaced",
         "empty_lib_unset",
         "null_lib_unset",
+        "number_lib_unset",
         "label_gets_version",
+        "sdk_lib_gets_version",
     ],
 )
 async def test_event_properties_follow_the_pair_rule(properties, expected):
@@ -173,15 +178,21 @@ async def test_event_properties_follow_the_pair_rule(properties, expected):
     assert _lib(_sync_wire(send)["$mcp_tool_call"]) == expected
 
 
-async def test_mcp_label_beats_super_properties_but_not_on_app_events():
+@pytest.mark.parametrize("layer", ["super_properties", "context_tag"])
+async def test_mcp_label_beats_lower_layers_but_not_on_app_events(layer):
+    wrapper = {"$lib": "my-wrapper", "$lib_version": "2.0.0"}
     with patch_capture_send("client") as send:
         client = Client(
             "phc_test",
             sync_mode=True,
-            super_properties={"$lib": "my-wrapper", "$lib_version": "2.0.0"},
+            super_properties=wrapper if layer == "super_properties" else None,
         )
-        await McpEventSink(client).capture(_tool_call(), McpCaptureOptions())
-        client.capture("app event", distinct_id="user-1")
+        with new_context(fresh=True):
+            if layer == "context_tag":
+                for key, value in wrapper.items():
+                    tag(key, value)
+            await McpEventSink(client).capture(_tool_call(), McpCaptureOptions())
+            client.capture("app event", distinct_id="user-1")
 
     wire = _sync_wire(send)
     assert _lib(wire["$mcp_tool_call"]) == MCP_LIB
