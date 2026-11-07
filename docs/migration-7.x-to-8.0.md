@@ -24,7 +24,7 @@ You need to change code if your app does any of these:
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
 - tests the AI integrations with a mock client and asserts on `capture`
 - passes its own client object to the AI integrations
-- sets `$lib` or `$lib_version` in a call's `properties` or a context tag, or in `super_properties` on an MCP client
+- sets `$lib` or `$lib_version` in a call's `properties` or a context tag, or in `super_properties` and expects MCP analytics events to carry it
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
@@ -56,13 +56,12 @@ If a proxy redirects capture requests to another host, point `host` at the final
 
 ## SDK identity
 
-Every event carries `$lib` and `$lib_version` in its properties.
-By default they are `posthog-python` and the installed package version.
+By default every event carries `$lib: "posthog-python"` and the installed package version in `$lib_version`.
 PostHog stores the values the event is sent with.
 
 You can set them in a call's `properties`, a context tag or `super_properties`. Like any other property, each one comes from the most specific place that sets it, so set both in the same place.
 A `$lib` counts as set only when it is a non-empty string.
-The SDK adds its own version only when `$lib` is `posthog-python`.
+If you set `$lib` without `$lib_version`, the SDK adds its own version only when `$lib` is `posthog-python`.
 A `$lib_version` without a `$lib` is replaced with the SDK's.
 `before_send` sees both and can change or remove them.
 In 7.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context tag.
@@ -70,7 +69,8 @@ In 7.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context t
 If an event reaches PostHog without `$lib`, PostHog sets both from the `PostHog-Sdk-Info` request header.
 
 MCP analytics events from `posthog.mcp.instrument()` or `PostHogMCP` report `posthog-python-mcp` and the installed package version.
-In 7.x the MCP integration relabeled the whole client: the app's own events, the request headers and feature flag requests.
+The integration sets both in each event's own properties, so neither a context tag nor `super_properties` replaces them. `before_send` can.
+In 7.x the MCP integration relabeled the whole client, or the default client when `instrument()` got none: the app's own events, the request headers and feature flag requests.
 In 8.0 those report `posthog-python`, so one client can serve both.
 
 ## Removed options and APIs
