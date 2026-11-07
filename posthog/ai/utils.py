@@ -1147,6 +1147,9 @@ def capture_streaming_event(
         cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
         event_properties["$ai_cache_read_input_tokens"] = cache_read
         event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+        reasoning = event_data["usage_stats"].get("reasoning_tokens")
+        if isinstance(reasoning, int) and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
     else:
         optional_token_fields = [
             "cache_read_input_tokens",
