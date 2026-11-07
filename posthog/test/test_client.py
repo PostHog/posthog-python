@@ -1889,14 +1889,18 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("missing", None, None),
-            ("non_string", 123, None),
-            ("empty", "", None),
-            ("set_by_before_send", "valid", 123),
+            (f"{name}_{method}", event, hook_event, method)
+            for name, event, hook_event in [
+                ("missing", None, None),
+                ("non_string", 123, None),
+                ("empty", "", None),
+                ("set_by_before_send", "valid", 123),
+            ]
+            for method in ["capture", "capture_ai"]
         ]
     )
     def test_capture_drops_an_invalid_event_name_and_logs_once(
-        self, _, event, hook_event
+        self, _, event, hook_event, method
     ):
         def before_send(msg):
             if hook_event is not None:
@@ -1907,13 +1911,16 @@ class TestClient(unittest.TestCase):
             patch_capture_send("client") as mock_post,
             mock.patch("posthog.utils._warned_reasons", set()),
             mock.patch.object(Client.log, "warning") as mock_warning,
+            mock.patch.object(Client.log, "exception") as mock_exception,
         ):
             client = Client(FAKE_TEST_API_KEY, sync_mode=True, before_send=before_send)
-            results = [client.capture(event, distinct_id="user") for _ in range(2)]
+            capture = getattr(client, method)
+            results = [capture(event, distinct_id="user") for _ in range(2)]
 
         self.assertEqual(results, [None, None])
         mock_post.assert_not_called()
         mock_warning.assert_called_once()
+        mock_exception.assert_not_called()
 
     @parameterized.expand(
         [

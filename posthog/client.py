@@ -1947,7 +1947,7 @@ class Client(object):
         Category:
             Capture
         """
-        if not event.startswith("$ai_"):
+        if isinstance(event, str) and not event.startswith("$ai_"):
             self.log.debug(
                 "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
                 event,
