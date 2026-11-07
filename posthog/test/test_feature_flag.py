@@ -43,6 +43,7 @@ class TestFeatureFlag(unittest.TestCase):
                 payload='{"some": "json"}',
                 version=2,
                 description="test-description",
+                config_version=1,
             ),
         )
 
