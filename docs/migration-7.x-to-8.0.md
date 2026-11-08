@@ -268,7 +268,7 @@ These changes follow from this order:
 - The AI integrations take capture options:
   - Every wrapper method that takes `posthog_properties` also takes `posthog_options`, for the events of that call. This covers OpenAI, Anthropic and Gemini, sync and async, and the Claude Agent SDK `query()` and `PostHogClaudeSDKClient`. The name keeps it apart from the Claude Agent SDK's own `options`.
   - The Gemini clients take `posthog_options` as a default for every call. A call's `posthog_options` win key by key.
-  - LangChain's `CallbackHandler` and `PostHogMiddleware`, OpenAI Agents' `instrument()` and `PostHogTracingProcessor`, and the Claude Agent SDK's `instrument()` and `PostHogClaudeAgentProcessor` take `options=` for every event. LangChain also reads `posthog_options` from run metadata, like `posthog_properties`. Like properties, the handler's or processor's options win over a run's or a query's.
+  - LangChain's `CallbackHandler` and `PostHogMiddleware`, OpenAI Agents' `instrument()` and `PostHogTracingProcessor`, and the Claude Agent SDK's `instrument()` and `PostHogClaudeAgentProcessor` take `options=` for every event. LangChain also reads `posthog_options` from run metadata, like `posthog_properties`. Like properties, the handler's or processor's options win over a run's or a query's. The `$exception` event LangChain captures for a failed run gets the same options.
   - These are the event's own options, so they win over context options and `super_options`, which still fill the keys they leave unset. `before_send` can still change them.
   - A value that is not a dict is logged as a warning and ignored. The provider call still runs, and the provider never receives `posthog_options`.
 

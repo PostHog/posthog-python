@@ -2814,6 +2814,53 @@ def test_exception_autocapture_on_llm_generation_error(mock_client):
     assert gen_props["$ai_is_error"] is True
 
 
+@pytest.mark.parametrize(
+    "distinct_id, handler_options, run_options, expected_options",
+    [
+        # No user: person processing stays off, as on the AI event.
+        (None, {}, None, {"process_person_profile": False}),
+        (
+            None,
+            {"process_person_profile": True, "cookieless_mode": True},
+            None,
+            {"process_person_profile": False, "cookieless_mode": True},
+        ),
+        # A user: the options are sent as set, the handler's winning over the run's.
+        ("user-123", {}, None, None),
+        (
+            "user-123",
+            {"cookieless_mode": True},
+            {"cookieless_mode": False, "product_tour_id": "tour-1"},
+            {"cookieless_mode": True, "product_tour_id": "tour-1"},
+        ),
+    ],
+)
+def test_exception_autocapture_sends_ai_event_options(
+    distinct_id, handler_options, run_options, expected_options
+):
+    """The `$exception` event carries the same options as its generation."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-opt"
+
+    callbacks = CallbackHandler(
+        mock_client, distinct_id=distinct_id, options=handler_options
+    )
+    run_id = uuid.uuid4()
+    metadata = {"posthog_options": run_options} if run_options is not None else None
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+        metadata=metadata,
+    )
+    callbacks.on_llm_error(Exception("boom"), run_id=run_id)
+
+    assert mock_client.capture_exception.call_count == 1
+    assert mock_client.capture_exception.call_args[1].get("options") == expected_options
+
+
 def test_exception_autocapture_passes_ai_properties_to_exception():
     """Test that AI properties are passed to the exception event."""
     mock_client = MagicMock()

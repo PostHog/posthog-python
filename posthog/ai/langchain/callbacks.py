@@ -583,7 +583,7 @@ class CallbackHandler(BaseCallbackHandler):
             )
             event_properties["$ai_is_error"] = True
             event_properties = self._capture_exception_and_update_properties(
-                outputs, event_properties
+                outputs, event_properties, self._options
             )
 
         elif outputs is not None:
@@ -604,7 +604,10 @@ class CallbackHandler(BaseCallbackHandler):
         )
 
     def _capture_exception_and_update_properties(
-        self, exception: BaseException, event_properties: Dict[str, Any]
+        self,
+        exception: BaseException,
+        event_properties: Dict[str, Any],
+        options: Dict[str, Any],
     ) -> Dict[str, Any]:
         # An `$exception` event carries the message and stack, which echo prompts and output.
         if not self._ph_client.enable_exception_autocapture or _privacy_mode_enabled(
@@ -612,11 +615,16 @@ class CallbackHandler(BaseCallbackHandler):
         ):
             return event_properties
 
+        exception_options = dict(options)
+        if _user_distinct_id(self._distinct_id) is None:
+            # Matches the AI event: without a user, person processing stays off.
+            exception_options["process_person_profile"] = False
         exception_id = self._ph_client.capture_exception(
             exception,
             distinct_id=self._distinct_id,
             groups=self._groups,
             properties=event_properties,
+            **({"options": exception_options} if exception_options else {}),
         )
         if exception_id:
             event_properties["$exception_event_id"] = exception_id
@@ -704,7 +712,10 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_is_error"] = True
 
             event_properties = self._capture_exception_and_update_properties(
-                output, event_properties
+                output,
+                event_properties,
+                # The handler's options win over the run's, like its properties.
+                {**_ai_event_options(run.posthog_options), **self._options},
             )
         else:
             # Add usage
