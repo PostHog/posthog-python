@@ -103,6 +103,53 @@ keep their injected arguments, and the virtual tools stay listed.
 SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
 `get_request_headers(extra)` works the same as for any other request.
 
+## Event options
+
+Set capture options, such as `cookieless_mode` or `process_person_profile`, on
+MCP events with `event_options`.
+
+`MCPAnalyticsOptions(event_options=...)` sets options on every event
+`instrument()` captures automatically, including `$exception` events. Like
+`event_properties`, it is a function of `(request, extra)` that returns a dict or
+`None`, and it can be sync or async:
+
+```python
+instrument(
+    server,
+    posthog,
+    MCPAnalyticsOptions(event_options=lambda request, extra: {"cookieless_mode": True}),
+)
+```
+
+The `PostHogMCP` capture methods and `McpAnalytics.capture` take an
+`event_options` argument for one event:
+
+```python
+await analytics.capture("report_exported", event_options={"cookieless_mode": True})
+
+mcp_client = PostHogMCP("phc_...")
+mcp_client.capture_tool_call(
+    "search_docs",
+    distinct_id="user-1",
+    event_options={"process_person_profile": False},
+)
+```
+
+`PostHogMCP.capture()` is the core client's `capture`, so it takes `options`
+instead.
+
+An event without an identity always sends `process_person_profile: False`, even
+when `event_options` sets it to `True`. An `event_options` value that is not a
+dict is logged and ignored.
+
+`$mcp_tool_call` is captured after the tool handler returns, so options set with
+`set_context_option` in a context opened inside the handler do not reach it. Use
+the `event_options` callback instead.
+
+`before_send` sees each event's `options`. A hook that returns a new dict must
+copy `options`, or the event is sent without them, including the
+`process_person_profile: False` set for an event without an identity.
+
 ## Capture safe input field names
 
 Tool-call events include `$mcp_input_keys`. The SDK records names from the
