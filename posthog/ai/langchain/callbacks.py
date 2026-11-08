@@ -624,7 +624,7 @@ class CallbackHandler(BaseCallbackHandler):
             distinct_id=self._distinct_id,
             groups=self._groups,
             properties=event_properties,
-            **({"options": exception_options} if exception_options else {}),
+            options=exception_options or None,
         )
         if exception_id:
             event_properties["$exception_event_id"] = exception_id
