@@ -62,8 +62,9 @@ MCPAnalyticsModelSource = Literal["client_metadata", "self_reported"]
 # Internal MCP event as it flows through the SDK before capture. Modeled as a
 # plain dict (constructed and read with ``.get()`` throughout) to mirror the TS
 # plain-object pipeline. Snake_case keys map to the ``$mcp_*`` wire keys in
-# ``posthog_events``. Known keys: client_name, client_version, conversation_id,
-# duration, error, error_type, event_name, event_type, groups, id, identify_actor_data,
+# ``posthog_events``. Known keys: callback_event_options, client_name,
+# client_version, conversation_id, duration, error, error_type, event_name,
+# event_options, event_type, groups, id, identify_actor_data,
 # identify_actor_given_id, is_error, listed_tool_names, parameters, properties,
 # resource_name, response, server_name, server_version, session_id, timestamp,
 # tool_category, tool_description, user_intent, user_intent_source, llm_model,
@@ -180,6 +181,7 @@ IdentifyFn = Callable[
 ]  # (request, extra) -> Optional[UserIdentity] | awaitable
 IntentFallbackFn = Callable[..., Any]  # (request, extra) -> Optional[str] | awaitable
 EventPropertiesFn = Callable[..., Any]  # (request, extra) -> Optional[dict] | awaitable
+EventOptionsFn = Callable[..., Any]  # (request, extra) -> Optional[dict] | awaitable
 InputAliasMap = Dict[str, List[str]]
 
 
@@ -254,6 +256,11 @@ class MCPAnalyticsOptions:
     # no `$mcp_tools_list`. Nothing else changes: tools keep their injected
     # arguments, and the virtual tools stay listed.
     send_tools_list_event: bool = True
+    # Capture options, such as `process_person_profile`, for every
+    # auto-captured event: a callable (request, extra) -> dict | None, sync or
+    # async, called for the same events as `event_properties`. An event without
+    # an identity always sends `process_person_profile: False`.
+    event_options: Optional[EventOptionsFn] = None
 
 
 @dataclass
