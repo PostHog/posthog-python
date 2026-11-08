@@ -18,7 +18,6 @@ You need to change code if your app does any of these:
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
 - sends events through a proxy that redirects capture requests to another host
 - reuses one event `uuid` for more than one event
-- sets `$process_person_profile`, `$cookieless_mode`, `$ignore_sent_at` or `$product_tour_id` as a property: use the matching option instead (see [Event options](#event-options)). For MCP events, pass options in `event_options` (see [MCP analytics](#mcp-analytics))
 - expects `super_properties` to override properties passed to a single call, including `$set` and `$groups`
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
 - has a `before_send` hook that returns a new dict: copy `options`, or the event is sent without them, including the `process_person_profile=False` the SDK sets for events without a distinct ID (see [Event options](#event-options)). The same applies to MCP's `before_send` (see [MCP analytics](#mcp-analytics))
@@ -208,7 +207,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`. `get_context_options()` returns the options of the current context. Both exist on `Client` and as module functions. `AsyncPosthog` has no context methods, like it has no `tag()`, so call the module functions. They apply to every client in the context.
 - The Celery integration propagates context options to workers, like tags.
   - A propagated `process_person_profile: True` turns person processing on for worker events without a distinct ID. Each of those events creates a person.
-  - In eager mode (`task_always_eager`), Celery publishes nothing, so the distinct ID, tags and options do not reach the task's events. To carry them, pass the task's PostHog headers with `task.apply(headers=...)`, as described in `references/middleware_configuration.md`.
+  - In eager mode (`task_always_eager`), Celery publishes nothing, so the distinct ID, tags and options do not reach the task's events. To carry them, pass the task's PostHog headers with `task.apply(headers=...)`, as described in [references/middleware_configuration.md](../references/middleware_configuration.md).
 - Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them. It drops an event with an option value it cannot read, such as a list for `cookieless_mode`, as `invalid_options`, and `on_error` reports it.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
@@ -332,9 +331,8 @@ A context you open inside the handler has ended by then, so options you set in i
 Events you capture inside that context still get them.
 To set options on `$mcp_tool_call`, use the `event_options` callback.
 
-MCP's `before_send` sees each event's `options` in an `options` key of `PostHogCaptureEvent`.
-The SDK sends what the hook returns, so a hook that returns a new dict must copy `options`.
-Otherwise the event is sent without them, including the `process_person_profile: False` the SDK sets for an event without an identity, and PostHog creates a person for each session.
+MCP's `before_send` gets each event's `options` in an `options` key of `PostHogCaptureEvent`.
+A hook that returns a new dict must copy them, or the event is sent without the anonymous `process_person_profile: False`.
 
 ## Batching and size limits
 
