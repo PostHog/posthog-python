@@ -9,6 +9,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
+
 try:
     from langchain_anthropic.chat_models import ChatAnthropic
     from langchain_community.chat_models.fake import FakeMessagesListChatModel
@@ -3076,3 +3078,71 @@ class TestGetHttpStatus:
 
         properties = client.capture_ai.call_args_list[0][1]["properties"]
         assert properties["$ai_http_status"] == 0
+
+
+def _invoke_fake_chain(handler, metadata=None):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    config = {"callbacks": [handler]}
+    if metadata is not None:
+        config["metadata"] = metadata
+    chain.invoke({}, config=config)
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+def test_handler_options_reach_every_event(mock_client, caplog, case):
+    _, distinct_id, options, expected, warns = case
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client, distinct_id=distinct_id, options=options)
+        )
+
+    calls = mock_client.capture_ai.call_args_list
+    assert [call.kwargs["event"] for call in calls] == [
+        "$ai_span",
+        "$ai_generation",
+        "$ai_trace",
+    ]
+    for call in calls:
+        assert_captured_options(call.kwargs, expected, warns, caplog)
+
+
+def test_run_metadata_posthog_options_reach_the_generation(mock_client):
+    _invoke_fake_chain(
+        CallbackHandler(
+            mock_client, distinct_id="user-1", options={"cookieless_mode": True}
+        ),
+        metadata={
+            "posthog_options": {
+                "cookieless_mode": False,
+                "disable_skew_correction": True,
+            }
+        },
+    )
+
+    options_by_event = {
+        call.kwargs["event"]: call.kwargs["options"]
+        for call in mock_client.capture_ai.call_args_list
+    }
+    # The handler's options win over the run's, like its properties.
+    assert options_by_event == {
+        "$ai_span": {"cookieless_mode": True},
+        "$ai_generation": {"cookieless_mode": True, "disable_skew_correction": True},
+        "$ai_trace": {"cookieless_mode": True},
+    }
+
+
+def test_non_dict_run_metadata_posthog_options_are_ignored(mock_client, caplog):
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client),
+            metadata={"posthog_options": "cookieless_mode"},
+        )
+
+    generation = mock_client.capture_ai.call_args_list[1].kwargs
+    assert generation["event"] == "$ai_generation"
+    assert generation["options"] == {"process_person_profile": False}
+    assert "posthog_options must be a dict" in caplog.text

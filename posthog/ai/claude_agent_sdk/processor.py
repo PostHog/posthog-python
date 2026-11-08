@@ -30,6 +30,7 @@ from posthog.ai.claude_agent_sdk.formatting import (
 )
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
+    _ai_event_options,
     _capture_processor_event,
     _resolve_ai_client,
     finalize_ai_content,
@@ -172,6 +173,7 @@ class PostHogClaudeAgentProcessor:
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a Claude Agent SDK query processor.
@@ -183,12 +185,18 @@ class PostHogClaudeAgentProcessor:
             privacy_mode: Whether to redact captured inputs, outputs, and tool data.
             groups: Optional PostHog groups to associate with emitted events.
             properties: Additional properties included on emitted AI events.
+            options: Capture options for emitted AI events, such as
+                ``{"cookieless_mode": True}``. They win over a query's
+                ``posthog_options``, context options and ``super_options``. An
+                event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
         self._client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
+        self._options = _ai_event_options(options)
 
     def _get_distinct_id(
         self, result: Optional["ResultMessage"] = None
@@ -210,6 +218,7 @@ class PostHogClaudeAgentProcessor:
         distinct_id: Optional[str] = None,
         groups: Optional[Dict[str, Any]] = None,
         personless: bool = False,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         _capture_processor_event(
             self._client,
@@ -219,6 +228,8 @@ class PostHogClaudeAgentProcessor:
             distinct_id=distinct_id,
             groups=groups if groups is not None else self._groups,
             personless=personless,
+            options=options,
+            default_options=self._options,
         )
 
     async def query(
@@ -234,6 +245,7 @@ class PostHogClaudeAgentProcessor:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
     ):
         """Drop-in replacement for claude_agent_sdk.query() with PostHog instrumentation.
 
@@ -249,6 +261,9 @@ class PostHogClaudeAgentProcessor:
             posthog_properties: Extra properties merged into all events for this query
             posthog_privacy_mode: Override privacy mode for this query
             posthog_groups: Override groups for this query
+            posthog_options: Capture options for all events of this query, such
+                as ``{"cookieless_mode": True}``. Named so it does not clash with
+                ``options``, the Claude Agent SDK options.
         """
         from dataclasses import replace
 
@@ -256,6 +271,7 @@ class PostHogClaudeAgentProcessor:
         distinct_id_override = posthog_distinct_id or self._distinct_id
         trace_id = posthog_trace_id or str(uuid.uuid4())
         extra_props = posthog_properties or {}
+        extra_options = _ai_event_options(posthog_options)
         # Per-call privacy can enable redaction, but cannot disable the
         # processor-level setting. This preserves the existing precedence.
         privacy = self._privacy_mode or posthog_privacy_mode is True
@@ -319,6 +335,7 @@ class PostHogClaudeAgentProcessor:
                             extra_props,
                             privacy,
                             groups,
+                            extra_options=extra_options,
                         )
                         # Promote: tool results from this turn become input for next turn
                         current_input = next_input
@@ -342,6 +359,7 @@ class PostHogClaudeAgentProcessor:
                                 extra_props,
                                 privacy,
                                 groups,
+                                extra_options=extra_options,
                             )
                     output_content = format_assistant_blocks(message.content)
                     if output_content:
@@ -388,6 +406,7 @@ class PostHogClaudeAgentProcessor:
                             extra_props,
                             privacy,
                             groups,
+                            extra_options=extra_options,
                         )
 
                     self._emit_trace(
@@ -398,6 +417,7 @@ class PostHogClaudeAgentProcessor:
                         extra_props,
                         privacy,
                         groups,
+                        extra_options=extra_options,
                     )
 
             except Exception as e:
@@ -416,6 +436,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
         latency = (
@@ -476,6 +497,7 @@ class PostHogClaudeAgentProcessor:
             resolved_id or trace_id,
             groups,
             personless=resolved_id is None,
+            options=extra_options,
         )
 
     def _emit_generation_from_result(
@@ -490,6 +512,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Fallback: emit a single generation from ResultMessage aggregate data."""
         resolved_id = self._resolve_distinct_id(distinct_id)
@@ -550,6 +573,7 @@ class PostHogClaudeAgentProcessor:
             resolved_id or trace_id,
             groups,
             personless=resolved_id is None,
+            options=extra_options,
         )
 
     def _emit_tool_span(
@@ -561,6 +585,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
 
@@ -586,6 +611,7 @@ class PostHogClaudeAgentProcessor:
             resolved_id or trace_id,
             groups,
             personless=resolved_id is None,
+            options=extra_options,
         )
 
     def _emit_trace(
@@ -597,6 +623,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id, result)
         latency = (
@@ -624,6 +651,7 @@ class PostHogClaudeAgentProcessor:
             resolved_id or trace_id,
             groups,
             personless=resolved_id is None,
+            options=extra_options,
         )
 
         # Flush to ensure events are sent before process exits

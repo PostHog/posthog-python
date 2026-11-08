@@ -69,6 +69,7 @@ class AsyncClient:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -85,6 +86,8 @@ class AsyncClient:
             posthog_properties: Default properties for all calls (can be overridden per call)
             posthog_privacy_mode: Default privacy mode for all calls (a call can enable it, not disable it)
             posthog_groups: Default groups for all calls (can be overridden per call)
+            posthog_options: Default capture options for all calls, such as
+                ``{"cookieless_mode": True}`` (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
 
@@ -109,6 +112,7 @@ class AsyncClient:
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
+            posthog_options=posthog_options,
             **kwargs,
         )
         self.files = self._provider_client.aio.files
@@ -137,6 +141,7 @@ class AsyncModels(_GeminiModelsPolicy):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         provider_client: Optional[Any] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs,
     ):
         """
@@ -155,6 +160,8 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_groups: Default groups for all calls
             provider_client: An already-built genai.Client to reuse instead of
                 constructing one from the connection arguments above
+            posthog_options: Default capture options for all calls, such as
+                ``{"cookieless_mode": True}`` (can be overridden per call)
             **kwargs: Additional arguments (for future compatibility)
         """
 
@@ -171,6 +178,7 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_properties=posthog_properties,
             posthog_privacy_mode=posthog_privacy_mode,
             posthog_groups=posthog_groups,
+            posthog_options=posthog_options,
             provider_client=provider_client,
         )
 
@@ -183,6 +191,7 @@ class AsyncModels(_GeminiModelsPolicy):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -199,6 +208,10 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_properties: Extra properties to include in the event (merged with client defaults)
             posthog_privacy_mode: Whether to redact sensitive information (cannot disable a client default of True)
             posthog_groups: Group analytics properties (overrides client default)
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``, merged with client defaults. They
+                win over context options and ``super_options``. An event without
+                a distinct ID always sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Gemini's generate_content
         """
 
@@ -212,6 +225,7 @@ class AsyncModels(_GeminiModelsPolicy):
                 posthog_groups,
             )
         )
+        options = self._merge_posthog_options(posthog_options)
 
         kwargs_with_contents = {"model": model, "contents": contents, **kwargs}
 
@@ -225,6 +239,7 @@ class AsyncModels(_GeminiModelsPolicy):
             groups,
             self._base_url,
             self._client.aio.models.generate_content,
+            posthog_options=options,
             **kwargs_with_contents,
         )
 
@@ -237,6 +252,7 @@ class AsyncModels(_GeminiModelsPolicy):
         properties: Optional[Dict[str, Any]],
         privacy_mode: bool,
         groups: Optional[Dict[str, Any]],
+        options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         start_time = time.time()
@@ -302,6 +318,7 @@ class AsyncModels(_GeminiModelsPolicy):
                     accumulated_content,
                     stop_reason=stop_reason,
                     error=stream_error,
+                    options=options,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -315,6 +332,7 @@ class AsyncModels(_GeminiModelsPolicy):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -329,6 +347,10 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_privacy_mode: Whether to redact captured input and output,
                 overriding the client default.
             posthog_groups: Optional PostHog groups, overriding the client default.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``, merged with client defaults. They
+                win over context options and ``super_options``. An event without
+                a distinct ID always sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Gemini's async ``generate_content_stream`` API.
 
         Returns:
@@ -344,6 +366,7 @@ class AsyncModels(_GeminiModelsPolicy):
                 posthog_groups,
             )
         )
+        options = self._merge_posthog_options(posthog_options)
 
         return await self._generate_content_streaming(
             model,
@@ -353,6 +376,7 @@ class AsyncModels(_GeminiModelsPolicy):
             properties,
             privacy_mode,
             groups,
+            options=options,
             **kwargs,
         )
 
@@ -365,6 +389,7 @@ class AsyncModels(_GeminiModelsPolicy):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -378,6 +403,10 @@ class AsyncModels(_GeminiModelsPolicy):
             posthog_properties: Extra properties to include in the event (merged with client defaults)
             posthog_privacy_mode: Whether to redact sensitive information (cannot disable a client default of True)
             posthog_groups: Group analytics properties (overrides client default)
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``, merged with client defaults. They
+                win over context options and ``super_options``. An event without
+                a distinct ID always sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Gemini's embed_content (e.g., config)
         """
         distinct_id, trace_id, properties, privacy_mode, groups = (
@@ -389,6 +418,7 @@ class AsyncModels(_GeminiModelsPolicy):
                 posthog_groups,
             )
         )
+        options = self._merge_posthog_options(posthog_options)
 
         start_time = time.time()
         response = None
@@ -409,6 +439,7 @@ class AsyncModels(_GeminiModelsPolicy):
                 properties=properties,
                 privacy_mode=privacy_mode,
                 groups=groups,
+                options=options,
                 response=response,
                 error=error,
                 latency=time.time() - start_time,

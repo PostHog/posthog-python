@@ -60,6 +60,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -71,6 +72,10 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_properties: Optional dictionary of extra properties to include in the event
             posthog_privacy_mode: Whether to redact sensitive information in tracking
             posthog_groups: Optional group analytics properties
+            posthog_options: Optional capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Anthropic's messages.create
         """
 
@@ -84,6 +89,7 @@ class AsyncWrappedMessages(AsyncMessages):
                 posthog_properties,
                 posthog_privacy_mode,
                 posthog_groups,
+                posthog_options=posthog_options,
                 **kwargs,
             )
 
@@ -97,6 +103,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups,
             self._client.base_url,
             super().create,
+            posthog_options=posthog_options,
             **kwargs,
         )
 
@@ -107,6 +114,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -118,6 +126,10 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Anthropic's async ``messages.create`` API.
 
         Returns:
@@ -147,6 +159,7 @@ class AsyncWrappedMessages(AsyncMessages):
                 posthog_groups,
                 kwargs,
                 start_time,
+                options=posthog_options,
             )
 
         setattr(manager, request_attribute, tracked_request())
@@ -159,6 +172,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         start_time = time.time()
@@ -172,6 +186,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups,
             kwargs,
             start_time,
+            options=posthog_options,
         )
 
     def _track_streaming_response(
@@ -184,6 +199,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
         start_time: float,
+        options: Optional[Dict[str, Any]] = None,
     ):
         accumulator = _AnthropicStreamAccumulator()
 
@@ -213,6 +229,7 @@ class AsyncWrappedMessages(AsyncMessages):
                     accumulator.accumulated_content,
                     stop_reason=accumulator.stop_reason,
                     error=stream_error,
+                    options=options,
                 )
 
         return AsyncStreamWrapper(generator(), stream=response)
@@ -231,6 +248,7 @@ class AsyncWrappedMessages(AsyncMessages):
         accumulated_content: str,
         stop_reason: Optional[str] = None,
         error: Optional[BaseException] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.anthropic.anthropic_converter import (
@@ -259,6 +277,7 @@ class AsyncWrappedMessages(AsyncMessages):
             groups=posthog_groups,
             stop_reason=stop_reason,
             error=error,
+            options=options,
         )
 
         # Use the common capture function

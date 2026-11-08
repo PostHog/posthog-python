@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
 from posthog.version import VERSION
 
 try:
@@ -971,3 +972,148 @@ class TestQueryGracefulFallback:
                     prompt="Hello", options=ClaudeAgentOptions()
                 ):
                     pass
+
+
+def _streamed_messages():
+    return [
+        _make_message_start(),
+        _make_message_stop(),
+        _make_assistant_message(tool_uses=[{"id": "tu_1", "name": "Read"}]),
+        _make_result_message(),
+    ]
+
+
+def _result_only_messages():
+    return [_make_result_message()]
+
+
+# id, messages, the events they emit
+CLAUDE_MESSAGE_FLOWS = [
+    ("streamed", _streamed_messages, ["$ai_generation", "$ai_span", "$ai_trace"]),
+    ("result_only", _result_only_messages, ["$ai_generation", "$ai_trace"]),
+]
+
+
+def _claude_query(entry_point, client, distinct_id, options):
+    if entry_point == "module_query":
+        return posthog_query(
+            prompt="Hi",
+            options=ClaudeAgentOptions(),
+            posthog_client=client,
+            posthog_distinct_id=distinct_id,
+            posthog_options=options,
+        )
+    if entry_point == "processor_query":
+        proc = PostHogClaudeAgentProcessor(client=client, distinct_id=distinct_id)
+        return proc.query(
+            prompt="Hi", options=ClaudeAgentOptions(), posthog_options=options
+        )
+    proc = instrument(client=client, distinct_id=distinct_id, options=options)
+    return proc.query(prompt="Hi", options=ClaudeAgentOptions())
+
+
+class TestPostHogOptions:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "case",
+        POSTHOG_OPTIONS_CASES,
+        ids=[case[0] for case in POSTHOG_OPTIONS_CASES],
+    )
+    @pytest.mark.parametrize(
+        "flow", CLAUDE_MESSAGE_FLOWS, ids=[flow[0] for flow in CLAUDE_MESSAGE_FLOWS]
+    )
+    @pytest.mark.parametrize(
+        "entry_point", ["module_query", "processor_query", "instrument"]
+    )
+    async def test_options_reach_every_event_and_not_the_sdk(
+        self, mock_client, caplog, entry_point, flow, case
+    ):
+        _, make_messages, expected_events = flow
+        _, distinct_id, options, expected, warns = case
+        sdk_calls = []
+
+        def fake_sdk_query(**kwargs):
+            sdk_calls.append(kwargs)
+            return _fake_query(make_messages())
+
+        with caplog.at_level(logging.WARNING, logger="posthog"):
+            with patch(
+                "posthog.ai.claude_agent_sdk.processor.original_query",
+                side_effect=fake_sdk_query,
+            ):
+                async for _ in _claude_query(
+                    entry_point, mock_client, distinct_id, options
+                ):
+                    pass
+
+        assert [set(call) for call in sdk_calls] == [{"prompt", "options", "transport"}]
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == expected_events
+        for call in calls:
+            assert_captured_options(call.kwargs, expected, warns, caplog)
+
+    @pytest.mark.asyncio
+    async def test_processor_options_win_over_query_options(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client,
+            distinct_id="user",
+            options={"cookieless_mode": True},
+        )
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(_streamed_messages()),
+        ):
+            async for _ in proc.query(
+                prompt="Hi",
+                options=ClaudeAgentOptions(),
+                posthog_options={
+                    "cookieless_mode": False,
+                    "disable_skew_correction": True,
+                },
+            ):
+                pass
+
+        # Like properties, the processor's options win key by key.
+        for call in mock_client.capture_ai.call_args_list:
+            assert call.kwargs["options"] == {
+                "cookieless_mode": True,
+                "disable_skew_correction": True,
+            }
+
+    @pytest.mark.asyncio
+    async def test_sdk_client_options_reach_every_event(self, mock_client):
+        from posthog.ai.claude_agent_sdk import PostHogClaudeSDKClient
+
+        sdk_client = MagicMock()
+
+        async def noop(*args, **kwargs):
+            return None
+
+        sdk_client.connect = noop
+        sdk_client.query = noop
+        sdk_client.disconnect = noop
+        sdk_client.receive_response = lambda: _fake_query(_streamed_messages())
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.client.ClaudeSDKClient",
+            return_value=sdk_client,
+        ):
+            async with PostHogClaudeSDKClient(
+                ClaudeAgentOptions(),
+                posthog_client=mock_client,
+                posthog_distinct_id="user",
+                posthog_options={"cookieless_mode": True},
+            ) as client:
+                await client.query("Hi")
+                async for _ in client.receive_response():
+                    pass
+
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == [
+            "$ai_generation",
+            "$ai_span",
+            "$ai_trace",
+        ]
+        for call in calls:
+            assert call.kwargs["options"] == {"cookieless_mode": True}
