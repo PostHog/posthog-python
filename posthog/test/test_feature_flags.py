@@ -7247,6 +7247,40 @@ class TestRelativeDateParsing(unittest.TestCase):
                 "1y"
             ) == now - relativedelta(years=1)
 
+    def test_month_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2025-03-31T12:00:00Z", "2m", (2025, 1, 28)),
+            ("2024-03-31T12:00:00Z", "2m", (2024, 1, 29)),
+            ("2025-05-31T12:00:00Z", "2m", (2025, 3, 30)),
+            ("2025-05-31T12:00:00Z", "4m", (2025, 1, 28)),
+            ("2025-01-31T12:00:00Z", "11m", (2024, 2, 29)),
+            ("2025-03-30T12:00:00Z", "13m", (2024, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_year_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2024-02-29T12:00:00Z", "4y", (2020, 2, 28)),
+            ("2024-02-29T12:00:00Z", "2y", (2022, 2, 28)),
+            ("2024-03-31T12:00:00Z", "4y", (2020, 3, 31)),
+            ("2024-02-28T12:00:00Z", "4y", (2020, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_month_and_year_parsing_with_zero_keeps_the_date(self):
+        with freeze_time("2024-02-29T12:00:00Z"):
+            now = datetime.datetime.now(datetime.timezone.utc)
+            assert relative_date_parse_for_feature_flag_matching("0m") == now
+            assert relative_date_parse_for_feature_flag_matching("0y") == now
+
     def test_year_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):
             assert relative_date_parse_for_feature_flag_matching(
