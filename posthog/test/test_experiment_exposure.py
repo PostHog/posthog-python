@@ -21,6 +21,7 @@ import jsonschema
 import pytest
 
 from posthog import AsyncPosthog
+from posthog import client as posthog_client
 from posthog.client import (
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES,
@@ -1662,6 +1663,16 @@ def test_a_read_during_a_sync_mode_send_does_not_send_it_again(delivered):
         client.shutdown()
 
     assert posted == [FLAG_CALLED, EXPOSURE] + ([] if delivered else [EXPOSURE])
+
+
+def test_a_forked_child_replaces_the_dedupe_lock(client):
+    # A parent thread can hold the lock when the process forks. The child replaces
+    # it, so its reads do not wait for a thread the child does not have.
+    with posthog_client._flag_event_keys_lock:
+        posthog_client._reinit_flag_event_keys_lock_after_fork()
+        events = _read_events("get_feature_flag", _response(_split()), client=client)
+
+    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
 
 
 def test_a_flags_reload_does_not_repeat_an_exposure(client):

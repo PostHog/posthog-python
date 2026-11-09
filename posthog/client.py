@@ -549,6 +549,16 @@ _flag_events_log = logging.getLogger("posthog")
 _flag_event_keys_lock = threading.Lock()
 
 
+def _reinit_flag_event_keys_lock_after_fork() -> None:
+    global _flag_event_keys_lock
+    # A parent thread can hold the lock at fork time. Replace it, never acquire it.
+    _flag_event_keys_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reinit_flag_event_keys_lock_after_fork)
+
+
 def _reserve_dedupe_key(
     reported_by_distinct_id: Dict[Any, Any], distinct_id: Any, dedupe_key: Any
 ) -> Optional[Set[Any]]:
