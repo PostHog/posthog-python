@@ -14,7 +14,13 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import AsyncEmails, EmailError, Emails, EmailStatus
+from posthog.emails import (
+    TRANSACTIONAL_CATEGORY,
+    AsyncEmails,
+    EmailError,
+    Emails,
+    EmailStatus,
+)
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
@@ -645,6 +651,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
                 "capture_engagement": False,
+                "category": "product-updates",
                 "distinct_id": "user_123",
             },
             {
@@ -653,8 +660,14 @@ def send_code(emails: Emails, **overrides: Any):
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
                 "capture_engagement": False,
+                "category": "product-updates",
                 "distinct_id": "user_123",
             },
+        ),
+        (
+            "transactional_category_sent_as_set",
+            {"html": HTML, "category": TRANSACTIONAL_CATEGORY},
+            {"html": HTML, "category": "transactional"},
         ),
         (
             "several_reply_to",
@@ -674,6 +687,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
+                "category": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -766,6 +780,8 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
         ("blank_reply_to", {"html": HTML, "reply_to": " "}, ValueError),
         ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
+        ("category_not_text", {"html": HTML, "category": 1}, TypeError),
+        ("empty_category", {"html": HTML, "category": ""}, ValueError),
         (
             "template_data_on_code_form",
             {"html": HTML, "template_data": {"first_name": "Jane"}},
@@ -779,6 +795,16 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
                 "template_key": None,
                 "subject": None,
                 "capture_engagement": False,
+            },
+            TypeError,
+        ),
+        (
+            "category_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "category": "product-updates",
             },
             TypeError,
         ),

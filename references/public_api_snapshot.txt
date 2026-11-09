@@ -889,12 +889,14 @@ attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeEmailArgs.category: NotRequired[Optional[EmailCategory]]
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.EmailCategory = Union[Literal['transactional'], str]
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -915,6 +917,7 @@ attribute posthog.emails.EmailWarning.message: str
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
+attribute posthog.emails.TRANSACTIONAL_CATEGORY: Final = 'transactional'
 attribute posthog.emails.TemplateEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.TemplateEmailArgs.template_id: Union[str, UUID]
 attribute posthog.enable_exception_autocapture = False

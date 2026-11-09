@@ -33,7 +33,24 @@ posthog.emails.send(
     html=rendered_html,
     distinct_id="user_123",
 )
+
+# Marketing email in one of the project's message categories, named by its key
+posthog.emails.send(
+    to="user@example.com",
+    template_key="november-digest",
+    subject="What's new in November",
+    html=digest_html,  # links {{ unsubscribe_url }}
+    category="product-updates",
+    distinct_id="user_123",
+)
 ```
+
+Message categories: an email you send from code is transactional unless you
+pass ``category``. Any value other than :data:`TRANSACTIONAL_CATEGORY` is the
+key of one of the project's marketing message categories. A marketing send
+honors the recipient's opt-outs, and its body must link
+``{{ unsubscribe_url }}``, which PostHog fills with the recipient's
+preferences link.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -103,6 +120,8 @@ from types import TracebackType
 from typing import (
     Any,
     Callable,
+    Final,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -127,8 +146,10 @@ from .utils import clean
 from .version import VERSION
 
 __all__ = [
+    "TRANSACTIONAL_CATEGORY",
     "AsyncEmails",
     "CodeEmailArgs",
+    "EmailCategory",
     "EmailError",
     "EmailStatus",
     "EmailWarning",
@@ -138,6 +159,9 @@ __all__ = [
 ]
 
 log = logging.getLogger("posthog")
+
+TRANSACTIONAL_CATEGORY: Final = "transactional"
+EmailCategory = Union[Literal["transactional"], str]
 
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
@@ -247,6 +271,16 @@ class CodeEmailArgs(_RecipientArgs):
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
+        category: Left out, or :data:`TRANSACTIONAL_CATEGORY`
+            (``"transactional"``), sends transactional email. Any other value
+            is the key of one of the project's marketing message categories.
+            A marketing send honors the recipient's opt-outs, and its ``html``,
+            or its ``text`` when it has no ``html``, must hold
+            ``{{ unsubscribe_url }}``. PostHog raises ``unknown_category`` for
+            a key the project has no marketing category for,
+            ``unsubscribe_link_required`` for a body without the link, and
+            ``recipient_opted_out`` for a recipient who opted out of the
+            category or of all marketing.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -264,6 +298,7 @@ class CodeEmailArgs(_RecipientArgs):
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
     capture_engagement: NotRequired[Optional[bool]]
+    category: NotRequired[Optional[EmailCategory]]
 
 
 _OPTIONAL_CODE_FIELDS = frozenset(
@@ -273,6 +308,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "from_",
         "reply_to",
         "capture_engagement",
+        "category",
     }
 )
 
@@ -366,6 +402,8 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
+    if "category" in args:
+        payload["category"] = _nonempty_text(args, "category")
     return _PreparedSend(
         path=_SEND_PATH,
         body=_encode(payload),
@@ -541,7 +579,7 @@ def _error_name(status: Optional[int], code: str) -> str:
             else "concurrent_idempotent_requests"
         )
     if status == 422:
-        # The template send route also answers 422 for send checks such as recipient_suppressed.
+        # The send route also answers 422 for send checks such as recipient_suppressed and recipient_opted_out.
         return (
             "invalid_idempotent_request"
             if code == "idempotency_key_reused"
