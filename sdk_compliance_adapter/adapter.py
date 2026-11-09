@@ -714,14 +714,23 @@ def get_feature_flag():
 
 @app.route("/get_feature_flag_payload", methods=["POST"])
 def get_feature_flag_payload():
-    """Read a flag's payload with the legacy payload accessor (remote evaluation)."""
+    """Read a flag's payload with the legacy payload accessor.
+
+    Takes the same evaluation modes as /get_feature_flag; remote by default.
+    """
     try:
         if not state.client:
             return jsonify({"error": "SDK not initialized"}), 400
         data = request.json or {}
+        only_evaluate_locally = data.get("only_evaluate_locally", False)
+        force_remote = data.get("force_remote", not only_evaluate_locally)
+        if only_evaluate_locally and force_remote:
+            return jsonify(
+                {"error": "only_evaluate_locally conflicts with force_remote"}
+            ), 400
         if not data.get("key") or not data.get("distinct_id"):
             return jsonify({"error": "key and distinct_id are required"}), 400
-        client = state.remote_client or state.client
+        client = (state.remote_client or state.client) if force_remote else state.client
         payload = client.get_feature_flag_payload(
             data["key"],
             data["distinct_id"],
@@ -729,7 +738,7 @@ def get_feature_flag_payload():
             groups=data.get("groups"),
             group_properties=data.get("group_properties"),
             disable_geoip=data.get("disable_geoip"),
-            only_evaluate_locally=False,
+            only_evaluate_locally=not force_remote,
         )
         client.flush()
         return jsonify({"success": True, "value": payload})
