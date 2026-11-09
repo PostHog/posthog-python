@@ -247,6 +247,13 @@ class CodeEmailArgs(_RecipientArgs):
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
+        track_opens_and_clicks: Whether the email carries open and click
+            tracking: PostHog's open pixel and links rewritten to count
+            clicks. Defaults to ``True``. With ``False``, the email goes out
+            without either, so PostHog can't count its opens and clicks.
+            Independent of ``capture_engagement``, which decides whether
+            engagement events are captured on the recipient's person. The
+            template form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -264,6 +271,7 @@ class CodeEmailArgs(_RecipientArgs):
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
     capture_engagement: NotRequired[Optional[bool]]
+    track_opens_and_clicks: NotRequired[Optional[bool]]
 
 
 _OPTIONAL_CODE_FIELDS = frozenset(
@@ -273,6 +281,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "from_",
         "reply_to",
         "capture_engagement",
+        "track_opens_and_clicks",
     }
 )
 
@@ -385,6 +394,11 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")
     sender["capture_engagement"] = capture_engagement
+    if "track_opens_and_clicks" in args:
+        track_opens_and_clicks = args["track_opens_and_clicks"]
+        if not isinstance(track_opens_and_clicks, bool):
+            raise TypeError("track_opens_and_clicks must be True or False.")
+        sender["track_opens_and_clicks"] = track_opens_and_clicks
     return sender
 
 

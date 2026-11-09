@@ -895,6 +895,7 @@ attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str,
 attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.CodeEmailArgs.track_opens_and_clicks: NotRequired[Optional[bool]]
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field

@@ -657,6 +657,16 @@ def send_code(emails: Emails, **overrides: Any):
             },
         ),
         (
+            "untracked",
+            {"html": HTML, "track_opens_and_clicks": False},
+            {"html": HTML, "track_opens_and_clicks": False},
+        ),
+        (
+            "tracked",
+            {"html": HTML, "track_opens_and_clicks": True},
+            {"html": HTML, "track_opens_and_clicks": True},
+        ),
+        (
             "several_reply_to",
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
@@ -674,6 +684,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
+                "track_opens_and_clicks": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -779,6 +790,16 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
                 "template_key": None,
                 "subject": None,
                 "capture_engagement": False,
+            },
+            TypeError,
+        ),
+        (
+            "track_opens_and_clicks_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "track_opens_and_clicks": False,
             },
             TypeError,
         ),
