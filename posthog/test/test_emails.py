@@ -876,6 +876,7 @@ UPLOADS_URL = (
     "https://us.posthog.com/api/projects/@current/messaging/attachments/uploads/"
 )
 BUCKET_URL = "https://files.example.com/team/1/"
+SIGNATURE = "?X-Amz-Expires=900&X-Amz-Signature=abc123"
 INVITE_SHA256 = "215efae54e34ac5657da47b49c8d1bd8ea12649ee1efa838c9a47d7233f18afb"
 LOGO = b"\x89PNG\r\n\x1a\n"
 LOGO_SHA256 = "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
@@ -893,7 +894,7 @@ def upload(sha256: str) -> dict[str, Any]:
     return {
         "sha256": sha256,
         "status": "upload",
-        "url": BUCKET_URL + sha256,
+        "url": BUCKET_URL + sha256 + SIGNATURE,
         "method": "PUT",
         "headers": SIGNED_HEADERS,
         "url_expires_at": "2026-11-09T12:15:00Z",
@@ -945,7 +946,7 @@ def test_uploads_the_files_posthog_lacks_then_sends_their_hashes():
     }
     assert (put.method, put.url, put.body) == (
         "PUT",
-        BUCKET_URL + INVITE_SHA256,
+        BUCKET_URL + INVITE_SHA256 + SIGNATURE,
         INVITE,
     )
     assert "Authorization" not in put.headers
@@ -974,11 +975,14 @@ def test_sends_without_uploading_when_posthog_has_every_file():
     ]
 
 
-def test_the_upload_never_carries_credentials_the_session_holds():
+def test_the_upload_carries_only_the_signed_url_and_headers_whatever_the_session_holds():
     adapter = FakeAdapter([slots(upload(INVITE_SHA256)), stored(), accepted()])
     session = requests.Session()
     session.mount("https://", adapter)
-    session.headers["Authorization"] = "Bearer session-default"
+    session.params = {"api_key": "session-default"}
+    session.headers.update(
+        {"Authorization": "Bearer session-default", "Content-Type": "text/plain"}
+    )
     emails = Emails(SECRET_KEY, session=session)
 
     send_code(
@@ -986,7 +990,10 @@ def test_the_upload_never_carries_credentials_the_session_holds():
     )
 
     put = adapter.requests[1]
-    assert "Authorization" not in put.headers
+    assert put.url == BUCKET_URL + INVITE_SHA256 + SIGNATURE
+    assert {
+        name.lower(): value for name, value in put.headers.items()
+    } == SIGNED_HEADERS
 
 
 @parameterized.expand(
@@ -1207,7 +1214,11 @@ async def test_async_send_uploads_without_the_secret_key_then_sends_the_hashes()
         SECRET_KEY,
         http_client=httpx.AsyncClient(
             transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer client-default"},
+            params={"api_key": "client-default"},
+            headers={
+                "Authorization": "Bearer client-default",
+                "Content-Type": "text/plain",
+            },
         ),
     )
 
@@ -1221,17 +1232,19 @@ async def test_async_send_uploads_without_the_secret_key_then_sends_the_hashes()
 
     assert result.id == "msg_1"
     ask, put, sent = seen
-    assert (ask.method, str(ask.url)) == ("POST", UPLOADS_URL)
+    assert (ask.method, ask.url.path) == (
+        "POST",
+        "/api/projects/@current/messaging/attachments/uploads/",
+    )
     assert ask.headers["Authorization"] == f"Bearer {SECRET_KEY}"
     assert (put.method, str(put.url), put.content) == (
         "PUT",
-        BUCKET_URL + INVITE_SHA256,
+        BUCKET_URL + INVITE_SHA256 + SIGNATURE,
         INVITE,
     )
-    assert "Authorization" not in put.headers
-    assert (
-        put.headers["x-amz-checksum-sha256"] == SIGNED_HEADERS["x-amz-checksum-sha256"]
-    )
+    assert {
+        name: value for name, value in put.headers.items() if name != "host"
+    } == SIGNED_HEADERS
     assert json.loads(sent.content)["attachments"] == [
         {"sha256": INVITE_SHA256, "filename": "invite.ics"}
     ]

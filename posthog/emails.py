@@ -125,6 +125,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Mapping,
     Optional,
@@ -1028,13 +1029,12 @@ _ResultT = TypeVar("_ResultT")
 _Parse = Callable[[int, bytes, Optional[str]], _ResultT]
 
 
-class _ExactAuth(requests.auth.AuthBase):
+class _BearerAuth(requests.auth.AuthBase):
     def __init__(self, headers: dict[str, str]) -> None:
         self._headers = headers
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         # Setting auth explicitly stops requests from substituting .netrc credentials.
-        request.headers.pop("Authorization", None)
         request.headers.update(self._headers)
         return request
 
@@ -1209,30 +1209,24 @@ class Emails(_EmailsBase):
             idempotency_key=prepared.idempotency_key,
         )
         return self._call(
-            "POST",
-            self.host + prepared.path,
-            prepared.body,
-            headers,
+            self._posthog_request("POST", prepared.path, prepared.body, headers),
             _parse_response,
             prepared.max_retries,
         )
 
     def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
+        headers = _headers(secret_key, self.migrated_from, has_body=True)
         targets = self._call(
-            "POST",
-            self.host + _UPLOADS_PATH,
-            _files_body(prepared.files),
-            _headers(secret_key, self.migrated_from, has_body=True),
+            self._posthog_request(
+                "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
+            ),
             _upload_slots_parser(prepared.files),
             prepared.max_retries,
         )
         for index, (file, target) in enumerate(zip(prepared.files, targets)):
             if target is not None:
                 self._call(
-                    target.method,
-                    target.url,
-                    file.content,
-                    target.headers,
+                    self._storage_request(target, file.content),
                     _upload_parser(index),
                     prepared.max_retries,
                 )
@@ -1266,33 +1260,46 @@ class Emails(_EmailsBase):
         try:
             headers = _headers(self._secret_key(_GET_KEY_NEEDED), self.migrated_from)
             return self._call(
-                "GET", self.host + path, None, headers, _parse_status_response
+                self._posthog_request("GET", path, None, headers),
+                _parse_status_response,
             )
         finally:
             finish()
 
+    def _posthog_request(
+        self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
+    ) -> Callable[[], requests.Response]:
+        session, auth = self._get_session(), _BearerAuth(headers)
+        return lambda: session.request(
+            method,
+            self.host + path,
+            data=body,
+            auth=auth,
+            timeout=self.timeout,
+            allow_redirects=False,
+        )
+
+    def _storage_request(
+        self, target: _UploadTarget, content: bytes
+    ) -> Callable[[], requests.Response]:
+        session = self._get_session()
+        request = requests.Request(
+            target.method, target.url, data=content, headers=target.headers
+        ).prepare()
+        return lambda: session.send(
+            request, timeout=self.timeout, allow_redirects=False
+        )
+
     def _call(
         self,
-        method: str,
-        url: str,
-        body: Optional[bytes],
-        headers: dict[str, str],
+        send: Callable[[], requests.Response],
         parse: _Parse[_ResultT],
         max_retries: Optional[int] = None,
     ) -> _ResultT:
-        auth = _ExactAuth(headers)
-        session = self._get_session()
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
-                response = session.request(
-                    method,
-                    url,
-                    data=body,
-                    auth=auth,
-                    timeout=self.timeout,
-                    allow_redirects=False,
-                )
+                response = send()
                 try:
                     return parse(
                         response.status_code,
@@ -1412,30 +1419,24 @@ class AsyncEmails(_EmailsBase):
             idempotency_key=prepared.idempotency_key,
         )
         return await self._call(
-            "POST",
-            self.host + prepared.path,
-            prepared.body,
-            headers,
+            self._posthog_request("POST", prepared.path, prepared.body, headers),
             _parse_response,
             prepared.max_retries,
         )
 
     async def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
+        headers = _headers(secret_key, self.migrated_from, has_body=True)
         targets = await self._call(
-            "POST",
-            self.host + _UPLOADS_PATH,
-            _files_body(prepared.files),
-            _headers(secret_key, self.migrated_from, has_body=True),
+            self._posthog_request(
+                "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
+            ),
             _upload_slots_parser(prepared.files),
             prepared.max_retries,
         )
         for index, (file, target) in enumerate(zip(prepared.files, targets)):
             if target is not None:
                 await self._call(
-                    target.method,
-                    target.url,
-                    file.content,
-                    target.headers,
+                    self._storage_request(target, file.content),
                     _upload_parser(index),
                     prepared.max_retries,
                 )
@@ -1451,32 +1452,51 @@ class AsyncEmails(_EmailsBase):
         try:
             headers = _headers(self._secret_key(_GET_KEY_NEEDED), self.migrated_from)
             return await self._call(
-                "GET", self.host + path, None, headers, _parse_status_response
+                self._posthog_request("GET", path, None, headers),
+                _parse_status_response,
             )
         finally:
             finish()
 
+    def _posthog_request(
+        self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
+    ) -> Callable[[], Awaitable[Any]]:
+        _, client = self._get_client()
+        # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
+        # the secret key's Bearer header, and the request timeout applies whatever the client's default.
+        return lambda: client.request(
+            method,
+            self.host + path,
+            content=body,
+            headers=headers,
+            auth=None,
+            timeout=self.timeout,
+        )
+
+    def _storage_request(
+        self, target: _UploadTarget, content: bytes
+    ) -> Callable[[], Awaitable[Any]]:
+        httpx, client = self._get_client()
+        request = httpx.Request(
+            target.method,
+            target.url,
+            content=content,
+            headers=target.headers,
+            extensions={"timeout": httpx.Timeout(self.timeout).as_dict()},
+        )
+        return lambda: client.send(request, auth=None)
+
     async def _call(
         self,
-        method: str,
-        url: str,
-        body: Optional[bytes],
-        headers: dict[str, str],
+        send: Callable[[], Awaitable[Any]],
         parse: _Parse[_ResultT],
         max_retries: Optional[int] = None,
     ) -> _ResultT:
-        httpx, client = self._get_client()
+        httpx, _ = self._get_client()
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
-                # An injected client may carry its own auth, headers and timeout, so the request sets exactly the
-                # headers given, sends without the client's auth, and applies its own timeout.
-                request = client.build_request(
-                    method, url, content=body, timeout=self.timeout
-                )
-                request.headers.pop("Authorization", None)
-                request.headers.update(headers)
-                response = await client.send(request, auth=None)
+                response = await send()
                 try:
                     return parse(
                         response.status_code,
