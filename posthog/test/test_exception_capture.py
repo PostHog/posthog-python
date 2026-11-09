@@ -1,9 +1,12 @@
+import copy
+import importlib.util
+import pickle
 import subprocess
 import sys
 import threading
 from textwrap import dedent
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -526,3 +529,177 @@ def test_last_inspected_group_member_retains_its_cause_chain():
     ]
     assert exceptions[-1]["mechanism"]["source"] == "cause"
     assert exceptions[-1]["mechanism"]["parent_id"] == 2
+
+
+_APP_MODULE_SOURCE = dedent(
+    """
+    def entry_point(capture, error):
+        return handler(capture, error)
+
+    def handler(capture, error):
+        return capture(error)
+    """
+)
+
+
+def _call_from_app_module(capture, error):
+    # Run the capture call from frames that belong to an application module,
+    # not to the posthog package, the way a real caller would.
+    namespace = {"__name__": "app"}
+    exec(compile(_APP_MODULE_SOURCE, "app.py", "exec"), namespace)
+    return namespace["entry_point"](capture, error)
+
+
+def _exceptions_for_never_raised(error):
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    return exceptions_from_error_tuple(
+        _call_from_app_module(exc_info_from_error, error)
+    )
+
+
+def test_never_raised_exception_stack_is_outermost_first():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert functions.index("entry_point") < functions.index("handler")
+    assert functions[-1] == "handler"
+
+
+def test_never_raised_exception_stack_omits_sdk_frames():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert "construct_artificial_traceback" not in functions
+    assert "exc_info_from_error" not in functions
+
+
+def test_never_raised_exception_stack_is_marked_synthetic():
+    exception = _exceptions_for_never_raised(ValueError("never raised"))[0]
+
+    assert exception["mechanism"]["synthetic"] is True
+
+
+def test_raised_exception_passed_by_object_is_not_synthetic():
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    try:
+        raise ValueError("raised")
+    except ValueError as error:
+        exceptions = exceptions_from_error_tuple(exc_info_from_error(error))
+
+    assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def test_client_capture_of_never_raised_exception_sends_synthetic_stack():
+    from posthog.client import Client
+
+    client = Client("phc_test", sync_mode=True)
+    try:
+        with patch.object(client, "capture", return_value="event-id") as capture:
+            _call_from_app_module(
+                lambda error: client.capture_exception(error, distinct_id="user"),
+                ValueError("never raised"),
+            )
+
+        exception = capture.call_args.kwargs["properties"]["$exception_list"][0]
+        functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+        assert exception["mechanism"]["synthetic"] is True
+        assert functions.index("entry_point") < functions.index("handler")
+        assert "capture_exception" not in functions
+    finally:
+        client.shutdown()
+
+
+def test_never_raised_exception_stays_pickleable_after_capture():
+    from posthog.exception_utils import exc_info_from_error
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    restored = pickle.loads(pickle.dumps(error))
+
+    assert isinstance(restored, ValueError)
+    assert restored.args == ("never raised",)
+
+
+def test_never_raised_exception_is_not_synthetic_once_raised():
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    try:
+        raise error
+    except ValueError as raised:
+        exceptions = exceptions_from_error_tuple(exc_info_from_error(raised))
+
+    assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def _pickle_round_trip(error):
+    return pickle.loads(pickle.dumps(error))
+
+
+@pytest.mark.parametrize("duplicate", [_pickle_round_trip, copy.copy, copy.deepcopy])
+def test_copy_of_captured_exception_is_not_synthetic_once_raised(duplicate):
+    from posthog.exception_utils import exc_info_from_error, exceptions_from_error_tuple
+
+    # Capture inline, so no application frame keeps the exception alive and the
+    # synthesized traceback is freed as soon as the original goes away. Its
+    # address is then free for the traceback of the raise below.
+    for _ in range(50):
+        error = ValueError("never raised")
+        exc_info_from_error(error)
+        duplicated = duplicate(error)
+        del error
+
+        try:
+            raise duplicated
+        except ValueError as raised:
+            exceptions = exceptions_from_error_tuple(exc_info_from_error(raised))
+
+        assert exceptions[0]["mechanism"]["synthetic"] is False
+
+
+def test_captured_exception_can_be_unpickled_without_the_sdk():
+    from posthog.exception_utils import exc_info_from_error
+
+    error = ValueError("never raised")
+    _call_from_app_module(exc_info_from_error, error)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-S",
+            "-c",
+            "import pickle, sys; print(pickle.loads(sys.stdin.buffer.read()))",
+        ],
+        input=pickle.dumps(error),
+        capture_output=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == b"never raised"
+
+
+def test_never_raised_exception_stack_omits_sdk_frames_in_renamed_package():
+    import posthog.exception_utils as exception_utils
+
+    # The posthoganalytics mirror ships this module under another package name.
+    spec = importlib.util.spec_from_file_location(
+        "posthoganalytics.exception_utils", exception_utils.__file__
+    )
+    mirror = importlib.util.module_from_spec(spec)
+    with patch.dict(sys.modules, {spec.name: mirror}):
+        spec.loader.exec_module(mirror)
+        exception = mirror.exceptions_from_error_tuple(
+            _call_from_app_module(
+                mirror.exc_info_from_error, ValueError("never raised")
+            )
+        )[0]
+
+    functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
+    assert functions[-1] == "handler"
+    assert exception["mechanism"]["synthetic"] is True

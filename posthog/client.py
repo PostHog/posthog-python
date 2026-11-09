@@ -3538,6 +3538,8 @@ class Client(object):
         unresolvable: Dict[str, Tuple[UnresolvedFlagReason, str]] = {}
         for flag in snapshot["flags"]:
             try:
+                if flag.get("evaluation_runtime") == "client":
+                    continue
                 key = flag["key"]
                 reason = _get_definition_unresolved_reason(
                     flag,

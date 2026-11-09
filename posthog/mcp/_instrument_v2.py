@@ -53,6 +53,7 @@ from ._instrumentation import (
     _to_jsonable,
     copy_tools_list_result,
     is_first_listing_page,
+    is_tool_result_error,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
@@ -66,6 +67,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
+from ._instrument_lowlevel import registered_tool_exists
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
@@ -450,6 +452,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 name, call_arguments, context=context, convert_result=convert_result
             )
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                _name_owned_by_real_tool_v2(server, name)
+            ):
+                raise
             # The outer MCPServer layer converts the raise after this seam; no
             # freshly minted handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
@@ -669,6 +675,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         try:
             result = await original(ctx, params)
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(standalone, name)
+            ):
+                raise
             # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
             # handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
@@ -684,6 +694,12 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 lifecycle.conversation_id,
                 lifecycle.minted_conversation_id,
             )
+
+        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(standalone, name),
+            conversation_id_delivered=delivered,
+        ):
+            return result
 
         await lifecycle.record_result(
             result, duration_ms, conversation_id_delivered=delivered
