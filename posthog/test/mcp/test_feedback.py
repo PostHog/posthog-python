@@ -1,5 +1,7 @@
 """Tests for the ``send_feedback`` virtual tool (the ``collect_feedback`` option)."""
 
+import json
+
 import mcp.types as mcp_types
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -376,6 +378,39 @@ def test_nested_extras_keep_key_based_redaction():
     assert '"password": "[redacted]"' in props["$mcp_feedback_meta"]
     assert "hunter2" not in props["$mcp_feedback_meta"]
     assert '"note": "ping [redacted]"' in props["$mcp_feedback_meta"]
+
+
+@pytest.mark.parametrize(
+    ("meta", "identifier", "expected"),
+    [
+        ({"card\n4111111111111111": 1}, "4111111111111111", None),
+        ({"ada@example.com": "x"}, "ada@example.com", {"[redacted]": "x"}),
+        ({"n": 4111111111111111}, "4111111111111111", {"n": "[redacted]"}),
+        ({"n": [4111111111111111, 7]}, "4111111111111111", {"n": ["[redacted]", 7]}),
+    ],
+)
+def test_object_extras_redact_identifiers_in_keys_and_numbers(
+    meta, identifier, expected
+):
+    options = CollectFeedbackOptions(extra_properties={"meta": {"type": "object"}})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": meta}, options
+    )
+    captured = build_feedback_event_properties(report)["$mcp_feedback_meta"]
+    assert identifier not in captured
+    assert expected is None or json.loads(captured) == expected
+
+
+@pytest.mark.parametrize(
+    ("schema", "value"),
+    [({"type": "number"}, 4111111111111111), ({"type": "boolean"}, True)],
+)
+def test_top_level_scalar_extras_are_captured_as_sent(schema, value):
+    options = CollectFeedbackOptions(extra_properties={"meta": schema})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": value}, options
+    )
+    assert build_feedback_event_properties(report)["$mcp_feedback_meta"] == value
 
 
 def test_intent_joins_summary_and_details():
