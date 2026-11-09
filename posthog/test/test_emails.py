@@ -1355,6 +1355,16 @@ def test_refuses_eleven_files_before_reading_any_of_them():
             "message_too_large",
         ),
         (
+            "base64_file_too_large_behind_extra_padding",
+            [
+                {
+                    "filename": "scan.pdf",
+                    "content": "AAAA" * (29_182_875 // 3) + "=" * 12,
+                }
+            ],
+            "message_too_large",
+        ),
+        (
             "files_too_large_together",
             [{"filename": f"{i}.pdf", "content": bytes(3_000_000)} for i in range(10)],
             "message_too_large",

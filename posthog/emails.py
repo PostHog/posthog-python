@@ -586,8 +586,7 @@ def _content_size(field: str, content: Any) -> int:
     if isinstance(content, (bytes, bytearray, memoryview)):
         size = memoryview(content).nbytes
     elif isinstance(content, str):
-        padding = len(content) - len(content.rstrip("="))
-        size = max(0, len(content) * 3 // 4 - padding)
+        size = len(content.rstrip("=")) * 3 // 4
     else:
         raise _invalid_attachment(
             "An attachment needs content: bytes or a Base64 string. "
