@@ -24,7 +24,7 @@ Follow [Public API changes](./CONTRIBUTING.md#public-api-changes). As an agent, 
 
 Before changing capture configuration, serialization, routing, or retries, read the relevant implementation and tests.
 
-Preserve v0 defaults/compatibility; strictly typed v1 options and `$set`/`$set_once` relocation; v1-only compression (zlib-wrapped deflate, optional zstd); partial-only per-event retries with stable identity; accumulated drop reporting even on 2xx; terminal v1 `429`; `Retry-After` as a minimum bounded by the shared 30s ceiling; and inline blocking retries with `sync_mode=True`.
+Preserve v0 defaults/compatibility; strictly typed v1 options and `$set`/`$set_once` relocation; v1-only compression (zlib-wrapped deflate, optional zstd); partial-only per-event retries with stable identity; accumulated drop reporting even on 2xx; v1 retries on `404` and `429` like `408` and 5xx; `Retry-After` as a minimum bounded by the shared 30s ceiling; and inline blocking retries with `sync_mode=True`.
 
 ## Mirror and build safety
 
