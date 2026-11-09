@@ -25,7 +25,7 @@ STATUS_URL = (
     f"https://us.posthog.com/api/projects/@current/messaging/emails/{MESSAGE_ID}/"
 )
 
-Reply = Union[Exception, tuple[int, Optional[dict[str, Any]], dict[str, str]]]
+Reply = Union[Exception, tuple[int, Union[dict[str, Any], bytes, None], dict[str, str]]]
 
 
 def accepted(message_id: str = "msg_1", **fields: Any) -> Reply:
@@ -55,7 +55,13 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         status, body, headers = reply
         response = requests.Response()
         response.status_code = status
-        response._content = b"" if body is None else json.dumps(body).encode()
+        response._content = (
+            body
+            if isinstance(body, bytes)
+            else b""
+            if body is None
+            else json.dumps(body).encode()
+        )
         response.headers.update(headers)
         response.request = request
         response.url = request.url or ""
@@ -728,7 +734,6 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         reply_to="help@example.com",
         cc="manager@example.com",
         bcc=["audit@example.com"],
-        attachments=[{"filename": "invite.ics", "content": INVITE}],
         capture_engagement=False,
         distinct_id="user_123",
         idempotency_key="reset:user_123",
@@ -751,7 +756,6 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         "reply_to": ["help@example.com"],
         "cc": ["manager@example.com"],
         "bcc": ["audit@example.com"],
-        "attachments": [{"filename": "invite.ics", "content": INVITE_BASE64}],
         "capture_engagement": False,
         "distinct_id": "user_123",
     }
@@ -868,32 +872,121 @@ def test_a_refused_send_names_the_field_from_attr():
     assert len(adapter.requests) == 1
 
 
-def test_attachments_are_sent_base64_encoded_once_across_retries():
-    emails, adapter = emails_with([rejected(503, "delivery_unavailable"), accepted()])
+UPLOADS_URL = (
+    "https://us.posthog.com/api/projects/@current/messaging/attachments/uploads/"
+)
+BUCKET_URL = "https://files.example.com/team/1/"
+INVITE_SHA256 = "215efae54e34ac5657da47b49c8d1bd8ea12649ee1efa838c9a47d7233f18afb"
+LOGO = b"\x89PNG\r\n\x1a\n"
+LOGO_SHA256 = "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
+SIGNED_HEADERS = {
+    "content-length": "32",
+    "x-amz-checksum-sha256": "IV765U40rFZX2ke0nI0b2OoSZJ7h76g4yaR9cjPxivs=",
+}
 
-    send_code(
-        emails,
-        html=HTML,
-        attachments=[
-            {
-                "filename": "invite.ics",
-                "content": INVITE,
-                "content_type": "text/calendar; method=REQUEST",
-            },
-            {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
-        ],
+
+def present(sha256: str) -> dict[str, Any]:
+    return {"sha256": sha256, "status": "present", "expires_at": "2026-12-16T00:00:00Z"}
+
+
+def upload(sha256: str) -> dict[str, Any]:
+    return {
+        "sha256": sha256,
+        "status": "upload",
+        "url": BUCKET_URL + sha256,
+        "method": "PUT",
+        "headers": SIGNED_HEADERS,
+        "url_expires_at": "2026-11-09T12:15:00Z",
+    }
+
+
+def slots(*files: dict[str, Any]) -> Reply:
+    return (200, {"files": list(files)}, {})
+
+
+def stored() -> Reply:
+    return (200, None, {})
+
+
+def bucket_refused(status: int, code: str, message: str) -> Reply:
+    return (
+        status,
+        f"<?xml version='1.0'?><Error><Code>{code}</Code><Message>{message}</Message></Error>".encode(),
+        {},
     )
 
-    first, retry = adapter.requests
-    assert json.loads(first.body)["attachments"] == [
+
+INVITE_AND_LOGO = [
+    {
+        "filename": "invite.ics",
+        "content": INVITE,
+        "content_type": "text/calendar; method=REQUEST",
+    },
+    {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+]
+
+
+def test_uploads_the_files_posthog_lacks_then_sends_their_hashes():
+    emails, adapter = emails_with(
+        [slots(upload(INVITE_SHA256), present(LOGO_SHA256)), stored(), accepted()]
+    )
+
+    result = send_code(emails, html=HTML, attachments=INVITE_AND_LOGO)
+
+    assert result.id == "msg_1"
+    ask, put, sent = adapter.requests
+    assert (ask.method, ask.url) == ("POST", UPLOADS_URL)
+    assert ask.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert json.loads(ask.body) == {
+        "files": [
+            {"sha256": INVITE_SHA256, "size": 32},
+            {"sha256": LOGO_SHA256, "size": 8},
+        ]
+    }
+    assert (put.method, put.url, put.body) == (
+        "PUT",
+        BUCKET_URL + INVITE_SHA256,
+        INVITE,
+    )
+    assert "Authorization" not in put.headers
+    assert {name: put.headers[name] for name in SIGNED_HEADERS} == SIGNED_HEADERS
+    assert (sent.method, sent.url) == ("POST", SEND_URL)
+    assert json.loads(sent.body)["attachments"] == [
         {
+            "sha256": INVITE_SHA256,
             "filename": "invite.ics",
-            "content": INVITE_BASE64,
             "content_type": "text/calendar; method=REQUEST",
         },
-        {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"},
+        {"sha256": LOGO_SHA256, "filename": "logo.png", "content_id": "logo"},
     ]
-    assert retry.body == first.body
+
+
+def test_sends_without_uploading_when_posthog_has_every_file():
+    emails, adapter = emails_with([slots(present(INVITE_SHA256)), accepted()])
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": INVITE}]
+    )
+
+    assert [(request.method, request.url) for request in adapter.requests] == [
+        ("POST", UPLOADS_URL),
+        ("POST", SEND_URL),
+    ]
+
+
+def test_the_upload_never_carries_credentials_the_session_holds():
+    adapter = FakeAdapter([slots(upload(INVITE_SHA256)), stored(), accepted()])
+    session = requests.Session()
+    session.mount("https://", adapter)
+    session.headers["Authorization"] = "Bearer session-default"
+    emails = Emails(SECRET_KEY, session=session)
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": INVITE}]
+    )
+
+    put = adapter.requests[1]
+    assert "Authorization" not in put.headers
 
 
 @parameterized.expand(
@@ -904,19 +997,276 @@ def test_attachments_are_sent_base64_encoded_once_across_retries():
             "strided_memoryview",
             memoryview(bytes(b for byte in INVITE for b in (byte, 0)))[::2],
         ),
+        ("base64_string", INVITE_BASE64),
     ]
 )
-def test_attachment_content_from_any_bytes_buffer_is_base64_encoded(_name, content):
-    emails, adapter = emails_with([accepted()])
+def test_file_content_from_bytes_or_base64_uploads_the_same_bytes(_name, content):
+    emails, adapter = emails_with([slots(upload(INVITE_SHA256)), stored(), accepted()])
 
     send_code(
         emails, html=HTML, attachments=[{"filename": "invite.ics", "content": content}]
     )
 
-    [request] = adapter.requests
-    assert json.loads(request.body)["attachments"] == [
-        {"filename": "invite.ics", "content": INVITE_BASE64}
+    ask, put, _sent = adapter.requests
+    assert json.loads(ask.body) == {"files": [{"sha256": INVITE_SHA256, "size": 32}]}
+    assert put.body == INVITE
+
+
+@parameterized.expand(
+    [
+        (
+            "signed_checksum_mismatch",
+            bucket_refused(
+                400, "BadDigest", "The Content-SHA256 you specified did not match."
+            ),
+            400,
+            "BadDigest",
+        ),
+        (
+            "expired_url",
+            bucket_refused(403, "AccessDenied", "Request has expired"),
+            403,
+            "AccessDenied",
+        ),
     ]
+)
+def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
+    _name, refusal, status, storage_code
+):
+    emails, adapter = emails_with([slots(upload(INVITE_SHA256)), refusal])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    error = raised.value
+    assert (error.code, error.status_code, error.field) == (
+        "upload_failed",
+        status,
+        "attachments__0",
+    )
+    assert storage_code in error.message
+    assert [request.method for request in adapter.requests] == ["POST", "PUT"]
+
+
+def test_an_unavailable_storage_is_retried_before_the_send():
+    emails, adapter = emails_with(
+        [
+            slots(upload(INVITE_SHA256)),
+            bucket_refused(503, "SlowDown", "Please reduce your request rate."),
+            stored(),
+            accepted(),
+        ]
+    )
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": INVITE}]
+    )
+
+    assert [request.method for request in adapter.requests] == [
+        "POST",
+        "PUT",
+        "PUT",
+        "POST",
+    ]
+
+
+def test_a_refused_upload_request_uploads_and_sends_nothing():
+    refused = {
+        "type": "invalid_request",
+        "code": "field_not_accepted",
+        "detail": "This project can't send files yet, so PostHog didn't prepare the uploads.",
+        "attr": "files",
+        "why": "Sending files isn't available to this project yet.",
+        "fix": "Send the email without files.",
+    }
+    emails, adapter = emails_with([(400, refused, {})])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    error = raised.value
+    assert (error.code, error.field, error.why) == (
+        "field_not_accepted",
+        "files",
+        "Sending files isn't available to this project yet.",
+    )
+    assert [request.url for request in adapter.requests] == [UPLOADS_URL]
+
+
+def test_a_project_over_its_daily_upload_bytes_is_told_without_retrying():
+    emails, adapter = emails_with([rejected(429, "upload_quota_exceeded"), slots()])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert (raised.value.code, raised.value.name) == (
+        "upload_quota_exceeded",
+        "daily_quota_exceeded",
+    )
+    assert len(adapter.requests) == 1
+
+
+def test_a_retried_send_reuses_its_uploads_and_its_idempotency_key():
+    emails, adapter = emails_with(
+        [
+            slots(upload(INVITE_SHA256)),
+            stored(),
+            rejected(503, "delivery_unavailable"),
+            accepted(),
+        ]
+    )
+
+    send_code(
+        emails,
+        html=HTML,
+        idempotency_key="invite:user_123",
+        attachments=[{"filename": "invite.ics", "content": INVITE}],
+    )
+
+    _ask, _put, first, retry = adapter.requests
+    assert (retry.url, retry.body) == (SEND_URL, first.body)
+    assert retry.headers["Idempotency-Key"] == "invite:user_123"
+
+
+@parameterized.expand(
+    [
+        (
+            "eleven_files",
+            [{"filename": f"{i}.txt", "content": b"hi"} for i in range(11)],
+            "too_many_attachments",
+        ),
+        (
+            "one_file_too_large_beside_the_body",
+            [{"filename": "scan.pdf", "content": bytes(29_182_875)}],
+            "message_too_large",
+        ),
+        (
+            "files_too_large_together",
+            [{"filename": f"{i}.pdf", "content": bytes(3_000_000)} for i in range(10)],
+            "message_too_large",
+        ),
+    ]
+)
+def test_refuses_an_email_over_the_limits_before_any_request(_name, attachments, code):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html="Hi!", attachments=attachments)
+
+    error = raised.value
+    assert (error.name, error.code, error.field) == (
+        "validation_error",
+        code,
+        "attachments",
+    )
+    assert error.fix
+    assert adapter.requests == []
+
+
+LARGEST_SCAN_SHA256 = "da8348171897010f0a7968e94886e059512d508ec8f543ec2af1d353cae83f60"
+
+
+def test_sends_the_largest_file_that_fits_beside_the_body():
+    emails, adapter = emails_with([slots(present(LARGEST_SCAN_SHA256)), accepted()])
+
+    send_code(
+        emails,
+        html="Hi!",
+        attachments=[{"filename": "scan.pdf", "content": bytes(29_182_872)}],
+    )
+
+    assert json.loads(adapter.requests[0].body)["files"][0]["size"] == 29_182_872
+
+
+@pytest.mark.asyncio
+async def test_async_send_uploads_without_the_secret_key_then_sends_the_hashes():
+    seen: list[httpx.Request] = []
+    replies = [
+        httpx.Response(200, json={"files": [upload(INVITE_SHA256)]}),
+        httpx.Response(200),
+        httpx.Response(202, json={"message_id": "msg_1"}),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            headers={"Authorization": "Bearer client-default"},
+        ),
+    )
+
+    result = await emails.send(
+        to="user@example.com",
+        template_key="invite",
+        subject="You're invited",
+        html=HTML,
+        attachments=[{"filename": "invite.ics", "content": INVITE}],
+    )
+
+    assert result.id == "msg_1"
+    ask, put, sent = seen
+    assert (ask.method, str(ask.url)) == ("POST", UPLOADS_URL)
+    assert ask.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert (put.method, str(put.url), put.content) == (
+        "PUT",
+        BUCKET_URL + INVITE_SHA256,
+        INVITE,
+    )
+    assert "Authorization" not in put.headers
+    assert (
+        put.headers["x-amz-checksum-sha256"] == SIGNED_HEADERS["x-amz-checksum-sha256"]
+    )
+    assert json.loads(sent.content)["attachments"] == [
+        {"sha256": INVITE_SHA256, "filename": "invite.ics"}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_refused_upload_sends_no_email():
+    seen: list[httpx.Request] = []
+    replies = [
+        httpx.Response(200, json={"files": [upload(INVITE_SHA256)]}),
+        httpx.Response(
+            400, content=b"<Error><Code>BadDigest</Code><Message>No.</Message></Error>"
+        ),
+    ]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(EmailError) as raised:
+        await emails.send(
+            to="user@example.com",
+            template_key="invite",
+            subject="You're invited",
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert raised.value.code == "upload_failed"
+    assert [request.method for request in seen] == ["POST", "PUT"]
 
 
 SECRET_CONTENT = b"secret-file-content"
@@ -937,6 +1287,11 @@ SECRET_CONTENT = b"secret-file-content"
             "attachments__0__content",
         ),
         ("no_content", [{"filename": "a.txt"}], "attachments__0__content"),
+        (
+            "empty_content",
+            [{"filename": "a.txt", "content": b""}],
+            "attachments__0__content",
+        ),
         (
             "text_not_base64",
             [{"filename": "a.txt", "content": "secret-file-content"}],

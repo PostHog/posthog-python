@@ -59,6 +59,14 @@ Moving from another email provider: set ``migrated_from``, such as
 ``"resend"``, on the client or on :class:`Emails`, so PostHog knows where your
 sends came from.
 
+Attachments: a code send takes ``attachments``, at most 10 files and 40 MB
+per message after Base64 encoding, about 29 MB of files. The client checks
+both before any request. It then asks PostHog which files it lacks, uploads
+each of those to the URL PostHog answers, without the secret key, and sends the
+email naming each file by its SHA-256. A file the project already sent uploads
+nothing. A failed upload sends no email. The upload URL's host is not the app
+host, so a network that limits outbound requests must allow it.
+
 Errors: a send that is not queued raises :class:`EmailError`. Branch on
 ``code``. The ones a setup usually hits:
 
@@ -70,6 +78,18 @@ Errors: a send that is not queued raises :class:`EmailError`. Branch on
   enabled for the project.
 - ``client_disabled``: the client is disabled, so it sends nothing.
 - ``client_closed``: the client is shut down.
+
+A send with attachments can also raise:
+
+- ``too_many_attachments`` or ``message_too_large``: the email is over the
+  limits above. The client raises these before any request.
+- ``invalid_attachment``: the client can't send a file, such as one without
+  content.
+- ``upload_failed``: PostHog's file storage refused an upload. ``message``
+  and ``why`` carry its answer, and ``field`` names the attachment.
+- ``upload_quota_exceeded`` (429): the project uploaded its daily limit of
+  file bytes. Files it already sent don't count.
+- ``field_not_accepted``: the project can't send files yet.
 
 Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 30 days after the send, as an :class:`EmailStatus`. A key with only
@@ -91,6 +111,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hashlib
 import importlib
 import json
 import logging
@@ -143,6 +164,7 @@ __all__ = [
 log = logging.getLogger("posthog")
 
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
+_UPLOADS_PATH = "/api/projects/@current/messaging/attachments/uploads/"
 _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
@@ -150,6 +172,12 @@ _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
+_DAILY_QUOTA_CODES = frozenset({"upload_quota_exceeded"})
+_MAX_ATTACHMENTS = 10
+_MAX_MESSAGE_BYTES = 40_000_000
+_HEADERS_AND_MIME_BOUNDARIES_BYTES = 64 * 1024
+_MESSAGE_LIMIT = "40 MB after Base64 encoding, about 29 MB of files"
+_STORAGE_ERROR = re.compile(r"<(Code|Message)>([^<]{1,500})</\1>")
 
 
 class EmailError(Exception):
@@ -206,9 +234,9 @@ class EmailAttachment(TypedDict):
 
     Args:
         filename: The file name the recipient sees, such as ``invite.ics``.
-        content: The file as ``bytes``, ``bytearray`` or ``memoryview``, which
-            the client encodes as Base64, or already Base64 encoded as a string.
-            PostHog can't fetch a file from a path or URL.
+        content: The file as ``bytes``, ``bytearray`` or ``memoryview``, or
+            Base64 encoded as a string. PostHog can't fetch a file from a path
+            or URL.
         content_type: The MIME type. Without it, the type follows the file name.
         content_id: Shows the file inline: reference it in ``html`` as
             ``<img src="cid:logo">`` with ``content_id`` ``logo``.
@@ -272,9 +300,12 @@ class CodeEmailArgs(_RecipientArgs):
             most 10.
         bcc: One address or a list of addresses that get a hidden copy, at
             most 10.
-        attachments: Files sent with the email, at most 10 and 512 KB in
-            total. A file the client can't send raises :class:`EmailError`
-            with ``code`` ``invalid_attachment``.
+        attachments: Files sent with the email: at most 10 files and 40 MB
+            per message after Base64 encoding, about 29 MB of files. The
+            client checks both before any request. It uploads each file that
+            PostHog doesn't hold yet, then sends the email. A file the client
+            can't send raises :class:`EmailError` with ``code``
+            ``invalid_attachment``.
         capture_engagement: Capture the email's opens and clicks as events of
             the recipient. Defaults to ``True``. A project whose admin turned
             engagement capture off captures nothing, whatever the send asks. A
@@ -344,11 +375,29 @@ class EmailStatus:
 
 
 @dataclass(frozen=True)
+class _File:
+    sha256: str
+    content: bytes
+
+    @property
+    def size(self) -> int:
+        return len(self.content)
+
+
+@dataclass(frozen=True)
+class _UploadTarget:
+    url: str
+    method: str
+    headers: dict[str, str]
+
+
+@dataclass(frozen=True)
 class _PreparedSend:
     path: str
     body: bytes
     idempotency_key: str
     max_retries: Optional[int] = None
+    files: tuple[_File, ...] = ()
 
 
 def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
@@ -402,15 +451,21 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if not (content.get("html") or content.get("text")):
         raise ValueError("html or text must be a nonempty string.")
 
+    references, files = _attachments(args.get("attachments", []))
+    _check_limits(files, content)
+
     payload: dict[str, Any] = {"to": to, "template_key": template_key, **content}
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
+    if references:
+        payload["attachments"] = references
     return _PreparedSend(
         path=_SEND_PATH,
         body=_encode(payload),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
+        files=files,
     )
 
 
@@ -422,9 +477,6 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
         addresses = _addresses(field, args[field]) if field in args else []
         if addresses:
             sender[field] = addresses
-    attachments = _attachments(args["attachments"]) if "attachments" in args else []
-    if attachments:
-        sender["attachments"] = attachments
     capture_engagement = args.get("capture_engagement", True)
     if not isinstance(capture_engagement, bool):
         raise TypeError("capture_engagement must be True or False.")
@@ -452,15 +504,18 @@ def _invalid_attachment(message: str, field: str) -> EmailError:
     )
 
 
-def _attachments(attachments: Any) -> list[dict[str, str]]:
+def _attachments(
+    attachments: Any,
+) -> tuple[list[dict[str, str]], tuple[_File, ...]]:
     if isinstance(
         attachments, (str, bytes, bytearray, memoryview, Mapping)
     ) or not isinstance(attachments, Sequence):
         raise _invalid_attachment("attachments must be a list of files.", "attachments")
-    return [_attachment(index, file) for index, file in enumerate(attachments)]
+    prepared = [_attachment(index, file) for index, file in enumerate(attachments)]
+    return [reference for reference, _ in prepared], tuple(file for _, file in prepared)
 
 
-def _attachment(index: int, file: Any) -> dict[str, str]:
+def _attachment(index: int, file: Any) -> tuple[dict[str, str], _File]:
     field = f"attachments__{index}"
     if not isinstance(file, Mapping):
         raise _invalid_attachment(
@@ -486,38 +541,91 @@ def _attachment(index: int, file: Any) -> dict[str, str]:
             "An attachment needs a filename, such as 'invoice.pdf'.",
             f"{field}__filename",
         )
-    attachment = {
-        "filename": file["filename"],
-        "content": _base64_content(field, file.get("content")),
-    }
+    content = _file_bytes(field, file.get("content"))
+    sha256 = hashlib.sha256(content).hexdigest()
+    reference = {"sha256": sha256, "filename": file["filename"]}
     for name in ("content_type", "content_id"):
         if name in file:
             if not isinstance(file[name], str):
                 raise _invalid_attachment(
                     f"An attachment's {name} must be a string.", f"{field}__{name}"
                 )
-            attachment[name] = file[name]
-    return attachment
+            reference[name] = file[name]
+    return reference, _File(sha256=sha256, content=content)
 
 
-def _base64_content(field: str, content: Any) -> str:
+def _file_bytes(field: str, content: Any) -> bytes:
     if isinstance(content, (bytes, bytearray, memoryview)):
-        return base64.b64encode(bytes(content)).decode("ascii")
-    if isinstance(content, str):
+        file_bytes = bytes(content)
+    elif isinstance(content, str):
         try:
-            base64.b64decode(content, validate=True)
+            file_bytes = base64.b64decode(content, validate=True)
         except (binascii.Error, ValueError):
             raise _invalid_attachment(
                 "An attachment's content string must be Base64. "
                 "Pass the file's bytes instead, such as text.encode() for text.",
                 f"{field}__content",
             ) from None
-        return content
-    raise _invalid_attachment(
-        "An attachment needs content: bytes or a Base64 string. "
-        "Convert a list of byte values with bytes(content).",
-        f"{field}__content",
+    else:
+        raise _invalid_attachment(
+            "An attachment needs content: bytes or a Base64 string. "
+            "Convert a list of byte values with bytes(content).",
+            f"{field}__content",
+        )
+    if not file_bytes:
+        raise _invalid_attachment(
+            "An attachment's content is empty, and an empty file gives the "
+            "recipient nothing to open. Leave the file out.",
+            f"{field}__content",
+        )
+    return file_bytes
+
+
+def _check_limits(files: Sequence[_File], content: Mapping[str, str]) -> None:
+    if len(files) > _MAX_ATTACHMENTS:
+        raise _over_the_limit(
+            "too_many_attachments",
+            f"An email carries at most {_MAX_ATTACHMENTS} files, so no email was sent.",
+            fix=f"Send at most {_MAX_ATTACHMENTS} files, and link to any others "
+            "from the email body.",
+        )
+    bodies = [
+        body.encode("utf-8")
+        for body in (content.get("html"), content.get("text"))
+        if body
+    ]
+    sizes = [file.size for file in files] + [len(body) for body in bodies]
+    if files and _estimated_message_bytes(sizes) > _MAX_MESSAGE_BYTES:
+        raise _over_the_limit(
+            "message_too_large",
+            f"These files make the email larger than {_MESSAGE_LIMIT}, so no email was sent.",
+            fix="Send fewer or smaller files, or link to large files from the email body.",
+        )
+
+
+def _over_the_limit(code: str, message: str, *, fix: str) -> EmailError:
+    return EmailError(
+        name="validation_error",
+        code=code,
+        message=message,
+        why=f"An email carries at most {_MAX_ATTACHMENTS} files and {_MESSAGE_LIMIT}.",
+        fix=fix,
+        field="attachments",
     )
+
+
+def _estimated_message_bytes(sizes: Sequence[int]) -> int:
+    return _HEADERS_AND_MIME_BOUNDARIES_BYTES + sum(
+        _base64_transfer_bytes(size) for size in sizes
+    )
+
+
+def _base64_transfer_bytes(size: int) -> int:
+    return _ceil_div(_ceil_div(size, 3) * 4 * 78, 76)
+
+
+def _ceil_div(dividend: int, divisor: int) -> int:
+    return -(-dividend // divisor)
 
 
 def _string(args: Mapping[str, Any], name: str) -> str:
@@ -669,6 +777,8 @@ def _error_name(status: Optional[int], code: str) -> str:
             else "validation_error"
         )
     if status == 429:
+        if code in _DAILY_QUOTA_CODES:
+            return "daily_quota_exceeded"
         return (
             "monthly_quota_exceeded" if code in _QUOTA_CODES else "rate_limit_exceeded"
         )
@@ -690,10 +800,18 @@ def _retry_after(header: Optional[str]) -> Optional[float]:
     return max(0.0, seconds)
 
 
+def _json_object(body: bytes) -> dict[str, Any]:
+    try:
+        payload = json.loads(body)
+    except ValueError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 def _parse_response(
-    status: int, payload: Any, retry_after_header: Optional[str]
+    status: int, body: bytes, retry_after_header: Optional[str]
 ) -> SendEmailResult:
-    fields = payload if isinstance(payload, dict) else {}
+    fields = _json_object(body)
     if 200 <= status < 300:
         message_id = _text(fields.get("message_id"))
         if message_id is None:
@@ -733,9 +851,9 @@ def _timestamp(value: Any) -> Optional[datetime]:
 
 
 def _parse_status_response(
-    status: int, payload: Any, retry_after_header: Optional[str]
+    status: int, body: bytes, retry_after_header: Optional[str]
 ) -> EmailStatus:
-    fields = payload if isinstance(payload, dict) else {}
+    fields = _json_object(body)
     if not 200 <= status < 300:
         raise _response_error(fields, status, retry_after_header)
     message_id = _text(fields.get("id"))
@@ -757,6 +875,77 @@ def _parse_status_response(
         created_at=created_at,
         status_at=status_at,
         reason=_text(fields.get("reason")),
+    )
+
+
+def _upload_slots_parser(
+    files: Sequence[_File],
+) -> _Parse[list[Optional[_UploadTarget]]]:
+    def parse(
+        status: int, body: bytes, retry_after_header: Optional[str]
+    ) -> list[Optional[_UploadTarget]]:
+        fields = _json_object(body)
+        if not 200 <= status < 300:
+            raise _response_error(fields, status, retry_after_header)
+        slots = fields.get("files")
+        if not isinstance(slots, list) or len(slots) != len(files):
+            raise _no_upload_slots(status)
+        return [_upload_target(slot, file, status) for slot, file in zip(slots, files)]
+
+    return parse
+
+
+def _upload_target(slot: Any, file: _File, status: int) -> Optional[_UploadTarget]:
+    if not isinstance(slot, dict) or slot.get("sha256") != file.sha256:
+        raise _no_upload_slots(status)
+    if slot.get("status") == "present":
+        return None
+    url, method, headers = (
+        _text(slot.get("url")),
+        _text(slot.get("method", "PUT")),
+        slot.get("headers"),
+    )
+    if (
+        slot.get("status") != "upload"
+        or url is None
+        or method is None
+        or not isinstance(headers, dict)
+        or not all(isinstance(value, str) for value in headers.values())
+    ):
+        raise _no_upload_slots(status)
+    return _UploadTarget(url=url, method=method, headers=headers)
+
+
+def _no_upload_slots(status: int) -> EmailError:
+    return _sdk_error(
+        "api_error", "PostHog answered without an upload slot for each file.", status
+    )
+
+
+def _upload_parser(index: int) -> _Parse[None]:
+    def parse(status: int, body: bytes, retry_after_header: Optional[str]) -> None:
+        if not 200 <= status < 300:
+            raise _upload_error(index, status, body, retry_after_header)
+
+    return parse
+
+
+def _upload_error(
+    index: int, status: int, body: bytes, retry_after_header: Optional[str]
+) -> EmailError:
+    answer = dict(_STORAGE_ERROR.findall(body.decode("utf-8", "replace")))
+    storage_answer = " ".join(filter(None, (f"HTTP {status}", answer.get("Code"))))
+    return EmailError(
+        name=_error_name(status, "upload_failed"),
+        code="upload_failed",
+        message=f"PostHog's file storage refused the upload of attachments[{index}] "
+        f"with {storage_answer}, so no email was sent.",
+        status_code=status,
+        why=answer.get("Message"),
+        fix="Send the email again. If the upload keeps failing, check that the "
+        "file's bytes don't change while it is sent.",
+        field=f"attachments__{index}",
+        retry_after=_retry_after(retry_after_header),
     )
 
 
@@ -784,7 +973,7 @@ def _is_retryable(error: EmailError) -> bool:
     if error.status_code == 409:
         return error.code in _IN_FLIGHT_CODES
     if error.status_code == 429:
-        return error.code not in _QUOTA_CODES
+        return error.code not in _QUOTA_CODES | _DAILY_QUOTA_CODES
     return error.status_code == 503
 
 
@@ -836,17 +1025,24 @@ _GET_KEY_NEEDED = (
     "transactional_email:read or transactional_email:write scope."
 )
 _ResultT = TypeVar("_ResultT")
-_Parse = Callable[[int, Any, Optional[str]], _ResultT]
+_Parse = Callable[[int, bytes, Optional[str]], _ResultT]
 
 
-class _BearerAuth(requests.auth.AuthBase):
+class _ExactAuth(requests.auth.AuthBase):
     def __init__(self, headers: dict[str, str]) -> None:
         self._headers = headers
 
     def __call__(self, request: requests.PreparedRequest) -> requests.PreparedRequest:
         # Setting auth explicitly stops requests from substituting .netrc credentials.
+        request.headers.pop("Authorization", None)
         request.headers.update(self._headers)
         return request
+
+
+def _files_body(files: Sequence[_File]) -> bytes:
+    return _encode(
+        {"files": [{"sha256": file.sha256, "size": file.size} for file in files]}
+    )
 
 
 class _EmailsBase:
@@ -971,8 +1167,9 @@ class Emails(_EmailsBase):
         Raises:
             EmailError: PostHog did not queue the email, or the client could
                 not tell whether it did.
-                ``code`` is ``invalid_attachment`` for an attachment the
-                client can't send, before any request.
+                With attachments, ``code`` is ``too_many_attachments``,
+                ``message_too_large`` or ``invalid_attachment`` before any
+                request, and ``upload_failed`` when an upload failed.
             TypeError, ValueError: An argument has the wrong type or format.
 
         Examples:
@@ -1003,6 +1200,8 @@ class Emails(_EmailsBase):
         return result
 
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
+        if prepared.files:
+            self._upload(prepared, secret_key)
         headers = _headers(
             secret_key,
             self.migrated_from,
@@ -1011,12 +1210,32 @@ class Emails(_EmailsBase):
         )
         return self._call(
             "POST",
-            prepared.path,
+            self.host + prepared.path,
             prepared.body,
             headers,
             _parse_response,
             prepared.max_retries,
         )
+
+    def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
+        targets = self._call(
+            "POST",
+            self.host + _UPLOADS_PATH,
+            _files_body(prepared.files),
+            _headers(secret_key, self.migrated_from, has_body=True),
+            _upload_slots_parser(prepared.files),
+            prepared.max_retries,
+        )
+        for index, (file, target) in enumerate(zip(prepared.files, targets)):
+            if target is not None:
+                self._call(
+                    target.method,
+                    target.url,
+                    file.content,
+                    target.headers,
+                    _upload_parser(index),
+                    prepared.max_retries,
+                )
 
     def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
@@ -1046,22 +1265,23 @@ class Emails(_EmailsBase):
         finish = self._start(_GET_NOT_DONE)
         try:
             headers = _headers(self._secret_key(_GET_KEY_NEEDED), self.migrated_from)
-            return self._call("GET", path, None, headers, _parse_status_response)
+            return self._call(
+                "GET", self.host + path, None, headers, _parse_status_response
+            )
         finally:
             finish()
 
     def _call(
         self,
         method: str,
-        path: str,
+        url: str,
         body: Optional[bytes],
         headers: dict[str, str],
         parse: _Parse[_ResultT],
         max_retries: Optional[int] = None,
     ) -> _ResultT:
-        auth = _BearerAuth(headers)
+        auth = _ExactAuth(headers)
         session = self._get_session()
-        url = self.host + path
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
@@ -1074,13 +1294,9 @@ class Emails(_EmailsBase):
                     allow_redirects=False,
                 )
                 try:
-                    try:
-                        payload = response.json()
-                    except ValueError:
-                        payload = None
                     return parse(
                         response.status_code,
-                        payload,
+                        response.content,
                         response.headers.get("Retry-After"),
                     )
                 finally:
@@ -1187,6 +1403,8 @@ class AsyncEmails(_EmailsBase):
     async def _deliver(
         self, prepared: _PreparedSend, secret_key: str
     ) -> SendEmailResult:
+        if prepared.files:
+            await self._upload(prepared, secret_key)
         headers = _headers(
             secret_key,
             self.migrated_from,
@@ -1195,12 +1413,32 @@ class AsyncEmails(_EmailsBase):
         )
         return await self._call(
             "POST",
-            prepared.path,
+            self.host + prepared.path,
             prepared.body,
             headers,
             _parse_response,
             prepared.max_retries,
         )
+
+    async def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
+        targets = await self._call(
+            "POST",
+            self.host + _UPLOADS_PATH,
+            _files_body(prepared.files),
+            _headers(secret_key, self.migrated_from, has_body=True),
+            _upload_slots_parser(prepared.files),
+            prepared.max_retries,
+        )
+        for index, (file, target) in enumerate(zip(prepared.files, targets)):
+            if target is not None:
+                await self._call(
+                    target.method,
+                    target.url,
+                    file.content,
+                    target.headers,
+                    _upload_parser(index),
+                    prepared.max_retries,
+                )
 
     async def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
@@ -1212,42 +1450,37 @@ class AsyncEmails(_EmailsBase):
         finish = self._start(_GET_NOT_DONE)
         try:
             headers = _headers(self._secret_key(_GET_KEY_NEEDED), self.migrated_from)
-            return await self._call("GET", path, None, headers, _parse_status_response)
+            return await self._call(
+                "GET", self.host + path, None, headers, _parse_status_response
+            )
         finally:
             finish()
 
     async def _call(
         self,
         method: str,
-        path: str,
+        url: str,
         body: Optional[bytes],
         headers: dict[str, str],
         parse: _Parse[_ResultT],
         max_retries: Optional[int] = None,
     ) -> _ResultT:
         httpx, client = self._get_client()
-        url = self.host + path
         retries = self.max_retries if max_retries is None else max_retries
         for attempt in range(retries + 1):
             try:
-                # An injected client may carry its own auth and timeout, so set both per request: auth=None keeps
-                # the secret key's Bearer header, and the request timeout applies whatever the client's default.
-                response = await client.request(
-                    method,
-                    url,
-                    content=body,
-                    headers=headers,
-                    auth=None,
-                    timeout=self.timeout,
+                # An injected client may carry its own auth, headers and timeout, so the request sets exactly the
+                # headers given, sends without the client's auth, and applies its own timeout.
+                request = client.build_request(
+                    method, url, content=body, timeout=self.timeout
                 )
+                request.headers.pop("Authorization", None)
+                request.headers.update(headers)
+                response = await client.send(request, auth=None)
                 try:
-                    try:
-                        payload = response.json()
-                    except ValueError:
-                        payload = None
                     return parse(
                         response.status_code,
-                        payload,
+                        response.content,
                         response.headers.get("Retry-After"),
                     )
                 finally:

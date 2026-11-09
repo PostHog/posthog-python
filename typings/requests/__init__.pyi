@@ -10,6 +10,7 @@ class Response:
     status_code: int
     ok: bool
     text: str
+    content: bytes
     headers: dict[str, str]
     def json(self) -> Any: ...
     def close(self) -> None: ...
