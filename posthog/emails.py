@@ -94,6 +94,8 @@ A send with attachments can also raise:
 - ``upload_quota_exceeded`` (429): the project uploaded its daily limit of
   file bytes. Files it already sent don't count.
 - ``field_not_accepted``: the project can't send files yet.
+- ``not_found`` (404) with ``field`` ``attachments``: this PostHog version
+  doesn't take files yet.
 
 Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 30 days after the send, as an :class:`EmailStatus`. A key with only
@@ -900,6 +902,8 @@ def _pending_uploads_parser(files: Sequence[_File]) -> _Parse[list[_Upload]]:
         status: int, body: bytes, retry_after_header: Optional[str]
     ) -> list[_Upload]:
         fields = _json_object(body)
+        if status == 404:
+            raise _no_upload_route()
         if not 200 <= status < 300:
             raise _response_error(fields, status, retry_after_header)
         slots = fields.get("files")
@@ -932,6 +936,20 @@ def _pending_upload(slot: Any, file: _File, status: int) -> Optional[_Upload]:
     ):
         raise _no_upload_slots(status)
     return _Upload(file=file, url=url, method=method, headers=headers)
+
+
+def _no_upload_route() -> EmailError:
+    return EmailError(
+        name="not_found",
+        code="not_found",
+        message="PostHog has no upload route for attachments here, so no email was sent.",
+        status_code=404,
+        why="This PostHog version doesn't take attachments yet, or transactional "
+        "email is not enabled for the project.",
+        fix="Send the email without attachments, or check that the project can "
+        "send transactional email.",
+        field="attachments",
+    )
 
 
 def _no_upload_slots(status: int) -> EmailError:

@@ -1182,6 +1182,66 @@ def test_a_refused_upload_request_uploads_and_sends_nothing():
     assert [request.url for request in adapter.requests] == [UPLOADS_URL]
 
 
+@parameterized.expand(
+    [
+        ("throttled", 429, "SlowDown", "rate_limit_exceeded"),
+        ("unavailable", 503, "ServiceUnavailable", "service_unavailable"),
+    ]
+)
+def test_a_storage_out_of_retries_names_its_passing_fault(
+    _name, status, storage_code, name
+):
+    emails, adapter = emails_with(
+        [
+            slots(upload(INVITE_SHA256)),
+            bucket_refused(status, storage_code, "Try again."),
+        ],
+        max_retries=0,
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert (raised.value.name, raised.value.code) == (name, "upload_failed")
+    assert [request.method for request in adapter.requests] == ["POST", "PUT"]
+
+
+def test_a_posthog_without_the_upload_route_names_attachments_and_sends_nothing():
+    emails, adapter = emails_with(
+        [
+            (
+                404,
+                {
+                    "type": "invalid_request",
+                    "code": "not_found",
+                    "detail": "Endpoint not found.",
+                },
+                {},
+            )
+        ]
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    error = raised.value
+    assert (error.code, error.status_code, error.field) == (
+        "not_found",
+        404,
+        "attachments",
+    )
+    assert "attachments" in error.message
+    assert [request.url for request in adapter.requests] == [UPLOADS_URL]
+
+
 def test_a_project_over_its_daily_upload_bytes_is_told_without_retrying():
     emails, adapter = emails_with([rejected(429, "upload_quota_exceeded"), slots()])
 
