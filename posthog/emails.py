@@ -243,10 +243,10 @@ class CodeEmailArgs(_RecipientArgs):
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
         reply_to: One address or a list of addresses. An empty list sends no reply-to.
         capture_engagement: Capture the email's engagement events, such as
-            opens and clicks, on the recipient's person. Defaults to ``True``.
-            Turning it off doesn't change the email: PostHog still adds its
-            open pixel and rewrites links to count opens and clicks. A project
-            whose admin turned
+            deliveries and opens, on the recipient's person. Defaults to
+            ``True``. Turning it off doesn't change the email: PostHog still
+            adds its open pixel to count opens. It never rewrites the email's
+            links, so it counts no clicks. A project whose admin turned
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
