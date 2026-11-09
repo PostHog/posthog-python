@@ -62,6 +62,7 @@ class PostHogClaudeSDKClient:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a stateful Claude Agent SDK client with PostHog instrumentation.
@@ -78,6 +79,10 @@ class PostHogClaudeSDKClient:
             posthog_properties: Additional properties included on emitted AI events.
             posthog_privacy_mode: Whether to redact captured inputs, outputs, and tool data.
             posthog_groups: Optional PostHog groups to associate with emitted events.
+            posthog_options: Capture options for emitted AI events, such as
+                ``{"cookieless_mode": True}``. They win over context options and
+                ``super_options``. An event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
         from dataclasses import replace as dc_replace
 
@@ -94,6 +99,7 @@ class PostHogClaudeSDKClient:
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             properties=posthog_properties or {},
+            options=posthog_options,
         )
         self._trace_id = posthog_trace_id or str(uuid.uuid4())
         self._distinct_id = posthog_distinct_id
