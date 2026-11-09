@@ -2,7 +2,7 @@
 pypi/posthog: minor
 ---
 
-A send with your own content now takes `track_opens_and_clicks`. It defaults to `True`. With `track_opens_and_clicks=False`, the email goes out without PostHog's open pixel and without links rewritten to count clicks, so PostHog can't count its opens and clicks. It is independent of `capture_engagement`, which decides whether engagement events are captured on the recipient's person. The template form doesn't take it.
+A send with your own content now takes `track_opens_and_clicks`. It defaults to `True`. With `track_opens_and_clicks=False`, the email goes out without PostHog's open pixel, so PostHog can't count its opens. PostHog doesn't track clicks on emails sent from code, so their links are never rewritten either way. It is independent of `capture_engagement`, which decides whether engagement events are captured on the recipient's person. The template form doesn't take it.
 
 ```python
 posthog.emails.send(

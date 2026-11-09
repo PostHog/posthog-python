@@ -247,13 +247,14 @@ class CodeEmailArgs(_RecipientArgs):
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
-        track_opens_and_clicks: Whether the email carries open and click
-            tracking: PostHog's open pixel and links rewritten to count
-            clicks. Defaults to ``True``. With ``False``, the email goes out
-            without either, so PostHog can't count its opens and clicks.
-            Independent of ``capture_engagement``, which decides whether
-            engagement events are captured on the recipient's person. The
-            template form doesn't take it.
+        track_opens_and_clicks: Whether PostHog tracks opens and clicks of
+            the email. Defaults to ``True``. With ``False``, the email goes
+            out without PostHog's open pixel, so PostHog can't count its
+            opens. PostHog doesn't track clicks on emails sent from code, so
+            their links are never rewritten either way. Independent of
+            ``capture_engagement``, which decides whether engagement events
+            are captured on the recipient's person. The template form
+            doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
