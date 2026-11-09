@@ -653,6 +653,32 @@ class ToolCallLifecycle:
         )
         return await handle_feedback(report, self.feedback_options)
 
+    async def record_if_unknown_tool(
+        self, tool_exists: Optional[bool], *, conversation_id_delivered: bool = False
+    ) -> bool:
+        """Record the failed call as ``$mcp_unknown_tool`` when ``tool_exists``
+        proves the server has no tool by that name, and say whether the call is
+        settled that way. A call naming no tool is settled with no event. The
+        adapter then re-raises or returns its response."""
+        if not self.name:
+            return True
+        if tool_exists is not False:
+            return False
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session = await self.prepare_session(conversation_id)
+        await record_unknown_tool(
+            self.data,
+            session,
+            conversation_id=conversation_id,
+            name=self.name,
+            arguments=self.arguments,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+        return True
+
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
@@ -1250,9 +1276,7 @@ def mutate_tool_schema(
             required=context_required,
         )
     if inject_model:
-        schema = _mutate_model_schema(
-            data, tool.name, schema, required=context_required
-        )
+        schema = _mutate_model_schema(data, tool.name, schema)
     else:
         # Discard any earlier registered-tool verdict: middleware may now
         # advertise or dispatch an application-owned field with the same name.
@@ -1281,9 +1305,7 @@ def lists_conversation_id(extra: Any, client_name: Optional[str]) -> bool:
     return client is None or not client.handle_free
 
 
-def _mutate_model_schema(
-    data: MCPAnalyticsData, name: str, schema: Any, *, required: bool
-) -> Any:
+def _mutate_model_schema(data: MCPAnalyticsData, name: str, schema: Any) -> Any:
     if not is_capture_model_enabled(data.options.capture_model):
         return schema
     model_was_injected = data.tool_model_parameter_injected.get(name, False)
@@ -1293,7 +1315,6 @@ def _mutate_model_schema(
             schema,
             name,
             get_model_description(data.options.capture_model),
-            required=required,
         )
     data.tool_model_parameter_injected[name] = not app_owns_model and schema_has_param(
         schema, "llm_model"
@@ -1461,6 +1482,40 @@ async def record_missing_capability(
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
+
+
+async def record_unknown_tool(
+    data: MCPAnalyticsData,
+    session: ResolvedSession,
+    *,
+    conversation_id: Optional[str],
+    name: str,
+    arguments: Optional[Dict[str, Any]],
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Record a call naming a tool the server never registered as
+    ``$mcp_unknown_tool``. It is not a tool call, so it carries no outcome."""
+    try:
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_UNKNOWN_TOOL,
+            "session_id": session.session_id,
+            "session_source": session.source,
+            "conversation_id": conversation_id,
+            "resource_name": name,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+        }
+        await _apply_event_properties(
+            data, event, build_tool_call_request(name, arguments), extra
+        )
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_unknown_tool failed (event dropped): {err}")
 
 
 async def record_feedback(

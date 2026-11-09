@@ -1,5 +1,6 @@
 import gzip
 import json
+import socket
 import unittest
 import zlib
 from datetime import date, datetime, timedelta
@@ -697,6 +698,60 @@ class TestFlagsRetries(unittest.TestCase):
         mock_get_flags_session.return_value = mock_session
 
         response = flags("test-key", "https://test.posthog.com", distinct_id="user123")
+
+        self.assertEqual(response["featureFlags"], {"test-flag": True})
+        self.assertEqual(mock_session.post.call_count, 2)
+        mock_sleep.assert_called_once_with(0.3)
+
+    @mock.patch("posthog.request.time.sleep")
+    def test_flags_does_not_retry_refused_connection(self, mock_sleep):
+        # Bind and close a socket so the port refuses connections.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+
+        with mock.patch("posthog.request.post", wraps=request_module.post) as mock_post:
+            with self.assertRaises(requests.exceptions.ConnectionError):
+                flags(
+                    "test-key",
+                    f"http://127.0.0.1:{port}",
+                    max_retries=2,
+                    distinct_id="user123",
+                )
+
+        self.assertEqual(mock_post.call_count, 1)
+        mock_sleep.assert_not_called()
+
+    @mock.patch("posthog.request.time.sleep")
+    @mock.patch("posthog.request._get_flags_session")
+    def test_flags_retries_when_handling_an_unrelated_refused_connection(
+        self, mock_get_flags_session, mock_sleep
+    ):
+        mock_response = requests.Response()
+        mock_response.status_code = 200
+        mock_response._content = json.dumps(
+            {
+                "featureFlags": {"test-flag": True},
+                "featureFlagPayloads": {},
+                "errorsWhileComputingFlags": False,
+            }
+        ).encode("utf-8")
+
+        mock_session = mock.MagicMock()
+        mock_session.post.side_effect = [
+            requests.exceptions.Timeout("timed out"),
+            mock_response,
+        ]
+        mock_get_flags_session.return_value = mock_session
+
+        # The application evaluates flags while handling its own refused
+        # connection, so the timeout inherits that error as its __context__.
+        try:
+            raise ConnectionRefusedError("database is down")
+        except ConnectionRefusedError:
+            response = flags(
+                "test-key", "https://test.posthog.com", distinct_id="user123"
+            )
 
         self.assertEqual(response["featureFlags"], {"test-flag": True})
         self.assertEqual(mock_session.post.call_count, 2)

@@ -155,7 +155,7 @@ async def test_modern_tools_list_advertises_injected_params():
     assert "context" in tools["add"]["inputSchema"]["properties"]
     assert "conversation_id" in tools["add"]["inputSchema"]["properties"]
     assert "llm_model" in tools["add"]["inputSchema"]["properties"]
-    assert "llm_model" in tools["add"]["inputSchema"]["required"]
+    assert "llm_model" not in tools["add"]["inputSchema"]["required"]
 
     listed = _events(client, "$mcp_tools_list")
     assert listed and set(listed[0]["properties"]["$mcp_listed_tool_names"]) == {

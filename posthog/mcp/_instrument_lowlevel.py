@@ -15,10 +15,11 @@ server's ``request_context`` contextvar (the handler receives only the request).
 from __future__ import annotations
 
 import functools
+import importlib
 import inspect
 import time
 from functools import lru_cache
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
 import mcp.types as mcp_types
 
@@ -36,6 +37,7 @@ from ._instrumentation import (
     copy_tools_list_result,
     extract_tools,
     is_first_listing_page,
+    is_tool_result_error,
     mutate_tool_schema,
     prepare_request,
     raw_listing_owns_tool_name,
@@ -282,6 +284,10 @@ def _wrap_call_tool(
         try:
             result = await original(req)
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(high_level, name)
+            ):
+                raise
             # The @server.call_tool() decorator converts raises into
             # CallToolResult(isError=True), but a handler wired straight into
             # request_handlers can raise — capture before re-raising so the failed
@@ -332,6 +338,12 @@ def _wrap_call_tool(
                     if hasattr(result, "root")
                     else call_result
                 )
+
+        if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(high_level, name),
+            conversation_id_delivered=delivered,
+        ):
+            return result
 
         await lifecycle.record_result(
             call_result,
@@ -581,7 +593,7 @@ async def _name_owned_by_real_tool(
 
 
 @lru_cache(maxsize=1)
-def _tool_lookup_not_found_errors() -> Tuple[type, ...]:
+def _tool_lookup_not_found_errors() -> Tuple[Type[BaseException], ...]:
     """The fastmcp exceptions that mean "no live tool by that name" -- an answer.
     Anything else out of ``get_tool`` is the lookup itself failing. Empty when
     fastmcp is absent or has moved them, which makes every failure delegate:
@@ -714,9 +726,13 @@ async def _listed_input_schema(
     """Return the schema that middleware advertises for the current request."""
     try:
         version = _requested_tool_version(meta)
-        candidates = [
-            tool for tool in await high_level.list_tools() if tool.name == name
-        ]
+        list_tools = getattr(high_level, "list_tools", None)
+        if list_tools is None:
+            # FastMCP 2.x only lists through request middleware, which can
+            # spend rate limits, and its registry can disagree with what that
+            # middleware advertises, so the advertised schema is unknown.
+            return None
+        candidates = [tool for tool in await list_tools() if tool.name == name]
         if version is not None:
             candidates = [
                 tool
@@ -801,13 +817,82 @@ def _dispatch_can_differ(server: Any) -> bool:
     )
 
 
+# Stock fastmcp middleware that observes, times, retries, throttles, denies,
+# caches, or trims a call to the tool it names, and never provides, renames, or
+# reroutes one. The tool-injection family is left out on purpose.
+_STOCK_DISPATCH_PRESERVING_MIDDLEWARE = (
+    ("logging", "LoggingMiddleware"),
+    ("logging", "StructuredLoggingMiddleware"),
+    ("timing", "TimingMiddleware"),
+    ("timing", "DetailedTimingMiddleware"),
+    ("error_handling", "ErrorHandlingMiddleware"),
+    ("error_handling", "RetryMiddleware"),
+    ("rate_limiting", "RateLimitingMiddleware"),
+    ("rate_limiting", "SlidingWindowRateLimitingMiddleware"),
+    ("ping", "PingMiddleware"),
+    ("authorization", "AuthMiddleware"),
+    ("caching", "ResponseCachingMiddleware"),
+    ("response_limiting", "ResponseLimitingMiddleware"),
+)
+
+
 @functools.lru_cache(maxsize=1)
 def _builtin_middleware_types() -> tuple:
     """The middleware a bare ``FastMCP()`` installs on its own, probed rather
-    than named so a new built-in in a later release is still recognised."""
+    than named so a new built-in in a later release is still recognised, plus
+    the stock middleware above that this fastmcp release ships."""
     from fastmcp import FastMCP
 
-    return tuple(type(middleware) for middleware in FastMCP("posthog-probe").middleware)
+    stock = []
+    for module, name in _STOCK_DISPATCH_PRESERVING_MIDDLEWARE:
+        try:
+            stock.append(
+                getattr(
+                    importlib.import_module(f"fastmcp.server.middleware.{module}"), name
+                )
+            )
+        except (ImportError, AttributeError):
+            continue
+    return tuple(
+        type(middleware) for middleware in FastMCP("posthog-probe").middleware
+    ) + tuple(stock)
+
+
+async def registered_tool_exists(server: Any, name: str) -> Optional[bool]:
+    """Whether jlowin's FastMCP registers ``name``, enabled or not, asked after a
+    failed call to tell an unknown tool from a failed one. A disabled tool still
+    exists: calling it is a failed call. ``None`` when nothing authoritative can
+    say: no registry (a raw low-level server, whose listing may hide tools its
+    dispatcher serves), middleware that can serve tools the registry lacks, or a
+    mounted server or other provider, which hides its disabled tools."""
+    if server is None or _dispatch_can_differ(server):
+        return None
+    try:
+        from fastmcp import FastMCP
+
+        # From 3.x, get_tool hides a disabled tool; the providers still hold it.
+        found = (
+            await server.get_tool(name) is not None
+            or await super(FastMCP, server).get_tool(name) is not None
+        )
+    except _tool_lookup_not_found_errors():
+        found = False
+    except Exception as err:  # noqa: BLE001 - analytics must not break the call
+        log(f"PostHog MCP: could not look up tool {name!r} - {err}")
+        return None
+    if found:
+        return True
+    return None if _serves_other_providers(server) else False
+
+
+def _serves_other_providers(server: Any) -> bool:
+    """Whether a FastMCP server serves tools from anywhere but its own
+    registry: a mounted server, a proxy, or a custom provider. FastMCP 2.x
+    keeps mounts in ``_mounted_servers``; 3.x lists them in ``providers``."""
+    if getattr(server, "_mounted_servers", None):
+        return True
+    local = getattr(server, "_local_provider", None)
+    return any(provider is not local for provider in getattr(server, "providers", ()))
 
 
 def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
