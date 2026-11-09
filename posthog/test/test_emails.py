@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import traceback
+import tracemalloc
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Union
@@ -1373,6 +1374,29 @@ def test_refuses_an_email_over_the_limits_before_any_request(_name, attachments,
         "attachments",
     )
     assert error.fix
+    assert adapter.requests == []
+
+
+def test_refuses_an_oversized_email_without_copying_its_files():
+    emails, adapter = emails_with([])
+    scan = memoryview(bytearray(8 * 1024 * 1024))
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(EmailError) as raised:
+            send_code(
+                emails,
+                html=HTML,
+                attachments=[
+                    {"filename": f"scan-{i}.pdf", "content": scan} for i in range(10)
+                ],
+            )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert raised.value.code == "message_too_large"
+    assert peak < len(scan)
     assert adapter.requests == []
 
 

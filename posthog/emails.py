@@ -461,8 +461,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if not (content.get("html") or content.get("text")):
         raise ValueError("html or text must be a nonempty string.")
 
-    references, files = _attachments(args.get("attachments", []))
-    _check_message_size(files, content)
+    references, files = _attachments(args.get("attachments", []), content)
 
     payload: dict[str, Any] = {"to": to, "template_key": template_key, **content}
     if distinct_id is not None:
@@ -522,7 +521,7 @@ def _invalid_attachment(message: str, field: str) -> EmailError:
 
 
 def _attachments(
-    attachments: Any,
+    attachments: Any, content: Mapping[str, str]
 ) -> tuple[list[dict[str, str]], tuple[_File, ...]]:
     if isinstance(
         attachments, (str, bytes, bytearray, memoryview, Mapping)
@@ -535,11 +534,21 @@ def _attachments(
             fix=f"Send at most {_MAX_ATTACHMENTS} files, and link to any others "
             "from the email body.",
         )
-    prepared = [_attachment(index, file) for index, file in enumerate(attachments)]
+    checked = [
+        _checked_attachment(index, file) for index, file in enumerate(attachments)
+    ]
+    _check_message_size(
+        [
+            _content_size(f"attachments__{index}", file.get("content"))
+            for index, file in enumerate(checked)
+        ],
+        content,
+    )
+    prepared = [_attachment(index, file) for index, file in enumerate(checked)]
     return [reference for reference, _ in prepared], tuple(file for _, file in prepared)
 
 
-def _attachment(index: int, file: Any) -> tuple[dict[str, str], _File]:
+def _checked_attachment(index: int, file: Any) -> Mapping[str, Any]:
     field = f"attachments__{index}"
     if not isinstance(file, Mapping):
         raise _invalid_attachment(
@@ -565,56 +574,70 @@ def _attachment(index: int, file: Any) -> tuple[dict[str, str], _File]:
             "An attachment needs a filename, such as 'invoice.pdf'.",
             f"{field}__filename",
         )
-    content = _file_bytes(field, file.get("content"))
-    sha256 = hashlib.sha256(content).hexdigest()
-    reference = {"sha256": sha256, "filename": file["filename"]}
     for name in ("content_type", "content_id"):
-        if name in file:
-            if not isinstance(file[name], str):
-                raise _invalid_attachment(
-                    f"An attachment's {name} must be a string.", f"{field}__{name}"
-                )
-            reference[name] = file[name]
-    return reference, _File(
-        sha256=sha256, content=content, first_attachment_index=index
-    )
-
-
-def _file_bytes(field: str, content: Any) -> bytes:
-    if isinstance(content, (bytes, bytearray, memoryview)):
-        file_bytes = bytes(content)
-    elif isinstance(content, str):
-        try:
-            file_bytes = base64.b64decode(content, validate=True)
-        except (binascii.Error, ValueError):
+        if name in file and not isinstance(file[name], str):
             raise _invalid_attachment(
-                "An attachment's content string must be Base64. "
-                "Pass the file's bytes instead, such as text.encode() for text.",
-                f"{field}__content",
-            ) from None
+                f"An attachment's {name} must be a string.", f"{field}__{name}"
+            )
+    return file
+
+
+def _content_size(field: str, content: Any) -> int:
+    if isinstance(content, (bytes, bytearray, memoryview)):
+        size = memoryview(content).nbytes
+    elif isinstance(content, str):
+        padding = len(content) - len(content.rstrip("="))
+        size = max(0, len(content) * 3 // 4 - padding)
     else:
         raise _invalid_attachment(
             "An attachment needs content: bytes or a Base64 string. "
             "Convert a list of byte values with bytes(content).",
             f"{field}__content",
         )
-    if not file_bytes:
+    if not size:
         raise _invalid_attachment(
             "An attachment's content is empty, and an empty file gives the "
             "recipient nothing to open. Leave the file out.",
             f"{field}__content",
         )
-    return file_bytes
+    return size
 
 
-def _check_message_size(files: Sequence[_File], content: Mapping[str, str]) -> None:
-    bodies = [
-        body.encode("utf-8")
+def _attachment(index: int, file: Mapping[str, Any]) -> tuple[dict[str, str], _File]:
+    content = _file_bytes(f"attachments__{index}", file["content"])
+    sha256 = hashlib.sha256(content).hexdigest()
+    reference = {"sha256": sha256, "filename": file["filename"]}
+    for name in ("content_type", "content_id"):
+        if name in file:
+            reference[name] = file[name]
+    return reference, _File(
+        sha256=sha256, content=content, first_attachment_index=index
+    )
+
+
+def _file_bytes(field: str, content: Union[bytes, bytearray, memoryview, str]) -> bytes:
+    if not isinstance(content, str):
+        return bytes(content)
+    try:
+        return base64.b64decode(content, validate=True)
+    except (binascii.Error, ValueError):
+        raise _invalid_attachment(
+            "An attachment's content string must be Base64. "
+            "Pass the file's bytes instead, such as text.encode() for text.",
+            f"{field}__content",
+        ) from None
+
+
+def _check_message_size(file_sizes: Sequence[int], content: Mapping[str, str]) -> None:
+    body_sizes = [
+        len(body.encode("utf-8"))
         for body in (content.get("html"), content.get("text"))
         if body
     ]
-    sizes = [file.size for file in files] + [len(body) for body in bodies]
-    if files and _estimated_message_bytes(sizes) > _MAX_MESSAGE_BYTES:
+    if (
+        file_sizes
+        and _estimated_message_bytes([*file_sizes, *body_sizes]) > _MAX_MESSAGE_BYTES
+    ):
         raise _over_the_limit(
             "message_too_large",
             f"These files make the email larger than {_MESSAGE_LIMIT}, so no email was sent.",
