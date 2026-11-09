@@ -1,5 +1,11 @@
 # posthog
 
+## 7.86.3 — 2026-11-09
+
+### Patch changes
+
+- [2a2e5788](https://github.com/posthog/posthog-python/commit/2a2e5788b31170a3971359af10a561b128bfea03) An exception passed to `capture_exception` without being raised now gets its synthesized stack in outermost-first order, without the SDK's own capture frames, and with `mechanism.synthetic` set to `true`. — Thanks @luantaraschi!
+
 ## 7.86.2 — 2026-11-09
 
 ### Patch changes
