@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from typing import TYPE_CHECKING as _TYPE_CHECKING, Any, Dict, Optional
@@ -40,6 +41,8 @@ from .wrapper_utils import (
     _wrap_openai_resources,
     merge_provider_override,
 )
+
+_log = logging.getLogger("posthog")
 
 
 class OpenAI(openai.OpenAI):
@@ -167,7 +170,26 @@ class WrappedResponses(_OpenAIWrapperResource):
     ):
         start_time = time.time()
         state = _ResponsesStreamState()
-        response = self._original.create(**kwargs)
+        try:
+            response = self._original.create(**kwargs)
+        except Exception as exc:
+            try:
+                self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    state,
+                    time.time() - start_time,
+                    error=exc,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error, and the
+                # fixed text avoids echoing prompt or error content into logs.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
 
         def generator():
             stream_error: Optional[BaseException] = None
@@ -395,7 +417,26 @@ class WrappedCompletions(_OpenAIWrapperResource):
             **(stream_options if isinstance(stream_options, dict) else {}),
             "include_usage": True,
         }
-        response = self._original.create(**kwargs)
+        try:
+            response = self._original.create(**kwargs)
+        except Exception as exc:
+            try:
+                self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    state,
+                    time.time() - start_time,
+                    error=exc,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error, and the
+                # fixed text avoids echoing prompt or error content into logs.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
 
         def generator():
             stream_error: Optional[BaseException] = None
