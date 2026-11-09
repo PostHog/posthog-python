@@ -2,6 +2,8 @@
 
 The Python SDK captures events, evaluates feature flags and reports errors from Python 3.10 or later.
 
+To send your first event, install the package, create a client, capture an event, and shut the client down, as the steps below show.
+
 ## Install
 
 ```bash
