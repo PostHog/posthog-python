@@ -1,5 +1,11 @@
 # posthog
 
+## 7.86.1 — 2026-11-09
+
+### Patch changes
+
+- [bf3adb3f](https://github.com/posthog/posthog-python/commit/bf3adb3ff90feb11bd7cc06e655451ef6a526edd) A flag record that the server marks `failed` no longer returns a payload, even when the record still carries `metadata.payload`. A failed flag reads as disabled, so `get_feature_flag_payload()`, `get_feature_flag_result().payload` and a snapshot's `get_flag_payload()` now return `None` for it, and its `$feature_flag_called` events leave out `$feature_flag_payload`. `get_all_flags_and_payloads()` and `get_feature_payloads()` already left it out. This applies to responses from both `/flags?v=4` and older servers. — Thanks @andehen!
+
 ## 7.86.0 — 2026-11-06
 
 ### Minor changes
