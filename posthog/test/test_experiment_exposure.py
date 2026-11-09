@@ -572,6 +572,25 @@ def test_rule_fields_are_sent_only_for_reasons_that_name_a_rule(
         FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
+@pytest.mark.parametrize("method", ["get_flag", "is_enabled"])
+async def test_async_a_failed_split_sends_no_exposure(method):
+    # The record keeps its complete split metadata, but it failed.
+    record = _split(value=None, failed=True)
+
+    async def read(client: Any) -> None:
+        snapshot = await client.evaluate_flags(DISTINCT_ID)
+        getattr(snapshot, method)(FLAG)
+
+    events = await _read_async_events([_response(record)], [read])
+
+    [called] = _named(events, FLAG_CALLED)
+    assert _attribution(called.properties) == {
+        "$feature_flag_config_version": 2,
+        "$feature_flag_reason_code": "experiment_split",
+    }
+    assert _named(events, EXPOSURE) == []
+
+
 @pytest.mark.parametrize("path", ["get_feature_flag_result", "snapshot.get_flag"])
 @pytest.mark.parametrize(
     "code, rule_type",
