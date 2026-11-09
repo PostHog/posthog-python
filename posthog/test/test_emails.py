@@ -1211,7 +1211,15 @@ def test_a_storage_out_of_retries_names_its_passing_fault(
     assert [request.method for request in adapter.requests] == ["POST", "PUT"]
 
 
-def test_a_posthog_without_the_upload_route_names_attachments_and_sends_nothing():
+@parameterized.expand(
+    [
+        ("posthog_without_the_upload_route", "Endpoint not found."),
+        ("sending_from_code_off_for_the_project", "Not found."),
+    ]
+)
+def test_an_upload_route_404_reports_posthogs_answer_on_attachments_and_sends_nothing(
+    _name, detail
+):
     emails, adapter = emails_with(
         [
             (
@@ -1219,7 +1227,8 @@ def test_a_posthog_without_the_upload_route_names_attachments_and_sends_nothing(
                 {
                     "type": "invalid_request",
                     "code": "not_found",
-                    "detail": "Endpoint not found.",
+                    "detail": detail,
+                    "attr": None,
                 },
                 {},
             )
@@ -1234,12 +1243,33 @@ def test_a_posthog_without_the_upload_route_names_attachments_and_sends_nothing(
         )
 
     error = raised.value
+    assert (error.name, error.code, error.status_code, error.field, error.message) == (
+        "not_found",
+        "not_found",
+        404,
+        "attachments",
+        detail,
+    )
+    assert error.why and error.fix
+    assert [request.url for request in adapter.requests] == [UPLOADS_URL]
+
+
+def test_an_upload_route_404_without_an_answer_still_names_attachments():
+    emails, adapter = emails_with([(404, b"<h1>Not Found</h1>", {})])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    error = raised.value
     assert (error.code, error.status_code, error.field) == (
         "not_found",
         404,
         "attachments",
     )
-    assert "attachments" in error.message
     assert [request.url for request in adapter.requests] == [UPLOADS_URL]
 
 

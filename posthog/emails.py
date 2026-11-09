@@ -95,7 +95,8 @@ A send with attachments can also raise:
   file bytes. Files it already sent don't count.
 - ``field_not_accepted``: the project can't send files yet.
 - ``not_found`` (404) with ``field`` ``attachments``: this PostHog version
-  doesn't take files yet.
+  doesn't take files yet, or sending email from code is off for the project.
+  ``message`` carries PostHog's answer, and no email was sent.
 
 Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 30 days after the send, as an :class:`EmailStatus`. A key with only
@@ -925,7 +926,7 @@ def _pending_uploads_parser(files: Sequence[_File]) -> _Parse[list[_Upload]]:
     ) -> list[_Upload]:
         fields = _json_object(body)
         if status == 404:
-            raise _no_upload_route()
+            raise _upload_route_not_found(fields, retry_after_header)
         if not 200 <= status < 300:
             raise _response_error(fields, status, retry_after_header)
         slots = fields.get("files")
@@ -960,17 +961,19 @@ def _pending_upload(slot: Any, file: _File, status: int) -> Optional[_Upload]:
     return _Upload(file=file, url=url, method=method, headers=headers)
 
 
-def _no_upload_route() -> EmailError:
-    return EmailError(
-        name="not_found",
-        code="not_found",
-        message="PostHog has no upload route for attachments here, so no email was sent.",
-        status_code=404,
-        why="This PostHog version doesn't take attachments yet, or transactional "
-        "email is not enabled for the project.",
-        fix="Send the email without attachments, or check that the project can "
-        "send transactional email.",
-        field="attachments",
+def _upload_route_not_found(
+    fields: Mapping[str, Any], retry_after_header: Optional[str]
+) -> EmailError:
+    unanswered = {
+        "code": "not_found",
+        "why": "This PostHog version doesn't take attachments yet, or sending "
+        "email from code is off for the project.",
+        "fix": "Send the email without attachments, or check that the project "
+        "can send email from code.",
+    }
+    answered = {key: value for key, value in fields.items() if value is not None}
+    return _response_error(
+        {**unanswered, **answered, "attr": "attachments"}, 404, retry_after_header
     )
 
 
