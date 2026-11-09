@@ -1,5 +1,102 @@
 # posthog
 
+## 7.86.1 — 2026-11-09
+
+### Patch changes
+
+- [bf3adb3f](https://github.com/posthog/posthog-python/commit/bf3adb3ff90feb11bd7cc06e655451ef6a526edd) A flag record that the server marks `failed` no longer returns a payload, even when the record still carries `metadata.payload`. A failed flag reads as disabled, so `get_feature_flag_payload()`, `get_feature_flag_result().payload` and a snapshot's `get_flag_payload()` now return `None` for it, and its `$feature_flag_called` events leave out `$feature_flag_payload`. `get_all_flags_and_payloads()` and `get_feature_payloads()` already left it out. This applies to responses from both `/flags?v=4` and older servers. — Thanks @andehen!
+
+## 7.86.0 — 2026-11-06
+
+### Minor changes
+
+- [0aa5df1](https://github.com/posthog/posthog-python/commit/0aa5df18d1c60769de1307677b1e0e649eb023e8) MCP analytics now matches the cross-SDK MCP spec ahead of 1.0:
+  
+  - `instrument()` sends `$mcp_unknown_tool` instead of a failed `$mcp_tool_call` and `$exception` when a `tools/call` names a tool your server never registered. Insights that count failed tool calls stop counting these. A call naming no tool sends nothing. A raw low-level server has no registry the SDK can read, so a failed call there stays a failed tool call.
+  - FastMCP's stock logging, timing, error-handling, and similar middleware no longer turns off `llm_model` injection on standalone `fastmcp.FastMCP`.
+  - Manual capture without a `session_id` now sends a fresh `ses_` session id and uses it as the `distinct_id`, instead of no `$session_id` and an `anonymous` person.
+  - Truncated string properties now fit their limit with the `...` marker included, so `$mcp_tool_name` and other names stop at 256 characters instead of 259. — Thanks @lucasheriques!
+- [5f2ee56](https://github.com/posthog/posthog-python/commit/5f2ee56bb0f2b3815e863045c6506a35ae4053b8) `posthog.mcp` is now stable. From this release, a minor or patch release of `posthog` no longer makes breaking changes to the `posthog.mcp` API, renames or removes a `$mcp_*` event or property, changes its type, or changes which requests send an event, so your saved insights keep working across upgrades. New events and properties can still arrive in minor releases. Upgrading needs no code change. — Thanks @lucasheriques!
+
+### Patch changes
+
+- [d8a7ff0](https://github.com/posthog/posthog-python/commit/d8a7ff0efa49eb4cf0be8a1b30c1370d6e322553) On FastMCP 2.x servers with middleware, `posthog.mcp` no longer tries to read the advertised tool schema on each call. FastMCP 2.x can only list tools through request middleware, which can spend rate limits, so the lookup failed and logged an error on every call. Argument names there stay redacted in `$mcp_input_keys`, as before. — Thanks @lucasheriques!
+
+## 7.85.0 — 2026-11-06
+
+### Minor changes
+
+- [778f386](https://github.com/posthog/posthog-python/commit/778f386eaacd1ea9379852c3b032a9f19a6271ea) MCP analytics tool definitions change in three ways:
+  
+  - `get_more_tools` and `send_feedback` declare `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint` as `false`, because a call records data in your PostHog project. Their annotations no longer carry a `title`.
+  - The injected `context` argument has a shorter description.
+  - The injected `llm_model` argument is always optional.
+  
+  These changes alter your published tool definitions. If your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools. — Thanks @lucasheriques!
+
+## 7.84.3 — 2026-11-06
+
+### Patch changes
+
+- [3f93a34](https://github.com/posthog/posthog-python/commit/3f93a347939779e63f0176bf0a1396b07f98002c) Exclude client-only feature flags from definition-load warnings about experience continuity and unsupported definitions, without changing local evaluation. — Thanks @marandaneto!
+
+## 7.84.2 — 2026-11-06
+
+### Patch changes
+
+- [11585fb](https://github.com/posthog/posthog-python/commit/11585fba6517aa3c33e657e5b94103e65469563e) Stop retrying `/flags` requests when the connection is refused, so the flag error surfaces right away instead of after the retry backoff. — Thanks @luantaraschi!
+
+## 7.84.1 — 2026-11-05
+
+### Patch changes
+
+- [f3116ff](https://github.com/posthog/posthog-python/commit/f3116ffca51ba3dcac8527bb0c50505bab079bdc) Reworded the descriptions of the injected `conversation_id` and `llm_model` arguments and the `get_more_tools` and `send_feedback` virtual tools so they describe the field instead of instructing the model. This changes your published tool definitions; if your server is listed in the ChatGPT or Claude directories, those platforms may re-review the updated tools. — Thanks @lucasheriques!
+
+## 7.84.0 — 2026-11-05
+
+### Minor changes
+
+- [063f1ce](https://github.com/posthog/posthog-python/commit/063f1cece68ee0d6e4d644d4b6fe0fbe335e3b29) `posthog.emails.send()` can now send email content your code rendered, such as HTML from Jinja or React Email. Give the email a `template_key` and a `subject`, and pass `html`, `text` or both.
+  
+  ```python
+  posthog = Posthog("phc_...", secret_key="phs_...")
+  
+  result = posthog.emails.send(
+      to="user@example.com",
+      distinct_id="user_123",
+      template_key="password-reset",
+      subject="Reset your password",
+      html=rendered_html,
+  )
+  
+  # "delivered", "bounced", ...
+  status = posthog.emails.get(result.id).status
+  ```
+  
+  You need a project secret API key, the kind that starts with `phs_`. Create one under **Project secret API keys** in your project settings. Set its **Transactional email** scope to Write to send emails, or to Read for a key that only reads statuses. Pass it to the client as `secret_key`. Set `app_host` to your PostHog app URL when you self-host PostHog or send through a reverse proxy.
+  
+  PostHog records each email's delivery, opens and clicks on the person with that `distinct_id`. It groups every email with the same `template_key`, so you see their metrics and logs in one place. The SDK retries a request that hits a network error, a rate limit or an outage twice by default. Every send carries an idempotency key, so a retry never sends the email twice. Pass your own `idempotency_key`, such as `welcome:user_123`, and your job runner's retries are safe too.
+  
+  A send with your own content also takes `from_`, `reply_to` and `capture_engagement=False`. Set `migrated_from` on the client to tell PostHog which email provider you moved from. A failed call raises an `EmailError` with PostHog's `code` and the HTTP `status_code`.
+  
+  Docs: [Send transactional emails with Python](https://posthog.com/docs/workflows/transactional-emails/python) and the [transactional email overview](https://posthog.com/docs/workflows/transactional-emails). — Thanks @Silthus!
+
+### Patch changes
+
+- [b741c65](https://github.com/posthog/posthog-python/commit/b741c65a5cd0e503aaf915e695cdb4d54686d9f9) The LangChain callback handler no longer reports too few input tokens for a non-streamed `ChatAnthropic` call that reads or writes the prompt cache. It took the raw Anthropic usage from `response_metadata`, whose input tokens already exclude the cache, and subtracted the cache tokens again, so a cached call usually reported 0 input tokens. It now reads LangChain's standard `usage_metadata` first, as it already did for streamed calls. — Thanks @jaeminbird for your first contribution 🎉!
+
+## 7.83.3 — 2026-11-05
+
+### Patch changes
+
+- [7cd0d8a](https://github.com/posthog/posthog-python/commit/7cd0d8a4a9cadafc92bc479c4ec209436476132c) Streaming Gemini calls that fail now record the HTTP status of the google-genai error (for example 429 or 503) in `$ai_http_status`. Before, `capture_streaming_event` read only `status_code`, so these events were captured with a status of 0. — Thanks @pcbeingused333!
+
+## 7.83.2 — 2026-11-04
+
+### Patch changes
+
+- [ae2dcf2](https://github.com/posthog/posthog-python/commit/ae2dcf2eaa76fa2693ed8ebe19bbf22054661acb) Local evaluation now respects early access feature enrollment. A flag with feature enrollment uses the `$feature_enrollment/<flag key>` person property when you pass it, and otherwise falls back to the flags service. Before, it returned `False` for enrolled people who matched no release condition, while the flags service returned `True`. — Thanks @puemos for your first contribution 🎉!
+
 ## 7.83.1 — 2026-11-03
 
 ### Patch changes
