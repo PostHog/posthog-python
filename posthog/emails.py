@@ -64,8 +64,10 @@ per message after Base64 encoding, about 29 MB of files. The client checks
 both before any request. It then asks PostHog which files it lacks, uploads
 each of those to the URL PostHog answers, without the secret key, and sends the
 email naming each file by its SHA-256. A file the project already sent uploads
-nothing. A failed upload sends no email. The upload URL's host is not the app
-host, so a network that limits outbound requests must allow it.
+nothing, and the same bytes in two attachments upload once. An upload retries
+like a send when the storage is unreachable or answers a passing fault. A
+failed upload sends no email. The upload URL's host is not the app host, so a
+network that limits outbound requests must allow it.
 
 Errors: a send that is not queued raises :class:`EmailError`. Branch on
 ``code``. The ones a setup usually hits:
@@ -87,6 +89,8 @@ A send with attachments can also raise:
   content.
 - ``upload_failed``: PostHog's file storage refused an upload. ``message``
   and ``why`` carry its answer, and ``field`` names the attachment.
+- ``network_error`` with ``field`` naming an attachment: the file storage
+  didn't answer, such as when a firewall blocks its host.
 - ``upload_quota_exceeded`` (429): the project uploaded its daily limit of
   file bytes. Files it already sent don't count.
 - ``field_not_accepted``: the project can't send files yet.
@@ -175,6 +179,8 @@ _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
 _DAILY_QUOTA_CODES = frozenset({"upload_quota_exceeded"})
 _MAX_ATTACHMENTS = 10
+# File storage answers these for a passing fault, such as S3's InternalError and SlowDown.
+_STORAGE_RETRY_STATUSES = frozenset({500, 502, 503, 504})
 _MAX_MESSAGE_BYTES = 40_000_000
 _HEADERS_AND_MIME_BOUNDARIES_BYTES = 64 * 1024
 _MESSAGE_LIMIT = "40 MB after Base64 encoding, about 29 MB of files"
@@ -379,6 +385,7 @@ class EmailStatus:
 class _File:
     sha256: str
     content: bytes
+    index: int  # The first attachment that carries these bytes.
 
     @property
     def size(self) -> int:
@@ -386,7 +393,8 @@ class _File:
 
 
 @dataclass(frozen=True)
-class _UploadTarget:
+class _Upload:
+    file: _File
     url: str
     method: str
     headers: dict[str, str]
@@ -453,7 +461,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         raise ValueError("html or text must be a nonempty string.")
 
     references, files = _attachments(args.get("attachments", []))
-    _check_limits(files, content)
+    _check_message_size(files, content)
 
     payload: dict[str, Any] = {"to": to, "template_key": template_key, **content}
     if distinct_id is not None:
@@ -466,7 +474,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         body=_encode(payload),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
-        files=files,
+        files=_distinct(files),
     )
 
 
@@ -496,6 +504,14 @@ def _addresses(field: str, value: Any) -> list[str]:
     return list(addresses)
 
 
+def _distinct(files: Sequence[_File]) -> tuple[_File, ...]:
+    """Each file once, so bytes that two attachments share upload once."""
+    by_hash: dict[str, _File] = {}
+    for file in files:
+        by_hash.setdefault(file.sha256, file)
+    return tuple(by_hash.values())
+
+
 def _invalid_attachment(message: str, field: str) -> EmailError:
     return EmailError(
         name="validation_error",
@@ -512,6 +528,13 @@ def _attachments(
         attachments, (str, bytes, bytearray, memoryview, Mapping)
     ) or not isinstance(attachments, Sequence):
         raise _invalid_attachment("attachments must be a list of files.", "attachments")
+    if len(attachments) > _MAX_ATTACHMENTS:
+        raise _over_the_limit(
+            "too_many_attachments",
+            f"An email carries at most {_MAX_ATTACHMENTS} files, so no email was sent.",
+            fix=f"Send at most {_MAX_ATTACHMENTS} files, and link to any others "
+            "from the email body.",
+        )
     prepared = [_attachment(index, file) for index, file in enumerate(attachments)]
     return [reference for reference, _ in prepared], tuple(file for _, file in prepared)
 
@@ -552,7 +575,7 @@ def _attachment(index: int, file: Any) -> tuple[dict[str, str], _File]:
                     f"An attachment's {name} must be a string.", f"{field}__{name}"
                 )
             reference[name] = file[name]
-    return reference, _File(sha256=sha256, content=content)
+    return reference, _File(sha256=sha256, content=content, index=index)
 
 
 def _file_bytes(field: str, content: Any) -> bytes:
@@ -582,14 +605,7 @@ def _file_bytes(field: str, content: Any) -> bytes:
     return file_bytes
 
 
-def _check_limits(files: Sequence[_File], content: Mapping[str, str]) -> None:
-    if len(files) > _MAX_ATTACHMENTS:
-        raise _over_the_limit(
-            "too_many_attachments",
-            f"An email carries at most {_MAX_ATTACHMENTS} files, so no email was sent.",
-            fix=f"Send at most {_MAX_ATTACHMENTS} files, and link to any others "
-            "from the email body.",
-        )
+def _check_message_size(files: Sequence[_File], content: Mapping[str, str]) -> None:
     bodies = [
         body.encode("utf-8")
         for body in (content.get("html"), content.get("text"))
@@ -879,24 +895,27 @@ def _parse_status_response(
     )
 
 
-def _upload_slots_parser(
-    files: Sequence[_File],
-) -> _Parse[list[Optional[_UploadTarget]]]:
+def _uploads_parser(files: Sequence[_File]) -> _Parse[list[_Upload]]:
+    """Parse PostHog's answer into the uploads still to make, leaving out the files it has."""
+
     def parse(
         status: int, body: bytes, retry_after_header: Optional[str]
-    ) -> list[Optional[_UploadTarget]]:
+    ) -> list[_Upload]:
         fields = _json_object(body)
         if not 200 <= status < 300:
             raise _response_error(fields, status, retry_after_header)
         slots = fields.get("files")
         if not isinstance(slots, list) or len(slots) != len(files):
             raise _no_upload_slots(status)
-        return [_upload_target(slot, file, status) for slot, file in zip(slots, files)]
+        uploads = (
+            _pending_upload(slot, file, status) for slot, file in zip(slots, files)
+        )
+        return [upload for upload in uploads if upload is not None]
 
     return parse
 
 
-def _upload_target(slot: Any, file: _File, status: int) -> Optional[_UploadTarget]:
+def _pending_upload(slot: Any, file: _File, status: int) -> Optional[_Upload]:
     if not isinstance(slot, dict) or slot.get("sha256") != file.sha256:
         raise _no_upload_slots(status)
     if slot.get("status") == "present":
@@ -914,7 +933,7 @@ def _upload_target(slot: Any, file: _File, status: int) -> Optional[_UploadTarge
         or not all(isinstance(value, str) for value in headers.values())
     ):
         raise _no_upload_slots(status)
-    return _UploadTarget(url=url, method=method, headers=headers)
+    return _Upload(file=file, url=url, method=method, headers=headers)
 
 
 def _no_upload_slots(status: int) -> EmailError:
@@ -937,7 +956,10 @@ def _upload_error(
     answer = dict(_STORAGE_ERROR.findall(body.decode("utf-8", "replace")))
     storage_answer = " ".join(filter(None, (f"HTTP {status}", answer.get("Code"))))
     return EmailError(
-        name=_error_name(status, "upload_failed"),
+        # The names for PostHog's statuses, such as invalid_permission for 403, would mislead here.
+        name="service_unavailable"
+        if status in _STORAGE_RETRY_STATUSES
+        else "application_error",
         code="upload_failed",
         message=f"PostHog's file storage refused the upload of attachments[{index}] "
         f"with {storage_answer}, so no email was sent.",
@@ -971,6 +993,8 @@ def _is_retryable(error: EmailError) -> bool:
     # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
     if error.status_code is None:
         return error.code == "network_error"
+    if error.code == "upload_failed":
+        return error.status_code in _STORAGE_RETRY_STATUSES
     if error.status_code == 409:
         return error.code in _IN_FLIGHT_CODES
     if error.status_code == 429:
@@ -1039,8 +1063,17 @@ class _BearerAuth(requests.auth.AuthBase):
         return request
 
 
-def _storage_unreachable(exc: Exception) -> str:
-    return f"PostHog's file storage didn't answer ({type(exc).__name__})."
+def _storage_unreachable(index: int, exc: Exception) -> EmailError:
+    # Built without the request's exception, whose text holds the signed URL.
+    return EmailError(
+        name="service_unavailable",
+        code="network_error",
+        message=f"PostHog's file storage didn't answer the upload of attachments[{index}] "
+        f"({type(exc).__name__}), so no email was sent.",
+        fix="Send the email again. If it keeps failing, check that your network "
+        "lets the app reach PostHog's file storage.",
+        field=f"attachments__{index}",
+    )
 
 
 def _files_body(files: Sequence[_File]) -> bytes:
@@ -1173,7 +1206,9 @@ class Emails(_EmailsBase):
                 not tell whether it did.
                 With attachments, ``code`` is ``too_many_attachments``,
                 ``message_too_large`` or ``invalid_attachment`` before any
-                request, and ``upload_failed`` when an upload failed.
+                request, ``upload_failed`` when the storage refused an upload,
+                and ``network_error`` with ``field`` naming the attachment
+                when the storage didn't answer.
             TypeError, ValueError: An argument has the wrong type or format.
 
         Examples:
@@ -1220,20 +1255,19 @@ class Emails(_EmailsBase):
 
     def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from, has_body=True)
-        targets = self._call(
+        uploads = self._call(
             self._posthog_request(
                 "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
             ),
-            _upload_slots_parser(prepared.files),
+            _uploads_parser(prepared.files),
             prepared.max_retries,
         )
-        for index, (file, target) in enumerate(zip(prepared.files, targets)):
-            if target is not None:
-                self._call(
-                    self._storage_request(target, file.content),
-                    _upload_parser(index),
-                    prepared.max_retries,
-                )
+        for upload in uploads:
+            self._call(
+                self._storage_request(upload),
+                _upload_parser(upload.file.index),
+                prepared.max_retries,
+            )
 
     def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
@@ -1283,14 +1317,12 @@ class Emails(_EmailsBase):
             allow_redirects=False,
         )
 
-    def _storage_request(
-        self, target: _UploadTarget, content: bytes
-    ) -> Callable[[], requests.Response]:
+    def _storage_request(self, upload: _Upload) -> Callable[[], requests.Response]:
         session = self._get_session()
         request = requests.Request(
-            target.method, target.url, data=content, headers=target.headers
+            upload.method, upload.url, data=upload.file.content, headers=upload.headers
         ).prepare()
-        transport = session.merge_environment_settings(target.url, {}, None, None, None)
+        transport = session.merge_environment_settings(upload.url, {}, None, None, None)
 
         def send() -> requests.Response:
             try:
@@ -1298,9 +1330,7 @@ class Emails(_EmailsBase):
                     request, timeout=self.timeout, allow_redirects=False, **transport
                 )
             except requests.exceptions.RequestException as exc:
-                raise requests.exceptions.ConnectionError(
-                    _storage_unreachable(exc)
-                ) from None
+                raise _storage_unreachable(upload.file.index, exc) from None
 
         return send
 
@@ -1440,20 +1470,19 @@ class AsyncEmails(_EmailsBase):
 
     async def _upload(self, prepared: _PreparedSend, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from, has_body=True)
-        targets = await self._call(
+        uploads = await self._call(
             self._posthog_request(
                 "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
             ),
-            _upload_slots_parser(prepared.files),
+            _uploads_parser(prepared.files),
             prepared.max_retries,
         )
-        for index, (file, target) in enumerate(zip(prepared.files, targets)):
-            if target is not None:
-                await self._call(
-                    self._storage_request(target, file.content),
-                    _upload_parser(index),
-                    prepared.max_retries,
-                )
+        for upload in uploads:
+            await self._call(
+                self._storage_request(upload),
+                _upload_parser(upload.file.index),
+                prepared.max_retries,
+            )
 
     async def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
@@ -1487,15 +1516,13 @@ class AsyncEmails(_EmailsBase):
             timeout=self.timeout,
         )
 
-    def _storage_request(
-        self, target: _UploadTarget, content: bytes
-    ) -> Callable[[], Awaitable[Any]]:
+    def _storage_request(self, upload: _Upload) -> Callable[[], Awaitable[Any]]:
         httpx, client = self._get_client()
         request = httpx.Request(
-            target.method,
-            target.url,
-            content=content,
-            headers=target.headers,
+            upload.method,
+            upload.url,
+            content=upload.file.content,
+            headers=upload.headers,
             extensions={"timeout": httpx.Timeout(self.timeout).as_dict()},
         )
 
@@ -1503,7 +1530,7 @@ class AsyncEmails(_EmailsBase):
             try:
                 return await client.send(request, auth=None)
             except httpx.RequestError as exc:
-                raise httpx.ConnectError(_storage_unreachable(exc)) from None
+                raise _storage_unreachable(upload.file.index, exc) from None
 
         return send
 

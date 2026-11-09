@@ -1053,7 +1053,8 @@ def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
         )
 
     error = raised.value
-    assert (error.code, error.status_code, error.field) == (
+    assert (error.name, error.code, error.status_code, error.field) == (
+        "application_error",
         "upload_failed",
         status,
         "attachments__0",
@@ -1088,8 +1089,10 @@ def test_an_unreachable_storage_never_shows_the_signed_url_in_the_traceback():
             attachments=[{"filename": "invite.ics", "content": INVITE}],
         )
 
-    assert raised.value.code == "network_error"
-    assert "X-Amz-Signature" not in "".join(traceback.format_exception(raised.value))
+    error = raised.value
+    assert (error.code, error.field) == ("network_error", "attachments__0")
+    assert "file storage" in error.message
+    assert "X-Amz-Signature" not in "".join(traceback.format_exception(error))
     assert [request.method for request in adapter.requests] == ["POST"] + ["PUT"] * 3
 
 
@@ -1115,15 +1118,25 @@ async def test_async_unreachable_storage_never_shows_the_signed_url_in_the_trace
             attachments=[{"filename": "invite.ics", "content": INVITE}],
         )
 
-    assert raised.value.code == "network_error"
-    assert "X-Amz-Signature" not in "".join(traceback.format_exception(raised.value))
+    error = raised.value
+    assert (error.code, error.field) == ("network_error", "attachments__0")
+    assert "file storage" in error.message
+    assert "X-Amz-Signature" not in "".join(traceback.format_exception(error))
 
 
-def test_an_unavailable_storage_is_retried_before_the_send():
+@parameterized.expand(
+    [
+        ("slow_down", 503, "SlowDown", "Please reduce your request rate."),
+        ("internal_error", 500, "InternalError", "Please try again."),
+    ]
+)
+def test_a_storage_that_asks_for_a_retry_is_retried_before_the_send(
+    _name, status, code, message
+):
     emails, adapter = emails_with(
         [
             slots(upload(INVITE_SHA256)),
-            bucket_refused(503, "SlowDown", "Please reduce your request rate."),
+            bucket_refused(status, code, message),
             stored(),
             accepted(),
         ]
@@ -1205,6 +1218,66 @@ def test_a_retried_send_reuses_its_uploads_and_its_idempotency_key():
     _ask, _put, first, retry = adapter.requests
     assert (retry.url, retry.body) == (SEND_URL, first.body)
     assert retry.headers["Idempotency-Key"] == "invite:user_123"
+
+
+def test_the_same_bytes_in_two_attachments_upload_once():
+    emails, adapter = emails_with([slots(upload(LOGO_SHA256)), stored(), accepted()])
+
+    send_code(
+        emails,
+        html=HTML,
+        attachments=[
+            {"filename": "logo.png", "content": LOGO, "content_id": "logo"},
+            {"filename": "logo-copy.png", "content": LOGO},
+        ],
+    )
+
+    ask, put, sent = adapter.requests
+    assert json.loads(ask.body) == {"files": [{"sha256": LOGO_SHA256, "size": 8}]}
+    assert put.body == LOGO
+    assert json.loads(sent.body)["attachments"] == [
+        {"sha256": LOGO_SHA256, "filename": "logo.png", "content_id": "logo"},
+        {"sha256": LOGO_SHA256, "filename": "logo-copy.png"},
+    ]
+
+
+def test_a_failed_upload_names_the_first_attachment_with_those_bytes():
+    emails, _adapter = emails_with(
+        [
+            slots(present(INVITE_SHA256), upload(LOGO_SHA256)),
+            bucket_refused(403, "AccessDenied", "Request has expired"),
+        ]
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[
+                {"filename": "invite.ics", "content": INVITE},
+                {"filename": "logo.png", "content": LOGO},
+                {"filename": "logo-copy.png", "content": LOGO},
+            ],
+        )
+
+    assert raised.value.field == "attachments__1"
+
+
+def test_refuses_eleven_files_before_reading_any_of_them():
+    emails, adapter = emails_with([])
+    attachments: list[Any] = [
+        {"filename": f"{i}.txt", "content": b"hi"} for i in range(10)
+    ]
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=attachments + [{"filename": "late.txt", "content": None}],
+        )
+
+    assert raised.value.code == "too_many_attachments"
+    assert adapter.requests == []
 
 
 @parameterized.expand(
