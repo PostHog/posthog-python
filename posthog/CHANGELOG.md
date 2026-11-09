@@ -1,5 +1,11 @@
 # posthog
 
+## 7.86.2 — 2026-11-09
+
+### Patch changes
+
+- [3c398e59](https://github.com/posthog/posthog-python/commit/3c398e597284a7624ee56f589ac070df72600ba7) With `capture_mode="v1"`, capture now retries `404` and `429` responses like `408` and `500`, `502`, `503`, `504`, with the same backoff and `Retry-After` handling. Before, both failed the batch at once. — Thanks @andehen!
+
 ## 7.86.1 — 2026-11-09
 
 ### Patch changes
