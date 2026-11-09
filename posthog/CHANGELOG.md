@@ -1,5 +1,11 @@
 # posthog
 
+## 7.86.4 — 2026-11-09
+
+### Patch changes
+
+- [2c35f047](https://github.com/posthog/posthog-python/commit/2c35f0472a45b809e7b024a31edf1c85c60a391a) Capture an `$ai_generation` error event when `create(stream=True)` fails before the stream starts (bad key, rate limit, invalid model) in the OpenAI chat, OpenAI Responses, Anthropic and Gemini wrappers, sync and async. Previously only errors raised mid-stream were captured. — Thanks @pcbeingused333!
+
 ## 7.86.3 — 2026-11-09
 
 ### Patch changes
