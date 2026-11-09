@@ -1425,6 +1425,47 @@ def test_sends_the_largest_file_that_fits_beside_the_body():
     assert json.loads(adapter.requests[0].body)["files"][0]["size"] == 29_182_872
 
 
+SCAN_BESIDE_A_78_BYTE_BODY = bytes(29_182_818)
+SCAN_BESIDE_A_78_BYTE_BODY_SHA256 = (
+    "23a605f8a0f14f6ad57155dcee6f7e45f783f1a9cd44e6c38f6dfad6d33ef14c"
+)
+
+
+@parameterized.expand(
+    [
+        ("html", "html"),
+        ("text", "text"),
+    ]
+)
+def test_counts_a_body_like_a_file_in_the_size_estimate(_name, body_field):
+    emails, adapter = emails_with(
+        [slots(present(SCAN_BESIDE_A_78_BYTE_BODY_SHA256)), accepted()]
+    )
+    attachments = [{"filename": "scan.pdf", "content": SCAN_BESIDE_A_78_BYTE_BODY}]
+
+    send_code(emails, attachments=attachments, **{body_field: "a" * 57})
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, attachments=attachments, **{body_field: "é" * 57})
+
+    assert raised.value.code == "message_too_large"
+    assert len(adapter.requests) == 2
+
+
+def test_counts_html_and_text_as_two_bodies():
+    emails, adapter = emails_with([])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html="a",
+            text="a",
+            attachments=[{"filename": "scan.pdf", "content": bytes(29_182_872)}],
+        )
+
+    assert raised.value.code == "message_too_large"
+    assert adapter.requests == []
+
+
 @pytest.mark.asyncio
 async def test_async_send_uploads_without_the_secret_key_then_sends_the_hashes():
     seen: list[httpx.Request] = []
