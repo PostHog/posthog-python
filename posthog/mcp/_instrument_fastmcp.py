@@ -167,6 +167,10 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
                 name, call_arguments, context=context, convert_result=convert_result
             )
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                _name_owned_by_real_tool(server, name)
+            ):
+                raise
             # The minted prompt-back was never delivered to the agent — don't stamp
             # an orphan conversation_id it can't echo (an agent-supplied id is kept).
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)

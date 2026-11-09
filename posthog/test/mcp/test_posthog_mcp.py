@@ -20,6 +20,7 @@ from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
 from posthog.test.mcp._helpers import (
     events_named as _events,
     flush_background as _flush,
+    structured_content,
 )
 from posthog.version import VERSION
 
@@ -262,6 +263,49 @@ def test_prepare_tool_list_injects_context_into_dicts():
     assert "context" not in tools[0]["inputSchema"]["properties"]
 
 
+@pytest.mark.parametrize("sdk_tool", [False, True])
+def test_prepare_tool_list_injects_context_into_tool_objects(sdk_tool: bool) -> None:
+    client, _ = make_client()
+    schema = {"type": "object", "properties": {"q": {"type": "string"}}}
+    tool = (
+        Tool(name="search", inputSchema=schema)
+        if sdk_tool
+        else SimpleNamespace(name="search", input_schema=schema)
+    )
+    schema_attribute = (
+        "input_schema" if hasattr(tool, "input_schema") else "inputSchema"
+    )
+
+    prepared = client.prepare_tool_list([tool])
+
+    advertised = getattr(prepared[0], schema_attribute)
+    assert "context" in advertised["properties"]
+    assert "context" in advertised["required"]
+    assert "q" in advertised["properties"]
+    # the caller's schema dict is untouched
+    assert "context" not in schema["properties"]
+
+
+# The spec's text, pinned on purpose: every SDK sends this exact string, and
+# importing the constant would make this test agree with any change to it.
+_CROSS_SDK_CONTEXT_DESCRIPTION = (
+    "A few words on why you are calling this tool, for the server developer's "
+    'analytics. Describe people and things by role, such as "a customer". Do not '
+    "quote the user or include names, emails, or other personal details."
+)
+
+
+def test_prepare_tool_list_advertises_the_cross_sdk_context_description():
+    client, _ = make_client()
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    prepared = client.prepare_tool_list(tools)
+
+    assert prepared[0]["inputSchema"]["properties"]["context"]["description"] == (
+        _CROSS_SDK_CONTEXT_DESCRIPTION
+    )
+
+
 def test_prepare_tool_list_can_be_disabled():
     client, _ = make_client()
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
@@ -285,7 +329,7 @@ async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
     prepared_tools = client.prepare_tool_list(tools)
     schema = prepared_tools[0]["inputSchema"]
     assert ("llm_model" in schema["properties"]) == enabled
-    assert ("llm_model" in schema.get("required", [])) == enabled
+    assert "llm_model" not in schema.get("required", [])
 
     call = client.prepare_tool_call(
         "search",
@@ -602,7 +646,7 @@ def test_prepare_tool_result_delivers_into_call_tool_result_models(wrapped):
     delivered = prepared.result.root if wrapped else prepared.result
     assert len(call_result.content) == 1
     assert delivered.content[-1].text == _handle_block(prepared.conversation_id)["text"]
-    assert delivered.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+    assert structured_content(delivered)[MCP_INSTRUCTIONS_KEY] == {
         "conversation_id": prepared.conversation_id
     }
     assert _UUID7.match(prepared.conversation_id)
@@ -739,3 +783,17 @@ async def test_capture_tool_call_records_prepared_conversation_and_session():
     props = _events(captured, "$mcp_tool_call")[0]["properties"]
     assert props["$mcp_conversation_id"] == prepared.conversation_id
     assert props["$session_id"] == prepared.session_id
+
+
+def test_capture_without_a_session_gets_a_fresh_one_per_call():
+    client, captured = make_client()
+
+    client.capture_tool_call("t")
+    client.capture_tool_call("t")
+    client.flush()
+
+    first, second = captured
+    session = first["properties"]["$session_id"]
+    assert session.startswith("ses_")
+    assert first["distinct_id"] == session
+    assert second["properties"]["$session_id"] != session

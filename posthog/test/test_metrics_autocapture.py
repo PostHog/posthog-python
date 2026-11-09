@@ -941,7 +941,12 @@ class TestStartMetricsAutocapture:
         for request in app_server.received:
             headers = {key.lower() for key in request["headers"]}
             assert not headers & {"traceparent", "tracestate", "baggage"}
-        assert len(_points(reader, "http.client.request.duration")) == 2
+        points = [
+            point
+            for point in _points(reader, "http.client.request.duration")
+            if point.attributes.get("server.port") == app_server.port
+        ]
+        assert len(points) == 2
 
         handle.shutdown()
         requests_instrumentation = sys.modules["opentelemetry.instrumentation.requests"]

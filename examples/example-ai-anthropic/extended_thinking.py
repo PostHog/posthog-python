@@ -34,9 +34,9 @@ import anthropic  # noqa: E402
 client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
 message = client.messages.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     max_tokens=16000,
-    thinking={"type": "enabled", "budget_tokens": 10000},
+    thinking={"type": "adaptive", "display": "summarized"},
     messages=[
         {
             "role": "user",

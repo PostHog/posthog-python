@@ -20,7 +20,7 @@ from posthog.mcp._truncation import (
 
 def test_normalize_caps_long_strings():
     out = normalize("x" * (MAX_STRING_LENGTH + 100))
-    assert out.endswith("...") and len(out) == MAX_STRING_LENGTH + 3
+    assert out.endswith("...") and len(out) == MAX_STRING_LENGTH
 
 
 def test_normalize_keeps_bool_distinct_from_int():
@@ -102,9 +102,9 @@ def test_truncate_event_caps_metadata_fields():
             "llm_model": "m" * 500,
         }
     )
-    assert len(out["user_intent"]) == 2048 + 3
-    assert len(out["resource_name"]) == 256 + 3
-    assert len(out["llm_model"]) == 256 + 3
+    assert len(out["user_intent"]) == 2048
+    assert len(out["resource_name"]) == 256
+    assert len(out["llm_model"]) == 256
 
 
 def test_truncate_event_caps_exception_value_and_frames():
@@ -119,7 +119,7 @@ def test_truncate_event_caps_exception_value_and_frames():
         }
     )
     exc = out["error"]["$exception_list"][0]
-    assert len(exc["value"]) == 2048 + 3
+    assert len(exc["value"]) == 2048
     assert exc["stacktrace"]["frames"] == frames[:25] + frames[-25:]
 
 
@@ -127,7 +127,7 @@ def test_truncate_event_caps_response_text_block():
     out = truncate_event(
         {"response": {"content": [{"type": "text", "text": "t" * 40000}]}}
     )
-    assert len(out["response"]["content"][0]["text"]) == 32_768 + 3
+    assert len(out["response"]["content"][0]["text"]) == 32_768
 
 
 # --- size-targeted budget ----------------------------------------------------
