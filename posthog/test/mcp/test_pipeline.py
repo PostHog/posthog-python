@@ -763,8 +763,8 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
 @pytest.mark.parametrize(
     ("identifier", "fragment"),
     [
-        ("4111 1111 1111 1111", "4111 1"),
-        ("123 45 6789", "123 45"),
+        ("4111 1111 1111 1111", "4111"),
+        ("123 45 6789", "123"),
         ("(415) 555 0142", "(415)"),
         ("https://admin:hunter2@db.example.com/x", "hunter2"),
     ],
@@ -772,6 +772,17 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
 def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment):
     captured = _captured_intent(_straddling_the_scanned_head(identifier))
     assert fragment not in captured
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("s" * 5000, id="one long word"),
+        pytest.param("1 2 " * 2000, id="spaces only between digits"),
+    ],
+)
+def test_intent_scan_redacts_a_head_with_no_word_boundary(intent):
+    assert _captured_intent(intent) == "[redacted]"
 
 
 def test_intent_scan_keeps_what_truncation_keeps():

@@ -236,7 +236,7 @@ def test_properties_carry_all_fields_and_redact_pii():
 
 def test_properties_bound_free_text_and_tool_name():
     report = parse_feedback_report(
-        {"feedback_type": "issue", "summary": "s" * 5000, "tool_name": "t" * 500}
+        {"feedback_type": "issue", "summary": "s" * 4000, "tool_name": "t" * 500}
     )
     props = build_feedback_event_properties(report)
     assert len(props["$mcp_feedback_summary"]) == 2048
@@ -1144,3 +1144,15 @@ def test_send_feedback_result_shape():
     result = send_feedback_result()
     assert result["content"][0]["type"] == "text"
     assert result["content"][0]["text"] == send_feedback_result_text()
+
+
+def test_object_extras_are_limited_before_they_are_sanitized():
+    deep = "leaf"
+    for _ in range(5000):
+        deep = {"child": deep}
+    options = CollectFeedbackOptions(extra_properties={"meta": {"type": "object"}})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": deep}, options
+    )
+    captured = build_feedback_event_properties(report)["$mcp_feedback_meta"]
+    assert "[Object]" in captured

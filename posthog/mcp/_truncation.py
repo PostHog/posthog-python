@@ -18,7 +18,8 @@ import copy
 import json
 import math
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Set
 
 from ._server_build import MAX_SERVER_BUILD_LENGTH
 
@@ -35,6 +36,7 @@ _MAX_STACK_FRAMES = 50
 _MAX_CONTENT_TEXT_LENGTH = 32_768
 
 _TRUNCATION_SUFFIX = "..."
+_REDACTED_VALUE = "[redacted]"
 
 _METADATA_FIELDS = (
     ("user_intent", _MAX_USER_INTENT_LENGTH),
@@ -60,10 +62,23 @@ def normalize(
     depth: int = MAX_DEPTH,
     max_breadth: int = MAX_BREADTH,
     max_string_length: int = MAX_STRING_LENGTH,
+    redacts_key: Optional[Callable[[str], bool]] = None,
 ) -> Any:
     """Recursively normalize a value: cap strings, coerce non-serializable
-    values, convert datetimes, detect cycles, and bound depth/breadth."""
-    return _visit(value, depth, max_breadth, max_string_length, set())
+    values, convert datetimes, detect cycles, and bound depth/breadth. A key
+    ``redacts_key`` accepts gets ``[redacted]`` without its value being read."""
+    return _visit(
+        value, depth, max_breadth, max_string_length, _Walk(redacts_key, set())
+    )
+
+
+@dataclass
+class _Walk:
+    """What one walk shares: which keys to redact unread, and the containers on
+    the current path."""
+
+    redacts_key: Optional[Callable[[str], bool]]
+    memo: Set[int]
 
 
 def _visit(
@@ -71,7 +86,7 @@ def _visit(
     remaining_depth: int,
     max_breadth: int,
     max_string_length: int,
-    memo: set,
+    walk: _Walk,
 ) -> Any:
     if value is None:
         return None
@@ -93,28 +108,28 @@ def _visit(
 
     if isinstance(value, (list, tuple)):
         oid = id(value)
-        if oid in memo:
+        if oid in walk.memo:
             return "[Circular ~]"
         if remaining_depth <= 0:
             return "[Array]"
-        memo.add(oid)
+        walk.memo.add(oid)
         result: Any = _visit_array(
-            list(value), remaining_depth - 1, max_breadth, max_string_length, memo
+            list(value), remaining_depth - 1, max_breadth, max_string_length, walk
         )
-        memo.discard(oid)
+        walk.memo.discard(oid)
         return result
 
     if isinstance(value, dict):
         oid = id(value)
-        if oid in memo:
+        if oid in walk.memo:
             return "[Circular ~]"
         if remaining_depth <= 0:
             return "[Object]"
-        memo.add(oid)
+        walk.memo.add(oid)
         result = _visit_object(
-            value, remaining_depth - 1, max_breadth, max_string_length, memo
+            value, remaining_depth - 1, max_breadth, max_string_length, walk
         )
-        memo.discard(oid)
+        walk.memo.discard(oid)
         return result
 
     return str(value)
@@ -125,7 +140,7 @@ def _visit_array(
     remaining_depth: int,
     max_breadth: int,
     max_string_length: int,
-    memo: set,
+    walk: _Walk,
 ) -> List[Any]:
     result: List[Any] = []
     for i, item in enumerate(arr):
@@ -133,7 +148,7 @@ def _visit_array(
             result.append("[MaxProperties ~]")
             break
         result.append(
-            _visit(item, remaining_depth, max_breadth, max_string_length, memo)
+            _visit(item, remaining_depth, max_breadth, max_string_length, walk)
         )
     return result
 
@@ -143,7 +158,7 @@ def _visit_object(
     remaining_depth: int,
     max_breadth: int,
     max_string_length: int,
-    memo: set,
+    walk: _Walk,
 ) -> Dict[Any, Any]:
     result: Dict[Any, Any] = {}
     count = 0
@@ -151,8 +166,11 @@ def _visit_object(
         if count >= max_breadth:
             result["..."] = "[MaxProperties ~]"
             break
-        result[key] = _visit(val, remaining_depth, max_breadth, max_string_length, memo)
         count += 1
+        if walk.redacts_key is not None and walk.redacts_key(str(key)):
+            result[key] = _REDACTED_VALUE
+            continue
+        result[key] = _visit(val, remaining_depth, max_breadth, max_string_length, walk)
     return result
 
 

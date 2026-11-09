@@ -10,7 +10,7 @@ import json
 from typing import Any, Dict, Optional, Union
 
 from ._internal import _maybe_await
-from ._sanitization import sanitize_free_text, sanitize_free_text_value
+from ._sanitization import limit_entries, sanitize_free_text, sanitize_free_text_value
 from ._truncation import truncate_text
 from .constants import PostHogMCPAnalyticsProperty
 from .logger import log
@@ -258,15 +258,17 @@ def _capture_free_text(value: str) -> str:
 
 
 def _capture_extra_value(value: Any) -> Any:
-    """A declared extra is agent-supplied like the core free-text fields, so its
-    string leaves get the same free-text pass (with the key-based redaction
-    ``sanitize_free_text_value`` keeps for nested objects), then non-scalars are
-    JSON-stringified and everything is bounded. Unserializable values are dropped."""
-    sanitized = sanitize_free_text_value(value)
+    """A declared extra is agent-supplied like the core free-text fields, so it
+    gets the same free-text pass, then non-scalars are JSON-stringified and
+    everything is bounded. A top-level number or boolean is captured as sent.
+    Sanitizing before stringifying reads each key as written, where the JSON text
+    would glue an escape's letter to the identifier after it. Unserializable
+    values are dropped."""
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    sanitized = sanitize_free_text_value(limit_entries(value))
     if isinstance(sanitized, str):
         return truncate_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
-    if sanitized is None or isinstance(sanitized, (bool, int, float)):
-        return sanitized
     try:
         return truncate_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
     except Exception:  # noqa: BLE001 - capture must never raise into the tool path

@@ -11,15 +11,23 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+import sys
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ._event_types import MCPAnalyticsEventType
+from ._truncation import (
+    _MAX_USER_INTENT_LENGTH,
+    _REDACTED_VALUE,
+    _TRUNCATION_SUFFIX,
+    MAX_BREADTH,
+    normalize,
+)
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
-_REDACTED_VALUE = "[redacted]"
+_CAPTURED_REQUEST_FIELDS = ("id", "jsonrpc", "method", "params")
 _BINARY_DATA_MARKER = "[binary data redacted - not supported by PostHog MCP analytics]"
 _ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
@@ -410,6 +418,25 @@ _PHONE_INTL_PATTERN = re.compile(
     r"(?<!\w)\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}(?![\w])", re.ASCII
 )
 
+# Free text is redacted only as far as twice what truncation keeps: the scan costs
+# seconds per megabyte, and the rest would be cut anyway. The cut falls on a space
+# no pass can match across, so the head redacts exactly as it would inside the
+# whole string. URLs and credential words end at a space; of the patterns above, a
+# card, SSN or phone number can continue across one, but only after a digit or one
+# of these characters. A new pattern that spans a space must extend them.
+_SCANNED_FREE_TEXT_LENGTH = 2 * _MAX_USER_INTENT_LENGTH
+_CONTINUES_ACROSS_A_SPACE = "0123456789 ./()+-"
+
+
+def _free_text_head(value: str) -> str:
+    """The longest head of ``value`` that ends at a space no pass matches across,
+    within the scanned length. Empty when there is none: the head is then one
+    word whose redaction depends on all of it."""
+    cut = value.rfind(" ", 0, _SCANNED_FREE_TEXT_LENGTH)
+    while cut > 0 and value[cut - 1] in _CONTINUES_ACROSS_A_SPACE:
+        cut = value.rfind(" ", 0, cut)
+    return value[: max(cut, 0)]
+
 
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict)
@@ -461,6 +488,15 @@ def sanitize_free_text(value: Any) -> Any:
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
+    if len(value) <= _SCANNED_FREE_TEXT_LENGTH:
+        return _redact_free_text(value)
+    # Redaction can shrink the head below what truncation keeps; the capture is
+    # then shorter, never leakier.
+    head = _free_text_head(value)
+    return _redact_free_text(head) + _TRUNCATION_SUFFIX if head else _REDACTED_VALUE
+
+
+def _redact_free_text(value: str) -> str:
     return _sanitize_urls(redact_pii(_redact_credentials(value)))
 
 
@@ -588,35 +624,52 @@ def redact_pii(value: Any) -> Any:
 
 
 def sanitize_captured_value(value: Any) -> Any:
-    return _sanitize_value_with(value, _sanitize_string)
+    return _sanitize_value_with(value, _sanitize_captured_leaf, lambda key: key)
 
 
 def sanitize_free_text_value(value: Any) -> Any:
-    """:func:`sanitize_captured_value` with the free-text string pass
+    """:func:`sanitize_captured_value` with the free-text pass
     (:func:`sanitize_free_text`) on every string leaf, so nested agent-narrated
-    values get structured-PII redaction in the load-bearing order too."""
-    return _sanitize_value_with(value, sanitize_free_text)
+    values get structured-PII redaction in the load-bearing order too. Keys and
+    numbers get it as well, since a value sent as JSON text carries them: a
+    number that holds an identifier becomes ``[redacted]``, so the text stays
+    valid JSON."""
+    return _sanitize_value_with(
+        value, _sanitize_free_text_leaf, _sanitize_free_text_leaf
+    )
 
 
-def _sanitize_value_with(value: Any, sanitize_string_fn: Any) -> Any:
-    if value is None:
-        return value
+def _sanitize_captured_leaf(value: Any) -> Any:
+    return _sanitize_string(value) if isinstance(value, str) else value
+
+
+def _sanitize_free_text_leaf(value: Any) -> Any:
     if isinstance(value, str):
-        return sanitize_string_fn(value)
-    if isinstance(value, list):
-        return [_sanitize_value_with(item, sanitize_string_fn) for item in value]
-    # bool is an int subclass; both pass through unchanged.
-    if not isinstance(value, dict):
-        return value
+        return sanitize_free_text(value)
+    # bool is an int subclass and passes through unchanged.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        text = str(value)
+        return value if sanitize_free_text(text) == text else _REDACTED_VALUE
+    return value
 
-    result: Dict[str, Any] = {}
-    for key, nested in value.items():
-        result[key] = (
-            _REDACTED_VALUE
-            if _should_redact_key(str(key))
-            else _sanitize_value_with(nested, sanitize_string_fn)
-        )
-    return result
+
+def _sanitize_value_with(
+    value: Any,
+    sanitize_leaf: Callable[[Any], Any],
+    sanitize_key: Callable[[Any], Any],
+) -> Any:
+    if isinstance(value, list):
+        return [
+            _sanitize_value_with(item, sanitize_leaf, sanitize_key) for item in value
+        ]
+    if not isinstance(value, dict):
+        return sanitize_leaf(value)
+    return {
+        sanitize_key(key): _REDACTED_VALUE
+        if _should_redact_key(str(key))
+        else _sanitize_value_with(nested, sanitize_leaf, sanitize_key)
+        for key, nested in value.items()
+    }
 
 
 def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -754,55 +807,53 @@ def build_captured_mcp_parameters(
     strip_llm_model: bool = False,
     strip_argument_names: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """Build the sanitized ``$mcp_parameters`` payload from a request, stripping
-    the injected ``context`` argument before logging."""
-    if not _is_record(request):
-        return {"request": sanitize_captured_value(request)}
-
-    captured_request: Dict[str, Any] = {}
-    for key in ("id", "jsonrpc", "method"):
-        if key in request:
-            captured_request[key] = sanitize_captured_value(request[key])
-
+    """Build the sanitized ``$mcp_parameters`` payload from a request: its id,
+    JSON-RPC version, method and params, without the SDK-injected arguments. The
+    entry and nesting limits apply before sanitizing, so a call with a huge
+    argument object costs what a call at those limits costs."""
     names_to_strip = strip_argument_names
     if names_to_strip is None:
         names_to_strip = set(_INJECTED_ARGUMENT_NAMES)
         if strip_llm_model:
             names_to_strip.add("llm_model")
 
-    if "params" in request:
-        captured_request["params"] = _build_captured_mcp_params(
-            request["params"], strip_argument_names=names_to_strip
-        )
-
-    return {"request": captured_request}
+    return sanitize_captured_value(
+        limit_entries({"request": _pick_captured_fields(request, names_to_strip)})
+    )
 
 
-def _build_captured_mcp_params(params: Any, *, strip_argument_names: Set[str]) -> Any:
-    if not _is_record(params):
-        return sanitize_captured_value(params)
-
-    captured: Dict[str, Any] = {}
-    for key, value in params.items():
-        captured[key] = (
-            _build_captured_mcp_arguments(
-                value, strip_argument_names=strip_argument_names
-            )
-            if key == "arguments"
-            else sanitize_captured_value(value)
-        )
-    return captured
+def limit_entries(value: Any) -> Any:
+    """``value`` within the entry and nesting limits, strings left whole, so a
+    sanitizer reads at most what the event can keep and still sees past a
+    string's cut. A credential key's value is replaced unread, as the sanitizer
+    would replace it."""
+    return normalize(
+        value, max_string_length=sys.maxsize, redacts_key=_should_redact_key
+    )
 
 
-def _build_captured_mcp_arguments(
-    arguments: Any, *, strip_argument_names: Set[str]
-) -> Any:
-    if not _is_record(arguments):
-        return sanitize_captured_value(arguments)
+def _pick_captured_fields(request: Any, strip_argument_names: Set[str]) -> Any:
+    if not _is_record(request):
+        return request
+    fields = {key: request[key] for key in _CAPTURED_REQUEST_FIELDS if key in request}
+    params = fields.get("params")
+    if isinstance(params, dict) and _is_record(params.get("arguments")):
+        fields["params"] = {
+            **params,
+            "arguments": _kept_arguments(params["arguments"], strip_argument_names),
+        }
+    return fields
 
-    captured: Dict[str, Any] = {}
+
+def _kept_arguments(
+    arguments: Dict[str, Any], strip_argument_names: Set[str]
+) -> Dict[str, Any]:
+    """The arguments without the stripped names, which the entry limit does not
+    count. Copies one more than the limit, enough for it to see that more remain."""
+    kept: Dict[str, Any] = {}
     for key, value in arguments.items():
-        if key in strip_argument_names:
-            continue
-        captured[key] = sanitize_captured_value(value)
-    return captured
+        if key not in strip_argument_names:
+            kept[key] = value
+        if len(kept) > MAX_BREADTH:
+            break
+    return kept
