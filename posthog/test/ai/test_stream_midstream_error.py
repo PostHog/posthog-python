@@ -283,3 +283,114 @@ def test_capture_streaming_event_records_google_genai_error_status(
     props = _props(mock_client)
     assert props["$ai_http_status"] == code
     assert props["$ai_is_error"] is True
+
+
+class _OpenStatusError(RuntimeError):
+    status_code = 429
+
+
+def test_openai_chat_stream_open_error(mock_client):
+    from posthog.ai.openai import OpenAI
+
+    with patch("openai.resources.chat.completions.Completions.create") as create:
+        create.side_effect = _OpenStatusError("rate limited")
+        client = OpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            client.chat.completions.create(
+                model="gpt-4", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
+
+
+def test_openai_responses_stream_open_error(mock_client):
+    from posthog.ai.openai import OpenAI
+
+    with patch("openai.resources.responses.Responses.create") as create:
+        create.side_effect = _OpenStatusError("rate limited")
+        client = OpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            client.responses.create(model="gpt-4", input="hi", stream=True)
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
+
+
+@pytest.mark.asyncio
+async def test_openai_chat_stream_open_error_async(mock_client):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async def create(self, **kwargs):
+        raise _OpenStatusError("rate limited")
+
+    with patch("openai.resources.chat.completions.AsyncCompletions.create", new=create):
+        client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            await client.chat.completions.create(
+                model="gpt-4", messages=[{"role": "user", "content": "hi"}], stream=True
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_stream_open_error_async(mock_client):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async def create(self, **kwargs):
+        raise _OpenStatusError("rate limited")
+
+    with patch("openai.resources.responses.AsyncResponses.create", new=create):
+        client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            await client.responses.create(model="gpt-4", input="hi", stream=True)
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
+
+
+def test_anthropic_stream_open_error(mock_client):
+    from posthog.ai.anthropic import Anthropic
+
+    with patch("anthropic.resources.messages.Messages.create") as create:
+        create.side_effect = _OpenStatusError("rate limited")
+        client = Anthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
+
+
+@pytest.mark.asyncio
+async def test_anthropic_stream_open_error_async(mock_client):
+    from posthog.ai.anthropic import AsyncAnthropic
+
+    async def create(**kwargs):
+        raise _OpenStatusError("rate limited")
+
+    with patch("anthropic.resources.messages.AsyncMessages.create", side_effect=create):
+        client = AsyncAnthropic(api_key="k", posthog_client=mock_client)
+        with pytest.raises(_OpenStatusError):
+            await client.messages.create(
+                model="claude-3-opus-20240229",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                stream=True,
+            )
+
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 429
