@@ -1128,6 +1128,7 @@ async def test_async_unreachable_storage_never_shows_the_signed_url_in_the_trace
     [
         ("slow_down", 503, "SlowDown", "Please reduce your request rate."),
         ("internal_error", 500, "InternalError", "Please try again."),
+        ("too_many_requests", 429, "SlowDown", "Please reduce your request rate."),
     ]
 )
 def test_a_storage_that_asks_for_a_retry_is_retried_before_the_send(
