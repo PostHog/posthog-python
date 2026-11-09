@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import copy
 import json
+import threading
 import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterator, List, Mapping, Optional
@@ -23,11 +24,13 @@ from posthog import AsyncPosthog
 from posthog.client import (
     _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES,
+    MAX_DICT_SIZE,
     Client,
 )
 from posthog.test.test_flags_v4_response import FIXTURES, READERS, _build
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import FeatureFlagResult
+from posthog.utils import SizeLimitedDict
 
 FLAG = "pricing-page"
 DISTINCT_ID = "visitor-42"
@@ -1519,6 +1522,127 @@ def test_an_unqueued_config_version_1_call_is_deduped_as_before(client):
 
     # Config version 1 dedupe is unchanged: the attempt takes the key.
     assert calls == [FLAG_CALLED]
+
+
+class _Rendezvous:
+    """Holds each of the first two callers until the other one arrives.
+
+    When the dedupe check and the reservation are one step, the second read waits
+    for the first one to finish both, so the wait times out instead.
+    """
+
+    def __init__(self) -> None:
+        self._barrier = threading.Barrier(2, timeout=0.25)
+        self._lock = threading.Lock()
+        self.arrivals = 0
+
+    def __call__(self) -> None:
+        with self._lock:
+            self.arrivals += 1
+            arrival = self.arrivals
+        if arrival <= 2:
+            try:
+                self._barrier.wait()
+            except threading.BrokenBarrierError:
+                pass
+
+
+class _MeetingSet(set):
+    """A dedupe set: each membership check reads the set, then meets the other read."""
+
+    def __init__(self, meet: _Rendezvous) -> None:
+        super().__init__()
+        self._meet = meet
+
+    def __contains__(self, item: Any) -> bool:
+        found = super().__contains__(item)
+        self._meet()
+        return found
+
+
+class _MeetingDict(SizeLimitedDict):
+    """A dedupe map: each lookup reads the map, then meets the other read."""
+
+    def __init__(self, meet: _Rendezvous) -> None:
+        super().__init__(MAX_DICT_SIZE, set)
+        self._meet = meet
+
+    def get(self, key: Any, default: Any = None) -> Any:
+        found = super().get(key, default)
+        self._meet()
+        return found
+
+
+@pytest.mark.parametrize("event", [FLAG_CALLED, EXPOSURE])
+@pytest.mark.parametrize("distinct_id", ["seen", "new"])
+def test_concurrent_reads_of_one_outcome_send_each_event_once(
+    client, event, distinct_id
+):
+    # Two reads of one outcome both look up the dedupe key before either goes on.
+    # Unless the check and the reservation are one step, both find no key and both
+    # send the event. "new" also races on the distinct ID's first entry.
+    meet = _Rendezvous()
+    attribute = (
+        "distinct_ids_feature_flags_reported"
+        if event == FLAG_CALLED
+        else "_experiment_exposures_reported"
+    )
+    if distinct_id == "seen":
+        getattr(client, attribute)[DISTINCT_ID] = _MeetingSet(meet)
+    else:
+        setattr(client, attribute, _MeetingDict(meet))
+    recording, events = _record_events(client)
+    with _serving(_response(_split())), recording:
+        reads = [
+            threading.Thread(target=_read, args=(client, "get_feature_flag"))
+            for _ in range(2)
+        ]
+        for read in reads:
+            read.start()
+        for read in reads:
+            read.join(5)
+
+    assert meet.arrivals == 2
+    sent = [e.name for e in events if e.uuid is not None]
+    assert sorted(sent) == sorted([FLAG_CALLED, EXPOSURE])
+
+
+@pytest.mark.parametrize("delivered", [True, False], ids=["delivered", "failed"])
+def test_a_read_during_a_sync_mode_send_does_not_send_it_again(delivered):
+    # The second read runs while the first read's exposure is on the wire. It sends
+    # neither event. A send that fails releases the key, so a third read sends the
+    # exposure.
+    client = Client(FAKE_TEST_API_KEY, sync_mode=True, capture_mode="v0")
+    sending = threading.Event()
+    finish = threading.Event()
+    posted: List[str] = []
+
+    def batch_post(*args: Any, batch: List[Dict[str, Any]], **kwargs: Any) -> None:
+        [message] = batch
+        posted.append(message["event"])
+        if message["event"] == EXPOSURE and posted.count(EXPOSURE) == 1:
+            sending.set()
+            finish.wait(5)
+            if not delivered:
+                raise RuntimeError("connection reset")
+
+    try:
+        with (
+            _serving(_response(_split())),
+            mock.patch("posthog.client.batch_post", side_effect=batch_post),
+        ):
+            first = threading.Thread(target=_read, args=(client, "get_feature_flag"))
+            first.start()
+            assert sending.wait(5)
+            assert _read(client, "get_feature_flag") == "annual"
+            finish.set()
+            first.join(5)
+            assert _read(client, "get_feature_flag") == "annual"
+    finally:
+        finish.set()
+        client.shutdown()
+
+    assert posted == [FLAG_CALLED, EXPOSURE] + ([] if delivered else [EXPOSURE])
 
 
 def test_a_flags_reload_does_not_repeat_an_exposure(client):

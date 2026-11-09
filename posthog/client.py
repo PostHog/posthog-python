@@ -543,6 +543,32 @@ def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttributi
 
 _flag_events_log = logging.getLogger("posthog")
 
+# Guards the check and the reservation of config version 2 flag event dedupe keys on
+# both clients. It is held only for the dict and set operations, never while an event
+# is captured.
+_flag_event_keys_lock = threading.Lock()
+
+
+def _reserve_dedupe_key(
+    reported_by_distinct_id: Dict[Any, Any], distinct_id: Any, dedupe_key: Any
+) -> Optional[Set[Any]]:
+    """Reserve ``dedupe_key`` for ``distinct_id`` unless a read already holds it.
+
+    The check and the reservation are one step, so when concurrent reads have the
+    same key, only one of them gets it. Returns the set that now holds the key, for
+    ``_capture_once``. Returns ``None`` when the key is already there: the event was
+    reported, or another read is capturing it.
+    """
+    with _flag_event_keys_lock:
+        reported = reported_by_distinct_id.get(distinct_id)
+        if reported is None:
+            reported = set()
+            reported_by_distinct_id[distinct_id] = reported
+        if dedupe_key in reported:
+            return None
+        reported.add(dedupe_key)
+        return reported
+
 
 def _capture_once(
     capture: Callable[..., Any],
@@ -551,16 +577,16 @@ def _capture_once(
     event: str,
     **kwargs: Any,
 ) -> None:
-    """Capture one flag event and keep its dedupe key unless capture failed.
+    """Capture one flag event whose key ``_reserve_dedupe_key`` reserved, and keep
+    the key unless capture failed.
 
-    The key is reserved before the capture, so concurrent reads do not send the
+    The key stays reserved while capture runs, so concurrent reads do not send the
     same event twice. It is released when capture raises, or returns ``None``
     because the event could not be queued (a full or closed queue, opt-out or a
     disabled client), so a later read tries again. An event that ``before_send``
     drops keeps its key: the application chose to drop it, and every later read
     would be dropped the same way. A failure is logged and never reaches the read.
     """
-    reported.add(dedupe_key)
     before_send_drops: List[str] = []
     try:
         accepted = capture(
@@ -570,7 +596,8 @@ def _capture_once(
         _flag_events_log.exception("[FEATURE FLAGS] Failed to capture %s", event)
         accepted = False
     if not accepted:
-        reported.discard(dedupe_key)
+        with _flag_event_keys_lock:
+            reported.discard(dedupe_key)
 
 
 def _capture_flag_events(
@@ -626,9 +653,11 @@ def _capture_flag_events(
 
     Both config version 2 events are attempted independently: a failed capture of
     one does not stop the other, and keeps no dedupe key, so a later read tries
-    again. An event that ``before_send`` drops keeps its key. Their attribution is
-    pinned after super properties are merged, so a super property can neither change
-    it nor add a field the event never carries.
+    again. An event that ``before_send`` drops keeps its key. Each key is reserved
+    before its capture, in the same step as the check, so concurrent reads of one
+    outcome send each event once. Their attribution is pinned after super properties
+    are merged, so a super property can neither change it nor add a field the event
+    never carries.
     Config version 1 events are sent and deduped as before.
     """
     groups_key = (
@@ -639,12 +668,22 @@ def _capture_flag_events(
     if attribution is not None:
         feature_flag_reported_key += (2, *attribution)
 
-    reported_flags = flag_calls_reported.get(distinct_id)
-    if reported_flags is None:
-        reported_flags = set()
-        flag_calls_reported[distinct_id] = reported_flags
+    # The set this read records its $feature_flag_called key in, or None when the
+    # read sends no $feature_flag_called.
+    reported_flags: Optional[Set[Any]]
+    if attribution is None:
+        reported_flags = flag_calls_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            flag_calls_reported[distinct_id] = reported_flags
+        if feature_flag_reported_key in reported_flags:
+            reported_flags = None
+    else:
+        reported_flags = _reserve_dedupe_key(
+            flag_calls_reported, distinct_id, feature_flag_reported_key
+        )
 
-    if feature_flag_reported_key not in reported_flags:
+    if reported_flags is not None:
         if attribution is not None:
             properties.pop("$feature_flag_reason", None)
             properties.update(attribution.flag_called_properties())
@@ -700,12 +739,10 @@ def _capture_flag_events(
     # The value, request ID, evaluation time and evaluation source are left out, so
     # one assignment is one exposure however often it is read.
     exposure_key = (key, groups_key, 2, attribution.rule_id, attribution.variant_key)
-    normalized_distinct_id = str(distinct_id)
-    reported_exposures = exposures_reported.get(normalized_distinct_id)
+    reported_exposures = _reserve_dedupe_key(
+        exposures_reported, str(distinct_id), exposure_key
+    )
     if reported_exposures is None:
-        reported_exposures = set()
-        exposures_reported[normalized_distinct_id] = reported_exposures
-    if exposure_key in reported_exposures:
         return
 
     exposure_properties: Dict[str, Any] = {
