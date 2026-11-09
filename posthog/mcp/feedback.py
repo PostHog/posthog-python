@@ -262,14 +262,14 @@ def _capture_extra_value(value: Any) -> Any:
     gets the same free-text pass, then non-scalars are JSON-stringified and
     everything is bounded. A top-level number or boolean is captured as sent.
     Sanitizing before stringifying reads each key as written, where the JSON text
-    would glue an escape's letter to the identifier after it. Unserializable
-    values are dropped."""
+    would glue an escape's letter to the identifier after it. A non-JSON value
+    inside an object is captured as its text, as in ``$mcp_parameters``."""
     if value is None or isinstance(value, (bool, int, float)):
         return value
-    sanitized = sanitize_free_text_value(limit_entries(value))
-    if isinstance(sanitized, str):
-        return truncate_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
     try:
+        sanitized = sanitize_free_text_value(limit_entries(value))
+        if isinstance(sanitized, str):
+            return truncate_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
         return truncate_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
     except Exception:  # noqa: BLE001 - capture must never raise into the tool path
         return None

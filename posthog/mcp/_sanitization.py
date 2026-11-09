@@ -418,22 +418,35 @@ _PHONE_INTL_PATTERN = re.compile(
     r"(?<!\w)\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}(?![\w])", re.ASCII
 )
 
-# Free text is redacted only as far as twice what truncation keeps: the scan costs
-# seconds per megabyte, and the rest would be cut anyway. The cut falls on a space
-# no pass can match across, so the head redacts exactly as it would inside the
-# whole string. URLs and credential words end at a space; of the patterns above, a
-# card, SSN or phone number can continue across one, but only after a digit or one
-# of these characters. A new pattern that spans a space must extend them.
+# Free text is redacted whole up to four times what truncation keeps. Past that
+# the scan costs seconds per megabyte for text truncation would cut anyway, so only
+# a head of twice that is redacted. The head ends at a space no pass can match
+# across, so it redacts exactly as it would inside the whole string. URLs and
+# credential words end at a space; of the patterns above, a card, SSN or phone
+# number can continue across one, but only after a digit or one of these
+# characters (Unicode spaces count as the space they are normalized to). A new
+# pattern that spans a space must extend them.
+_MAX_WHOLE_FREE_TEXT_LENGTH = 4 * _MAX_USER_INTENT_LENGTH
 _SCANNED_FREE_TEXT_LENGTH = 2 * _MAX_USER_INTENT_LENGTH
 _CONTINUES_ACROSS_A_SPACE = "0123456789 ./()+-"
 
 
+def _redact_bounded(value: str, redact: Callable[[str], str]) -> str:
+    """``redact`` over ``value``, or over the head of it truncation can keep,
+    followed by the truncation marker. A long value with no head to cut is one
+    word whose redaction depends on all of it, so it is redacted whole."""
+    if len(value) <= _MAX_WHOLE_FREE_TEXT_LENGTH:
+        return redact(value)
+    head = _free_text_head(value)
+    return redact(head) + _TRUNCATION_SUFFIX if head else _REDACTED_VALUE
+
+
 def _free_text_head(value: str) -> str:
     """The longest head of ``value`` that ends at a space no pass matches across,
-    within the scanned length. Empty when there is none: the head is then one
-    word whose redaction depends on all of it."""
+    within the scanned length; empty when there is none."""
+    normalized = _UNICODE_SPACE_PATTERN.sub(" ", value[:_SCANNED_FREE_TEXT_LENGTH])
     cut = value.rfind(" ", 0, _SCANNED_FREE_TEXT_LENGTH)
-    while cut > 0 and value[cut - 1] in _CONTINUES_ACROSS_A_SPACE:
+    while cut > 0 and normalized[cut - 1] in _CONTINUES_ACROSS_A_SPACE:
         cut = value.rfind(" ", 0, cut)
     return value[: max(cut, 0)]
 
@@ -488,12 +501,9 @@ def sanitize_free_text(value: Any) -> Any:
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    if len(value) <= _SCANNED_FREE_TEXT_LENGTH:
-        return _redact_free_text(value)
     # Redaction can shrink the head below what truncation keeps; the capture is
     # then shorter, never leakier.
-    head = _free_text_head(value)
-    return _redact_free_text(head) + _TRUNCATION_SUFFIX if head else _REDACTED_VALUE
+    return _redact_bounded(value, _redact_free_text)
 
 
 def _redact_free_text(value: str) -> str:
@@ -635,7 +645,7 @@ def sanitize_free_text_value(value: Any) -> Any:
     number that holds an identifier becomes ``[redacted]``, so the text stays
     valid JSON."""
     return _sanitize_value_with(
-        value, _sanitize_free_text_leaf, _sanitize_free_text_leaf
+        value, _sanitize_free_text_leaf, _sanitize_free_text_key
     )
 
 
@@ -648,9 +658,26 @@ def _sanitize_free_text_leaf(value: Any) -> Any:
         return sanitize_free_text(value)
     # bool is an int subclass and passes through unchanged.
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        text = str(value)
+        try:
+            text = str(value)
+        except ValueError:  # an int past Python's digit limit for str()
+            return _REDACTED_VALUE
         return value if sanitize_free_text(text) == text else _REDACTED_VALUE
     return value
+
+
+def _sanitize_free_text_key(key: Any) -> Any:
+    """A key is a name, so like ``_sanitize_resource_name`` it skips the entropy
+    detector, which reads ``Get_Organization_Memberships`` as a credential: two
+    such keys would both become ``[redacted]`` and one value would be lost."""
+    if not isinstance(key, str):
+        return _sanitize_free_text_leaf(key)
+    return _redact_bounded(
+        key,
+        lambda text: _sanitize_urls(
+            redact_pii(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, text))
+        ),
+    )
 
 
 def _sanitize_value_with(

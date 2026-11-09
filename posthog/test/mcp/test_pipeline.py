@@ -767,6 +767,7 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
         ("123 45 6789", "123"),
         ("(415) 555 0142", "(415)"),
         ("https://admin:hunter2@db.example.com/x", "hunter2"),
+        ("+44\u00a0 20 7946 0958", "+44"),
     ],
 )
 def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment):
@@ -777,12 +778,24 @@ def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment)
 @pytest.mark.parametrize(
     "intent",
     [
-        pytest.param("s" * 5000, id="one long word"),
-        pytest.param("1 2 " * 2000, id="spaces only between digits"),
+        pytest.param("s" * 9000, id="one long word"),
+        pytest.param("1 2 " * 2500, id="spaces only between digits"),
     ],
 )
 def test_intent_scan_redacts_a_head_with_no_word_boundary(intent):
     assert _captured_intent(intent) == "[redacted]"
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("请帮我查询" * 900, id="CJK"),
+        pytest.param("item\n" * 1000, id="newline list"),
+        pytest.param("Open /" + "very/long/path/" * 300, id="prose then a long path"),
+    ],
+)
+def test_intent_up_to_four_times_the_limit_is_redacted_whole(intent):
+    assert _captured_intent(intent) == truncate_text(intent, 2048)
 
 
 def test_intent_scan_keeps_what_truncation_keeps():

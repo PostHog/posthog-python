@@ -387,6 +387,12 @@ def test_nested_extras_keep_key_based_redaction():
         ({"ada@example.com": "x"}, "ada@example.com", {"[redacted]": "x"}),
         ({"n": 4111111111111111}, "4111111111111111", {"n": "[redacted]"}),
         ({"n": [4111111111111111, 7]}, "4111111111111111", {"n": ["[redacted]", 7]}),
+        (
+            {"Get_Organization_Memberships": 1, "ISO_8601_timestamp_UTC": 5},
+            "[redacted]",
+            {"Get_Organization_Memberships": 1, "ISO_8601_timestamp_UTC": 5},
+        ),
+        ({"n": 10**5000}, "0000000000", {"n": "[redacted]"}),
     ],
 )
 def test_object_extras_redact_identifiers_in_keys_and_numbers(
