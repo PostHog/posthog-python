@@ -38,9 +38,12 @@ try:
     from posthog.ai.openai.openai_async import AsyncOpenAI
     from posthog.ai.openai.wrapper_utils import reset_fallback_warnings
     from posthog.test.ai.utils import (
+        POSTHOG_OPTIONS_CASES,
         RecordingAsyncStream,
         RecordingStream,
+        assert_captured_options,
         make_response_usage,
+        posthog_call_kwargs,
     )
 
     OPENAI_AVAILABLE = True
@@ -3170,3 +3173,271 @@ def test_streaming_state_tracks_served_service_tier():
         SimpleNamespace(response=SimpleNamespace(service_tier="flex"), type="other")
     )
     assert responses_state.service_tier == "flex"
+
+
+def _options_chat_completion():
+    return ChatCompletion(
+        id="test",
+        model="gpt-4",
+        object="chat.completion",
+        created=1741476542,
+        choices=[
+            Choice(
+                finish_reason="stop",
+                index=0,
+                message=ChatCompletionMessage(content="Hi", role="assistant"),
+            )
+        ],
+        usage=CompletionUsage(completion_tokens=1, prompt_tokens=2, total_tokens=3),
+    )
+
+
+def _options_chat_chunks():
+    return [
+        ChatCompletionChunk(
+            id="chunk",
+            model="gpt-4",
+            object="chat.completion.chunk",
+            created=1741476542,
+            choices=[
+                ChoiceChunk(
+                    index=0, delta=ChoiceDelta(content="Hi"), finish_reason="stop"
+                )
+            ],
+            usage=CompletionUsage(completion_tokens=1, prompt_tokens=2, total_tokens=3),
+        )
+    ]
+
+
+def _options_response():
+    return Response(
+        id="test",
+        model="gpt-4o-mini",
+        object="response",
+        created_at=1741476542,
+        status="completed",
+        error=None,
+        incomplete_details=None,
+        instructions=None,
+        max_output_tokens=None,
+        tools=[],
+        tool_choice="auto",
+        output=[],
+        parallel_tool_calls=True,
+        previous_response_id=None,
+        usage=make_response_usage(input_tokens=2, output_tokens=1, total_tokens=3),
+        user=None,
+        metadata={},
+    )
+
+
+def _options_response_chunks():
+    chunk = MagicMock()
+    chunk.type = "response.completed"
+    chunk.response.usage = make_response_usage(
+        input_tokens=2, output_tokens=1, total_tokens=3
+    )
+    chunk.response.output = []
+    return [chunk]
+
+
+def _options_embedding():
+    return CreateEmbeddingResponse(
+        data=[Embedding(embedding=[0.1], index=0, object="embedding")],
+        model="text-embedding-3-small",
+        object="list",
+        usage=Usage(prompt_tokens=2, total_tokens=2),
+    )
+
+
+_CHAT_KWARGS = {"model": "gpt-4", "messages": [{"role": "user", "content": "Hi"}]}
+_RESPONSES_KWARGS = {"model": "gpt-4o-mini", "input": "Hi"}
+
+# id, provider module, provider class, method, wrapper accessor, call kwargs,
+# response factory, whether the call streams
+OPENAI_OPTIONS_CALLS = [
+    (
+        "chat_create",
+        "openai.resources.chat.completions",
+        "Completions",
+        "create",
+        lambda client: client.chat.completions.create,
+        _CHAT_KWARGS,
+        _options_chat_completion,
+        False,
+    ),
+    (
+        "chat_create_stream",
+        "openai.resources.chat.completions",
+        "Completions",
+        "create",
+        lambda client: client.chat.completions.create,
+        {**_CHAT_KWARGS, "stream": True},
+        _options_chat_chunks,
+        True,
+    ),
+    (
+        "chat_parse",
+        "openai.resources.chat.completions",
+        "Completions",
+        "parse",
+        lambda client: client.chat.completions.parse,
+        _CHAT_KWARGS,
+        _options_chat_completion,
+        False,
+    ),
+    (
+        "beta_chat_parse",
+        "openai.resources.chat.completions",
+        "Completions",
+        "parse",
+        lambda client: client.beta.chat.completions.parse,
+        _CHAT_KWARGS,
+        _options_chat_completion,
+        False,
+    ),
+    (
+        "responses_create",
+        "openai.resources.responses",
+        "Responses",
+        "create",
+        lambda client: client.responses.create,
+        _RESPONSES_KWARGS,
+        _options_response,
+        False,
+    ),
+    (
+        "responses_create_stream",
+        "openai.resources.responses",
+        "Responses",
+        "create",
+        lambda client: client.responses.create,
+        {**_RESPONSES_KWARGS, "stream": True},
+        _options_response_chunks,
+        True,
+    ),
+    (
+        "responses_parse",
+        "openai.resources.responses",
+        "Responses",
+        "parse",
+        lambda client: client.responses.parse,
+        _RESPONSES_KWARGS,
+        _options_response,
+        False,
+    ),
+    (
+        "embeddings_create",
+        "openai.resources.embeddings",
+        "Embeddings",
+        "create",
+        lambda client: client.embeddings.create,
+        {"model": "text-embedding-3-small", "input": "Hi"},
+        _options_embedding,
+        False,
+    ),
+]
+
+
+def _recording_provider_method(make_response, is_async, stream, provider_calls):
+    def respond(kwargs):
+        provider_calls.append(kwargs)
+        response = make_response()
+        if not stream:
+            return response
+        return RecordingAsyncStream(response) if is_async else RecordingStream(response)
+
+    if is_async:
+
+        async def async_method(self, **kwargs):
+            return respond(kwargs)
+
+        return async_method
+
+    def method(self, **kwargs):
+        return respond(kwargs)
+
+    return method
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+@pytest.mark.parametrize(
+    "call", OPENAI_OPTIONS_CALLS, ids=[call[0] for call in OPENAI_OPTIONS_CALLS]
+)
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_posthog_options_reach_capture_and_not_the_provider(
+    mock_client, caplog, is_async, call, case
+):
+    _, module, class_name, method, accessor, call_kwargs, make_response, stream = call
+    _, distinct_id, posthog_options, expected, warns = case
+    provider_class = f"Async{class_name}" if is_async else class_name
+    provider_calls = []
+
+    with patch(
+        f"{module}.{provider_class}.{method}",
+        new=_recording_provider_method(make_response, is_async, stream, provider_calls),
+    ):
+        client_class = AsyncOpenAI if is_async else OpenAI
+        client = client_class(api_key="test-key", posthog_client=mock_client)
+        with caplog.at_level(logging.WARNING, logger="posthog"):
+            result = accessor(client)(
+                **call_kwargs, **posthog_call_kwargs(distinct_id, posthog_options)
+            )
+            if is_async:
+                result = await result
+            if stream:
+                if is_async:
+                    _ = [chunk async for chunk in result]
+                else:
+                    list(result)
+
+    assert len(provider_calls) == 1
+    assert not any(key.startswith("posthog_") for key in provider_calls[0])
+    assert mock_client.capture_ai.call_count == 1
+    assert_captured_options(
+        mock_client.capture_ai.call_args.kwargs, expected, warns, caplog
+    )
+
+
+def test_posthog_options_beat_context_options_and_super_options():
+    from posthog import new_context, set_context_option
+    from posthog.capture_event import _to_v1_event
+    from posthog.client import Client
+
+    sent = []
+    posthog_client = Client(
+        "phc_test",
+        send=False,
+        before_send=lambda msg: sent.append(msg) or msg,
+        super_options={"cookieless_mode": False, "disable_skew_correction": True},
+    )
+
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=_options_chat_completion(),
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=posthog_client)
+        with new_context():
+            set_context_option("cookieless_mode", False)
+            set_context_option("product_tour_id", "tour-1")
+            client.chat.completions.create(
+                **_CHAT_KWARGS,
+                posthog_distinct_id="user-1",
+                posthog_options={"cookieless_mode": True},
+            )
+            client.chat.completions.create(**_CHAT_KWARGS, posthog_distinct_id="user-1")
+
+    assert [_to_v1_event(msg)["options"] for msg in sent] == [
+        {
+            "cookieless_mode": True,
+            "product_tour_id": "tour-1",
+            "disable_skew_correction": True,
+        },
+        {
+            "cookieless_mode": False,
+            "product_tour_id": "tour-1",
+            "disable_skew_correction": True,
+        },
+    ]

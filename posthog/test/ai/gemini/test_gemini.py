@@ -1,8 +1,16 @@
 import json
+import logging
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from posthog.test.ai.utils import (
+    POSTHOG_OPTIONS_CASES,
+    RecordingAsyncStream,
+    assert_captured_options,
+    posthog_call_kwargs,
+)
 
 try:
     from google import genai as google_genai
@@ -1765,3 +1773,148 @@ def test_streaming_url_context_on_earlier_chunk_bills_tool_use_tokens(
     props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input_tokens"] == 320
     assert props["$ai_output_tokens"] == 10
+
+
+def _gemini_stream_chunk():
+    chunk = MagicMock()
+    chunk.text = "Hi"
+    usage = MagicMock()
+    usage.prompt_token_count = 2
+    usage.candidates_token_count = 1
+    usage.cached_content_token_count = 0
+    usage.thoughts_token_count = 0
+    chunk.usage_metadata = usage
+    return chunk
+
+
+@pytest.fixture
+def gemini_provider(mock_gemini_response, mock_embed_content_response):
+    """A genai.Client mock with sync ``models`` and async ``aio.models``."""
+    with patch.object(google_genai, "Client") as client_class:
+        provider = MagicMock()
+        provider.models.generate_content.return_value = mock_gemini_response
+        provider.models.generate_content_stream.side_effect = lambda **kwargs: iter(
+            [_gemini_stream_chunk()]
+        )
+        provider.models.embed_content.return_value = mock_embed_content_response
+        provider.aio.models.generate_content = AsyncMock(
+            return_value=mock_gemini_response
+        )
+        provider.aio.models.generate_content_stream = AsyncMock(
+            side_effect=lambda **kwargs: RecordingAsyncStream([_gemini_stream_chunk()])
+        )
+        provider.aio.models.embed_content = AsyncMock(
+            return_value=mock_embed_content_response
+        )
+        client_class.return_value = provider
+        yield provider
+
+
+# id, client class, models accessor, whether the surface is async
+GEMINI_SURFACES = [
+    ("client_models", "Client", lambda client: client.models, False),
+    ("client_aio_models", "Client", lambda client: client.aio.models, True),
+    ("async_client_models", "AsyncClient", lambda client: client.models, True),
+]
+
+
+def _gemini_client(class_name, **kwargs):
+    from posthog.ai.gemini import AsyncClient
+
+    client_class = AsyncClient if class_name == "AsyncClient" else Client
+    return client_class(api_key="test-key", **kwargs)
+
+
+async def _call_gemini(models, method, is_async, **kwargs):
+    result = getattr(models, method)(model="gemini-2.5-flash", contents="Hi", **kwargs)
+    if is_async:
+        result = await result
+    if method == "generate_content_stream":
+        if is_async:
+            _ = [chunk async for chunk in result]
+        else:
+            list(result)
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+@pytest.mark.parametrize(
+    "method", ["generate_content", "generate_content_stream", "embed_content"]
+)
+@pytest.mark.parametrize(
+    "surface", GEMINI_SURFACES, ids=[surface[0] for surface in GEMINI_SURFACES]
+)
+async def test_posthog_options_reach_capture_and_not_the_provider(
+    mock_client, gemini_provider, caplog, surface, method, case
+):
+    _, class_name, accessor, is_async = surface
+    _, distinct_id, posthog_options, expected, warns = case
+    client = _gemini_client(class_name, posthog_client=mock_client)
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        await _call_gemini(
+            accessor(client),
+            method,
+            is_async,
+            **posthog_call_kwargs(distinct_id, posthog_options),
+        )
+
+    models = gemini_provider.aio.models if is_async else gemini_provider.models
+    provider_method = getattr(models, method)
+    assert provider_method.call_count == 1
+    assert not any(
+        key.startswith("posthog_") for key in provider_method.call_args.kwargs
+    )
+    assert mock_client.capture_ai.call_count == 1
+    assert_captured_options(
+        mock_client.capture_ai.call_args.kwargs, expected, warns, caplog
+    )
+
+
+@pytest.mark.parametrize(
+    "method", ["generate_content", "generate_content_stream", "embed_content"]
+)
+@pytest.mark.parametrize(
+    "surface", GEMINI_SURFACES, ids=[surface[0] for surface in GEMINI_SURFACES]
+)
+async def test_posthog_options_merge_over_client_defaults(
+    mock_client, gemini_provider, surface, method
+):
+    _, class_name, accessor, is_async = surface
+    client = _gemini_client(
+        class_name,
+        posthog_client=mock_client,
+        posthog_options={"cookieless_mode": True, "disable_skew_correction": True},
+    )
+
+    await _call_gemini(accessor(client), method, is_async, posthog_distinct_id="u")
+    await _call_gemini(
+        accessor(client),
+        method,
+        is_async,
+        posthog_distinct_id="u",
+        posthog_options={"cookieless_mode": False},
+    )
+
+    assert [
+        call.kwargs["options"] for call in mock_client.capture_ai.call_args_list
+    ] == [
+        {"cookieless_mode": True, "disable_skew_correction": True},
+        {"cookieless_mode": False, "disable_skew_correction": True},
+    ]
+
+
+def test_non_dict_client_default_posthog_options_are_ignored(
+    mock_client, gemini_provider, caplog
+):
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        client = Client(
+            api_key="test-key", posthog_client=mock_client, posthog_options="bad"
+        )
+        client.models.generate_content(
+            model="gemini-2.5-flash", contents="Hi", posthog_distinct_id="user-1"
+        )
+
+    assert "posthog_options must be a dict" in caplog.text
+    assert "options" not in mock_client.capture_ai.call_args.kwargs

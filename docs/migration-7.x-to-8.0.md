@@ -18,7 +18,6 @@ You need to change code if your app does any of these:
 - sends events to a self-hosted PostHog that does not serve the capture v1 endpoints
 - sends events through a proxy that redirects capture requests to another host
 - reuses one event `uuid` for more than one event
-- sets `$process_person_profile`, `$cookieless_mode`, `$ignore_sent_at` or `$product_tour_id` as a property: use the matching option instead (see [Event options](#event-options)). For MCP events, pass options in `event_options` (see [MCP analytics](#mcp-analytics))
 - expects `super_properties` to override properties passed to a single call, including `$set` and `$groups`
 - sets `$is_server`, `$geoip_disable` or a system property such as `$os` and expects the SDK's value to win
 - has a `before_send` hook that returns a new dict: copy `options`, or the event is sent without them, including the `process_person_profile=False` the SDK sets for events without a distinct ID (see [Event options](#event-options)). The same applies to MCP's `before_send` (see [MCP analytics](#mcp-analytics))
@@ -202,10 +201,13 @@ Capture v1 sends processing options in an `options` object, next to `properties`
   posthog.capture("signed_up", distinct_id="user-1", options={"cookieless_mode": True})
   ```
 
-  The MCP capture methods take `event_options` instead (see [MCP analytics](#mcp-analytics)).
+  The MCP capture methods take `event_options` instead (see [MCP analytics](#mcp-analytics)), and the AI integrations take `posthog_options` (see [AI capture](#ai-capture)).
 
 - `super_options`, a new `Client`, `AsyncPosthog` and module setting, sets options on every event, like `super_properties`.
 - `set_context_option(key, value)` sets an option for the current context, like `tag()`. `get_context_options()` returns the options of the current context. Both exist on `Client` and as module functions. `AsyncPosthog` has no context methods, like it has no `tag()`, so call the module functions. They apply to every client in the context.
+- The Celery integration propagates context options to workers, like tags.
+  - A propagated `process_person_profile: True` turns person processing on for worker events without a distinct ID. Each of those events creates a person.
+  - In eager mode (`task_always_eager`), Celery publishes nothing, so the distinct ID, tags and options do not reach the task's events. To carry them, pass the task's PostHog headers with `task.apply(headers=...)`, as described in [references/middleware_configuration.md](../references/middleware_configuration.md).
 - Context tags and options reach `capture`, `capture_ai`, `capture_exception`, `alias` and `group_identify`. Context options also reach `set` and `set_once`. `super_properties` and `super_options` reach every method.
 - Options are sent as given. PostHog validates them. It drops an event with an option value it cannot read, such as a list for `cookieless_mode`, as `invalid_options`, and `on_error` reports it.
 - An `options` value that is not a dict is logged as an error and ignored. The event is still sent.
@@ -260,9 +262,31 @@ These changes follow from this order:
 - `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
 - The AI integrations call your client's `capture_ai`, and never `capture`. A custom client object must implement `capture_ai` and accept its `options` keyword argument. If the client has no `capture_ai`, the wrapper, callback handler or tracing processor logs one error when you create it and captures no AI events; provider calls still work. Before, such a client got `capture` calls.
 - Tests that pass a `Mock` client to an AI integration must assert on `mock.capture_ai`, not `mock.capture`.
-- When an AI integration or MCP falls back to a trace, run or session ID, it turns person processing off with a per-event option. This is the only option the integrations set. It wins over `super_options` and context options. `before_send` can still change it.
+- When an AI integration or MCP falls back to a trace, run or session ID, it turns person processing off with a per-event option. This is the only option the integrations set on their own. It wins over your `posthog_options`, `options`, `super_options` and context options. `before_send` can still change it.
 - An empty or whitespace-only distinct ID passed to an AI integration, such as `posthog_distinct_id=""`, counts as missing, so the integration falls back the same way and turns person processing off. In 7.x, an empty ID gave non-streaming wrapper calls a random personless ID. Streaming calls, embeddings and LangChain used the trace or run ID with person processing on. OpenAI Agents already treated an empty ID as missing. Every integration sent a whitespace-only ID as given, with person processing on.
-- The AI integrations have no `options` argument. To set options on their events, use `set_context_option` in a context around the call, or `super_options`. `before_send` can also change an event's `options`.
+- The AI integrations take capture options:
+  - Every wrapper method that takes `posthog_properties` also takes `posthog_options`, for the events of that call. This covers OpenAI, Anthropic and Gemini, sync and async, and the Claude Agent SDK `query()` and `PostHogClaudeSDKClient`. The name keeps it apart from the Claude Agent SDK's own `options`.
+  - The Gemini clients take `posthog_options` as a default for every call. A call's `posthog_options` win key by key.
+  - LangChain's `CallbackHandler` and `PostHogMiddleware`, OpenAI Agents' `instrument()` and `PostHogTracingProcessor`, and the Claude Agent SDK's `instrument()` and `PostHogClaudeAgentProcessor` take `options=` for every event. LangChain also reads `posthog_options` from run metadata, like `posthog_properties`. Like properties, the handler's or processor's options win over a run's or a query's. The `$exception` event LangChain captures for a failed run gets the same options.
+  - These are the event's own options, so they win over context options and `super_options`, which still fill the keys they leave unset. `before_send` can still change them.
+  - A value that is not a dict is logged as a warning and ignored. The provider call still runs, and the provider never receives `posthog_options`.
+
+  ```python
+  from posthog.ai.langchain import CallbackHandler
+  from posthog.ai.openai import OpenAI
+
+  client = OpenAI(posthog_client=posthog_client)
+  client.chat.completions.create(
+      model="gpt-5-mini",
+      messages=[{"role": "user", "content": "Hello"}],
+      posthog_distinct_id="user-1",
+      posthog_options={"cookieless_mode": True},
+  )
+
+  handler = CallbackHandler(
+      posthog_client, distinct_id="user-1", options={"cookieless_mode": True}
+  )
+  ```
 - New `Client` and `AsyncPosthog` arguments for the AI lane:
   - `capture_ai_compression`: default none. `POSTHOG_CAPTURE_COMPRESSION` does not apply to it.
   - `capture_ai_max_queue_size`: default 1000
@@ -307,9 +331,8 @@ A context you open inside the handler has ended by then, so options you set in i
 Events you capture inside that context still get them.
 To set options on `$mcp_tool_call`, use the `event_options` callback.
 
-MCP's `before_send` sees each event's `options` in an `options` key of `PostHogCaptureEvent`.
-The SDK sends what the hook returns, so a hook that returns a new dict must copy `options`.
-Otherwise the event is sent without them, including the `process_person_profile: False` the SDK sets for an event without an identity, and PostHog creates a person for each session.
+MCP's `before_send` gets each event's `options` in an `options` key of `PostHogCaptureEvent`.
+A hook that returns a new dict must copy them, or the event is sent without the anonymous `process_person_profile: False`.
 
 ## Batching and size limits
 

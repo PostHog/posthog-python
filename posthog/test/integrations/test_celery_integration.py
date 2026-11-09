@@ -1,11 +1,17 @@
+import json
 import unittest
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from parameterized import parameterized
+
 from posthog import contexts
+from posthog.capture_event import _to_v1_event
+from posthog.client import Client
 from posthog.integrations.celery import (
     CONTEXT_DISTINCT_ID_HEADER,
+    CONTEXT_OPTIONS_HEADER,
     CONTEXT_SESSION_ID_HEADER,
     CONTEXT_TAGS_HEADER,
     PosthogCeleryIntegration,
@@ -206,19 +212,39 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             contexts.identify_context("distinct-123")
             contexts.set_context_session("session-456")
             contexts.tag("request_id", "abc")
+            contexts.set_context_option("cookieless_mode", True)
 
             integration._on_before_task_publish(sender="test.task", headers=headers)
 
         self.assertEqual(headers[CONTEXT_DISTINCT_ID_HEADER], "distinct-123")
         self.assertEqual(headers[CONTEXT_SESSION_ID_HEADER], "session-456")
-        self.assertIn(CONTEXT_TAGS_HEADER, headers)
+        self.assertEqual(
+            json.loads(headers[CONTEXT_TAGS_HEADER]), {"request_id": "abc"}
+        )
+        self.assertEqual(
+            json.loads(headers[CONTEXT_OPTIONS_HEADER]), {"cookieless_mode": True}
+        )
 
         # celery#4875: headers must also be nested inside headers["headers"]
         # so they survive to task.request.headers on the worker
         inner = headers["headers"]
         self.assertEqual(inner[CONTEXT_DISTINCT_ID_HEADER], "distinct-123")
         self.assertEqual(inner[CONTEXT_SESSION_ID_HEADER], "session-456")
-        self.assertIn(CONTEXT_TAGS_HEADER, inner)
+        self.assertEqual(json.loads(inner[CONTEXT_TAGS_HEADER]), {"request_id": "abc"})
+        self.assertEqual(
+            json.loads(inner[CONTEXT_OPTIONS_HEADER]), {"cookieless_mode": True}
+        )
+
+    def test_before_task_publish_skips_options_header_without_context_options(self):
+        integration = PosthogCeleryIntegration()
+        headers = {}
+
+        with contexts.new_context(fresh=True):
+            contexts.tag("request_id", "abc")
+            integration._on_before_task_publish(sender="test.task", headers=headers)
+
+        self.assertNotIn(CONTEXT_OPTIONS_HEADER, headers)
+        self.assertNotIn(CONTEXT_OPTIONS_HEADER, headers["headers"])
 
     def test_before_task_publish_preserves_existing_nested_headers(self):
         integration = PosthogCeleryIntegration()
@@ -240,6 +266,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             contexts.identify_context("user-rt")
             contexts.set_context_session("sess-rt")
             contexts.tag("env", "test")
+            contexts.set_context_option("process_person_profile", False)
             integration._on_before_task_publish(sender="test.task", headers=headers)
 
         # Simulate Celery worker: task.request.headers is the nested dict
@@ -256,6 +283,9 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         self.assertEqual(contexts.get_context_distinct_id(), "user-rt")
         self.assertEqual(contexts.get_context_session_id(), "sess-rt")
         self.assertEqual(contexts.get_tags().get("env"), "test")
+        self.assertEqual(
+            contexts.get_context_options(), {"process_person_profile": False}
+        )
 
         # close out the task lifecycle so the test doesn't leave context hanging around
         integration._on_task_success(sender=task)
@@ -268,6 +298,7 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
             contexts.identify_context("distinct-123")
             contexts.set_context_session("session-456")
             contexts.tag("request_id", "abc")
+            contexts.set_context_option("process_person_profile", False)
 
             integration._on_before_task_publish(sender="test.task", headers=headers)
 
@@ -709,10 +740,194 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         ctx_after = contexts._get_current_context()
         self.assertIs(ctx_after, ctx_before)
 
-    def test_extract_propagated_tags_invalid_json_returns_empty_dict(self):
+    @parameterized.expand(
+        [
+            ("tags", CONTEXT_TAGS_HEADER, "_extract_propagated_tags"),
+            ("options", CONTEXT_OPTIONS_HEADER, "_extract_propagated_options"),
+        ]
+    )
+    def test_extract_propagated_header_invalid_json_returns_empty_dict(
+        self, _name, header, extractor
+    ):
         integration = PosthogCeleryIntegration()
-        request = SimpleNamespace(headers={CONTEXT_TAGS_HEADER: "{bad json"})
+        request = SimpleNamespace(headers={header: "{bad json"})
 
-        tags = integration._extract_propagated_tags(request)
+        self.assertEqual(getattr(integration, extractor)(request), {})
 
-        self.assertEqual(tags, {})
+
+def _set_producer_context(distinct_id=None, tags=None, options=None):
+    if distinct_id:
+        contexts.identify_context(distinct_id)
+    for key, value in (tags or {}).items():
+        contexts.tag(key, value)
+    for key, value in (options or {}).items():
+        contexts.set_context_option(key, value)
+
+
+class TestCeleryContextOptionsOnTheWire(unittest.TestCase):
+    """Checks the options worker events send, through a real client."""
+
+    def _client(self, **kwargs):
+        sent = []
+        client = Client(
+            "phc_test",
+            send=False,
+            before_send=lambda msg: sent.append(msg) or msg,
+            **kwargs,
+        )
+        return client, sent
+
+    def _worker_task(self, headers):
+        request = SimpleNamespace(
+            headers=headers, delivery_info={}, hostname="worker-1", retries=0
+        )
+        return SimpleNamespace(name="app.tasks.example", request=request)
+
+    def _run_worker(self, integration, client, headers, in_task=None):
+        task = self._worker_task(headers)
+        integration._on_task_prerun(sender=task, task_id="task-1")
+        if in_task:
+            in_task()
+        client.capture("in task")
+        integration._on_task_success(sender=task)
+
+    def _publish_and_run(
+        self, producer, super_options=None, in_task=None, propagate_context=True
+    ):
+        kwargs = {"super_options": super_options} if super_options else {}
+        client, sent = self._client(**kwargs)
+        integration = PosthogCeleryIntegration(
+            client=client, propagate_context=propagate_context
+        )
+        headers = {}
+        with contexts.new_context(fresh=True, client=client):
+            _set_producer_context(**producer)
+            integration._on_before_task_publish(sender="t", headers=headers)
+        self._run_worker(integration, client, headers.get("headers", {}), in_task)
+        return {
+            event["event"]: event["options"]
+            for event in (_to_v1_event(msg) for msg in sent)
+        }
+
+    @parameterized.expand(
+        [
+            (
+                "all_four_options",
+                {
+                    "distinct_id": "user-1",
+                    "options": {
+                        "process_person_profile": False,
+                        "cookieless_mode": True,
+                        "disable_skew_correction": True,
+                        "product_tour_id": "tour-1",
+                    },
+                },
+                None,
+                {
+                    "process_person_profile": False,
+                    "cookieless_mode": True,
+                    "disable_skew_correction": True,
+                    "product_tour_id": "tour-1",
+                },
+            ),
+            (
+                "option_beats_legacy_tag_on_same_key",
+                {
+                    "distinct_id": "user-1",
+                    "tags": {"$process_person_profile": True},
+                    "options": {"process_person_profile": False},
+                },
+                None,
+                {"process_person_profile": False},
+            ),
+            (
+                "legacy_tag_only",
+                {"distinct_id": "user-1", "tags": {"$process_person_profile": False}},
+                None,
+                {"process_person_profile": False},
+            ),
+            (
+                "context_option_beats_worker_super_options",
+                {"distinct_id": "user-1", "options": {"cookieless_mode": False}},
+                {"cookieless_mode": True},
+                {"cookieless_mode": False},
+            ),
+            (
+                "personless_process_person_profile_true",
+                {"options": {"process_person_profile": True}},
+                None,
+                {"process_person_profile": True},
+            ),
+        ]
+    )
+    def test_worker_events_send_propagated_options(
+        self, _name, producer, super_options, expected
+    ):
+        options_by_event = self._publish_and_run(producer, super_options)
+
+        self.assertEqual(
+            options_by_event,
+            {
+                "celery task started": expected,
+                "in task": expected,
+                "celery task success": expected,
+            },
+        )
+
+    def test_option_set_inside_task_overrides_propagated_option(self):
+        options_by_event = self._publish_and_run(
+            {"distinct_id": "user-1", "options": {"process_person_profile": False}},
+            in_task=lambda: contexts.set_context_option("process_person_profile", True),
+        )
+
+        self.assertEqual(
+            options_by_event,
+            {
+                "celery task started": {"process_person_profile": False},
+                "in task": {"process_person_profile": True},
+                "celery task success": {"process_person_profile": True},
+            },
+        )
+
+    @parameterized.expand(
+        [
+            ("missing", None, {}),
+            ("bad_json", "{bad json", {}),
+            ("not_an_object", '["cookieless_mode"]', {}),
+            ("bytes", b'{"cookieless_mode": true}', {"cookieless_mode": True}),
+        ]
+    )
+    def test_worker_handles_options_header(self, _name, raw, expected):
+        client, sent = self._client()
+        integration = PosthogCeleryIntegration(client=client)
+        headers = {CONTEXT_DISTINCT_ID_HEADER: "user-1"}
+        if raw is not None:
+            headers[CONTEXT_OPTIONS_HEADER] = raw
+
+        self._run_worker(integration, client, headers)
+
+        self.assertEqual(
+            [(msg["event"], _to_v1_event(msg)["options"]) for msg in sent],
+            [
+                ("celery task started", expected),
+                ("in task", expected),
+                ("celery task success", expected),
+            ],
+        )
+
+    def test_propagate_context_false_sends_no_options(self):
+        options_by_event = self._publish_and_run(
+            {"distinct_id": "user-1", "options": {"cookieless_mode": True}},
+            propagate_context=False,
+        )
+
+        # The distinct ID is not propagated either, so worker events are personless.
+        personless = {"process_person_profile": False}
+        self.assertEqual(
+            options_by_event,
+            {
+                "celery task started": personless,
+                "in task": personless,
+                "celery task success": personless,
+            },
+        )

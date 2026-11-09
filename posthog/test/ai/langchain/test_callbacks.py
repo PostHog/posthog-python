@@ -9,6 +9,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
+
 try:
     from langchain_anthropic.chat_models import ChatAnthropic
     from langchain_community.chat_models.fake import FakeMessagesListChatModel
@@ -2812,6 +2814,53 @@ def test_exception_autocapture_on_llm_generation_error(mock_client):
     assert gen_props["$ai_is_error"] is True
 
 
+@pytest.mark.parametrize(
+    "distinct_id, handler_options, run_options, expected_options",
+    [
+        # No user: person processing stays off, as on the AI event.
+        (None, {}, None, {"process_person_profile": False}),
+        (
+            None,
+            {"process_person_profile": True, "cookieless_mode": True},
+            None,
+            {"process_person_profile": False, "cookieless_mode": True},
+        ),
+        # A user: the options are sent as set, the handler's winning over the run's.
+        ("user-123", {}, None, None),
+        (
+            "user-123",
+            {"cookieless_mode": True},
+            {"cookieless_mode": False, "product_tour_id": "tour-1"},
+            {"cookieless_mode": True, "product_tour_id": "tour-1"},
+        ),
+    ],
+)
+def test_exception_autocapture_sends_ai_event_options(
+    distinct_id, handler_options, run_options, expected_options
+):
+    """The `$exception` event carries the same options as its generation."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-opt"
+
+    callbacks = CallbackHandler(
+        mock_client, distinct_id=distinct_id, options=handler_options
+    )
+    run_id = uuid.uuid4()
+    metadata = {"posthog_options": run_options} if run_options is not None else None
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+        metadata=metadata,
+    )
+    callbacks.on_llm_error(Exception("boom"), run_id=run_id)
+
+    assert mock_client.capture_exception.call_count == 1
+    assert mock_client.capture_exception.call_args[1].get("options") == expected_options
+
+
 def test_exception_autocapture_passes_ai_properties_to_exception():
     """Test that AI properties are passed to the exception event."""
     mock_client = MagicMock()
@@ -3076,3 +3125,71 @@ class TestGetHttpStatus:
 
         properties = client.capture_ai.call_args_list[0][1]["properties"]
         assert properties["$ai_http_status"] == 0
+
+
+def _invoke_fake_chain(handler, metadata=None):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    config = {"callbacks": [handler]}
+    if metadata is not None:
+        config["metadata"] = metadata
+    chain.invoke({}, config=config)
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+def test_handler_options_reach_every_event(mock_client, caplog, case):
+    _, distinct_id, options, expected, warns = case
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client, distinct_id=distinct_id, options=options)
+        )
+
+    calls = mock_client.capture_ai.call_args_list
+    assert [call.kwargs["event"] for call in calls] == [
+        "$ai_span",
+        "$ai_generation",
+        "$ai_trace",
+    ]
+    for call in calls:
+        assert_captured_options(call.kwargs, expected, warns, caplog)
+
+
+def test_run_metadata_posthog_options_reach_the_generation(mock_client):
+    _invoke_fake_chain(
+        CallbackHandler(
+            mock_client, distinct_id="user-1", options={"cookieless_mode": True}
+        ),
+        metadata={
+            "posthog_options": {
+                "cookieless_mode": False,
+                "disable_skew_correction": True,
+            }
+        },
+    )
+
+    options_by_event = {
+        call.kwargs["event"]: call.kwargs["options"]
+        for call in mock_client.capture_ai.call_args_list
+    }
+    # The handler's options win over the run's, like its properties.
+    assert options_by_event == {
+        "$ai_span": {"cookieless_mode": True},
+        "$ai_generation": {"cookieless_mode": True, "disable_skew_correction": True},
+        "$ai_trace": {"cookieless_mode": True},
+    }
+
+
+def test_non_dict_run_metadata_posthog_options_are_ignored(mock_client, caplog):
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client),
+            metadata={"posthog_options": "cookieless_mode"},
+        )
+
+    generation = mock_client.capture_ai.call_args_list[1].kwargs
+    assert generation["event"] == "$ai_generation"
+    assert generation["options"] == {"process_person_profile": False}
+    assert "posthog_options must be a dict" in caplog.text

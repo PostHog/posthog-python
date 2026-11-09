@@ -13,6 +13,7 @@ from ...client import Client as PostHogClient
 from ..types import StreamingEventData, TokenUsage
 from ..utils import (
     _user_distinct_id,
+    _ai_event_options,
     _capture_ai_event,
     _resolve_ai_client,
     capture_streaming_event,
@@ -130,6 +131,7 @@ class _GeminiModelsPolicy:
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        posthog_options: Optional[Dict[str, Any]] = None,
         provider_client: Optional[Any] = None,
     ) -> None:
         self._ph_client = _resolve_ai_client(posthog_client)
@@ -137,6 +139,7 @@ class _GeminiModelsPolicy:
         self._default_properties = posthog_properties or {}
         self._default_privacy_mode = posthog_privacy_mode
         self._default_groups = posthog_groups
+        self._default_options = _ai_event_options(posthog_options)
 
         # Every surface of one PostHog client (sync models, aio models, files)
         # shares a single provider client rather than opening its own.
@@ -180,6 +183,12 @@ class _GeminiModelsPolicy:
         trace_id = call_trace_id if call_trace_id is not None else str(uuid.uuid4())
         return distinct_id, trace_id, properties, privacy_mode, groups
 
+    def _merge_posthog_options(
+        self, call_options: Optional[Dict[str, Any]]
+    ) -> Dict[str, Any]:
+        """Merge call-level capture options over the client defaults, key by key."""
+        return {**self._default_options, **_ai_event_options(call_options)}
+
     def _capture_streaming_event(
         self,
         model: str,
@@ -195,6 +204,7 @@ class _GeminiModelsPolicy:
         output: Any,
         stop_reason: Optional[str] = None,
         error: Optional[BaseException] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         formatted_input = merge_system_prompt(
             {"contents": contents, **kwargs}, "gemini"
@@ -215,6 +225,7 @@ class _GeminiModelsPolicy:
             groups=groups,
             stop_reason=stop_reason,
             error=error,
+            options=options,
         )
         capture_streaming_event(self._ph_client, event_data)
 
@@ -231,6 +242,7 @@ class _GeminiModelsPolicy:
         response: Any,
         error: Optional[Exception],
         latency: float,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         input_tokens = (
             extract_gemini_embedding_token_count(response) if response else None
@@ -266,4 +278,5 @@ class _GeminiModelsPolicy:
             properties=event_properties,
             groups=groups,
             personless=_user_distinct_id(distinct_id) is None,
+            options=options,
         )
