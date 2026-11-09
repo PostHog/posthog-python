@@ -1039,6 +1039,10 @@ class _BearerAuth(requests.auth.AuthBase):
         return request
 
 
+def _storage_unreachable(exc: Exception) -> str:
+    return f"PostHog's file storage didn't answer ({type(exc).__name__})."
+
+
 def _files_body(files: Sequence[_File]) -> bytes:
     return _encode(
         {"files": [{"sha256": file.sha256, "size": file.size} for file in files]}
@@ -1286,9 +1290,19 @@ class Emails(_EmailsBase):
         request = requests.Request(
             target.method, target.url, data=content, headers=target.headers
         ).prepare()
-        return lambda: session.send(
-            request, timeout=self.timeout, allow_redirects=False
-        )
+        transport = session.merge_environment_settings(target.url, {}, None, None, None)
+
+        def send() -> requests.Response:
+            try:
+                return session.send(
+                    request, timeout=self.timeout, allow_redirects=False, **transport
+                )
+            except requests.exceptions.RequestException as exc:
+                raise requests.exceptions.ConnectionError(
+                    _storage_unreachable(exc)
+                ) from None
+
+        return send
 
     def _call(
         self,
@@ -1484,7 +1498,14 @@ class AsyncEmails(_EmailsBase):
             headers=target.headers,
             extensions={"timeout": httpx.Timeout(self.timeout).as_dict()},
         )
-        return lambda: client.send(request, auth=None)
+
+        async def send() -> Any:
+            try:
+                return await client.send(request, auth=None)
+            except httpx.RequestError as exc:
+                raise httpx.ConnectError(_storage_unreachable(exc)) from None
+
+        return send
 
     async def _call(
         self,

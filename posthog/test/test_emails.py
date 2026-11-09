@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import traceback
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Union
@@ -44,11 +45,13 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         super().__init__()
         self.replies = list(replies)
         self.requests: list[requests.PreparedRequest] = []
+        self.verify: list[Any] = []
 
     def send(
         self, request: requests.PreparedRequest, **kwargs: Any
     ) -> requests.Response:
         self.requests.append(request)
+        self.verify.append(kwargs.get("verify"))
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -1057,6 +1060,63 @@ def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
     )
     assert storage_code in error.message
     assert [request.method for request in adapter.requests] == ["POST", "PUT"]
+
+
+def test_the_upload_trusts_the_certificates_the_environment_names(monkeypatch):
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/etc/ssl/corporate-ca.pem")
+    emails, adapter = emails_with([slots(upload(INVITE_SHA256)), stored(), accepted()])
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": INVITE}]
+    )
+
+    assert adapter.verify == ["/etc/ssl/corporate-ca.pem"] * 3
+
+
+def test_an_unreachable_storage_never_shows_the_signed_url_in_the_traceback():
+    unreachable = requests.exceptions.ConnectionError(
+        f"Max retries exceeded with url: {BUCKET_URL}{INVITE_SHA256}{SIGNATURE}"
+    )
+    emails, adapter = emails_with(
+        [slots(upload(INVITE_SHA256)), unreachable, unreachable, unreachable]
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert raised.value.code == "network_error"
+    assert "X-Amz-Signature" not in "".join(traceback.format_exception(raised.value))
+    assert [request.method for request in adapter.requests] == ["POST"] + ["PUT"] * 3
+
+
+@pytest.mark.asyncio
+async def test_async_unreachable_storage_never_shows_the_signed_url_in_the_traceback():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            raise httpx.ConnectError(f"Connection refused: {request.url}")
+        return httpx.Response(200, json={"files": [upload(INVITE_SHA256)]})
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+    with pytest.raises(EmailError) as raised:
+        await emails.send(
+            to="user@example.com",
+            template_key="invite",
+            subject="You're invited",
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert raised.value.code == "network_error"
+    assert "X-Amz-Signature" not in "".join(traceback.format_exception(raised.value))
 
 
 def test_an_unavailable_storage_is_retried_before_the_send():
