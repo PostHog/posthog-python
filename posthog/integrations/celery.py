@@ -10,8 +10,8 @@ Features:
   queue, retry count, duration, Celery version etc.
 - Any custom events captured inside a task (via ``client.capture``) are automatically
   enriched with the same Celery-specific properties via context tags.
-- Propagates PostHog context (distinct ID, session ID, tags) from the producer
-  process to the worker process.
+- Propagates PostHog context (distinct ID, session ID, tags, context options)
+  from the producer process to the worker process.
 
 Supports Celery 4.0+ (Message Protocol Version 2).
 
@@ -82,6 +82,7 @@ from ..tracing._context import _enrich_span
 CONTEXT_DISTINCT_ID_HEADER = "X-POSTHOG-DISTINCT-ID"
 CONTEXT_SESSION_ID_HEADER = "X-POSTHOG-SESSION-ID"
 CONTEXT_TAGS_HEADER = "X-POSTHOG-CONTEXT-TAGS"
+CONTEXT_OPTIONS_HEADER = "X-POSTHOG-CONTEXT-OPTIONS"
 
 logger = logging.getLogger("posthog")
 
@@ -101,8 +102,8 @@ class PosthogCeleryIntegration:
         capture_task_lifecycle_events: Whether to emit lifecycle events of the task
             such as "started", "success", "failure" etc. (default ``True``).
         propagate_context: Whether to propagate PostHog context (distinct
-            ID, session ID, tags) from the producer to the worker via task
-            headers (default ``True``).
+            ID, session ID, tags, context options) from the producer to the
+            worker via task headers (default ``True``).
         task_filter: Optional callback ``(task_name, task_properties) -> bool`` expected to
             return ``False`` if a given task should not be tracked.
     """
@@ -228,6 +229,7 @@ class PosthogCeleryIntegration:
             distinct_id = contexts.get_context_distinct_id()
             session_id = contexts.get_context_session_id()
             tags = contexts.get_tags()
+            options = contexts.get_context_options()
 
             posthog_headers: dict[str, str] = {}
             if distinct_id:
@@ -236,6 +238,10 @@ class PosthogCeleryIntegration:
                 posthog_headers[CONTEXT_SESSION_ID_HEADER] = session_id
             if tags:
                 posthog_headers[CONTEXT_TAGS_HEADER] = json.dumps(tags, default=str)
+            if options:
+                posthog_headers[CONTEXT_OPTIONS_HEADER] = json.dumps(
+                    options, default=str
+                )
 
             if posthog_headers:
                 headers.update(posthog_headers)
@@ -293,6 +299,7 @@ class PosthogCeleryIntegration:
             sender = kwargs.get("sender")
             request = getattr(sender, "request", None)
             context_tags = self._extract_propagated_tags(request)
+            context_options = self._extract_propagated_options(request)
             task_properties = self._build_task_properties(
                 sender=sender,
                 task_id=task_id,
@@ -316,6 +323,8 @@ class PosthogCeleryIntegration:
             merged_tags = {**task_properties, **context_tags}
             for key, value in merged_tags.items():
                 contexts.tag(key, value)
+            for key, value in context_options.items():
+                contexts.set_context_option(key, value)
 
             if self.capture_task_lifecycle_events and self._should_track(
                 task_name, task_properties
@@ -420,14 +429,20 @@ class PosthogCeleryIntegration:
             contexts.set_context_session(str(session_id))
 
     def _extract_propagated_tags(self, request: Any) -> dict[str, Any]:
+        return self._extract_propagated_json(request, CONTEXT_TAGS_HEADER)
+
+    def _extract_propagated_options(self, request: Any) -> dict[str, Any]:
+        return self._extract_propagated_json(request, CONTEXT_OPTIONS_HEADER)
+
+    def _extract_propagated_json(self, request: Any, header: str) -> dict[str, Any]:
         headers = self._extract_headers(request)
 
-        raw_tags = headers.get(CONTEXT_TAGS_HEADER)
-        if not isinstance(raw_tags, (str, bytes, bytearray)):
+        raw = headers.get(header)
+        if not isinstance(raw, (str, bytes, bytearray)):
             return {}
 
         try:
-            parsed = json.loads(raw_tags)
+            parsed = json.loads(raw)
         except Exception:
             return {}
 

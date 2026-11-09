@@ -199,6 +199,7 @@ def test_instruments_sync_agent_model_and_tool_loop() -> None:
                 trace_id="trace-id",
                 properties={"environment": "test"},
                 groups={"company": "posthog"},
+                options={"cookieless_mode": True},
             )
         ],
     )
@@ -219,6 +220,7 @@ def test_instruments_sync_agent_model_and_tool_loop() -> None:
     assert trace["groups"] == {"company": "posthog"}
     assert all(event["properties"]["$ai_trace_id"] == "trace-id" for event in events)
     assert all(event["properties"]["environment"] == "test" for event in events)
+    assert all(event["options"] == {"cookieless_mode": True} for event in events)
     assert all(
         event["properties"].get("$ai_parent_id") == trace["properties"]["$ai_span_id"]
         for event in events[:-1]

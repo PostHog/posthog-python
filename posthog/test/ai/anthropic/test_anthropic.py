@@ -29,7 +29,12 @@ try:
     from anthropic.types.raw_message_delta_event import Delta
 
     from posthog.ai.anthropic import Anthropic, AnthropicBedrock, AsyncAnthropic
-    from posthog.test.ai.utils import RecordingAsyncStream
+    from posthog.test.ai.utils import (
+        POSTHOG_OPTIONS_CASES,
+        RecordingAsyncStream,
+        assert_captured_options,
+        posthog_call_kwargs,
+    )
 
     ANTHROPIC_AVAILABLE = True
 except ImportError:
@@ -2409,3 +2414,93 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_anthropic_res
     assert mock_client.capture_ai.call_count == 1
     props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input"][0]["content"][0]["source"]["data"] == image_data
+
+
+_OPTIONS_CALL_KWARGS = {
+    "model": "claude-haiku-4-5",
+    "messages": [{"role": "user", "content": "Foo"}],
+    "max_tokens": 1,
+}
+
+
+async def _call_anthropic_with_options(kind, is_async, mock_client, posthog_kwargs):
+    """Run one wrapper call and return the arguments the provider received."""
+    client_class = AsyncAnthropic if is_async else Anthropic
+    client = client_class(api_key="test-key", posthog_client=mock_client)
+
+    if kind == "stream_manager":
+        # messages.stream() builds the request itself, so record the HTTP call.
+        if is_async:
+            client.post = AsyncMock(
+                return_value=RecordingAsyncStream(_anthropic_raw_stream_events())
+            )
+            manager = client.messages.stream(**_OPTIONS_CALL_KWARGS, **posthog_kwargs)
+            async with manager as stream:
+                _ = [chunk async for chunk in stream.text_stream]
+        else:
+            client.post = Mock(
+                return_value=RecordingStream(_anthropic_raw_stream_events())
+            )
+            with client.messages.stream(
+                **_OPTIONS_CALL_KWARGS, **posthog_kwargs
+            ) as stream:
+                list(stream.text_stream)
+        return client.post.call_args
+
+    stream = kind == "create_stream"
+    provider_calls = []
+
+    def respond(kwargs):
+        provider_calls.append(kwargs)
+        if not stream:
+            return create_mock_response()
+        events = _anthropic_stream_events()
+        return RecordingAsyncStream(events) if is_async else RecordingStream(events)
+
+    async def async_create(self, **kwargs):
+        return respond(kwargs)
+
+    def sync_create(self, **kwargs):
+        return respond(kwargs)
+
+    target = "AsyncMessages" if is_async else "Messages"
+    with patch(
+        f"anthropic.resources.messages.{target}.create",
+        new=async_create if is_async else sync_create,
+    ):
+        call_kwargs = {**_OPTIONS_CALL_KWARGS, "stream": stream, **posthog_kwargs}
+        result = client.messages.create(**call_kwargs)
+        if is_async:
+            result = await result
+        if stream:
+            if is_async:
+                _ = [event async for event in result]
+            else:
+                list(result)
+    assert len(provider_calls) == 1
+    return provider_calls[0]
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+@pytest.mark.parametrize("kind", ["create", "create_stream", "stream_manager"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_posthog_options_reach_capture_and_not_the_provider(
+    mock_client, caplog, is_async, kind, case
+):
+    _, distinct_id, posthog_options, expected, warns = case
+
+    with caplog.at_level("WARNING", logger="posthog"):
+        provider_call = await _call_anthropic_with_options(
+            kind,
+            is_async,
+            mock_client,
+            posthog_call_kwargs(distinct_id, posthog_options),
+        )
+
+    assert "posthog_" not in repr(provider_call)
+    assert mock_client.capture_ai.call_count == 1
+    assert_captured_options(
+        mock_client.capture_ai.call_args.kwargs, expected, warns, caplog
+    )

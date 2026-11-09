@@ -10,6 +10,7 @@ import pytest
 from mcp.types import CallToolResult, ServerResult, TextContent, Tool
 
 from posthog.mcp import (
+    FeedbackReport,
     PostHogMCP,
     PreparedToolCall,
     derive_session_id_from_conversation,
@@ -116,6 +117,75 @@ def test_mcp_client_keeps_the_sdk_identity():
         client.capture("$mcp_custom")
 
     assert send.call_args.kwargs["sdk_info"] == f"posthog-python/{VERSION}"
+
+
+_CAPTURE_METHODS = [
+    ("capture_tool_call", ("search",), {}, "$mcp_tool_call"),
+    ("capture_initialize", (), {}, "$mcp_initialize"),
+    ("capture_tools_list", (), {"tool_names": ["a"]}, "$mcp_tools_list"),
+    ("capture_missing_capability", (), {}, "$mcp_missing_capability"),
+    (
+        "capture_feedback",
+        (),
+        {"report": FeedbackReport(summary="good")},
+        "$mcp_feedback",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "method, args, kwargs, event_name",
+    _CAPTURE_METHODS,
+    ids=[m[0] for m in _CAPTURE_METHODS],
+)
+@pytest.mark.parametrize(
+    "distinct_id, expected",
+    [
+        ("user_1", {"cookieless_mode": True, "process_person_profile": True}),
+        (None, {"cookieless_mode": True, "process_person_profile": False}),
+    ],
+    ids=["identified", "anonymous"],
+)
+async def test_capture_methods_send_event_options(
+    method, args, kwargs, event_name, distinct_id, expected
+):
+    client, captured = make_client()
+    event_options = {"cookieless_mode": True, "process_person_profile": True}
+    getattr(client, method)(
+        *args, distinct_id=distinct_id, event_options=event_options, **kwargs
+    )
+    await _flush()
+
+    [event] = captured
+    assert event["event"] == event_name
+    assert event["options"] == expected
+    assert event_options == {"cookieless_mode": True, "process_person_profile": True}
+
+
+async def test_capture_tool_call_event_options_reach_the_exception_sibling():
+    client, captured = make_client()
+    client.capture_tool_call(
+        "broken",
+        is_error=True,
+        error=RuntimeError("kaboom"),
+        distinct_id="u",
+        event_options={"product_tour_id": "tour"},
+    )
+    await _flush()
+
+    assert [(e["event"], e["options"]) for e in captured] == [
+        ("$mcp_tool_call", {"product_tour_id": "tour"}),
+        ("$exception", {"product_tour_id": "tour"}),
+    ]
+
+
+async def test_capture_methods_pass_empty_options_without_event_options():
+    client, captured = make_client()
+    client.capture_tool_call("search", distinct_id="u")
+    await _flush()
+
+    [event] = captured
+    assert event["options"] == {}
 
 
 async def test_capture_initialize_and_tools_list():
