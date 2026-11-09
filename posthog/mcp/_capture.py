@@ -71,6 +71,8 @@ def capture_event(
         "error_type": event_input.get("error_type"),
         "conversation_id": event_input.get("conversation_id"),
         "properties": event_input.get("properties"),
+        "callback_event_options": event_input.get("callback_event_options"),
+        "event_options": event_input.get("event_options"),
     }
 
     options = McpCaptureOptions(

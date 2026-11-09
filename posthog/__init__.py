@@ -394,10 +394,7 @@ Attributes:
     super_options: Capture options for every captured event, such as
         ``{"cookieless_mode": True}``. They fill only options the event leaves
         unset, before ``before_send`` runs. An event's own ``options`` and
-        context options override them, and ``before_send`` can change them. They also
-        win over an event's legacy property for the same key, such as
-        ``$cookieless_mode``, so pass per-event overrides of that key as
-        ``options``.
+        context options override them, and ``before_send`` can change them.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``

@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
+
 try:
     from agents.tracing.span_data import (
         AgentSpanData,
@@ -1196,6 +1198,35 @@ class TestInstrumentHelper:
 
             assert processor._groups == {"company": "acme"}
             assert processor._properties == {"env": "test"}
+
+    @pytest.mark.parametrize(
+        "case",
+        POSTHOG_OPTIONS_CASES,
+        ids=[case[0] for case in POSTHOG_OPTIONS_CASES],
+    )
+    def test_instrument_options_reach_trace_and_span_events(
+        self, mock_client, mock_trace, mock_span, caplog, case
+    ):
+        _, distinct_id, options, expected, warns = case
+
+        with caplog.at_level(logging.WARNING, logger="posthog"):
+            with patch("agents.tracing.add_trace_processor"):
+                processor = instrument(
+                    client=mock_client, distinct_id=distinct_id, options=options
+                )
+            processor.on_trace_start(mock_trace)
+            mock_span.span_data = GenerationSpanData(model="gpt-4o")
+            processor.on_span_start(mock_span)
+            processor.on_span_end(mock_span)
+            processor.on_trace_end(mock_trace)
+
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == [
+            "$ai_generation",
+            "$ai_trace",
+        ]
+        for call in calls:
+            assert_captured_options(call.kwargs, expected, warns, caplog)
 
 
 class TestCapturePolicy:

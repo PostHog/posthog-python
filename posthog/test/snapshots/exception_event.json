@@ -119,6 +119,8 @@
             "company": "company-456"
           },
           "$is_server": true,
+          "$lib": "posthog-python",
+          "$lib_version": "<SDK_VERSION>",
           "$os": "<OS>",
           "$os_distro": "<OS_DISTRO>",
           "$os_version": "<OS_VERSION>",

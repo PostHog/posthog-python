@@ -8,10 +8,12 @@ from unittest import mock
 import pytest
 
 from posthog import AsyncPosthog
+from posthog.capture_event import _to_v1_event
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
 from posthog.contexts import new_context, set_context_device_id
 from posthog.request import APIError
 from posthog.test.capture_helpers import patch_async_capture_send
+from posthog.version import VERSION
 
 
 def flags_response(*, minimal=False):
@@ -201,6 +203,11 @@ async def test_minimal_flag_called_event_uses_strict_property_allowlist():
         "$feature_flag_request_id",
         "$feature_flag_has_experiment",
     } <= set(event["properties"])
+    wire_properties = _to_v1_event(event)["properties"]
+    assert (wire_properties["$lib"], wire_properties["$lib_version"]) == (
+        "posthog-python",
+        VERSION,
+    )
 
 
 @pytest.mark.asyncio

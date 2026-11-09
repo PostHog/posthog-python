@@ -72,24 +72,37 @@ def _user_distinct_id(distinct_id: Any) -> Any:
     return distinct_id if _explicit_distinct_id(distinct_id) is not None else None
 
 
+def _ai_event_options(value: Any) -> Dict[str, Any]:
+    """Return a copy of a caller's ``posthog_options``, or ``{}`` when it is not a dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        logging.getLogger("posthog").warning(
+            "posthog_options must be a dict, got %s. Sending the event without them.",
+            type(value).__name__,
+        )
+        return {}
+    return dict(value)
+
+
 def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwargs):
     """Capture a wrapper-emitted AI event with the PostHog AI library identity.
 
-    ``personless`` marks an event whose distinct ID is a fallback, such as a
-    trace ID, not a real user.
+    ``options`` are the caller's per-event options. ``personless`` marks an
+    event whose distinct ID is a fallback, such as a trace ID, not a real user.
     """
     kwargs["properties"] = {
         **_AI_LIB_PROPERTIES,
         **(kwargs.get("properties") or {}),
     }
+    options = _ai_event_options(kwargs.pop("options", None))
     if personless:
-        # A per-event option beats legacy properties and global or context
-        # options, because a person profile for a fallback ID is always wrong.
-        # before_send can still change it.
-        kwargs["options"] = {
-            **(kwargs.get("options") or {}),
-            "process_person_profile": False,
-        }
+        # Set last, so it beats the caller's options as well as legacy
+        # properties and global or context options: a person profile for a
+        # fallback ID is always wrong. before_send can still change it.
+        options["process_person_profile"] = False
+    if options:
+        kwargs["options"] = options
     return ph_client.capture_ai(event=event, **kwargs)
 
 
@@ -133,8 +146,14 @@ def _capture_processor_event(
     distinct_id: Optional[str] = None,
     groups: Optional[Dict[str, Any]] = None,
     personless: bool = False,
+    options: Optional[Dict[str, Any]] = None,
+    default_options: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Apply the shared capture policy used by AI SDK processors."""
+    """Apply the shared capture policy used by AI SDK processors.
+
+    ``default_options`` win over ``options`` key by key, like
+    ``default_properties`` over ``properties``.
+    """
     try:
         if not callable(getattr(ph_client, "capture_ai", None)):
             return
@@ -146,6 +165,10 @@ def _capture_processor_event(
             properties={**properties, **(default_properties or {})},
             groups=groups,
             personless=personless,
+            options={
+                **_ai_event_options(options),
+                **_ai_event_options(default_options),
+            },
         )
     except Exception as exc:
         logging.getLogger("posthog").debug("Failed to capture PostHog event: %s", exc)
@@ -520,11 +543,15 @@ def call_llm_and_track_usage(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_method: Callable[..., Any],
+    *,
+    posthog_options: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Any:
     """
     Common usage-tracking logic for both sync and async calls.
     call_method: the llm call method (e.g. openai.chat.completions.create)
+    posthog_options: capture options for the event. They are not passed to
+        ``call_method``.
     """
     start_time = time.time()
     response = None
@@ -669,6 +696,7 @@ def call_llm_and_track_usage(
                     properties=merged_properties,
                     groups=posthog_groups,
                     personless=not has_person_distinct_id,
+                    options=posthog_options,
                 )
 
         if error:
@@ -687,6 +715,8 @@ async def call_llm_and_track_usage_async(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_async_method: Callable[..., Any],
+    *,
+    posthog_options: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Any:
     start_time = time.time()
@@ -839,6 +869,7 @@ async def call_llm_and_track_usage_async(
                     properties=merged_properties,
                     groups=posthog_groups,
                     personless=not has_person_distinct_id,
+                    options=posthog_options,
                 )
 
         if error:
@@ -1260,4 +1291,5 @@ def capture_streaming_event(
             properties=event_properties,
             groups=event_data.get("groups"),
             personless=_user_distinct_id(event_data.get("distinct_id")) is None,
+            options=event_data.get("options"),
         )
