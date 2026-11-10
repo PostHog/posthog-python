@@ -4734,12 +4734,12 @@ class Client(object):
                 request_id,
                 evaluated_at,
                 flag_details,
-                value_from_details,
                 feature_flag_error,
                 has_experiment,
                 minimal_flag_called_events,
                 local_flag_id=local_flag_id,
                 local_flag_version=local_flag_version,
+                value_from_details=value_from_details,
             )
 
         return flag_result
@@ -5029,12 +5029,15 @@ class Client(object):
         request_id: Optional[str],
         evaluated_at: Optional[int],
         flag_details: Optional[FeatureFlag],
-        value_from_details: bool,
         feature_flag_error: Optional[str] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
         local_flag_id: Optional[int] = None,
         local_flag_version: Optional[int] = None,
+        *,
+        # Keyword-only, and false by default: a caller that does not say the record
+        # supplied the value sends no $experiment_exposure.
+        value_from_details: bool = False,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
