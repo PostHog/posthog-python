@@ -767,9 +767,14 @@ _CATEGORY_FIELDS = {"key", "type", "name", "description"}
 
 
 class FakeSendApi(requests.adapters.BaseAdapter):
-    def __init__(self, categories: Optional[dict[str, dict[str, str]]] = None):
+    def __init__(
+        self,
+        categories: Optional[dict[str, dict[str, str]]] = None,
+        templates: Optional[dict[str, Optional[str]]] = None,
+    ):
         super().__init__()
         self.categories = categories or {}
+        self.templates = templates or {}
         self.sent: list[tuple[str, Optional[str]]] = []
 
     def send(
@@ -786,6 +791,8 @@ class FakeSendApi(requests.adapters.BaseAdapter):
         category = body.get("category")
         if set(body) - _CODE_SEND_FIELDS or not _is_valid_category(category):
             return 400, {"code": "invalid_input", "attr": "category"}
+        if body["template_key"] in self.templates:
+            return self._send_for_template(body, category)
         if not isinstance(category, dict):
             self.sent.append((body["to"], None))
             return 202, {"message_id": "msg_1"}
@@ -802,6 +809,23 @@ class FakeSendApi(requests.adapters.BaseAdapter):
             stored["description"] = category["description"]
         self.categories[category["key"]] = stored
         self.sent.append((body["to"], category["key"]))
+        return 202, {"message_id": "msg_1"}
+
+    def _send_for_template(
+        self, body: dict[str, Any], category: Any
+    ) -> tuple[int, dict[str, Any]]:
+        key = self.templates[body["template_key"]]
+        if key is None:
+            matches = category in (None, "transactional")
+        else:
+            matches = category is None or (
+                isinstance(category, dict)
+                and category["key"] == key
+                and category["type"] == self.categories[key]["type"]
+            )
+        if not matches:
+            return 400, {"code": "category_mismatch", "attr": "category"}
+        self.sent.append((body["to"], key))
         return 202, {"message_id": "msg_1"}
 
     def close(self) -> None:
@@ -821,8 +845,9 @@ def _is_valid_category(category: Any) -> bool:
 
 def emails_with_send_api(
     categories: Optional[dict[str, dict[str, str]]] = None,
+    templates: Optional[dict[str, Optional[str]]] = None,
 ) -> tuple[Emails, FakeSendApi]:
-    api = FakeSendApi(categories)
+    api = FakeSendApi(categories, templates)
     session = requests.Session()
     session.mount("https://", api)
     return Emails(SECRET_KEY, session=session, max_retries=0), api
@@ -910,6 +935,46 @@ def test_a_send_without_a_category_is_transactional(_name, overrides):
 
     assert api.sent == [("user@example.com", None)]
     assert api.categories == {}
+
+
+def emails_with_a_newsletter_template() -> tuple[Emails, FakeSendApi]:
+    return emails_with_send_api(
+        {
+            "newsletter": {
+                "type": "marketing",
+                "name": "Newsletter",
+                "description": "",
+            }
+        },
+        templates={"november-digest": "newsletter"},
+    )
+
+
+@parameterized.expand([("left_out", {}), ("none", {"category": None})])
+def test_a_send_for_a_marketing_template_follows_its_category(_name, overrides):
+    emails, api = emails_with_a_newsletter_template()
+
+    send_code(emails, template_key="november-digest", html=MARKETING_HTML, **overrides)
+
+    assert api.sent == [("user@example.com", "newsletter")]
+
+
+def test_transactional_on_a_marketing_template_is_refused():
+    emails, api = emails_with_a_newsletter_template()
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            template_key="november-digest",
+            html=MARKETING_HTML,
+            category=TRANSACTIONAL_CATEGORY,
+        )
+
+    assert (raised.value.code, raised.value.name) == (
+        "category_mismatch",
+        "validation_error",
+    )
+    assert api.sent == []
 
 
 def test_a_category_of_another_type_is_refused():

@@ -301,15 +301,17 @@ class CodeEmailArgs(_RecipientArgs):
             engagement capture off captures nothing, whatever the send asks. A
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
-        category: Left out, or :data:`TRANSACTIONAL_CATEGORY`
-            (``"transactional"``), sends transactional email with no category.
-            A :class:`MessageCategory` files the email under that category, and
+        category: Left out, the email follows the category of the template
+            that ``template_key`` names, or is transactional with no category.
+            :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``) sends
+            transactional email with no category. A :class:`MessageCategory` files the email under that category, and
             creates or updates it. A marketing send honors the recipient's
             opt-outs, and its ``html``, or its ``text`` when it has no
             ``html``, must hold ``{{ unsubscribe_url }}``. PostHog raises
             ``category_mismatch`` when the project's category with that key
             has another type, or when ``template_key`` names a template in
-            another category; ``too_many_categories`` when the send would
+            another category, including :data:`TRANSACTIONAL_CATEGORY` for a
+            template in a category; ``too_many_categories`` when the send would
             create a category past the project's limit;
             ``unsubscribe_link_required`` for a marketing body without the
             link; and ``recipient_opted_out`` for a recipient who opted out
