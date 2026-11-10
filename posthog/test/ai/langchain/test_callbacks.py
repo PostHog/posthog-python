@@ -2808,6 +2808,26 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     assert span_props["$ai_error"] == "ValueError: test error"
 
 
+def test_exception_autocapture_absent_on_client_still_sends_the_span():
+    """A client without the autocapture setting, such as AsyncPosthog, still gets the failed span."""
+    mock_client = MagicMock(spec=["capture", "capture_exception", "privacy_mode"])
+    mock_client.privacy_mode = False
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    with pytest.raises(ValueError):
+        RunnableLambda(failing_span).invoke({}, config={"callbacks": callbacks})
+
+    assert mock_client.capture_exception.call_count == 0
+    assert mock_client.capture.call_count == 1
+    span_props = mock_client.capture.call_args[1]["properties"]
+    assert span_props["$ai_is_error"] is True
+    assert span_props["$ai_error"] == "ValueError: test error"
+    assert "$exception_event_id" not in span_props
+
+
 @pytest.mark.parametrize(
     "autocapture, client_privacy_mode, handler_privacy_mode, expected_error",
     [
