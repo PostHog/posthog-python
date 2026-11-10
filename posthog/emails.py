@@ -59,15 +59,18 @@ Moving from another email provider: set ``migrated_from``, such as
 ``"resend"``, on the client or on :class:`Emails`, so PostHog knows where your
 sends came from.
 
-Attachments: a code send takes ``attachments``, at most 10 files and 40 MB
-per message after Base64 encoding, about 29 MB of files. The client checks
+Attachments: a code send takes ``attachments``, at most 10 files and 40 MB per
+message after Base64 encoding, about 29 MB of files. Without ``text``, the
+HTML counts twice, since PostHog derives the text from it. The client checks
 both before any request. It then asks PostHog which files it lacks, uploads
-each of those to the URL PostHog answers, without the secret key, and sends the
-email naming each file by its SHA-256. A file the project already sent uploads
-nothing, and the same bytes in two attachments upload once. An upload retries
-like a send when the storage is unreachable or answers a passing fault. A
-failed upload sends no email. The upload URL's host is not the app host, so a
-network that limits outbound requests must allow it.
+each of those to the https URL PostHog answers, without the secret key, and
+sends the email naming each file by its SHA-256. A file the project already
+sent uploads nothing, and the same bytes in two attachments upload once. An
+upload retries like a send when the storage is unreachable or answers a
+passing fault. A failed upload sends no email. A plain HTTP upload URL is
+refused before any upload unless the client's host is plain HTTP too, as in
+local development. The upload URL's host is not the app host, so a network
+that limits outbound requests must allow it.
 
 Errors: a send that is not queued raises :class:`EmailError`. Branch on
 ``code``. The ones a setup usually hits:
@@ -91,6 +94,8 @@ A send with attachments can also raise:
   and ``why`` carry its answer, and ``field`` names the attachment.
 - ``network_error`` with ``field`` naming an attachment: the file storage
   didn't answer, such as when a firewall blocks its host.
+- ``api_error`` with ``field`` naming an attachment: PostHog named an upload
+  URL that isn't https. Fix the file storage's URL. Nothing was uploaded.
 - ``upload_quota_exceeded`` (429): the project uploaded its daily limit of
   file bytes. Files it already sent don't count.
 - ``field_not_accepted``: the project can't send files yet.
@@ -661,11 +666,8 @@ def _over_the_limit(code: str, message: str, *, fix: str) -> EmailError:
 def _estimated_message_bytes(
     file_sizes: Sequence[int], content: Mapping[str, str]
 ) -> int:
-    body_sizes = [
-        len(body.encode("utf-8"))
-        for body in (content.get("html"), content.get("text"))
-        if body
-    ]
+    html, text = content.get("html") or "", content.get("text") or ""
+    body_sizes = [len(body.encode("utf-8")) for body in (html, text or html) if body]
     return (
         _HEADERS_AND_MIME_BOUNDARIES_BYTES
         + sum(_base64_transfer_bytes(size) for size in [*file_sizes, *body_sizes])
@@ -938,7 +940,9 @@ def _parse_status_response(
     )
 
 
-def _pending_uploads_parser(files: Sequence[_File]) -> _Parse[list[_Upload]]:
+def _pending_uploads_parser(
+    files: Sequence[_File], plain_http_allowed: bool
+) -> _Parse[list[_Upload]]:
     def parse(
         status: int, body: bytes, retry_after_header: Optional[str]
     ) -> list[_Upload]:
@@ -950,10 +954,14 @@ def _pending_uploads_parser(files: Sequence[_File]) -> _Parse[list[_Upload]]:
         slots = fields.get("files")
         if not isinstance(slots, list) or len(slots) != len(files):
             raise _no_upload_slots(status)
-        uploads = (
+        pending = (
             _pending_upload(slot, file, status) for slot, file in zip(slots, files)
         )
-        return [upload for upload in uploads if upload is not None]
+        uploads = [upload for upload in pending if upload is not None]
+        for upload in uploads:
+            if not plain_http_allowed and not upload.url.lower().startswith("https://"):
+                raise _upload_url_not_https(upload.file.first_attachment_index, status)
+        return uploads
 
     return parse
 
@@ -992,6 +1000,20 @@ def _upload_route_not_found(
     answered = {key: value for key, value in fields.items() if value is not None}
     return _response_error(
         {**unanswered, **answered, "attr": "attachments"}, 404, retry_after_header
+    )
+
+
+def _upload_url_not_https(index: int, status: int) -> EmailError:
+    return EmailError(
+        name=_error_name(status, "api_error"),
+        code="api_error",
+        message=f"PostHog named an upload URL that isn't https, so attachments[{index}] "
+        "would travel unencrypted. No email was sent.",
+        status_code=status,
+        why="PostHog's file storage is set up with a plain HTTP URL.",
+        fix="Fix the file storage's URL so it uses https. For local development "
+        "over plain HTTP, give the client a host that starts with http://.",
+        field=f"attachments__{index}",
     )
 
 
@@ -1323,7 +1345,9 @@ class Emails(_EmailsBase):
             self._posthog_request(
                 "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
             ),
-            _pending_uploads_parser(prepared.files),
+            _pending_uploads_parser(
+                prepared.files, self.host.lower().startswith("http://")
+            ),
             prepared.max_retries,
         )
         for upload in uploads:
@@ -1540,7 +1564,9 @@ class AsyncEmails(_EmailsBase):
             self._posthog_request(
                 "POST", _UPLOADS_PATH, _files_body(prepared.files), headers
             ),
-            _pending_uploads_parser(prepared.files),
+            _pending_uploads_parser(
+                prepared.files, self.host.lower().startswith("http://")
+            ),
             prepared.max_retries,
         )
         for upload in uploads:

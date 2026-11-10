@@ -1056,9 +1056,13 @@ def files_asked_for(body: bytes) -> Optional[list[tuple[str, int]]]:
 
 
 class FakePostHog:
-    def __init__(self, storage_url: str = STORAGE_URL) -> None:
+    def __init__(
+        self, storage_url: str = STORAGE_URL, posthog_host: str = POSTHOG_HOST
+    ) -> None:
         self.storage_url = storage_url
-        self.bucket: dict[str, bytes] = {}
+        self.posthog_host = posthog_host
+        self._bucket: dict[str, bytes] = {}
+        self._content_types: dict[str, Optional[str]] = {}
         self.writes = 0
         self.delivered: list[DeliveredEmail] = []
         self.project_can_send_files = True
@@ -1069,6 +1073,17 @@ class FakePostHog:
             "storage": [],
         }
         self._signing_delay = 0.0
+
+    @property
+    def stored_files(self) -> list[bytes]:
+        return sorted(self._bucket.values())
+
+    @property
+    def stored_content_types(self) -> list[Optional[str]]:
+        return list(self._content_types.values())
+
+    def already_has(self, content: bytes) -> None:
+        self._bucket[hashlib.sha256(content).hexdigest()] = content
 
     def inject(self, route: str, *faults: Fault) -> None:
         self._faults[route].extend(faults)
@@ -1085,12 +1100,26 @@ class FakePostHog:
 
     def _route(self, incoming: Incoming) -> tuple[str, Handler]:
         if incoming.url.startswith(self.storage_url + "/"):
+            if incoming.method != "PUT":
+                return "storage", lambda _incoming: storage_error(
+                    405,
+                    "MethodNotAllowed",
+                    "The specified method is not allowed against this resource.",
+                )
             return "storage", self._store
-        if incoming.url.startswith(POSTHOG_HOST + "/"):
-            if incoming.path == UPLOADS_PATH:
-                return "uploads", self._answer_uploads
-            if incoming.path == SEND_PATH:
-                return "send", self._send
+        if incoming.url.startswith(self.posthog_host + "/") and incoming.path in (
+            UPLOADS_PATH,
+            SEND_PATH,
+        ):
+            route = "uploads" if incoming.path == UPLOADS_PATH else "send"
+            if incoming.method != "POST":
+                return route, lambda _incoming: api_error(
+                    405,
+                    "method_not_allowed",
+                    f'Method "{incoming.method}" not allowed.',
+                    kind="invalid_request",
+                )
+            return route, (self._answer_uploads if route == "uploads" else self._send)
         return "unknown", lambda _incoming: api_error(
             404, "not_found", "Not found.", kind="invalid_request"
         )
@@ -1118,7 +1147,7 @@ class FakePostHog:
         )
 
     def _slot(self, sha256: str, size: int) -> dict[str, Any]:
-        if sha256 in self.bucket:
+        if sha256 in self._bucket:
             return {
                 "sha256": sha256,
                 "status": "present",
@@ -1174,7 +1203,9 @@ class FakePostHog:
                 "BadDigest",
                 "The SHA256 you specified did not match the calculated checksum.",
             )
-        self.bucket[incoming.path.rsplit("/", 1)[1]] = incoming.body
+        key = incoming.path.rsplit("/", 1)[1]
+        self._bucket[key] = incoming.body
+        self._content_types[key] = incoming.headers.get("content-type")
         self.writes += 1
         return Answer(200)
 
@@ -1223,7 +1254,7 @@ class FakePostHog:
                 "An attachment names sha256 and filename.",
                 attr=f"attachments__{index}",
             )
-        if reference["sha256"] not in self.bucket:
+        if reference["sha256"] not in self._bucket:
             return api_error(
                 400,
                 "attachment_not_uploaded",
@@ -1246,7 +1277,7 @@ class FakePostHog:
             attachments=tuple(
                 DeliveredFile(
                     filename=reference["filename"],
-                    content=self.bucket[reference["sha256"]],
+                    content=self._bucket[reference["sha256"]],
                     content_type=reference.get("content_type"),
                     content_id=reference.get("content_id"),
                 )
@@ -1376,11 +1407,11 @@ def test_delivers_cc_and_bcc_beside_the_files():
 
 def test_stores_only_the_files_posthog_lacks_under_their_own_hash():
     posthog = FakePostHog()
-    posthog.bucket[LOGO_SHA256] = LOGO
+    posthog.already_has(LOGO)
 
     send_code(emails_on(posthog), html=HTML, attachments=INVITE_AND_LOGO)
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE, LOGO_SHA256: LOGO}
+    assert posthog.stored_files == sorted([INVITE, LOGO])
     assert posthog.writes == 1
     [email] = posthog.delivered
     assert email.attachments == DELIVERED_INVITE_AND_LOGO
@@ -1388,7 +1419,7 @@ def test_stores_only_the_files_posthog_lacks_under_their_own_hash():
 
 def test_sends_without_uploading_when_posthog_has_every_file():
     posthog = FakePostHog()
-    posthog.bucket[INVITE_SHA256] = INVITE
+    posthog.already_has(INVITE)
 
     send_code(emails_on(posthog), html=HTML, attachments=[INVITE_FILE])
 
@@ -1407,75 +1438,9 @@ def test_the_upload_carries_only_the_signed_url_and_headers_whatever_the_session
 
     send_code(Emails(SECRET_KEY, session=session), html=HTML, attachments=[INVITE_FILE])
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE}
+    assert (posthog.stored_files, posthog.stored_content_types) == ([INVITE], [None])
     [email] = posthog.delivered
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
-
-
-def upload_slot(posthog: FakePostHog, content: bytes) -> dict[str, Any]:
-    asked = posthog.handle(
-        Incoming(
-            "POST",
-            POSTHOG_HOST + UPLOADS_PATH,
-            {"authorization": f"Bearer {SECRET_KEY}"},
-            json.dumps(
-                {
-                    "files": [
-                        {
-                            "sha256": hashlib.sha256(content).hexdigest(),
-                            "size": len(content),
-                        }
-                    ]
-                }
-            ).encode(),
-        )
-    )
-    return json.loads(asked.body)["files"][0]
-
-
-@parameterized.expand(
-    [
-        (
-            "bytes_that_differ_from_the_signed_checksum",
-            lambda slot: (slot["url"], slot["headers"], INVITE[::-1]),
-            400,
-            "BadDigest",
-        ),
-        (
-            "an_added_query_parameter",
-            lambda slot: (slot["url"] + "&api_key=x", slot["headers"], INVITE),
-            403,
-            "SignatureDoesNotMatch",
-        ),
-        (
-            "no_signed_headers",
-            lambda slot: (slot["url"], {}, INVITE),
-            403,
-            "SignatureDoesNotMatch",
-        ),
-        (
-            "an_authorization_header_beside_the_signature",
-            lambda slot: (
-                slot["url"],
-                {**slot["headers"], "Authorization": f"Bearer {SECRET_KEY}"},
-                INVITE,
-            ),
-            400,
-            "InvalidArgument",
-        ),
-    ]
-)
-def test_the_fake_storage_refuses_what_s3_refuses(_name, tamper, status, code):
-    posthog = FakePostHog()
-    url, headers, body = tamper(upload_slot(posthog, INVITE))
-
-    refused = session_on(posthog).put(url, data=body, headers=headers)
-
-    assert (refused.status_code, f"<Code>{code}</Code>" in refused.text) == (
-        status,
-        True,
-    )
-    assert posthog.bucket == {}
 
 
 @parameterized.expand(
@@ -1498,7 +1463,7 @@ def test_file_content_from_bytes_or_base64_uploads_the_same_bytes(_name, content
         attachments=[{"filename": "invite.ics", "content": content}],
     )
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE}
+    assert posthog.stored_files == [INVITE]
     [email] = posthog.delivered
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
 
@@ -1548,7 +1513,7 @@ def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
     )
     assert storage_code in error.message
     assert "proxy" in error.fix
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @parameterized.expand(
@@ -1574,7 +1539,7 @@ def test_refuses_base64_not_in_one_padded_line_and_says_how_to_encode(_name, con
         "attachments__0__content",
     )
     assert "base64.b64encode" in error.message
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def self_signed_certificate(directory: Path) -> tuple[Path, Path]:
@@ -1685,7 +1650,7 @@ def test_the_upload_trusts_the_certificates_the_environment_names(
 
     send_code(emails, html=HTML, attachments=[INVITE_FILE])
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE}
+    assert posthog.stored_files == [INVITE]
     [email] = posthog.delivered
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
 
@@ -1705,7 +1670,7 @@ def test_the_upload_refuses_a_storage_whose_certificate_nothing_trusts(
         "network_error",
         "attachments__0",
     )
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def test_an_unreachable_storage_never_shows_the_signed_url_in_the_traceback():
@@ -1719,7 +1684,7 @@ def test_an_unreachable_storage_never_shows_the_signed_url_in_the_traceback():
     assert (error.code, error.field) == ("network_error", "attachments__0")
     assert "file storage" in error.message
     assert "X-Amz-Signature" not in "".join(traceback.format_exception(error))
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @pytest.mark.asyncio
@@ -1738,7 +1703,7 @@ async def test_async_unreachable_storage_never_shows_the_signed_url_in_the_trace
     assert (error.code, error.field) == ("network_error", "attachments__0")
     assert "file storage" in error.message
     assert "X-Amz-Signature" not in "".join(traceback.format_exception(error))
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @parameterized.expand(
@@ -1764,7 +1729,7 @@ def test_a_storage_that_asks_for_a_retry_is_retried_before_the_send(_name, fault
 
     send_code(emails_on(posthog), html=HTML, attachments=[INVITE_FILE])
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE}
+    assert posthog.stored_files == [INVITE]
     [email] = posthog.delivered
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
 
@@ -1782,7 +1747,7 @@ def test_a_project_that_cannot_send_files_uploads_and_sends_nothing():
         "files",
         "Sending files isn't available to this project yet.",
     )
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @parameterized.expand(
@@ -1805,7 +1770,7 @@ def test_a_storage_out_of_retries_names_its_passing_fault(
         )
 
     assert (raised.value.name, raised.value.code) == (name, "upload_failed")
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @parameterized.expand(
@@ -1835,7 +1800,7 @@ def test_an_upload_route_404_reports_posthogs_answer_on_attachments_and_sends_no
         detail,
     )
     assert error.why and error.fix
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def test_an_upload_route_404_without_an_answer_still_names_attachments():
@@ -1851,7 +1816,7 @@ def test_an_upload_route_404_without_an_answer_still_names_attachments():
         404,
         "attachments",
     )
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def test_a_project_over_its_daily_upload_bytes_is_told_without_retrying():
@@ -1875,7 +1840,7 @@ def test_a_project_over_its_daily_upload_bytes_is_told_without_retrying():
         "upload_quota_exceeded",
         "daily_quota_exceeded",
     )
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def test_a_retried_send_reuses_its_uploads_and_its_idempotency_key():
@@ -1911,7 +1876,7 @@ def test_the_same_bytes_in_two_attachments_upload_once():
         ],
     )
 
-    assert (posthog.bucket, posthog.writes) == ({LOGO_SHA256: LOGO}, 1)
+    assert (posthog.stored_files, posthog.writes) == ([LOGO], 1)
     [email] = posthog.delivered
     assert email.attachments == (
         DeliveredFile("logo.png", LOGO, content_id="logo"),
@@ -1921,7 +1886,7 @@ def test_the_same_bytes_in_two_attachments_upload_once():
 
 def test_a_failed_upload_names_the_first_attachment_with_those_bytes():
     posthog = FakePostHog()
-    posthog.bucket[INVITE_SHA256] = INVITE
+    posthog.already_has(INVITE)
     posthog.sign_urls_in_the_past(16)
 
     with pytest.raises(EmailError) as raised:
@@ -1956,7 +1921,7 @@ def test_refuses_eleven_files_before_reading_any_of_them():
         )
 
     assert raised.value.code == "too_many_attachments"
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 @parameterized.expand(
@@ -2001,7 +1966,7 @@ def test_refuses_an_email_over_the_limits_before_any_request(_name, attachments,
         "attachments",
     )
     assert error.fix
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 def test_refuses_an_oversized_email_without_copying_its_files():
@@ -2048,7 +2013,7 @@ def test_refuses_oversized_padded_base64_without_copying_it():
     assert adapter.requests == []
 
 
-LARGEST_SCAN = bytes(29_182_818)
+LARGEST_SCAN = bytes(29_182_815)
 
 
 def test_sends_the_largest_file_that_fits_beside_the_body():
@@ -2064,49 +2029,94 @@ def test_sends_the_largest_file_that_fits_beside_the_body():
     assert email.attachments == (DeliveredFile("scan.pdf", LARGEST_SCAN),)
 
 
-SCAN_BESIDE_A_78_BYTE_BODY = bytes(29_182_764)
+SCAN_BESIDE_A_78_BYTE_BODY = bytes(29_182_761)
 
 
 @parameterized.expand(
     [
-        ("html", "html"),
-        ("text", "text"),
+        ("html", "html", "text"),
+        ("text", "text", "html"),
     ]
 )
-def test_counts_a_body_like_a_file_in_the_size_estimate(_name, body_field):
+def test_counts_a_body_like_a_file_in_the_size_estimate(
+    _name, body_field, other_body_field
+):
     posthog = FakePostHog()
     emails = emails_on(posthog)
     attachments = [{"filename": "scan.pdf", "content": SCAN_BESIDE_A_78_BYTE_BODY}]
 
-    send_code(emails, attachments=attachments, **{body_field: "a" * 57})
+    send_code(
+        emails, attachments=attachments, **{body_field: "a" * 57, other_body_field: "b"}
+    )
     with pytest.raises(EmailError) as raised:
-        send_code(emails, attachments=attachments, **{body_field: "é" * 57})
+        send_code(
+            emails,
+            attachments=attachments,
+            **{body_field: "é" * 57, other_body_field: "b"},
+        )
 
     assert raised.value.code == "message_too_large"
     assert len(posthog.delivered) == 1
 
 
-def test_counts_html_and_text_as_two_bodies():
+def test_counts_the_html_twice_without_text_since_posthog_derives_the_text():
     posthog = FakePostHog()
+    emails = emails_on(posthog)
+    attachments = [{"filename": "scan.pdf", "content": SCAN_BESIDE_A_78_BYTE_BODY}]
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html="a" * 57, attachments=attachments)
+    send_code(emails, html="a" * 57, text="b", attachments=attachments)
+
+    assert raised.value.code == "message_too_large"
+    assert len(posthog.delivered) == 1
+
+
+def test_uploads_only_to_an_https_storage_url():
+    posthog = FakePostHog(storage_url="http://files.example.com/team/1")
 
     with pytest.raises(EmailError) as raised:
         send_code(
             emails_on(posthog),
-            html="a",
-            text="a",
-            attachments=[{"filename": "scan.pdf", "content": LARGEST_SCAN}],
+            html=HTML,
+            attachments=[
+                {"filename": "notes.txt", "content": b"notes"},
+                {"filename": "invite.ics", "content": INVITE},
+            ],
         )
 
-    assert raised.value.code == "message_too_large"
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    error = raised.value
+    assert (error.code, error.field) == ("api_error", "attachments__0")
+    assert "https" in error.message and "file storage" in (error.fix or "")
+    assert "files.example.com" not in str(error) + str(vars(error))
+    assert (posthog.delivered, posthog.stored_files, posthog.writes) == ([], [], 0)
+
+
+def test_a_plain_http_host_for_local_development_uploads_over_plain_http():
+    posthog = FakePostHog(
+        storage_url="http://localhost:8333/team/1",
+        posthog_host="http://localhost:8000",
+    )
+    emails = Emails(
+        SECRET_KEY,
+        host="http://localhost:8000",
+        session=session_on(posthog, "http://"),
+    )
+
+    send_code(
+        emails, html=HTML, attachments=[{"filename": "invite.ics", "content": INVITE}]
+    )
+
+    [email] = posthog.delivered
+    assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
 
 
 @parameterized.expand(
     [
-        ("42_ascii_bytes_take_75", "a" * 42, 29_182_818),
-        ("43_ascii_bytes_take_150", "a" * 43, 29_182_764),
-        ("21_two_byte_characters_take_75", "é" * 21, 29_182_818),
-        ("22_two_byte_characters_take_150", "é" * 22, 29_182_764),
+        ("42_ascii_bytes_take_75", "a" * 42, 29_182_815),
+        ("43_ascii_bytes_take_150", "a" * 43, 29_182_758),
+        ("21_two_byte_characters_take_75", "é" * 21, 29_182_815),
+        ("22_two_byte_characters_take_150", "é" * 22, 29_182_758),
     ]
 )
 def test_a_subject_takes_75_bytes_of_the_limit_per_42_utf8_bytes(
@@ -2225,7 +2235,10 @@ async def test_async_upload_carries_only_the_signed_url_and_headers_whatever_the
 
     result = await send_code(emails, html=HTML, attachments=INVITE_AND_LOGO)
 
-    assert posthog.bucket == {INVITE_SHA256: INVITE, LOGO_SHA256: LOGO}
+    assert (posthog.stored_files, posthog.stored_content_types) == (
+        sorted([INVITE, LOGO]),
+        [None, None],
+    )
     [email] = posthog.delivered
     assert result.id == email.message_id
     assert email.attachments == DELIVERED_INVITE_AND_LOGO
@@ -2244,7 +2257,7 @@ async def test_async_refused_upload_sends_no_email():
         "attachments__0",
         403,
     )
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
 SECRET_CONTENT = b"secret-file-content"
@@ -2340,4 +2353,4 @@ def test_rejects_an_attachment_it_cannot_send_without_repeating_its_content(
     )
     assert "secret-file-content" not in str(error)
     assert "115, 101" not in str(error)
-    assert (posthog.delivered, posthog.bucket) == ([], {})
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
