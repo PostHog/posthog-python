@@ -29,6 +29,7 @@ You need to change code if your app does any of these:
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
+- turns person processing off with `super_options`, `super_properties`, a context option or a context tag, and calls `alias`, `group_identify`, `set` or `set_once` (see [Identity and request context](#identity-and-request-context))
 - runs the Django, Flask or ASGI integration on 7.68 to 7.70 without tracing headers turned on (they are now read by default)
 
 ## Endpoints
@@ -173,7 +174,13 @@ The SDK moves them out of `properties` for you.
 - `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
 - `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
-- Person processing turned off in the context with `set_context_option("process_person_profile", False)`, or in `super_options`, now applies to `$create_alias` and `$groupidentify` events too. PostHog drops these events when person processing is off, with an ingestion warning. Capture accepts them, so `on_error` does not report the drop. To keep them, turn person processing off per call instead.
+- `process_person_profile: False` from a context option, `super_options`, or a `$process_person_profile` context tag or `super_properties` entry reaches `alias`, `group_identify`, `set` and `set_once` too. Context tags and options are new on `alias` and `group_identify`; `super_properties` already reached them in 7.x. PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning, so they never merge a person or update a group. It keeps the event from `set` or `set_once` but ignores its person update. Capture accepts these events, so `on_error` does not report the drop. To keep them, pass the option on the call, which wins over context and `super_options`, or set it in `before_send`:
+
+  ```python
+  posthog.alias(previous_id="anon-1", distinct_id="user-1", options={"process_person_profile": True})
+  posthog.group_identify("company", "acme", {"name": "Acme"}, options={"process_person_profile": True})
+  posthog.set(distinct_id="user-1", properties={"plan": "pro"}, options={"process_person_profile": True})
+  ```
 
 ## Tracing headers
 
