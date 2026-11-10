@@ -185,6 +185,8 @@ _MAX_ATTACHMENTS = 10
 _STORAGE_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _MAX_MESSAGE_BYTES = 40_000_000
 _HEADERS_AND_MIME_BOUNDARIES_BYTES = 64 * 1024
+_SUBJECT_BYTES_PER_ENCODED_WORD = 42
+_ENCODED_WORD_BYTES = 75
 _MESSAGE_LIMIT = "40 MB after Base64 encoding, about 29 MB of files"
 _STORAGE_ERROR = re.compile(r"<(Code|Message)>([^<]{1,500})</\1>")
 
@@ -631,14 +633,9 @@ def _file_bytes(field: str, content: Union[bytes, bytearray, memoryview, str]) -
 
 
 def _check_message_size(file_sizes: Sequence[int], content: Mapping[str, str]) -> None:
-    body_sizes = [
-        len(body.encode("utf-8"))
-        for body in (content.get("html"), content.get("text"))
-        if body
-    ]
     if (
         file_sizes
-        and _estimated_message_bytes([*file_sizes, *body_sizes]) > _MAX_MESSAGE_BYTES
+        and _estimated_message_bytes(file_sizes, content) > _MAX_MESSAGE_BYTES
     ):
         raise _over_the_limit(
             "message_too_large",
@@ -658,9 +655,25 @@ def _over_the_limit(code: str, message: str, *, fix: str) -> EmailError:
     )
 
 
-def _estimated_message_bytes(sizes: Sequence[int]) -> int:
-    return _HEADERS_AND_MIME_BOUNDARIES_BYTES + sum(
-        _base64_transfer_bytes(size) for size in sizes
+def _estimated_message_bytes(
+    file_sizes: Sequence[int], content: Mapping[str, str]
+) -> int:
+    body_sizes = [
+        len(body.encode("utf-8"))
+        for body in (content.get("html"), content.get("text"))
+        if body
+    ]
+    return (
+        _HEADERS_AND_MIME_BOUNDARIES_BYTES
+        + sum(_base64_transfer_bytes(size) for size in [*file_sizes, *body_sizes])
+        + _encoded_subject_bytes(content.get("subject") or "")
+    )
+
+
+def _encoded_subject_bytes(subject: str) -> int:
+    return (
+        _ceil_div(len(subject.encode("utf-8")), _SUBJECT_BYTES_PER_ENCODED_WORD)
+        * _ENCODED_WORD_BYTES
     )
 
 

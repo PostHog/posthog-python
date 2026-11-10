@@ -17,7 +17,13 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import AsyncEmails, EmailError, Emails, EmailStatus
+from posthog.emails import (
+    AsyncEmails,
+    EmailError,
+    Emails,
+    EmailStatus,
+    _encoded_subject_bytes,
+)
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
@@ -1409,7 +1415,7 @@ def test_refuses_eleven_files_before_reading_any_of_them():
         ),
         (
             "one_file_too_large_beside_the_body",
-            [{"filename": "scan.pdf", "content": bytes(29_182_875)}],
+            [{"filename": "scan.pdf", "content": bytes(29_182_821)}],
             "message_too_large",
         ),
         (
@@ -1417,7 +1423,7 @@ def test_refuses_eleven_files_before_reading_any_of_them():
             [
                 {
                     "filename": "scan.pdf",
-                    "content": "AAAA" * (29_182_875 // 3) + "=" * 12,
+                    "content": "AAAA" * (29_182_821 // 3) + "=" * 12,
                 }
             ],
             "message_too_large",
@@ -1468,7 +1474,8 @@ def test_refuses_an_oversized_email_without_copying_its_files():
     assert adapter.requests == []
 
 
-LARGEST_SCAN_SHA256 = "da8348171897010f0a7968e94886e059512d508ec8f543ec2af1d353cae83f60"
+LARGEST_SCAN = bytes(29_182_818)
+LARGEST_SCAN_SHA256 = "23a605f8a0f14f6ad57155dcee6f7e45f783f1a9cd44e6c38f6dfad6d33ef14c"
 
 
 def test_sends_the_largest_file_that_fits_beside_the_body():
@@ -1477,15 +1484,15 @@ def test_sends_the_largest_file_that_fits_beside_the_body():
     send_code(
         emails,
         html="Hi!",
-        attachments=[{"filename": "scan.pdf", "content": bytes(29_182_872)}],
+        attachments=[{"filename": "scan.pdf", "content": LARGEST_SCAN}],
     )
 
-    assert json.loads(adapter.requests[0].body)["files"][0]["size"] == 29_182_872
+    assert json.loads(adapter.requests[0].body)["files"][0]["size"] == 29_182_818
 
 
-SCAN_BESIDE_A_78_BYTE_BODY = bytes(29_182_818)
+SCAN_BESIDE_A_78_BYTE_BODY = bytes(29_182_764)
 SCAN_BESIDE_A_78_BYTE_BODY_SHA256 = (
-    "23a605f8a0f14f6ad57155dcee6f7e45f783f1a9cd44e6c38f6dfad6d33ef14c"
+    "af928bfa2ca810344546c2cdb01a6f5fb9f8545281e4d6c7b75a1bfec9f1f2c3"
 )
 
 
@@ -1517,11 +1524,43 @@ def test_counts_html_and_text_as_two_bodies():
             emails,
             html="a",
             text="a",
-            attachments=[{"filename": "scan.pdf", "content": bytes(29_182_872)}],
+            attachments=[{"filename": "scan.pdf", "content": LARGEST_SCAN}],
         )
 
     assert raised.value.code == "message_too_large"
     assert adapter.requests == []
+
+
+@parameterized.expand(
+    [
+        ("42_ascii_bytes_count_75", "a" * 42, "a" * 43),
+        ("21_two_byte_characters_count_75", "é" * 21, "é" * 22),
+    ]
+)
+def test_counts_the_subject_in_75_byte_steps_per_42_utf8_bytes(
+    _name, fitting_subject, refused_subject
+):
+    emails, adapter = emails_with([slots(present(LARGEST_SCAN_SHA256)), accepted()])
+    attachments = [{"filename": "scan.pdf", "content": LARGEST_SCAN}]
+
+    send_code(emails, html="Hi!", subject=fitting_subject, attachments=attachments)
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, html="Hi!", subject=refused_subject, attachments=attachments)
+
+    assert raised.value.code == "message_too_large"
+    assert len(adapter.requests) == 2
+
+
+@parameterized.expand(
+    [
+        ("empty", "", 0),
+        ("42_ascii_bytes", "a" * 42, 75),
+        ("43_ascii_bytes", "a" * 43, 150),
+        ("21_two_byte_characters", "é" * 21, 75),
+    ]
+)
+def test_sizes_a_subject_like_the_server(_name, subject, size):
+    assert _encoded_subject_bytes(subject) == size
 
 
 @pytest.mark.asyncio
