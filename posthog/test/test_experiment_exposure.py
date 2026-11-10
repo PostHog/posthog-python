@@ -1012,8 +1012,9 @@ def test_a_payload_lookup_for_a_match_value_sends_no_exposure(
         [called] = events
         assert called.name == FLAG_CALLED
         assert called.properties["$feature_flag_response"] == match_value
-        # The call still carries the record's attribution.
-        assert _attribution(called.properties) == EXPECTED_ATTRIBUTION
+        # The record did not supply that value, so the call does not carry the
+        # record's attribution.
+        assert _attribution(called.properties) == {}
 
         _read(client, later_read)
 
@@ -1036,7 +1037,10 @@ def test_a_stale_cached_value_sends_no_exposure(client):
 
     assert result is not None and result.get_value() == "annual"
     cache.get_stale_cached_flag.assert_called_once()
-    assert [event.name for event in events] == [FLAG_CALLED]
+    [called] = events
+    assert called.name == FLAG_CALLED
+    # The stale value is not attributed to the record's rule or variant.
+    assert _attribution(called.properties) == {}
 
 
 @pytest.mark.parametrize("path", list(SYNC_READS))
@@ -1212,10 +1216,34 @@ def test_the_exposure_dedupe_normalizes_the_distinct_id(client):
 
 
 def test_a_reported_call_never_suppresses_its_exposure(client):
-    # A read whose value the record did not supply reports the call without an
-    # exposure. A later read of the same record still sends the exposure, although
-    # its call is a duplicate.
-    with _serving(_response(_split())):
+    # The two events dedupe apart. When only the exposure key is gone, as after an
+    # eviction, the next read sends the exposure again, although its call is a
+    # duplicate.
+    recording, events = _record_events(client)
+    with _serving(_response(_split())), recording:
+        _read(client, "get_feature_flag")
+        client._experiment_exposures_reported.clear()
+        _read(client, "get_feature_flag")
+
+    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE, EXPOSURE]
+
+
+async def test_async_a_reported_call_never_suppresses_its_exposure():
+    async def read(client: Any) -> None:
+        snapshot = await client.evaluate_flags(DISTINCT_ID)
+        snapshot.get_flag(FLAG)
+        client._experiment_exposures_reported.clear()
+        snapshot.get_flag(FLAG)
+
+    events = await _read_async_events([_response(_split())], [read])
+
+    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE, EXPOSURE]
+
+
+def test_a_read_whose_value_the_record_did_not_supply_is_reported_as_before(client):
+    # Such a read sends the config version 1 call and no exposure, and takes neither
+    # config version 2 dedupe key: a later read of the record sends both its events.
+    with _serving(_response(_split(description="Assigned variant annual-first"))):
         details = client.evaluate_flags(DISTINCT_ID)._flags[FLAG].details
     recording, events = _record_events(client)
     with recording:
@@ -1224,31 +1252,23 @@ def test_a_reported_call_never_suppresses_its_exposure(client):
                 distinct_id=DISTINCT_ID,
                 key=FLAG,
                 response="annual",
-                properties={"$feature_flag": FLAG, "$feature_flag_response": "annual"},
+                properties={
+                    "$feature_flag": FLAG,
+                    "$feature_flag_response": "annual",
+                    "$feature_flag_reason": "Assigned variant annual-first",
+                },
                 details=details,
                 value_from_details=value_from_details,
             )
 
-    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
-
-
-async def test_async_a_reported_call_never_suppresses_its_exposure():
-    async def read(client: Any) -> None:
-        snapshot = await client.evaluate_flags(DISTINCT_ID)
-        details = snapshot._flags[FLAG].details
-        for value_from_details in (False, True):
-            client._capture_feature_flag_called_if_needed(
-                distinct_id=DISTINCT_ID,
-                key=FLAG,
-                response="annual",
-                properties={"$feature_flag": FLAG, "$feature_flag_response": "annual"},
-                details=details,
-                value_from_details=value_from_details,
-            )
-
-    events = await _read_async_events([_response(_split())], [read])
-
-    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
+    assert [event.name for event in events] == [FLAG_CALLED, FLAG_CALLED, EXPOSURE]
+    as_before, attributed = _named(events, FLAG_CALLED)
+    assert _attribution(as_before.properties) == {}
+    assert as_before.properties["$feature_flag_reason"] == (
+        "Assigned variant annual-first"
+    )
+    assert _attribution(attributed.properties) == EXPECTED_ATTRIBUTION
+    assert "$feature_flag_reason" not in attributed.properties
 
 
 async def test_async_snapshots_dedupe_both_events():

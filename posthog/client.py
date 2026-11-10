@@ -639,10 +639,12 @@ def _capture_flag_events(
     ``$feature_flag_called`` is sent if the (distinct_id, flag, response, groups)
     tuple hasn't already been reported on this client. Group context is included so
     that group-scoped flags fire a separate event for each group a user is evaluated
-    under. A config version 2 record adds its attribution to the event and to that
-    tuple, so equal-valued A/A arms, successive experiments of one flag, and
-    holdouts are each reported. Its reason code replaces the human-readable
-    ``$feature_flag_reason``. A config version 1 event and tuple are unchanged.
+    under. A config version 2 record that supplied the reported value
+    (``value_from_details``) adds its attribution to the event and to that tuple, so
+    equal-valued A/A arms, successive experiments of one flag, and holdouts are each
+    reported. Its reason code replaces the human-readable ``$feature_flag_reason``.
+    A config version 1 event and tuple are unchanged, and so are those of a read
+    whose value the record did not supply.
 
     ``has_experiment`` is the server-reported signal for whether the flag is linked
     to an experiment (``None`` when the server did not report it). When the
@@ -675,7 +677,10 @@ def _capture_flag_events(
     groups_key = (
         tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
     )
-    attribution = _rule_attribution(details)
+    # Only a record that supplied the reported value attributes it. A caller's
+    # match_value and a stale cached value are reported as before, with no config
+    # version 2 properties, even when a config version 2 record came with them.
+    attribution = _rule_attribution(details) if value_from_details else None
     # What both config version 2 events report about the read itself. Each event
     # pins it, so a super property cannot make the pair disagree.
     flag_identity = {
@@ -753,7 +758,7 @@ def _capture_flag_events(
                 **extra_capture_kwargs,
             )
 
-    if attribution is None or attribution.variant_key is None or not value_from_details:
+    if attribution is None or attribution.variant_key is None:
         return
 
     # The value, request ID, evaluation time and evaluation source are left out, so
@@ -4558,7 +4563,7 @@ class Client(object):
         flag_result = None
         flag_details = None
         # Whether flag_details supplied the value this read reports. Only then may the
-        # read send $experiment_exposure.
+        # read report config version 2 attribution or send $experiment_exposure.
         value_from_details = False
         request_id = None
         evaluated_at = None
@@ -5036,7 +5041,8 @@ class Client(object):
         local_flag_version: Optional[int] = None,
         *,
         # Keyword-only, and false by default: a caller that does not say the record
-        # supplied the value sends no $experiment_exposure.
+        # supplied the value reports no config version 2 attribution and sends no
+        # $experiment_exposure.
         value_from_details: bool = False,
     ):
         properties: dict[str, Any] = {
@@ -5103,7 +5109,8 @@ class Client(object):
         ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
         identically. ``details`` is the parsed ``/flags`` record of the read, or
         ``None`` for a locally evaluated flag. ``value_from_details`` says whether that
-        record supplied the reported value; only then can the read send an exposure.
+        record supplied the reported value; only then does the read report config
+        version 2 attribution or send an exposure.
         """
         _capture_flag_events(
             self.capture,
