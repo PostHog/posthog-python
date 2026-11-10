@@ -20,6 +20,7 @@ from posthog.emails import (
     EmailError,
     Emails,
     EmailStatus,
+    MessageCategory,
 )
 from posthog.version import VERSION
 
@@ -651,7 +652,12 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
                 "capture_engagement": False,
-                "category": "product-updates",
+                "category": MessageCategory(
+                    key="product-updates",
+                    type="marketing",
+                    name="Product updates",
+                    description="Monthly product news",
+                ),
                 "distinct_id": "user_123",
             },
             {
@@ -660,8 +666,30 @@ def send_code(emails: Emails, **overrides: Any):
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
                 "capture_engagement": False,
-                "category": "product-updates",
+                "category": {
+                    "key": "product-updates",
+                    "type": "marketing",
+                    "name": "Product updates",
+                    "description": "Monthly product news",
+                },
                 "distinct_id": "user_123",
+            },
+        ),
+        (
+            "category_without_description",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="receipts", type="transactional", name="Receipts"
+                ),
+            },
+            {
+                "html": HTML,
+                "category": {
+                    "key": "receipts",
+                    "type": "transactional",
+                    "name": "Receipts",
+                },
             },
         ),
         (
@@ -780,8 +808,32 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
         ("blank_reply_to", {"html": HTML, "reply_to": " "}, ValueError),
         ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
-        ("category_not_text", {"html": HTML, "category": 1}, TypeError),
-        ("empty_category", {"html": HTML, "category": ""}, ValueError),
+        ("category_not_a_category", {"html": HTML, "category": 1}, TypeError),
+        (
+            "category_as_a_key",
+            {"html": HTML, "category": "product-updates"},
+            TypeError,
+        ),
+        (
+            "category_type_unknown",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="product-updates", type="promo", name="Product updates"
+                ),
+            },
+            ValueError,
+        ),
+        (
+            "category_name_not_text",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="product-updates", type="marketing", name=None
+                ),
+            },
+            TypeError,
+        ),
         (
             "template_data_on_code_form",
             {"html": HTML, "template_data": {"first_name": "Jane"}},
@@ -804,7 +856,7 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
                 "template_id": TEMPLATE_ID,
                 "template_key": None,
                 "subject": None,
-                "category": "product-updates",
+                "category": TRANSACTIONAL_CATEGORY,
             },
             TypeError,
         ),

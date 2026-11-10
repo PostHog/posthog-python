@@ -14,6 +14,7 @@ Setup:
 
 ```python
 from posthog import Posthog
+from posthog.emails import MessageCategory
 
 posthog = Posthog("phc_...", secret_key="phs_...", host="https://eu.i.posthog.com")
 result = posthog.emails.send(
@@ -34,23 +35,25 @@ posthog.emails.send(
     distinct_id="user_123",
 )
 
-# Marketing email in one of the project's message categories, named by its key
+# Marketing email in a message category that your code defines
 posthog.emails.send(
     to="user@example.com",
     template_key="november-digest",
     subject="What's new in November",
     html=digest_html,  # links {{ unsubscribe_url }}
-    category="product-updates",
+    category=MessageCategory(key="newsletter", type="marketing", name="Newsletter"),
     distinct_id="user_123",
 )
 ```
 
-Message categories: an email you send from code is transactional unless you
-pass ``category``. Any value other than :data:`TRANSACTIONAL_CATEGORY` is the
-key of one of the project's marketing message categories. A marketing send
+Message categories: an email you send from code is transactional with no
+category unless you pass ``category``. A :class:`MessageCategory` names the
+category by its ``key``: the first send creates it in the project, and a send
+that changes its ``name`` or ``description`` updates it. A marketing send
 honors the recipient's opt-outs, and its body must link
 ``{{ unsubscribe_url }}``, which PostHog fills with the recipient's
-preferences link.
+preferences link. A ``template_key`` that names a template made in PostHog
+follows that template's category.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -149,11 +152,11 @@ __all__ = [
     "TRANSACTIONAL_CATEGORY",
     "AsyncEmails",
     "CodeEmailArgs",
-    "EmailCategory",
     "EmailError",
     "EmailStatus",
     "EmailWarning",
     "Emails",
+    "MessageCategory",
     "SendEmailResult",
     "TemplateEmailArgs",
 ]
@@ -161,7 +164,6 @@ __all__ = [
 log = logging.getLogger("posthog")
 
 TRANSACTIONAL_CATEGORY: Final = "transactional"
-EmailCategory = Union[Literal["transactional"], str]
 
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
@@ -222,6 +224,33 @@ class SendEmailResult:
     warnings: tuple[EmailWarning, ...] = ()
 
 
+@dataclass(frozen=True)
+class MessageCategory:
+    """A message category of the project, defined in your code.
+
+    A send creates the category when the project has no category with
+    ``key``, and updates its ``name`` and ``description`` when they changed.
+    An existing category must have the same ``type``.
+
+    Args:
+        key: The category's key, unique in the project. Recipients' opt-outs
+            and preferences refer to it.
+        type: ``"marketing"`` honors the recipient's opt-outs and needs an
+            unsubscribe link. ``"transactional"`` files the email under the
+            category and skips opt-outs.
+        name: The name recipients see on their preferences page.
+        description: What the category's emails are about.
+    """
+
+    key: str
+    type: Literal["marketing", "transactional"]
+    name: str
+    description: Optional[str] = None
+
+
+_CATEGORY_TYPES = frozenset({"marketing", "transactional"})
+
+
 class _RecipientArgs(TypedDict):
     to: str
     distinct_id: NotRequired[Optional[str]]
@@ -272,15 +301,18 @@ class CodeEmailArgs(_RecipientArgs):
             template made in PostHog follows the project's setting, so the
             template form doesn't take it.
         category: Left out, or :data:`TRANSACTIONAL_CATEGORY`
-            (``"transactional"``), sends transactional email. Any other value
-            is the key of one of the project's marketing message categories.
-            A marketing send honors the recipient's opt-outs, and its ``html``,
-            or its ``text`` when it has no ``html``, must hold
-            ``{{ unsubscribe_url }}``. PostHog raises ``unknown_category`` for
-            a key the project has no marketing category for,
-            ``unsubscribe_link_required`` for a body without the link, and
-            ``recipient_opted_out`` for a recipient who opted out of the
-            category or of all marketing.
+            (``"transactional"``), sends transactional email with no category.
+            A :class:`MessageCategory` files the email under that category, and
+            creates or updates it. A marketing send honors the recipient's
+            opt-outs, and its ``html``, or its ``text`` when it has no
+            ``html``, must hold ``{{ unsubscribe_url }}``. PostHog raises
+            ``category_mismatch`` when the project's category with that key
+            has another type, or when ``template_key`` names a template in
+            another category; ``too_many_categories`` when the send would
+            create a category past the project's limit;
+            ``unsubscribe_link_required`` for a marketing body without the
+            link; and ``recipient_opted_out`` for a recipient who opted out
+            of the category or of all marketing.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -298,7 +330,7 @@ class CodeEmailArgs(_RecipientArgs):
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
     capture_engagement: NotRequired[Optional[bool]]
-    category: NotRequired[Optional[EmailCategory]]
+    category: NotRequired[Optional[Union[Literal["transactional"], MessageCategory]]]
 
 
 _OPTIONAL_CODE_FIELDS = frozenset(
@@ -403,7 +435,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
     if "category" in args:
-        payload["category"] = _nonempty_text(args, "category")
+        payload["category"] = _category(args["category"])
     return _PreparedSend(
         path=_SEND_PATH,
         body=_encode(payload),
@@ -424,6 +456,21 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
         raise TypeError("capture_engagement must be True or False.")
     sender["capture_engagement"] = capture_engagement
     return sender
+
+
+def _category(category: Any) -> Union[str, dict[str, str]]:
+    if category == TRANSACTIONAL_CATEGORY:
+        return TRANSACTIONAL_CATEGORY
+    if not isinstance(category, MessageCategory):
+        raise TypeError("category must be TRANSACTIONAL_CATEGORY or a MessageCategory.")
+    if category.type not in _CATEGORY_TYPES:
+        raise ValueError("category.type must be 'marketing' or 'transactional'.")
+    fields = {"key": category.key, "type": category.type, "name": category.name}
+    if category.description is not None:
+        fields["description"] = category.description
+    if not all(isinstance(value, str) for value in fields.values()):
+        raise TypeError("category's key, name and description must be strings.")
+    return fields
 
 
 def _addresses(field: str, value: Any) -> list[str]:
