@@ -199,6 +199,38 @@ def test_clamps_out_of_range_options():
     assert limiter._refill_interval == 86400.0
 
 
+@pytest.mark.parametrize(
+    "option, attribute, fallback",
+    [
+        ("bucket_size", "_bucket_size", 100),
+        ("refill_rate", "_refill_rate", 10),
+        ("refill_interval_seconds", "_refill_interval", 86400.0),
+    ],
+)
+def test_nan_options_use_invalid_number_fallback(option, attribute, fallback, caplog):
+    limiter = make_limiter(FakeClock(), **{option: float("nan")})
+
+    assert getattr(limiter, attribute) == fallback
+    assert f"{option} must be a number" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        (0, 0),
+        (10**1000, 100),
+        (float("inf"), 100),
+        (float("-inf"), 0),
+        (True, 100),
+        (False, 100),
+    ],
+)
+def test_bucket_size_preserves_existing_clamping(value, expected):
+    limiter = make_limiter(FakeClock(), bucket_size=value)
+
+    assert limiter._bucket_size == expected
+
+
 def test_thread_safety_allows_exactly_bucket_size_minus_one():
     limiter = make_limiter(FakeClock(), bucket_size=50)
     allowed = []

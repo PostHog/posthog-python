@@ -92,6 +92,46 @@ def test_client_passes_rate_limiter_configuration_through():
         client.shutdown()
 
 
+@pytest.mark.parametrize(
+    "option, attempts, expected_uploads",
+    [
+        ("exception_autocapture_refill_interval_seconds", 6, 2),
+        ("exception_autocapture_bucket_size", 105, 99),
+    ],
+)
+def test_nan_limiter_configuration_keeps_exception_hook_working(
+    monkeypatch, caplog, option, attempts, expected_uploads
+):
+    from posthog import Posthog
+
+    previous_hook = MagicMock()
+    upload = MagicMock()
+    monkeypatch.setattr(sys, "excepthook", previous_hook)
+    monkeypatch.setattr("posthog.client.batch_post", upload)
+    options = {
+        "exception_autocapture_bucket_size": 3,
+        "exception_autocapture_refill_interval_seconds": 60,
+        option: float("nan"),
+    }
+    client = Posthog(
+        "phc_test",
+        sync_mode=True,
+        enable_exception_autocapture=True,
+        enable_exception_autocapture_rate_limiting=True,
+        **options,
+    )
+    try:
+        for _ in range(attempts):
+            error = ValueError("boom")
+            sys.excepthook(type(error), error, None)
+
+        assert upload.call_count == expected_uploads
+        assert previous_hook.call_count == attempts
+        assert "Failed to capture exception" not in caplog.text
+    finally:
+        client.shutdown()
+
+
 def test_rate_limits_per_exception_type():
     from posthog.exception_capture import ExceptionCapture
 
