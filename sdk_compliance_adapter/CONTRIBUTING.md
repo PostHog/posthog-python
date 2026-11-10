@@ -44,7 +44,7 @@ docker run -d --name sdk-adapter --network test-network -p 8080:8080 posthog-pyt
 docker run --rm \
   --name test-harness \
   --network test-network \
-  ghcr.io/posthog/sdk-test-harness:1.1.1 \
+  ghcr.io/posthog/sdk-test-harness:1.28.0 \
   run --adapter-url http://sdk-adapter:8080 --mock-url http://test-harness:8081
 
 # Cleanup
