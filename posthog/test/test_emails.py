@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, Union
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Iterator, Optional, Union
 from unittest import mock
 
 import httpx
@@ -657,27 +659,6 @@ def send_code(emails: Emails, **overrides: Any):
             },
         ),
         (
-            "all_tracking_off",
-            {"html": HTML, "tracking": False},
-            {"html": HTML, "tracking": False},
-        ),
-        (
-            "all_tracking_on",
-            {"html": HTML, "tracking": True},
-            {"html": HTML, "tracking": True},
-        ),
-        (
-            "each_kind_of_tracking_chosen",
-            {
-                "html": HTML,
-                "tracking": {"opens": True, "clicks": True, "engagement": False},
-            },
-            {
-                "html": HTML,
-                "tracking": {"opens": True, "clicks": True, "engagement": False},
-            },
-        ),
-        (
             "several_reply_to",
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
@@ -695,7 +676,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
-                "tracking": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -717,6 +697,78 @@ def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
         "subject": "Reset your password",
         **extra_body,
     }
+
+
+class _CaptureServer(HTTPServer):
+    received: list[Any]
+
+
+class _CaptureHandler(BaseHTTPRequestHandler):
+    server: _CaptureServer
+
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self.server.received.append(json.loads(body))
+        reply = json.dumps({"message_id": "msg_1", "replayed": False}).encode()
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def capture_server() -> Iterator[_CaptureServer]:
+    server = _CaptureServer(("127.0.0.1", 0), _CaptureHandler)
+    server.received = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize(
+    "overrides, extra_body",
+    [
+        pytest.param({}, {}, id="no_tracking_choice"),
+        pytest.param(
+            {"tracking": None, "capture_engagement": None}, {}, id="none_as_left_out"
+        ),
+        pytest.param({"tracking": False}, {"tracking": False}, id="all_tracking_off"),
+        pytest.param({"tracking": True}, {"tracking": True}, id="all_tracking_on"),
+        pytest.param(
+            {"tracking": {"opens": True, "clicks": True, "engagement": False}},
+            {"tracking": {"opens": True, "clicks": True, "engagement": False}},
+            id="each_kind_of_tracking_chosen",
+        ),
+        pytest.param(
+            {"capture_engagement": False},
+            {"capture_engagement": False},
+            id="deprecated_capture_engagement",
+        ),
+    ],
+)
+def test_a_code_send_delivers_its_tracking_choice(
+    capture_server, overrides, extra_body
+):
+    host = f"http://127.0.0.1:{capture_server.server_port}"
+    with Emails(SECRET_KEY, host=host) as emails:
+        result = send_code(emails, html=HTML, **overrides)
+
+    assert result.id == "msg_1"
+    assert capture_server.received == [
+        {
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            "html": HTML,
+            **extra_body,
+        }
+    ]
 
 
 @pytest.mark.asyncio
