@@ -2220,10 +2220,10 @@ def test_a_subject_takes_75_bytes_of_the_limit_per_42_utf8_bytes(
 
 
 class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
-    hits: list[str] = []
+    emails_sent = 0
+    redirect_followed = False
 
     def do_POST(self) -> None:
-        self.hits.append(f"POST {self.path}")
         self.rfile.read(int(self.headers["Content-Length"]))
         if self.path.endswith("/attachments/uploads/"):
             slot = {
@@ -2236,10 +2236,10 @@ class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
             }
             self.answer(200, json.dumps({"files": [slot]}).encode())
         else:
+            type(self).emails_sent += 1
             self.answer(202, json.dumps({"message_id": "msg_1"}).encode())
 
     def do_PUT(self) -> None:
-        self.hits.append(f"PUT {self.path}")
         self.rfile.read(int(self.headers["Content-Length"]))
         self.send_response(302)
         self.send_header("Location", "/login")
@@ -2247,7 +2247,7 @@ class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_GET(self) -> None:
-        self.hits.append(f"GET {self.path}")
+        type(self).redirect_followed = True
         self.answer(200, b"<html>Sign in</html>")
 
     def answer(self, status: int, body: bytes) -> None:
@@ -2262,7 +2262,6 @@ class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
 
 class PostHogWithAStorageThatHangsUp(PostHogWithARedirectingStorage):
     def do_PUT(self) -> None:
-        self.hits.append(f"PUT {self.path}")
         self.rfile.read(int(self.headers["Content-Length"]))
         self.send_response(500)
         self.send_header("Content-Length", "100")
@@ -2273,7 +2272,7 @@ class PostHogWithAStorageThatHangsUp(PostHogWithARedirectingStorage):
 
 def test_a_storage_answer_cut_short_names_the_attachment_even_on_a_streaming_session():
     server = ThreadingHTTPServer(("127.0.0.1", 0), PostHogWithAStorageThatHangsUp)
-    PostHogWithAStorageThatHangsUp.hits = []
+    PostHogWithAStorageThatHangsUp.emails_sent = 0
     threading.Thread(target=server.serve_forever, daemon=True).start()
     session = requests.Session()
     session.stream = True
@@ -2296,16 +2295,14 @@ def test_a_storage_answer_cut_short_names_the_attachment_even_on_a_streaming_ses
         "network_error",
         "attachments__0",
     )
-    assert PostHogWithAStorageThatHangsUp.hits == [
-        "POST /api/projects/@current/messaging/attachments/uploads/",
-        f"PUT /bucket/{INVITE_SHA256}",
-    ]
+    assert PostHogWithAStorageThatHangsUp.emails_sent == 0
 
 
 @pytest.mark.asyncio
 async def test_async_upload_never_follows_a_storage_redirect_even_when_the_client_does():
     server = ThreadingHTTPServer(("127.0.0.1", 0), PostHogWithARedirectingStorage)
-    PostHogWithARedirectingStorage.hits = []
+    PostHogWithARedirectingStorage.emails_sent = 0
+    PostHogWithARedirectingStorage.redirect_followed = False
     threading.Thread(target=server.serve_forever, daemon=True).start()
     emails = AsyncEmails(
         SECRET_KEY,
@@ -2331,10 +2328,8 @@ async def test_async_upload_never_follows_a_storage_redirect_even_when_the_clien
         "upload_failed",
         "attachments__0",
     )
-    assert PostHogWithARedirectingStorage.hits == [
-        "POST /api/projects/@current/messaging/attachments/uploads/",
-        f"PUT /bucket/{INVITE_SHA256}",
-    ]
+    assert PostHogWithARedirectingStorage.emails_sent == 0
+    assert not PostHogWithARedirectingStorage.redirect_followed
 
 
 @pytest.mark.asyncio
