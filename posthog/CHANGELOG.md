@@ -1,5 +1,15 @@
 # posthog
 
+## 7.86.5 — 2026-11-10
+
+### Patch changes
+
+- [53770bc3](https://github.com/posthog/posthog-python/commit/53770bc3a28e3436a75507d533fbde6063595044) Events captured inside a Celery task now carry that task's own `celery_*` properties. Before, a task published from inside another task, such as a child task, a retry or a chord callback, reported the publishing task's `celery_task_name`, `celery_task_id` and `celery_retry_count`. — Thanks @eli-r-ph!
+- [d572d099](https://github.com/posthog/posthog-python/commit/d572d0999ef553ddb5f6a8f36eb6d5e1c7c39b17) `AsyncPosthog` no longer breaks two exception paths that read `enable_exception_autocapture`, a setting `AsyncPosthog` does not have:
+  
+  - The LangChain callback handler no longer loses a failed run's `$ai_generation`, `$ai_span` or `$ai_trace` event. LangChain swallowed the error, so the event was never sent. The failed event is now sent without an `$exception`.
+  - `new_context(client=<AsyncPosthog>)` no longer raises `AttributeError`. Without `capture_exceptions`, it now leaves exceptions uncaptured; pass `capture_exceptions=True` to capture them. — Thanks @eli-r-ph!
+
 ## 7.86.4 — 2026-11-09
 
 ### Patch changes
