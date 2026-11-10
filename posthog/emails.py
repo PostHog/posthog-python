@@ -590,7 +590,10 @@ def _content_size(field: str, content: Any) -> int:
     if isinstance(content, (bytes, bytearray, memoryview)):
         size = memoryview(content).nbytes
     elif isinstance(content, str):
-        size = len(content.rstrip("=")) * 3 // 4
+        data_end = len(content)
+        while data_end and content[data_end - 1] == "=":
+            data_end -= 1
+        size = data_end * 3 // 4
     else:
         raise _invalid_attachment(
             "An attachment needs content: bytes or a Base64 string. "
@@ -666,7 +669,7 @@ def _estimated_message_bytes(
     return (
         _HEADERS_AND_MIME_BOUNDARIES_BYTES
         + sum(_base64_transfer_bytes(size) for size in [*file_sizes, *body_sizes])
-        + _encoded_subject_bytes(content.get("subject") or "")
+        + _encoded_subject_bytes(content["subject"])
     )
 
 
@@ -1591,7 +1594,7 @@ class AsyncEmails(_EmailsBase):
 
         async def send() -> Any:
             try:
-                return await client.send(request, auth=None)
+                return await client.send(request, auth=None, follow_redirects=False)
             except httpx.RequestError as exc:
                 raise _storage_unreachable(
                     upload.file.first_attachment_index, exc

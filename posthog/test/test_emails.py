@@ -23,7 +23,6 @@ from posthog.emails import (
     EmailError,
     Emails,
     EmailStatus,
-    _encoded_subject_bytes,
 )
 from posthog.version import VERSION
 
@@ -1532,6 +1531,27 @@ def test_refuses_an_oversized_email_without_copying_its_files():
     assert adapter.requests == []
 
 
+def test_refuses_oversized_padded_base64_without_copying_it():
+    emails, adapter = emails_with([])
+    scan = "AAAA" * 10_000_000 + "AA=="
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(EmailError) as raised:
+            send_code(
+                emails,
+                html=HTML,
+                attachments=[{"filename": "scan.pdf", "content": scan}],
+            )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert raised.value.code == "message_too_large"
+    assert peak < len(scan) // 4
+    assert adapter.requests == []
+
+
 LARGEST_SCAN = bytes(29_182_818)
 LARGEST_SCAN_SHA256 = "23a605f8a0f14f6ad57155dcee6f7e45f783f1a9cd44e6c38f6dfad6d33ef14c"
 
@@ -1591,34 +1611,76 @@ def test_counts_html_and_text_as_two_bodies():
 
 @parameterized.expand(
     [
-        ("42_ascii_bytes_count_75", "a" * 42, "a" * 43),
-        ("21_two_byte_characters_count_75", "é" * 21, "é" * 22),
+        ("42_ascii_bytes_take_75", "a" * 42, 29_182_818),
+        ("43_ascii_bytes_take_150", "a" * 43, 29_182_764),
+        ("21_two_byte_characters_take_75", "é" * 21, 29_182_818),
+        ("22_two_byte_characters_take_150", "é" * 22, 29_182_764),
     ]
 )
-def test_counts_the_subject_in_75_byte_steps_per_42_utf8_bytes(
-    _name, fitting_subject, refused_subject
+def test_a_subject_takes_75_bytes_of_the_limit_per_42_utf8_bytes(
+    _name, subject, largest_file_size
 ):
-    emails, adapter = emails_with([slots(present(LARGEST_SCAN_SHA256)), accepted()])
-    attachments = [{"filename": "scan.pdf", "content": LARGEST_SCAN}]
+    largest = bytes(largest_file_size)
+    emails, adapter = emails_with(
+        [slots(present(hashlib.sha256(largest).hexdigest())), accepted()]
+    )
 
-    send_code(emails, html="Hi!", subject=fitting_subject, attachments=attachments)
+    send_code(
+        emails,
+        html="Hi!",
+        subject=subject,
+        attachments=[{"filename": "scan.pdf", "content": largest}],
+    )
     with pytest.raises(EmailError) as raised:
-        send_code(emails, html="Hi!", subject=refused_subject, attachments=attachments)
+        send_code(
+            emails,
+            html="Hi!",
+            subject=subject,
+            attachments=[
+                {"filename": "scan.pdf", "content": bytes(largest_file_size + 1)}
+            ],
+        )
 
     assert raised.value.code == "message_too_large"
     assert len(adapter.requests) == 2
 
 
-@parameterized.expand(
-    [
-        ("empty", "", 0),
-        ("42_ascii_bytes", "a" * 42, 75),
-        ("43_ascii_bytes", "a" * 43, 150),
-        ("21_two_byte_characters", "é" * 21, 75),
+@pytest.mark.asyncio
+async def test_async_upload_never_follows_a_storage_redirect_even_when_the_client_does():
+    seen: list[httpx.Request] = []
+    replies = [
+        httpx.Response(200, json={"files": [upload(INVITE_SHA256)]}),
+        httpx.Response(302, headers={"Location": "https://files.example.com/login"}),
+        httpx.Response(200, text="<html>Sign in</html>"),
+        httpx.Response(202, json={"message_id": "msg_1"}),
     ]
-)
-def test_sizes_a_subject_like_the_server(_name, subject, size):
-    assert _encoded_subject_bytes(subject) == size
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), follow_redirects=True
+        ),
+    )
+
+    with pytest.raises(EmailError) as raised:
+        await emails.send(
+            to="user@example.com",
+            template_key="password-reset",
+            subject="Reset your password",
+            html=HTML,
+            attachments=[{"filename": "invite.ics", "content": INVITE}],
+        )
+
+    assert (raised.value.code, raised.value.field) == (
+        "upload_failed",
+        "attachments__0",
+    )
+    assert [request.method for request in seen] == ["POST", "PUT"]
 
 
 @pytest.mark.asyncio
