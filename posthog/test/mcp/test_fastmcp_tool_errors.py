@@ -31,8 +31,20 @@ def _tool_error():
 @pytest.mark.parametrize(
     "raise_in_tool, mask_error_details, error_type, message, chain",
     [
-        (_chained, False, "RuntimeError", "lookup failed", ["RuntimeError", "ConnectionError"]),
-        (_chained, True, "RuntimeError", "lookup failed", ["RuntimeError", "ConnectionError"]),
+        (
+            _chained,
+            False,
+            "RuntimeError",
+            "lookup failed",
+            ["RuntimeError", "ConnectionError"],
+        ),
+        (
+            _chained,
+            True,
+            "RuntimeError",
+            "lookup failed",
+            ["RuntimeError", "ConnectionError"],
+        ),
         (_tool_error, False, "ToolError", "bad input", ["ToolError"]),
     ],
 )

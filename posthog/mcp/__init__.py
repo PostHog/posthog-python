@@ -290,6 +290,7 @@ def instrument(
         from ._instrument_fastmcp import instrument_fastmcp
         from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
         from ._instrument_v2 import instrument_lowlevel_v2, instrument_mcpserver_v2
+        from ._raised_tool_error import wrap_call_tool
 
         client = _resolve_client(posthog_client)
         if client is None:
@@ -306,8 +307,10 @@ def instrument(
                 server_build=server_build,
             )
 
-        if is_fastmcp_v2(server) and uses_v2_handler_registry(key):
-            data.standalone_fastmcp = weakref.ref(server)
+        if is_fastmcp_v2(server):
+            wrap_call_tool(server)
+            if uses_v2_handler_registry(key):
+                data.standalone_fastmcp = weakref.ref(server)
 
         # A standalone FastMCP wrapper and its low-level server share one tracking
         # key, so instrumenting the second of the pair must still attach what only
