@@ -1,5 +1,13 @@
 # posthog
 
+## 7.86.6 — 2026-11-10
+
+### Patch changes
+
+- [4d732304](https://github.com/posthog/posthog-python/commit/4d732304a94f06f12ad61ec538832c9a671ceeb1) The Anthropic wrapper now reports `$ai_reasoning_tokens` from `usage.output_tokens_details.thinking_tokens`, for both regular and streaming responses. — Thanks @pcbeingused333!
+- [1342bb0b](https://github.com/posthog/posthog-python/commit/1342bb0bac0de26c81bcef95206a2a3db36b9025) Treat NaN exception rate-limit settings as invalid numbers so autocapture keeps working and bucket limits remain finite. — Thanks @peterolkhov for your first contribution 🎉!
+- [8c6b328d](https://github.com/posthog/posthog-python/commit/8c6b328d3440409887636ccd96d6e19b9825eb55) Local evaluation of relative date filters now clamps the day after every month or year subtracted, as the SDK spec requires. A `2m` filter evaluated on March 31 resolved to January 31 and now resolves to January 28, and `4y` on February 29 resolves to February 28 of the target year. — Thanks @luantaraschi!
+
 ## 7.86.5 — 2026-11-10
 
 ### Patch changes
