@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import traceback
@@ -54,6 +55,7 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         self.replies = list(replies)
         self.requests: list[requests.PreparedRequest] = []
         self.verify: list[Any] = []
+        self.stored: dict[str, bytes] = {}
 
     def send(
         self, request: requests.PreparedRequest, **kwargs: Any
@@ -63,6 +65,8 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
+        if request.method == "PUT" and reply[0] < 300:
+            reply = self.store(request, reply)
         status, body, headers = reply
         response = requests.Response()
         response.status_code = status
@@ -77,6 +81,19 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         response.request = request
         response.url = request.url or ""
         return response
+
+    def store(self, request: requests.PreparedRequest, reply: Reply) -> Reply:
+        content = request.body if isinstance(request.body, bytes) else b""
+        if dict(signed_headers(content)) != {
+            name: request.headers.get(name) for name in SIGNED_HEADERS
+        }:
+            return bucket_refused(
+                400,
+                "BadDigest",
+                "The SHA256 you specified did not match the calculated checksum.",
+            )
+        self.stored[(request.url or "").split("?")[0]] = content
+        return reply
 
     def close(self) -> None:
         pass
@@ -891,6 +908,18 @@ SIGNATURE = "?X-Amz-Expires=900&X-Amz-Signature=abc123"
 INVITE_SHA256 = "215efae54e34ac5657da47b49c8d1bd8ea12649ee1efa838c9a47d7233f18afb"
 LOGO = b"\x89PNG\r\n\x1a\n"
 LOGO_SHA256 = "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
+FILES = {INVITE_SHA256: INVITE, LOGO_SHA256: LOGO}
+
+
+def signed_headers(content: bytes) -> dict[str, str]:
+    return {
+        "content-length": str(len(content)),
+        "x-amz-checksum-sha256": base64.b64encode(
+            hashlib.sha256(content).digest()
+        ).decode(),
+    }
+
+
 SIGNED_HEADERS = {
     "content-length": "32",
     "x-amz-checksum-sha256": "IV765U40rFZX2ke0nI0b2OoSZJ7h76g4yaR9cjPxivs=",
@@ -907,7 +936,7 @@ def upload(sha256: str) -> dict[str, Any]:
         "status": "upload",
         "url": BUCKET_URL + sha256 + SIGNATURE,
         "method": "PUT",
-        "headers": SIGNED_HEADERS,
+        "headers": signed_headers(FILES[sha256]),
         "url_expires_at": "2026-11-09T12:15:00Z",
     }
 
@@ -971,6 +1000,35 @@ def test_uploads_the_files_posthog_lacks_then_sends_their_hashes():
         },
         {"sha256": LOGO_SHA256, "filename": "logo.png", "content_id": "logo"},
     ]
+
+
+def test_stores_each_file_posthog_lacks_under_its_own_hash():
+    emails, adapter = emails_with(
+        [
+            slots(upload(INVITE_SHA256), upload(LOGO_SHA256)),
+            stored(),
+            stored(),
+            accepted(),
+        ]
+    )
+
+    result = send_code(emails, html=HTML, attachments=INVITE_AND_LOGO)
+
+    assert result.id == "msg_1"
+    assert adapter.stored == {
+        BUCKET_URL + INVITE_SHA256: INVITE,
+        BUCKET_URL + LOGO_SHA256: LOGO,
+    }
+
+
+def test_storage_refuses_bytes_that_do_not_match_the_signed_checksum():
+    adapter = FakeAdapter([stored()])
+    session = requests.Session()
+    session.mount("https://", adapter)
+
+    refused = session.put(BUCKET_URL + LOGO_SHA256, data=LOGO, headers=SIGNED_HEADERS)
+
+    assert (refused.status_code, adapter.stored) == (400, {})
 
 
 def test_sends_without_uploading_when_posthog_has_every_file():
