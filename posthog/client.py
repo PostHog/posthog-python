@@ -418,6 +418,7 @@ _RULE_TYPES_BY_REASON_CODE: Dict[str, FrozenSet[str]] = {
 # Properties a super property must not add to, or change on, a config version 2
 # ``$feature_flag_called``: the attribution, which is set again from the record
 # after super properties are merged, and the fields such an event never carries.
+# The flag identity of the read is set again with the attribution.
 _V2_FLAG_CALLED_PINNED = frozenset(
     {
         "$feature_flag_config_version",
@@ -667,13 +668,21 @@ def _capture_flag_events(
     before its capture, in the same step as the check, so concurrent reads of one
     outcome send each event once. Their attribution is pinned after super properties
     are merged, so a super property can neither change it nor add a field the event
-    never carries.
+    never carries. The flag key, the response and the evaluation source are pinned
+    the same way on both events, so the pair always reports the same read.
     Config version 1 events are sent and deduped as before.
     """
     groups_key = (
         tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
     )
     attribution = _rule_attribution(details)
+    # What both config version 2 events report about the read itself. Each event
+    # pins it, so a super property cannot make the pair disagree.
+    flag_identity = {
+        "$feature_flag": key,
+        "$feature_flag_response": response,
+        "locally_evaluated": properties.get("locally_evaluated") is True,
+    }
     feature_flag_reported_key: Tuple[Any, ...] = (key, response, groups_key)
     if attribution is not None:
         feature_flag_reported_key += (2, *attribution)
@@ -738,7 +747,8 @@ def _capture_flag_events(
                 groups=capture_groups,
                 disable_geoip=disable_geoip,
                 _pinned_properties=_PinnedProperties(
-                    _V2_FLAG_CALLED_PINNED, attribution.flag_called_properties()
+                    _V2_FLAG_CALLED_PINNED,
+                    {**attribution.flag_called_properties(), **flag_identity},
                 ),
                 **extra_capture_kwargs,
             )
@@ -761,11 +771,9 @@ def _capture_flag_events(
         if name in properties
     }
     exposure_identity = {
-        "$feature_flag": key,
-        "$feature_flag_response": response,
+        **flag_identity,
         "$feature_flag_variant_key": attribution.variant_key,
         "$feature_flag_rule_id": attribution.rule_id,
-        "locally_evaluated": properties.get("locally_evaluated") is True,
     }
     exposure_properties.update(exposure_identity)
     _capture_once(

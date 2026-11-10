@@ -1700,7 +1700,24 @@ SPOOFED_SUPER_PROPERTIES = {
     "$feature_flag_forced_variant": True,
     "$feature_flag_experiment_id": 301,
     "$experiment_exposure_source": "spoofed",
+    # The flag identity of the read.
+    "$feature_flag": "spoofed",
+    "$feature_flag_response": "spoofed",
+    "locally_evaluated": True,
 }
+
+# What both events of a split read report about the read itself.
+EXPECTED_FLAG_IDENTITY = {
+    "$feature_flag": FLAG,
+    "$feature_flag_response": "annual",
+    "locally_evaluated": False,
+}
+
+
+def _flag_identity(properties: Mapping[str, Any]) -> Dict[str, Any]:
+    return {
+        name: properties[name] for name in EXPECTED_FLAG_IDENTITY if name in properties
+    }
 
 
 def _messages_with_super_properties(record: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -1741,6 +1758,16 @@ def test_super_properties_cannot_change_config_version_2_attribution():
     for name in ("$feature_flag_experiment_id", "$feature_flag_forced_variant"):
         assert name not in exposure["properties"], name
     EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure["properties"]))
+
+
+def test_super_properties_cannot_change_the_flag_identity_of_config_version_2_events():
+    messages = _messages_with_super_properties(_split())
+
+    # Both events report the same flag, response and evaluation source.
+    [called] = [m for m in messages if m["event"] == FLAG_CALLED]
+    assert _flag_identity(called["properties"]) == EXPECTED_FLAG_IDENTITY
+    [exposure] = [m for m in messages if m["event"] == EXPOSURE]
+    assert _flag_identity(exposure["properties"]) == EXPECTED_FLAG_IDENTITY
 
 
 def test_super_properties_cannot_add_rule_fields_a_config_version_2_call_omits():
@@ -1786,7 +1813,9 @@ async def test_async_super_properties_cannot_change_config_version_2_attribution
 
     [called] = [m for m in messages if m["event"] == FLAG_CALLED]
     assert _attribution(called["properties"]) == EXPECTED_ATTRIBUTION
+    assert _flag_identity(called["properties"]) == EXPECTED_FLAG_IDENTITY
     assert "$feature_flag_reason" not in called["properties"]
     [exposure] = [m for m in messages if m["event"] == EXPOSURE]
     assert _attribution(exposure["properties"]) == _attribution(EXPECTED_EXPOSURE)
+    assert _flag_identity(exposure["properties"]) == EXPECTED_FLAG_IDENTITY
     assert not set(EXPOSURE_LEAVES_OUT) & set(exposure["properties"])
