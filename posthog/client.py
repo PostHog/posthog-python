@@ -383,7 +383,7 @@ _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = (
         "$feature_flag_reason_code",
         "$feature_flag_rule_id",
         "$feature_flag_rule_type",
-        "$feature_flag_variant",
+        "$feature_flag_variant_key",
     }
 )
 
@@ -424,7 +424,7 @@ _V2_FLAG_CALLED_PINNED = frozenset(
         "$feature_flag_reason_code",
         "$feature_flag_rule_id",
         "$feature_flag_rule_type",
-        "$feature_flag_variant",
+        "$feature_flag_variant_key",
         "$feature_flag_reason",
         "$feature_flag_forced_variant",
         "$feature_flag_experiment_id",
@@ -493,7 +493,7 @@ class _RuleAttribution(NamedTuple):
         if self.rule_type is not None:
             properties["$feature_flag_rule_type"] = self.rule_type
         if self.variant_key is not None:
-            properties["$feature_flag_variant"] = self.variant_key
+            properties["$feature_flag_variant_key"] = self.variant_key
         return properties
 
 
@@ -763,7 +763,7 @@ def _capture_flag_events(
     exposure_identity = {
         "$feature_flag": key,
         "$feature_flag_response": response,
-        "$feature_flag_variant": attribution.variant_key,
+        "$feature_flag_variant_key": attribution.variant_key,
         "$feature_flag_rule_id": attribution.rule_id,
         "locally_evaluated": properties.get("locally_evaluated") is True,
     }

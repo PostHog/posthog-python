@@ -1,8 +1,8 @@
-"""Reading the ``/flags?v=4`` response, checked against the released wire contract.
+"""Reading the ``/flags?v=4`` response, checked against the harness wire contract.
 
-The files in ``fixtures/feature_flag_rules_v2`` are copied unchanged from a released
-``PostHog/posthog-sdk-test-harness`` contract. ``SOURCE.json`` records the release and
-the digest of each file.
+The files in ``fixtures/feature_flag_rules_v2`` are copied unchanged from a
+``PostHog/posthog-sdk-test-harness`` contract. ``SOURCE.json`` records the revision,
+its release and the digest of each file.
 """
 
 from __future__ import annotations
@@ -83,8 +83,10 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    assert source["release"] == "1.28.0"
-    assert source["contract_version"] == "9.0.0"
+    # Unreleased harness pull request head; copy the files again from its release.
+    assert source["release"] is None
+    assert source["revision"] == "b0a7bc55a3141260b6556820471186105de5f4bd"
+    assert source["contract_version"] == "10.0.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
@@ -1121,7 +1123,7 @@ _CONFIG_VERSION_2_EVENT_PROPERTIES = {
     "$feature_flag_reason_code",
     "$feature_flag_rule_id",
     "$feature_flag_rule_type",
-    "$feature_flag_variant",
+    "$feature_flag_variant_key",
 }
 
 

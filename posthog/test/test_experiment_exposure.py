@@ -3,8 +3,8 @@
 A remotely evaluated config version 2 record that assigns an experiment variant sends
 ``$experiment_exposure`` next to its ``$feature_flag_called``, and every config version
 2 record adds its rule attribution to ``$feature_flag_called``. The reader fixtures and
-event schemas are copied unchanged from a released ``PostHog/posthog-sdk-test-harness``
-contract; ``fixtures/feature_flag_rules_v2/SOURCE.json`` records which.
+event schemas are copied unchanged from a ``PostHog/posthog-sdk-test-harness`` contract;
+``fixtures/feature_flag_rules_v2/SOURCE.json`` records which.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ ATTRIBUTION_PROPERTIES = (
     "$feature_flag_reason_code",
     "$feature_flag_rule_id",
     "$feature_flag_rule_type",
-    "$feature_flag_variant",
+    "$feature_flag_variant_key",
 )
 
 
@@ -388,7 +388,7 @@ ATTRIBUTION_CASES = [
             "$feature_flag_reason_code": "experiment_split",
             "$feature_flag_rule_id": _RULE_ID,
             "$feature_flag_rule_type": "experiment",
-            "$feature_flag_variant": "arm_a",
+            "$feature_flag_variant_key": "arm_a",
         },
     ),
     (
@@ -523,7 +523,7 @@ def test_flag_called_attribution_follows_the_record(source, expected, path):
     assert _attribution(called.properties) == expected
     FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
     exposures = _named(events, EXPOSURE, "garden-layout")
-    assert len(exposures) == (1 if "$feature_flag_variant" in expected else 0)
+    assert len(exposures) == (1 if "$feature_flag_variant_key" in expected else 0)
 
 
 # A record whose reason names no rule, or that failed, reports no rule even when it
@@ -847,12 +847,12 @@ EXPECTED_ATTRIBUTION = {
     "$feature_flag_reason_code": "experiment_split",
     "$feature_flag_rule_id": RULE,
     "$feature_flag_rule_type": "experiment",
-    "$feature_flag_variant": "annual-first",
+    "$feature_flag_variant_key": "annual-first",
 }
 EXPECTED_EXPOSURE = {
     "$feature_flag": FLAG,
     "$feature_flag_response": "annual",
-    "$feature_flag_variant": "annual-first",
+    "$feature_flag_variant_key": "annual-first",
     "$feature_flag_rule_id": RULE,
     "locally_evaluated": False,
     "$feature_flag_id": 77,
@@ -944,7 +944,7 @@ def test_an_assignment_is_reported_whatever_the_read_returns(path):
 
     [exposure] = _named(events, EXPOSURE)
     assert exposure.properties["$feature_flag_response"] is False
-    assert exposure.properties["$feature_flag_variant"] == "no-banner"
+    assert exposure.properties["$feature_flag_variant_key"] == "no-banner"
 
 
 # --- What sends no exposure ------------------------------------------------------------
@@ -1018,7 +1018,7 @@ def test_a_payload_lookup_for_a_match_value_sends_no_exposure(
         _read(client, later_read)
 
     [exposure] = _named(events, EXPOSURE)
-    assert exposure.properties["$feature_flag_variant"] == "annual-first"
+    assert exposure.properties["$feature_flag_variant_key"] == "annual-first"
 
 
 def test_a_stale_cached_value_sends_no_exposure(client):
@@ -1133,7 +1133,7 @@ def test_equal_valued_arms_are_each_reported(path):
     )
 
     exposures = _named(events, EXPOSURE)
-    assert [e.properties["$feature_flag_variant"] for e in exposures] == [
+    assert [e.properties["$feature_flag_variant_key"] for e in exposures] == [
         "control",
         "test",
     ]
@@ -1267,7 +1267,7 @@ async def test_async_snapshots_dedupe_both_events():
         [read, read, read],
     )
 
-    assert [e.properties["$feature_flag_variant"] for e in events] == [
+    assert [e.properties["$feature_flag_variant_key"] for e in events] == [
         "control",
         "control",
         "test",
@@ -1404,9 +1404,9 @@ def test_an_empty_variant_key_is_a_complete_split(path):
     events = _read_events(path, _response(_split(variant_key="")))
 
     [called] = _named(events, FLAG_CALLED)
-    assert called.properties["$feature_flag_variant"] == ""
+    assert called.properties["$feature_flag_variant_key"] == ""
     [exposure] = _named(events, EXPOSURE)
-    assert exposure.properties["$feature_flag_variant"] == ""
+    assert exposure.properties["$feature_flag_variant_key"] == ""
     EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure.properties))
 
 
@@ -1695,7 +1695,7 @@ SPOOFED_SUPER_PROPERTIES = {
     "$feature_flag_reason_code": "spoofed",
     "$feature_flag_rule_type": "spoofed",
     "$feature_flag_rule_id": OTHER_RULE,
-    "$feature_flag_variant": "spoofed",
+    "$feature_flag_variant_key": "spoofed",
     "$feature_flag_reason": "spoofed",
     "$feature_flag_forced_variant": True,
     "$feature_flag_experiment_id": 301,
