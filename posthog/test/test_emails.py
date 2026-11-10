@@ -837,19 +837,33 @@ NEWSLETTER = MessageCategory(
 )
 
 
-def test_a_marketing_send_creates_its_category_in_the_project():
+@parameterized.expand(
+    [
+        (
+            "marketing",
+            NEWSLETTER,
+            MARKETING_HTML,
+            {
+                "type": "marketing",
+                "name": "Newsletter",
+                "description": "Monthly product news",
+            },
+        ),
+        (
+            "transactional",
+            MessageCategory(key="receipts", type="transactional", name="Receipts"),
+            "<p>Your receipt</p>",
+            {"type": "transactional", "name": "Receipts", "description": ""},
+        ),
+    ]
+)
+def test_a_send_creates_its_category_in_the_project(_name, category, html, stored):
     emails, api = emails_with_send_api()
 
-    send_code(emails, html=MARKETING_HTML, category=NEWSLETTER)
+    send_code(emails, html=html, category=category)
 
-    assert api.categories == {
-        "newsletter": {
-            "type": "marketing",
-            "name": "Newsletter",
-            "description": "Monthly product news",
-        }
-    }
-    assert api.sent == [("user@example.com", "newsletter")]
+    assert api.categories == {category.key: stored}
+    assert api.sent == [("user@example.com", category.key)]
 
 
 @parameterized.expand(
