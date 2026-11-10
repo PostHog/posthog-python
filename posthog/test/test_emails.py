@@ -1551,7 +1551,7 @@ def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
     error = raised.value
     assert (error.name, error.code, error.status_code, error.field, error.why) == (
         "application_error",
-        "upload_failed",
+        "attachment_upload_failed",
         status,
         "attachments__0",
         storage_message,
@@ -1847,7 +1847,7 @@ def test_a_storage_out_of_retries_names_its_passing_fault(
             emails_on(posthog, max_retries=0), html=HTML, attachments=[INVITE_FILE]
         )
 
-    assert (raised.value.name, raised.value.code) == (name, "upload_failed")
+    assert (raised.value.name, raised.value.code) == (name, "attachment_upload_failed")
     assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
@@ -1979,7 +1979,7 @@ def test_a_failed_upload_names_the_first_attachment_with_those_bytes():
         )
 
     assert (raised.value.code, raised.value.field) == (
-        "upload_failed",
+        "attachment_upload_failed",
         "attachments__1",
     )
     assert posthog.delivered == []
@@ -2350,7 +2350,7 @@ async def test_async_upload_never_follows_a_storage_redirect_even_when_the_clien
         server.server_close()
 
     assert (raised.value.code, raised.value.field) == (
-        "upload_failed",
+        "attachment_upload_failed",
         "attachments__0",
     )
     assert PostHogWithARedirectingStorage.emails_sent == 0
@@ -2377,7 +2377,7 @@ def test_an_upload_never_follows_storage_to_another_server():
         )
 
     assert (raised.value.code, raised.value.field) == (
-        "upload_failed",
+        "attachment_upload_failed",
         "attachments__0",
     )
     assert "elsewhere.example" not in error_text(raised.value)
@@ -2406,7 +2406,7 @@ async def test_async_upload_never_follows_storage_to_another_server():
         )
 
     assert (raised.value.code, raised.value.field) == (
-        "upload_failed",
+        "attachment_upload_failed",
         "attachments__0",
     )
     assert "elsewhere.example" not in error_text(raised.value)
@@ -2447,7 +2447,7 @@ async def test_async_refused_upload_sends_no_email():
         await send_code(async_emails_on(posthog), html=HTML, attachments=[INVITE_FILE])
 
     assert (raised.value.code, raised.value.field, raised.value.status_code) == (
-        "upload_failed",
+        "attachment_upload_failed",
         "attachments__0",
         403,
     )

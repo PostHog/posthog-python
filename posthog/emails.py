@@ -90,9 +90,9 @@ A send with attachments can also raise:
   limits above. The client raises these before any request.
 - ``invalid_attachment``: the client can't send a file, such as one without
   content.
-- ``upload_failed``: PostHog's file storage refused an upload or answered
-  with a redirect, which the client never follows. ``message`` and ``why``
-  carry its answer, and ``field`` names the attachment.
+- ``attachment_upload_failed``: PostHog's file storage refused an upload or
+  answered with a redirect, which the client never follows. ``message`` and
+  ``why`` carry its answer, and ``field`` names the attachment.
 - ``network_error`` with ``field`` naming an attachment: the file storage
   didn't answer, such as when a firewall blocks its host.
 - ``api_error`` with ``field`` naming an attachment: PostHog named an upload
@@ -1056,7 +1056,7 @@ def _upload_error(
     storage_answer = " ".join(filter(None, (f"HTTP {status}", answer.get("Code"))))
     return EmailError(
         name=_storage_error_name(status),
-        code="upload_failed",
+        code="attachment_upload_failed",
         message=f"PostHog's file storage refused the upload of attachments[{index}] "
         f"with {storage_answer}, so no email was sent.",
         status_code=status,
@@ -1098,7 +1098,7 @@ def _is_retryable(error: EmailError) -> bool:
     # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
     if error.status_code is None:
         return error.code == "network_error"
-    if error.code == "upload_failed":
+    if error.code == "attachment_upload_failed":
         return error.status_code in _STORAGE_RETRY_STATUSES
     if error.status_code == 409:
         return error.code in _IN_FLIGHT_CODES
@@ -1310,9 +1310,9 @@ class Emails(_EmailsBase):
                 not tell whether it did.
                 With attachments, ``code`` is ``too_many_attachments``,
                 ``message_too_large`` or ``invalid_attachment`` before any
-                request, ``upload_failed`` when the storage refused an upload,
-                and ``network_error`` with ``field`` naming the attachment
-                when the storage didn't answer.
+                request, ``attachment_upload_failed`` when the storage
+                refused an upload, and ``network_error`` with ``field``
+                naming the attachment when the storage didn't answer.
             TypeError, ValueError: An argument has the wrong type or format.
 
         Examples:
