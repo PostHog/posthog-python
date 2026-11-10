@@ -5,10 +5,12 @@ import base64
 import hashlib
 import json
 import logging
+import threading
 import traceback
 import tracemalloc
 from datetime import datetime, timezone
 from decimal import Decimal
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Optional, Union
 from unittest import mock
 
@@ -1645,42 +1647,74 @@ def test_a_subject_takes_75_bytes_of_the_limit_per_42_utf8_bytes(
     assert len(adapter.requests) == 2
 
 
+class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
+    hits: list[str] = []
+
+    def do_POST(self) -> None:
+        self.hits.append(f"POST {self.path}")
+        self.rfile.read(int(self.headers["Content-Length"]))
+        if self.path.endswith("/attachments/uploads/"):
+            slot = upload(INVITE_SHA256)
+            slot["url"] = f"http://{self.headers['Host']}/bucket/{INVITE_SHA256}"
+            self.answer(200, json.dumps({"files": [slot]}).encode())
+        else:
+            self.answer(202, json.dumps({"message_id": "msg_1"}).encode())
+
+    def do_PUT(self) -> None:
+        self.hits.append(f"PUT {self.path}")
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(302)
+        self.send_header("Location", "/login")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_GET(self) -> None:
+        self.hits.append(f"GET {self.path}")
+        self.answer(200, b"<html>Sign in</html>")
+
+    def answer(self, status: int, body: bytes) -> None:
+        self.send_response(status)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
 @pytest.mark.asyncio
 async def test_async_upload_never_follows_a_storage_redirect_even_when_the_client_does():
-    seen: list[httpx.Request] = []
-    replies = [
-        httpx.Response(200, json={"files": [upload(INVITE_SHA256)]}),
-        httpx.Response(302, headers={"Location": "https://files.example.com/login"}),
-        httpx.Response(200, text="<html>Sign in</html>"),
-        httpx.Response(202, json={"message_id": "msg_1"}),
-    ]
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        return replies.pop(0)
-
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PostHogWithARedirectingStorage)
+    PostHogWithARedirectingStorage.hits = []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
     emails = AsyncEmails(
         SECRET_KEY,
+        host=f"http://127.0.0.1:{server.server_address[1]}",
         max_retries=0,
-        http_client=httpx.AsyncClient(
-            transport=httpx.MockTransport(handler), follow_redirects=True
-        ),
+        http_client=httpx.AsyncClient(follow_redirects=True, trust_env=False),
     )
 
-    with pytest.raises(EmailError) as raised:
-        await emails.send(
-            to="user@example.com",
-            template_key="password-reset",
-            subject="Reset your password",
-            html=HTML,
-            attachments=[{"filename": "invite.ics", "content": INVITE}],
-        )
+    try:
+        with pytest.raises(EmailError) as raised:
+            await emails.send(
+                to="user@example.com",
+                template_key="password-reset",
+                subject="Reset your password",
+                html=HTML,
+                attachments=[{"filename": "invite.ics", "content": INVITE}],
+            )
+    finally:
+        server.shutdown()
+        server.server_close()
 
     assert (raised.value.code, raised.value.field) == (
         "upload_failed",
         "attachments__0",
     )
-    assert [request.method for request in seen] == ["POST", "PUT"]
+    assert PostHogWithARedirectingStorage.hits == [
+        "POST /api/projects/@current/messaging/attachments/uploads/",
+        f"PUT /bucket/{INVITE_SHA256}",
+    ]
 
 
 @pytest.mark.asyncio
