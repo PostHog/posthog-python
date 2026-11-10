@@ -90,8 +90,9 @@ A send with attachments can also raise:
   limits above. The client raises these before any request.
 - ``invalid_attachment``: the client can't send a file, such as one without
   content.
-- ``upload_failed``: PostHog's file storage refused an upload. ``message``
-  and ``why`` carry its answer, and ``field`` names the attachment.
+- ``upload_failed``: PostHog's file storage refused an upload or answered
+  with a redirect, which the client never follows. ``message`` and ``why``
+  carry its answer, and ``field`` names the attachment.
 - ``network_error`` with ``field`` naming an attachment: the file storage
   didn't answer, such as when a firewall blocks its host.
 - ``api_error`` with ``field`` naming an attachment: PostHog named an upload
