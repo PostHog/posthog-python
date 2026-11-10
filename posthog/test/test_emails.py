@@ -661,8 +661,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": "Reset it here.",
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
-                "cc": "manager@example.com",
-                "bcc": ["audit@example.com", "archive@example.com"],
                 "capture_engagement": False,
                 "distinct_id": "user_123",
             },
@@ -671,8 +669,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": "Reset it here.",
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
-                "cc": ["manager@example.com"],
-                "bcc": ["audit@example.com", "archive@example.com"],
                 "capture_engagement": False,
                 "distinct_id": "user_123",
             },
@@ -683,8 +679,8 @@ def send_code(emails: Emails, **overrides: Any):
             {"html": HTML, "reply_to": ["a@example.com", "b@example.com"]},
         ),
         (
-            "empty_lists_left_out",
-            {"html": HTML, "reply_to": [], "cc": [], "bcc": [], "attachments": []},
+            "empty_reply_to_left_out",
+            {"html": HTML, "reply_to": []},
             {"html": HTML},
         ),
         (
@@ -694,9 +690,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "text": None,
                 "from_": None,
                 "reply_to": None,
-                "cc": None,
-                "bcc": None,
-                "attachments": None,
                 "capture_engagement": None,
                 "distinct_id": None,
             },
@@ -741,8 +734,6 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         text="Reset it here.",
         from_="Acme <security@example.com>",
         reply_to="help@example.com",
-        cc="manager@example.com",
-        bcc=["audit@example.com"],
         capture_engagement=False,
         distinct_id="user_123",
         idempotency_key="reset:user_123",
@@ -763,8 +754,6 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         "text": "Reset it here.",
         "from": "Acme <security@example.com>",
         "reply_to": ["help@example.com"],
-        "cc": ["manager@example.com"],
-        "bcc": ["audit@example.com"],
         "capture_engagement": False,
         "distinct_id": "user_123",
     }
@@ -1360,7 +1349,6 @@ def async_emails_on(
 
 INVITE_SHA256 = "215efae54e34ac5657da47b49c8d1bd8ea12649ee1efa838c9a47d7233f18afb"
 LOGO = b"\x89PNG\r\n\x1a\n"
-LOGO_SHA256 = "4c4b6a3be1314ab86138bef4314dde022e600960d8689a2c8f8631802d20dab6"
 INVITE_FILE = {"filename": "invite.ics", "content": INVITE}
 INVITE_AND_LOGO = [
     {
@@ -1403,6 +1391,59 @@ def test_delivers_cc_and_bcc_beside_the_files():
         ("audit@example.com", "archive@example.com"),
     )
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
+
+
+@parameterized.expand(
+    [
+        (
+            "one_address_each",
+            {"cc": "manager@example.com", "bcc": "audit@example.com"},
+            ("manager@example.com",),
+            ("audit@example.com",),
+        ),
+        (
+            "lists",
+            {
+                "cc": ["manager@example.com", "finance@example.com"],
+                "bcc": ["audit@example.com"],
+            },
+            ("manager@example.com", "finance@example.com"),
+            ("audit@example.com",),
+        ),
+        ("empty_lists", {"cc": [], "bcc": [], "attachments": []}, (), ()),
+        ("none", {"cc": None, "bcc": None, "attachments": None}, (), ()),
+    ]
+)
+def test_delivers_cc_and_bcc_as_given(_name, overrides, cc, bcc):
+    posthog = FakePostHog()
+
+    send_code(emails_on(posthog), html=HTML, **overrides)
+
+    [email] = posthog.delivered
+    assert (email.to, email.cc, email.bcc, email.attachments) == (
+        "user@example.com",
+        cc,
+        bcc,
+        (),
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_delivers_cc_and_bcc():
+    posthog = FakePostHog()
+
+    await send_code(
+        async_emails_on(posthog),
+        html=HTML,
+        cc="manager@example.com",
+        bcc=["audit@example.com", "archive@example.com"],
+    )
+
+    [email] = posthog.delivered
+    assert (email.cc, email.bcc) == (
+        ("manager@example.com",),
+        ("audit@example.com", "archive@example.com"),
+    )
 
 
 def test_stores_only_the_files_posthog_lacks_under_their_own_hash():
@@ -1744,8 +1785,40 @@ def test_a_project_that_cannot_send_files_uploads_and_sends_nothing():
     error = raised.value
     assert (error.code, error.field, error.why) == (
         "field_not_accepted",
-        "files",
+        "attachments",
         "Sending files isn't available to this project yet.",
+    )
+    assert (posthog.delivered, posthog.stored_files) == ([], [])
+
+
+def test_an_upload_refusal_naming_a_file_names_the_first_attachment_with_those_bytes():
+    posthog = FakePostHog()
+    posthog.inject(
+        "uploads",
+        answers(
+            api_error(
+                400,
+                "message_too_large",
+                "This file is too large to send.",
+                attr="files__1__size",
+            )
+        ),
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails_on(posthog),
+            html=HTML,
+            attachments=[
+                INVITE_FILE,
+                {"filename": "invite-copy.ics", "content": INVITE},
+                {"filename": "logo.png", "content": LOGO},
+            ],
+        )
+
+    assert (raised.value.code, raised.value.field) == (
+        "message_too_large",
+        "attachments__2",
     )
     assert (posthog.delivered, posthog.stored_files) == ([], [])
 
@@ -2184,6 +2257,48 @@ class PostHogWithARedirectingStorage(BaseHTTPRequestHandler):
 
     def log_message(self, *args: Any) -> None:
         pass
+
+
+class PostHogWithAStorageThatHangsUp(PostHogWithARedirectingStorage):
+    def do_PUT(self) -> None:
+        self.hits.append(f"PUT {self.path}")
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(500)
+        self.send_header("Content-Length", "100")
+        self.end_headers()
+        self.wfile.write(b"<Error>")
+        self.close_connection = True
+
+
+def test_a_storage_answer_cut_short_names_the_attachment_even_on_a_streaming_session():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), PostHogWithAStorageThatHangsUp)
+    PostHogWithAStorageThatHangsUp.hits = []
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    session = requests.Session()
+    session.stream = True
+    session.trust_env = False
+    emails = Emails(
+        SECRET_KEY,
+        host=f"http://127.0.0.1:{server.server_address[1]}",
+        max_retries=0,
+        session=session,
+    )
+
+    try:
+        with pytest.raises(EmailError) as raised:
+            send_code(emails, html=HTML, attachments=[INVITE_FILE])
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert (raised.value.code, raised.value.field) == (
+        "network_error",
+        "attachments__0",
+    )
+    assert PostHogWithAStorageThatHangsUp.hits == [
+        "POST /api/projects/@current/messaging/attachments/uploads/",
+        f"PUT /bucket/{INVITE_SHA256}",
+    ]
 
 
 @pytest.mark.asyncio

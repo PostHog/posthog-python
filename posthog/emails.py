@@ -98,7 +98,8 @@ A send with attachments can also raise:
   URL that isn't https. Fix the file storage's URL. Nothing was uploaded.
 - ``upload_quota_exceeded`` (429): the project uploaded its daily limit of
   file bytes. Files it already sent don't count.
-- ``field_not_accepted``: the project can't send files yet.
+- ``field_not_accepted`` with ``field`` ``attachments``: the project can't send
+  files yet.
 - ``not_found`` (404) with ``field`` ``attachments``: this PostHog version
   doesn't take files yet, or sending email from code is off for the project.
   ``message`` carries PostHog's answer, and no email was sent.
@@ -950,7 +951,8 @@ def _pending_uploads_parser(
         if status == 404:
             raise _upload_route_not_found(fields, retry_after_header)
         if not 200 <= status < 300:
-            raise _response_error(fields, status, retry_after_header)
+            attr = _attachments_field(fields.get("attr"), files)
+            raise _response_error({**fields, "attr": attr}, status, retry_after_header)
         slots = fields.get("files")
         if not isinstance(slots, list) or len(slots) != len(files):
             raise _no_upload_slots(status)
@@ -964,6 +966,15 @@ def _pending_uploads_parser(
         return uploads
 
     return parse
+
+
+def _attachments_field(attr: Any, files: Sequence[_File]) -> Any:
+    if not isinstance(attr, str) or not attr.startswith("files"):
+        return attr
+    index = attr.split("__")[1] if attr.startswith("files__") else ""
+    if index.isdigit() and int(index) < len(files):
+        return f"attachments__{files[int(index)].first_attachment_index}"
+    return "attachments"
 
 
 def _pending_upload(slot: Any, file: _File, status: int) -> Optional[_Upload]:
@@ -1410,7 +1421,9 @@ class Emails(_EmailsBase):
         request = requests.Request(
             upload.method, upload.url, data=upload.file.content, headers=upload.headers
         ).prepare()
-        transport = session.merge_environment_settings(upload.url, {}, None, None, None)
+        transport = session.merge_environment_settings(
+            upload.url, {}, False, None, None
+        )
 
         def send() -> requests.Response:
             try:
