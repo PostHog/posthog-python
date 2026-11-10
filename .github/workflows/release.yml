@@ -250,16 +250,6 @@ jobs:
               "alertContext": "The version bump/changelog step failed before packages were published."
             }
 
-      - name: Notify Slack - Failed
-        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to bump versions for `posthog-python@${{ steps.sampo-release.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-          emoji_reaction: "x"
-
   # Build, publish, and tag each package whose version was bumped in this release.
   # A matrix over the publishable packages (N packages, like the posthog-ruby and
   # JS monorepos). The approval gate lives on `version-bump`, so this job has no
@@ -456,16 +446,6 @@ jobs:
               "alertText": ":rotating_light: Failed to release ${{ matrix.package.name }}@${{ needs.version-bump.outputs.new_version }} :rotating_light:",
               "alertContext": "The package publish step failed."
             }
-
-      - name: Notify Slack - Failed
-        if: ${{ failure() && needs.notify-approval-needed.outputs.slack_ts != '' }}
-        uses: posthog/.github/.github/actions/slack-thread-reply@cb0979b67dcd585828b61ac45927eef4da8f6287 # main
-        with:
-          slack_bot_token: ${{ secrets.SLACK_CLIENT_LIBRARIES_BOT_TOKEN }}
-          slack_channel_id: ${{ vars.SLACK_APPROVALS_CLIENT_LIBRARIES_CHANNEL_ID }}
-          thread_ts: ${{ needs.notify-approval-needed.outputs.slack_ts }}
-          message: "❌ Failed to publish `${{ matrix.package.name }}@${{ needs.version-bump.outputs.new_version }}`! <https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}|View logs>"
-          emoji_reaction: "x"
 
   # Side-effect-free rehearsal: runs ONLY when this workflow is manually
   # dispatched on a non-main branch (e.g. this PR branch). It applies the Sampo
