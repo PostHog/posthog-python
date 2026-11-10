@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Union
@@ -652,12 +653,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": "Acme <security@example.com>",
                 "reply_to": "help@example.com",
                 "capture_engagement": False,
-                "category": MessageCategory(
-                    key="product-updates",
-                    type="marketing",
-                    name="Product updates",
-                    description="Monthly product news",
-                ),
                 "distinct_id": "user_123",
             },
             {
@@ -666,57 +661,8 @@ def send_code(emails: Emails, **overrides: Any):
                 "from": "Acme <security@example.com>",
                 "reply_to": ["help@example.com"],
                 "capture_engagement": False,
-                "category": {
-                    "key": "product-updates",
-                    "type": "marketing",
-                    "name": "Product updates",
-                    "description": "Monthly product news",
-                },
                 "distinct_id": "user_123",
             },
-        ),
-        (
-            "category_without_description",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="receipts", type="transactional", name="Receipts"
-                ),
-            },
-            {
-                "html": HTML,
-                "category": {
-                    "key": "receipts",
-                    "type": "transactional",
-                    "name": "Receipts",
-                },
-            },
-        ),
-        (
-            "empty_category_description_sent_to_clear_it",
-            {
-                "html": HTML,
-                "category": MessageCategory(
-                    key="newsletter",
-                    type="marketing",
-                    name="Newsletter",
-                    description="",
-                ),
-            },
-            {
-                "html": HTML,
-                "category": {
-                    "key": "newsletter",
-                    "type": "marketing",
-                    "name": "Newsletter",
-                    "description": "",
-                },
-            },
-        ),
-        (
-            "transactional_category_sent_as_set",
-            {"html": HTML, "category": TRANSACTIONAL_CATEGORY},
-            {"html": HTML, "category": "transactional"},
         ),
         (
             "several_reply_to",
@@ -736,7 +682,6 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
-                "category": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -803,6 +748,173 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         "capture_engagement": False,
         "distinct_id": "user_123",
     }
+
+
+_UNSUBSCRIBE_LINK = re.compile(r"\{\{\s*unsubscribe_url\s*\}\}")
+_CODE_SEND_FIELDS = {
+    "to",
+    "template_key",
+    "subject",
+    "html",
+    "text",
+    "from",
+    "reply_to",
+    "capture_engagement",
+    "distinct_id",
+    "category",
+}
+_CATEGORY_FIELDS = {"key", "type", "name", "description"}
+
+
+class FakeSendApi(requests.adapters.BaseAdapter):
+    def __init__(self, categories: Optional[dict[str, dict[str, str]]] = None):
+        super().__init__()
+        self.categories = categories or {}
+        self.sent: list[tuple[str, Optional[str]]] = []
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        body = json.loads(request.body or b"{}")
+        status, reply = self._handle(body)
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps(reply).encode()
+        return response
+
+    def _handle(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        category = body.get("category")
+        if set(body) - _CODE_SEND_FIELDS or not _is_valid_category(category):
+            return 400, {"code": "invalid_input", "attr": "category"}
+        if not isinstance(category, dict):
+            self.sent.append((body["to"], None))
+            return 202, {"message_id": "msg_1"}
+        stored = self.categories.get(category["key"])
+        if stored is not None and stored["type"] != category["type"]:
+            return 400, {"code": "category_mismatch", "attr": "category"}
+        if category["type"] == "marketing" and not _UNSUBSCRIBE_LINK.search(
+            body.get("html") or body.get("text") or ""
+        ):
+            return 400, {"code": "unsubscribe_link_required", "attr": "html"}
+        stored = stored or {"type": category["type"], "description": ""}
+        stored["name"] = category["name"]
+        if "description" in category:
+            stored["description"] = category["description"]
+        self.categories[category["key"]] = stored
+        self.sent.append((body["to"], category["key"]))
+        return 202, {"message_id": "msg_1"}
+
+    def close(self) -> None:
+        pass
+
+
+def _is_valid_category(category: Any) -> bool:
+    if category is None or category == "transactional":
+        return True
+    return (
+        isinstance(category, dict)
+        and {"key", "type", "name"} <= set(category) <= _CATEGORY_FIELDS
+        and category["type"] in ("marketing", "transactional")
+        and all(isinstance(value, str) for value in category.values())
+    )
+
+
+def emails_with_send_api(
+    categories: Optional[dict[str, dict[str, str]]] = None,
+) -> tuple[Emails, FakeSendApi]:
+    api = FakeSendApi(categories)
+    session = requests.Session()
+    session.mount("https://", api)
+    return Emails(SECRET_KEY, session=session, max_retries=0), api
+
+
+MARKETING_HTML = "<p>News. <a href='{{ unsubscribe_url }}'>Unsubscribe</a></p>"
+NEWSLETTER = MessageCategory(
+    key="newsletter",
+    type="marketing",
+    name="Newsletter",
+    description="Monthly product news",
+)
+
+
+def test_a_marketing_send_creates_its_category_in_the_project():
+    emails, api = emails_with_send_api()
+
+    send_code(emails, html=MARKETING_HTML, category=NEWSLETTER)
+
+    assert api.categories == {
+        "newsletter": {
+            "type": "marketing",
+            "name": "Newsletter",
+            "description": "Monthly product news",
+        }
+    }
+    assert api.sent == [("user@example.com", "newsletter")]
+
+
+@parameterized.expand(
+    [
+        ("unset_keeps_it", None, "Old news"),
+        ("empty_clears_it", "", ""),
+        ("new_text_replaces_it", "Monthly product news", "Monthly product news"),
+    ]
+)
+def test_a_send_updates_its_category_description(_name, description, stored):
+    emails, api = emails_with_send_api(
+        {"newsletter": {"type": "marketing", "name": "News", "description": "Old news"}}
+    )
+
+    send_code(
+        emails,
+        html=MARKETING_HTML,
+        category=MessageCategory(
+            key="newsletter",
+            type="marketing",
+            name="Newsletter",
+            description=description,
+        ),
+    )
+
+    assert api.categories["newsletter"] == {
+        "type": "marketing",
+        "name": "Newsletter",
+        "description": stored,
+    }
+
+
+@parameterized.expand(
+    [
+        ("left_out", {}),
+        ("none", {"category": None}),
+        ("built_in_transactional", {"category": TRANSACTIONAL_CATEGORY}),
+    ]
+)
+def test_a_send_without_a_category_is_transactional(_name, overrides):
+    emails, api = emails_with_send_api()
+
+    send_code(emails, html=HTML, **overrides)
+
+    assert api.sent == [("user@example.com", None)]
+    assert api.categories == {}
+
+
+def test_a_category_of_another_type_is_refused():
+    emails, api = emails_with_send_api(
+        {"receipts": {"type": "transactional", "name": "Receipts", "description": ""}}
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=MARKETING_HTML,
+            category=MessageCategory(key="receipts", type="marketing", name="Receipts"),
+        )
+
+    assert (raised.value.code, raised.value.name) == (
+        "category_mismatch",
+        "validation_error",
+    )
+    assert api.sent == []
 
 
 @parameterized.expand(
