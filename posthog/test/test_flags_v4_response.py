@@ -83,9 +83,8 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    # Unreleased harness pull request head; copy the files again from its release.
-    assert source["release"] is None
-    assert source["revision"] == "b0a7bc55a3141260b6556820471186105de5f4bd"
+    assert source["release"] == "1.30.0"
+    assert source["revision"] == "6414114501396d96aadf2412fdd8054a03076782"
     assert source["contract_version"] == "10.0.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
