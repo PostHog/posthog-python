@@ -131,6 +131,7 @@ __all__ = [
     "CodeEmailArgs",
     "EmailError",
     "EmailStatus",
+    "EmailTracking",
     "EmailWarning",
     "Emails",
     "SendEmailResult",
@@ -223,6 +224,27 @@ class TemplateEmailArgs(_RecipientArgs):
     template_data: NotRequired[Optional[Mapping[str, Any]]]
 
 
+class EmailTracking(TypedDict, total=False):
+    """Which kinds of tracking a send with ``template_key`` turns on.
+
+    A key you leave out keeps its default.
+
+    Args:
+        opens: Counts opens with PostHog's open pixel. Defaults to ``True``.
+        clicks: Counts clicks by sending the email's links through PostHog's
+            click tracking. Defaults to ``False``. Needs ``opens``: PostHog
+            refuses a send with ``opens=False`` and ``clicks=True``.
+        engagement: Captures the email's engagement events (sent,
+            delivered, opened, clicked, bounced) as events of the recipient.
+            Defaults to ``True``. A project whose admin turned engagement
+            capture off captures nothing, whatever the send asks.
+    """
+
+    opens: bool
+    clicks: bool
+    engagement: bool
+
+
 class CodeEmailArgs(_RecipientArgs):
     """A send of email content that your code rendered for one recipient, named by a key.
 
@@ -242,19 +264,26 @@ class CodeEmailArgs(_RecipientArgs):
             without a plain-text part.
         from_: A verified sender, such as ``"Acme <hello@example.com>"``.
         reply_to: One address or a list of addresses. An empty list sends no reply-to.
-        capture_engagement: Capture the email's opens and clicks as events of
-            the recipient. Defaults to ``True``. A project whose admin turned
-            engagement capture off captures nothing, whatever the send asks. A
-            template made in PostHog follows the project's setting, so the
-            template form doesn't take it.
-        track_opens_and_clicks: Whether PostHog tracks opens and clicks of
-            the email. Defaults to ``True``. With ``False``, the email goes
-            out without PostHog's open pixel, so PostHog can't count its
-            opens. PostHog doesn't track clicks on emails sent from code, so
-            their links are never rewritten either way. Independent of
-            ``capture_engagement``, which decides whether engagement events
-            are captured on the recipient's person. The template form
+        capture_engagement: Deprecated, use ``tracking={"engagement": False}``.
+            It keeps working, but PostHog refuses a send that sets both
+            ``capture_engagement`` and ``tracking``. Captures the email's
+            engagement events as events of the recipient. Defaults to
+            ``True``. A project whose admin turned engagement capture off
+            captures nothing, whatever the send asks. A template made in
+            PostHog follows the project's setting, so the template form
             doesn't take it.
+        tracking: What PostHog tracks for this email. Without it, PostHog
+            counts opens with its open pixel, leaves the links as they are,
+            and captures engagement events. ``True`` turns on opens, clicks
+            and engagement events. ``False`` turns off all tracking,
+            including kinds PostHog adds later: PostHog can't count the
+            email's opens or clicks, and captures no engagement events. An
+            :class:`EmailTracking` dict turns each kind on or off, and a key
+            you leave out keeps its default. Clicks are off by default
+            because PostHog can't tell whether a link carries a login or
+            password reset token. Turn them on only when the email's links
+            are safe to send through PostHog's click tracking. The template
+            form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -272,7 +301,7 @@ class CodeEmailArgs(_RecipientArgs):
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
     capture_engagement: NotRequired[Optional[bool]]
-    track_opens_and_clicks: NotRequired[Optional[bool]]
+    tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 
 
 _OPTIONAL_CODE_FIELDS = frozenset(
@@ -282,7 +311,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "from_",
         "reply_to",
         "capture_engagement",
-        "track_opens_and_clicks",
+        "tracking",
     }
 )
 
@@ -391,16 +420,24 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     reply_to = _addresses("reply_to", args["reply_to"]) if "reply_to" in args else []
     if reply_to:
         sender["reply_to"] = reply_to
-    capture_engagement = args.get("capture_engagement", True)
-    if not isinstance(capture_engagement, bool):
-        raise TypeError("capture_engagement must be True or False.")
-    sender["capture_engagement"] = capture_engagement
-    if "track_opens_and_clicks" in args:
-        track_opens_and_clicks = args["track_opens_and_clicks"]
-        if not isinstance(track_opens_and_clicks, bool):
-            raise TypeError("track_opens_and_clicks must be True or False.")
-        sender["track_opens_and_clicks"] = track_opens_and_clicks
+    if "capture_engagement" in args:
+        capture_engagement = args["capture_engagement"]
+        if not isinstance(capture_engagement, bool):
+            raise TypeError("capture_engagement must be True or False.")
+        sender["capture_engagement"] = capture_engagement
+    if "tracking" in args:
+        sender["tracking"] = _tracking(args["tracking"])
     return sender
+
+
+def _tracking(value: Any) -> Union[bool, dict[str, Any]]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(
+        "tracking must be True, False or a dict of opens, clicks and engagement."
+    )
 
 
 def _addresses(field: str, value: Any) -> list[str]:

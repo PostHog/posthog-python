@@ -657,14 +657,25 @@ def send_code(emails: Emails, **overrides: Any):
             },
         ),
         (
-            "untracked",
-            {"html": HTML, "track_opens_and_clicks": False},
-            {"html": HTML, "track_opens_and_clicks": False},
+            "all_tracking_off",
+            {"html": HTML, "tracking": False},
+            {"html": HTML, "tracking": False},
         ),
         (
-            "tracked",
-            {"html": HTML, "track_opens_and_clicks": True},
-            {"html": HTML, "track_opens_and_clicks": True},
+            "all_tracking_on",
+            {"html": HTML, "tracking": True},
+            {"html": HTML, "tracking": True},
+        ),
+        (
+            "each_kind_of_tracking_chosen",
+            {
+                "html": HTML,
+                "tracking": {"opens": True, "clicks": True, "engagement": False},
+            },
+            {
+                "html": HTML,
+                "tracking": {"opens": True, "clicks": True, "engagement": False},
+            },
         ),
         (
             "several_reply_to",
@@ -684,7 +695,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
-                "track_opens_and_clicks": None,
+                "tracking": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -704,7 +715,6 @@ def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
         "to": "user@example.com",
         "template_key": "password-reset",
         "subject": "Reset your password",
-        "capture_engagement": True,
         **extra_body,
     }
 
@@ -794,15 +804,16 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
             TypeError,
         ),
         (
-            "track_opens_and_clicks_on_template_form",
+            "tracking_on_template_form",
             {
                 "template_id": TEMPLATE_ID,
                 "template_key": None,
                 "subject": None,
-                "track_opens_and_clicks": False,
+                "tracking": False,
             },
             TypeError,
         ),
+        ("tracking_not_bool_or_dict", {"html": HTML, "tracking": "off"}, TypeError),
     ]
 )
 def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
