@@ -2015,16 +2015,6 @@ def test_refuses_eleven_files_before_reading_any_of_them():
             "message_too_large",
         ),
         (
-            "base64_file_too_large_behind_extra_padding",
-            [
-                {
-                    "filename": "scan.pdf",
-                    "content": "AAAA" * (29_182_821 // 3) + "=" * 12,
-                }
-            ],
-            "message_too_large",
-        ),
-        (
             "files_too_large_together",
             [{"filename": f"{i}.pdf", "content": bytes(3_000_000)} for i in range(10)],
             "message_too_large",
@@ -2091,6 +2081,33 @@ def test_refuses_oversized_padded_base64_without_copying_it():
 
     assert raised.value.code == "message_too_large"
     assert peak < len(scan) // 4
+    assert posthog.stored_files == []
+    assert posthog.delivered == []
+
+
+def test_refuses_extra_base64_padding_without_copying_it():
+    posthog = FakePostHog()
+    emails = emails_on(posthog)
+    content = "YWJj" + "=" * 40_000_000
+
+    tracemalloc.start()
+    try:
+        with pytest.raises(EmailError) as raised:
+            send_code(
+                emails,
+                html=HTML,
+                attachments=[{"filename": "a.txt", "content": content}],
+            )
+        _current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    assert (raised.value.code, raised.value.field) == (
+        "invalid_attachment",
+        "attachments__0__content",
+    )
+    assert "base64.b64encode" in raised.value.message
+    assert peak < len(content) // 4
     assert posthog.stored_files == []
     assert posthog.delivered == []
 

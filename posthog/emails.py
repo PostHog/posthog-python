@@ -600,6 +600,8 @@ def _content_size(field: str, content: Any) -> int:
         data_end = len(content)
         while data_end and content[data_end - 1] == "=":
             data_end -= 1
+            if len(content) - data_end > 2:
+                raise _not_standard_base64(field)
         size = data_end * 3 // 4
     else:
         raise _invalid_attachment(
@@ -634,12 +636,16 @@ def _file_bytes(field: str, content: Union[bytes, bytearray, memoryview, str]) -
     try:
         return base64.b64decode(content, validate=True)
     except (binascii.Error, ValueError):
-        raise _invalid_attachment(
-            "An attachment's content string must be standard Base64 on one line "
-            "with its padding, as base64.b64encode gives. Pass the file's bytes "
-            "instead, such as text.encode() for text.",
-            f"{field}__content",
-        ) from None
+        raise _not_standard_base64(field) from None
+
+
+def _not_standard_base64(field: str) -> EmailError:
+    return _invalid_attachment(
+        "An attachment's content string must be standard Base64 on one line "
+        "with its padding, as base64.b64encode gives. Pass the file's bytes "
+        "instead, such as text.encode() for text.",
+        f"{field}__content",
+    )
 
 
 def _check_message_size(file_sizes: Sequence[int], content: Mapping[str, str]) -> None:
