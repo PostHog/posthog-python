@@ -283,7 +283,7 @@ def _wrap_call_tool(
 
         start = time.monotonic()
         try:
-            with raised_tool_error() as raised:
+            with raised_tool_error(high_level) as raised:
                 result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(

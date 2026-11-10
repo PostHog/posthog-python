@@ -28,6 +28,13 @@ def _tool_error():
     raise ToolError("bad input")
 
 
+def _tool_error_worded_like_fastmcp():
+    try:
+        _upstream()
+    except ConnectionError as exc:
+        raise ToolError("Error calling tool: lookup failed") from exc
+
+
 @pytest.mark.parametrize(
     "raise_in_tool, mask_error_details, error_type, message, chain",
     [
@@ -46,6 +53,13 @@ def _tool_error():
             ["RuntimeError", "ConnectionError"],
         ),
         (_tool_error, False, "ToolError", "bad input", ["ToolError"]),
+        (
+            _tool_error_worded_like_fastmcp,
+            False,
+            "ToolError",
+            "Error calling tool: lookup failed",
+            ["ToolError", "ConnectionError"],
+        ),
     ],
 )
 async def test_failed_call_carries_the_raised_exception(
@@ -77,23 +91,37 @@ async def test_failed_call_carries_the_raised_exception(
     assert all(e["stacktrace"]["frames"] for e in raised)
 
 
-async def test_exception_caught_by_the_tool_is_not_reported():
+@pytest.mark.parametrize(
+    "failing_server, instrumented",
+    [
+        ("same", "wrapper"),
+        ("other", "wrapper"),
+        ("other", "low_level_only"),
+    ],
+)
+async def test_exception_caught_by_the_tool_is_not_reported(
+    failing_server, instrumented
+):
     server = FastMCP("example-server")
+    other = FastMCP("other-server")
+    instrument(other, FakeClient(), MCPAnalyticsOptions())
+    backend = server if failing_server == "same" else other
 
-    @server.tool
+    @backend.tool
     def inner() -> str:
         raise RuntimeError("inner failure")
 
     @server.tool
     async def outer() -> str:
         try:
-            await server.call_tool("inner", {})
+            await backend.call_tool("inner", {})
         except ToolError:
             pass
         return "recovered"
 
     sink = FakeClient()
-    instrument(server, sink, MCPAnalyticsOptions())
+    target = server if instrumented == "wrapper" else server._mcp_server
+    instrument(target, sink, MCPAnalyticsOptions())
 
     async with Client(server) as client:
         result = await client.call_tool("outer", {}, raise_on_error=False)

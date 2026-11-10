@@ -18,6 +18,7 @@ _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 
 @dataclass
 class RaisedToolError:
+    server: Any
     error: Optional[BaseException] = None
 
 
@@ -37,24 +38,26 @@ def wrap_call_tool(server: Any) -> None:
         try:
             result = await original(*args, **kwargs)
         except Exception as error:
-            _settle(error)
+            _settle(server, error)
             raise
-        _settle(None)
+        _settle(server, None)
         return result
 
     setattr(call_tool, _WRAPPED_FLAG, True)
     server.call_tool = call_tool
 
 
-def _settle(error: Optional[BaseException]) -> None:
+def _settle(server: Any, error: Optional[BaseException]) -> None:
+    # Another server's call_tool, reached from inside a tool, must not write
+    # its outcome onto this call.
     raised = _current.get()
-    if raised is not None:
+    if raised is not None and raised.server is server:
         raised.error = error
 
 
 @contextmanager
-def raised_tool_error() -> Iterator[RaisedToolError]:
-    raised = RaisedToolError()
+def raised_tool_error(server: Any) -> Iterator[RaisedToolError]:
+    raised = RaisedToolError(server)
     token = _current.set(raised)
     try:
         yield raised

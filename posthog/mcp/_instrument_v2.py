@@ -674,7 +674,7 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
         start = time.monotonic()
         try:
-            with raised_tool_error() as raised:
+            with raised_tool_error(standalone) as raised:
                 result = await original(ctx, params)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
