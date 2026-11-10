@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import logging
 import traceback
@@ -1061,7 +1062,34 @@ def test_a_refused_upload_sends_no_email_and_surfaces_the_storage_answer(
         "attachments__0",
     )
     assert storage_code in error.message
+    assert "proxy" in error.fix
     assert [request.method for request in adapter.requests] == ["POST", "PUT"]
+
+
+@parameterized.expand(
+    [
+        ("line_wrapped", base64.encodebytes(bytes(100)).decode()),
+        ("unpadded", "QUI"),
+        ("url_safe", base64.urlsafe_b64encode(b"\xfb\xff").decode()),
+    ]
+)
+def test_refuses_base64_not_in_one_padded_line_and_says_how_to_encode(_name, content):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=HTML,
+            attachments=[{"filename": "a.bin", "content": content}],
+        )
+
+    error = raised.value
+    assert (error.code, error.field) == (
+        "invalid_attachment",
+        "attachments__0__content",
+    )
+    assert "base64.b64encode" in error.message
+    assert adapter.requests == []
 
 
 def test_the_upload_trusts_the_certificates_the_environment_names(monkeypatch):

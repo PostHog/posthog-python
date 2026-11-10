@@ -244,7 +244,8 @@ class EmailAttachment(TypedDict):
     Args:
         filename: The file name the recipient sees, such as ``invite.ics``.
         content: The file as ``bytes``, ``bytearray`` or ``memoryview``, or
-            Base64 encoded as a string. PostHog can't fetch a file from a path
+            Base64 encoded as a string on one line with its padding, as
+            ``base64.b64encode`` gives. PostHog can't fetch a file from a path
             or URL.
         content_type: The MIME type. Without it, the type follows the file name.
         content_id: Shows the file inline: reference it in ``html`` as
@@ -622,8 +623,9 @@ def _file_bytes(field: str, content: Union[bytes, bytearray, memoryview, str]) -
         return base64.b64decode(content, validate=True)
     except (binascii.Error, ValueError):
         raise _invalid_attachment(
-            "An attachment's content string must be Base64. "
-            "Pass the file's bytes instead, such as text.encode() for text.",
+            "An attachment's content string must be standard Base64 on one line "
+            "with its padding, as base64.b64encode gives. Pass the file's bytes "
+            "instead, such as text.encode() for text.",
             f"{field}__content",
         ) from None
 
@@ -1003,8 +1005,9 @@ def _upload_error(
         f"with {storage_answer}, so no email was sent.",
         status_code=status,
         why=answer.get("Message"),
-        fix="Send the email again. If the upload keeps failing, check that the "
-        "file's bytes don't change while it is sent.",
+        fix="Send the email again, which asks for a fresh upload URL. If the "
+        "upload keeps failing, check whether a proxy between your app and "
+        "PostHog's file storage changes or holds up uploads.",
         field=f"attachments__{index}",
         retry_after=_retry_after(retry_after_header),
     )
