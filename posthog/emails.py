@@ -239,7 +239,8 @@ class MessageCategory:
             unsubscribe link. ``"transactional"`` files the email under the
             category and skips opt-outs.
         name: The name recipients see on their preferences page.
-        description: What the category's emails are about.
+        description: What the category's emails are about. ``None`` keeps
+            the category's stored description, and ``""`` clears it.
     """
 
     key: str

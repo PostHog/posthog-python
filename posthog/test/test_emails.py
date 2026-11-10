@@ -693,6 +693,27 @@ def send_code(emails: Emails, **overrides: Any):
             },
         ),
         (
+            "empty_category_description_sent_to_clear_it",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="newsletter",
+                    type="marketing",
+                    name="Newsletter",
+                    description="",
+                ),
+            },
+            {
+                "html": HTML,
+                "category": {
+                    "key": "newsletter",
+                    "type": "marketing",
+                    "name": "Newsletter",
+                    "description": "",
+                },
+            },
+        ),
+        (
             "transactional_category_sent_as_set",
             {"html": HTML, "category": TRANSACTIONAL_CATEGORY},
             {"html": HTML, "category": "transactional"},
