@@ -1921,7 +1921,7 @@ def test_a_project_over_its_daily_upload_bytes_is_told_without_retrying():
     assert (posthog.delivered, posthog.stored_files) == ([], [])
 
 
-def test_a_retried_send_reuses_its_uploads_and_its_idempotency_key():
+def test_a_send_retried_after_a_lost_reply_replays_with_its_idempotency_key():
     posthog = FakePostHog()
     posthog.inject(
         "send",
