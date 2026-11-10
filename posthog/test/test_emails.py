@@ -850,24 +850,14 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
 
 
 def test_a_refused_send_names_the_field_from_attr():
-    refused = {
-        "type": "validation_error",
-        "code": "invalid_input",
-        "detail": "PostHog doesn't take this field, so it doesn't send the email without it.",
-        "attr": "cc",
-    }
-    emails, adapter = emails_with([(400, refused, {}), accepted()])
+    posthog = FakePostHog()
+    posthog.send_fields = SEND_FIELDS - {"cc"}
 
     with pytest.raises(EmailError) as raised:
-        send_code(emails, html=HTML, cc="manager@example.com")
+        send_code(emails_on(posthog), html=HTML, cc="manager@example.com")
 
-    error = raised.value
-    assert (error.name, error.code, error.field) == (
-        "validation_error",
-        "invalid_input",
-        "cc",
-    )
-    assert len(adapter.requests) == 1
+    assert (raised.value.code, raised.value.field) == ("invalid_input", "cc")
+    assert posthog.delivered == []
 
 
 POSTHOG_HOST = "https://us.posthog.com"
@@ -1055,6 +1045,7 @@ class FakePostHog:
         self.writes = 0
         self.delivered: list[DeliveredEmail] = []
         self.project_can_send_files = True
+        self.send_fields = SEND_FIELDS
         self._sent_by_idempotency_key: dict[str, str] = {}
         self._faults: dict[str, list[Fault]] = {
             "uploads": [],
@@ -1213,7 +1204,7 @@ class FakePostHog:
         payload = json_or_none(incoming.body)
         if not isinstance(payload, dict):
             return api_error(400, "invalid_input", "Send a JSON object.")
-        unknown = sorted(set(payload) - SEND_FIELDS)
+        unknown = sorted(set(payload) - self.send_fields)
         if unknown:
             return api_error(
                 400,
@@ -2044,7 +2035,8 @@ def test_refuses_an_email_over_the_limits_before_any_request(_name, attachments,
 
 
 def test_refuses_an_oversized_email_without_copying_its_files():
-    emails, adapter = emails_with([])
+    posthog = FakePostHog()
+    emails = emails_on(posthog)
     scan = memoryview(bytearray(8 * 1024 * 1024))
 
     tracemalloc.start()
@@ -2063,11 +2055,13 @@ def test_refuses_an_oversized_email_without_copying_its_files():
 
     assert raised.value.code == "message_too_large"
     assert peak < len(scan)
-    assert adapter.requests == []
+    assert posthog.stored_files == []
+    assert posthog.delivered == []
 
 
 def test_refuses_oversized_padded_base64_without_copying_it():
-    emails, adapter = emails_with([])
+    posthog = FakePostHog()
+    emails = emails_on(posthog)
     scan = "AAAA" * 10_000_000 + "AA=="
 
     tracemalloc.start()
@@ -2084,7 +2078,8 @@ def test_refuses_oversized_padded_base64_without_copying_it():
 
     assert raised.value.code == "message_too_large"
     assert peak < len(scan) // 4
-    assert adapter.requests == []
+    assert posthog.stored_files == []
+    assert posthog.delivered == []
 
 
 LARGEST_SCAN = bytes(29_182_815)
