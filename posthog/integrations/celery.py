@@ -313,7 +313,9 @@ class PosthogCeleryIntegration:
             self._apply_propagated_identity(request)
             self._enrich_task_span(task_id)
 
-            merged_tags = {**task_properties, **context_tags}
+            # The task's own celery_* values win: tags propagated from a task
+            # that published this one carry that task's values.
+            merged_tags = {**context_tags, **task_properties}
             for key, value in merged_tags.items():
                 contexts.tag(key, value)
 

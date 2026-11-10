@@ -593,9 +593,9 @@ class CallbackHandler(BaseCallbackHandler):
         self, exception: BaseException, event_properties: Dict[str, Any]
     ) -> Dict[str, Any]:
         # An `$exception` event carries the message and stack, which echo prompts and output.
-        if not self._ph_client.enable_exception_autocapture or _privacy_mode_enabled(
-            self._ph_client, self._privacy_mode
-        ):
+        if not getattr(
+            self._ph_client, "enable_exception_autocapture", False
+        ) or _privacy_mode_enabled(self._ph_client, self._privacy_mode):
             return event_properties
 
         exception_id = self._ph_client.capture_exception(
