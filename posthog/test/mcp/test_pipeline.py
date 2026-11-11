@@ -157,6 +157,19 @@ def test_sanitize_redacts_sensitive_json_members_inside_strings(value, expected)
     assert sanitize_captured_value(value) == expected
 
 
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param('{"note":[' + "1" * 40 + "!", id="digits"),
+        pytest.param('{"note":[' + "1 " * 40 + "!", id="spaced digits"),
+        pytest.param('{"note":[' + "1," * 20_000 + "!", id="long array"),
+    ],
+)
+def test_json_member_redaction_runs_in_linear_time_on_malformed_arrays(value):
+    assert sanitize_captured_value(value) == value
+
+
 def test_sanitize_redacts_large_base64():
     blob = "A" * 11000
     assert sanitize_captured_value(blob).startswith("[binary data redacted")

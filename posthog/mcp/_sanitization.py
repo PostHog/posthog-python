@@ -41,12 +41,15 @@ _SENSITIVE_KEY_PATTERN = re.compile(
 # posthog-go's jsonMemberPattern and posthog-rs's JSON_MEMBER.
 _JSON_STRING = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
 _JSON_SCALAR = _JSON_STRING + r"|-?\d[\d.eE+-]*|true|false"
+_JSON_ITEM = r"(?:" + _JSON_SCALAR + r"|null)\s*"
+# Python's `re` backtracks, unlike the RE2 and Rust engines the Go and Rust
+# SDKs run this on, so every item after the first needs its comma: with an
+# optional one, a run of digits splits into items in exponentially many ways.
+_JSON_ARRAY = (
+    r"\[\s*(?:" + _JSON_ITEM + r"(?:,\s*" + _JSON_ITEM + r")*(?:,\s*)?)?(?:\]|$)"
+)
 _JSON_MEMBER_PATTERN = re.compile(
-    r'("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:'
-    + _JSON_SCALAR
-    + r"|\[(?:\s*(?:"
-    + _JSON_SCALAR
-    + r"|null)\s*,?)*\s*(?:\]|$))"
+    r'("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:' + _JSON_SCALAR + "|" + _JSON_ARRAY + ")"
 )
 
 # No leading `\b`: a word boundary needs a non-word character before the scheme,
