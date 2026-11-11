@@ -680,11 +680,36 @@ def _sanitize_exception_values(error: Any) -> Any:
     return {
         **error,
         "$exception_list": [
-            {**exception, "value": sanitize_captured_value(exception.get("value"))}
-            if isinstance(exception, dict)
-            else exception
+            _sanitize_exception(exception) if isinstance(exception, dict) else exception
             for exception in exception_list
         ],
+    }
+
+
+_FRAME_SOURCE_KEYS = ("pre_context", "context_line", "post_context")
+
+
+def _sanitize_exception(exception: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = {**exception, "value": sanitize_captured_value(exception.get("value"))}
+    stacktrace = exception.get("stacktrace")
+    if isinstance(stacktrace, dict) and isinstance(stacktrace.get("frames"), list):
+        sanitized["stacktrace"] = {
+            **stacktrace,
+            "frames": [_sanitize_frame(frame) for frame in stacktrace["frames"]],
+        }
+    return sanitized
+
+
+def _sanitize_frame(frame: Any) -> Any:
+    if not isinstance(frame, dict):
+        return frame
+    return {
+        **frame,
+        **{
+            key: sanitize_captured_value(frame[key])
+            for key in _FRAME_SOURCE_KEYS
+            if key in frame
+        },
     }
 
 

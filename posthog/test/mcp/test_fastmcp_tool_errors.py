@@ -134,3 +134,27 @@ async def test_exception_caught_by_the_tool_is_not_reported(
     assert call["properties"]["$mcp_is_error"] is False
     assert events_named(sink, "$exception") == []
 
+
+async def test_secrets_in_frame_source_lines_are_redacted():
+    server = FastMCP("example-server")
+
+    @server.tool
+    def fail() -> str:
+        dsn = "postgres://admin:hunter2@db.example.com/app"
+        raise RuntimeError(f"connect failed for {dsn.rsplit('@')[-1]}")
+
+    sink = FakeClient()
+    instrument(server, sink, MCPAnalyticsOptions())
+
+    async with Client(server) as client:
+        await client.call_tool("fail", {}, raise_on_error=False)
+    await flush_background()
+
+    [exception] = events_named(sink, "$exception")
+    frames = [
+        frame
+        for entry in exception["properties"]["$exception_list"]
+        for frame in entry["stacktrace"]["frames"]
+    ]
+    assert "db.example.com/app" in repr(frames)
+    assert "hunter2" not in repr(frames)
