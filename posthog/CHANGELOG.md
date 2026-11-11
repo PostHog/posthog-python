@@ -1,5 +1,11 @@
 # posthog
 
+## 7.87.0 — 2026-11-11
+
+### Minor changes
+
+- [5febfd9b](https://github.com/posthog/posthog-python/commit/5febfd9b13d9d78e2f0cd253356badabf4e51c65) Send `$experiment_exposure` for config version 2 experiment splits, and send the reason code and rule attribution on `$feature_flag_called` for config version 2 flags in place of `$feature_flag_reason`. — Thanks @andehen!
+
 ## 7.86.6 — 2026-11-10
 
 ### Patch changes
