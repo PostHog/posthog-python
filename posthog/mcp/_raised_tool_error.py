@@ -69,8 +69,8 @@ def wrap_error_result(server: Any) -> None:
 
     def make_error_result(error_message: str) -> Any:
         # Input and output validation failures also land here from inside an
-        # except block, but with a prefixed message. Only the tool's own raise
-        # is passed through as its bare text.
+        # except block, but with a prefixed message. Only the catch-all around
+        # the tool call passes an exception's bare text.
         error = sys.exc_info()[1]
         if isinstance(error, Exception) and error_message == str(error):
             _settle(server, error)
