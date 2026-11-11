@@ -595,6 +595,9 @@ get_feature_flag_result(key: str, distinct_id: ID_TYPES, *, groups: Optional[Map
 Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
 depending on whether local evaluation is enabled and the flag can be locally evaluated.
 This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+When the flag was evaluated remotely and its config version 2 record is a complete experiment
+split (an experiment rule with a rule ID and a variant key), it also captures the
+`$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
 **Examples:**
 
@@ -3018,6 +3021,13 @@ posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
 To narrow the set of flags that get attached to a captured event, use the in-memory
 helpers `only` and `only_accessed`. To narrow the set of flags requested
 from the server in the first place, pass `flag_keys` to `Client.evaluate_flags`.
+
+Reading a flag sends `$feature_flag_called`, deduplicated as `is_enabled`
+describes. When the flag was evaluated remotely and its config version 2 record is
+a complete experiment split (an experiment rule with a rule ID and a variant key),
+the read also sends `$experiment_exposure`. The SDK sends one exposure per
+distinct ID, groups, flag, rule and variant. `send_feature_flag_events=False`
+suppresses both events.
 
 **Functions:**
 
