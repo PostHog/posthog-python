@@ -252,6 +252,8 @@ def _add_error_details(event: Event, properties: Dict[str, Any]) -> None:
     message = first.get("value")
     if message:
         properties[_P.ERROR_MESSAGE] = message
+    if event.get("error_status") is not None:
+        properties[_P.ERROR_STATUS] = event["error_status"]
 
 
 def _add_custom_properties(event: Event, properties: Dict[str, Any]) -> None:

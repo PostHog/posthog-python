@@ -7,6 +7,7 @@ import gc
 import logging
 import weakref
 
+import httpx
 import pytest
 
 pytest.importorskip("fastmcp")
@@ -33,6 +34,14 @@ def _tool_error():
     raise ToolError("bad input")
 
 
+def _upstream_status():
+    request = httpx.Request("GET", "https://api.example.com/invoices/1")
+    try:
+        httpx.Response(503, request=request).raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError("invoice lookup failed") from exc
+
+
 def _tool_error_worded_like_fastmcp():
     try:
         _upstream()
@@ -41,7 +50,7 @@ def _tool_error_worded_like_fastmcp():
 
 
 @pytest.mark.parametrize(
-    "raise_in_tool, mask_error_details, error_type, message, chain",
+    "raise_in_tool, mask_error_details, error_type, message, chain, status",
     [
         (
             _chained,
@@ -49,6 +58,7 @@ def _tool_error_worded_like_fastmcp():
             "RuntimeError",
             "lookup failed",
             ["RuntimeError", "ConnectionError"],
+            None,
         ),
         (
             _chained,
@@ -56,19 +66,29 @@ def _tool_error_worded_like_fastmcp():
             "RuntimeError",
             "lookup failed",
             ["RuntimeError", "ConnectionError"],
+            None,
         ),
-        (_tool_error, False, "ToolError", "bad input", ["ToolError"]),
+        (_tool_error, False, "ToolError", "bad input", ["ToolError"], None),
         (
             _tool_error_worded_like_fastmcp,
             False,
             "ToolError",
             "Error calling tool: lookup failed",
             ["ToolError", "ConnectionError"],
+            None,
+        ),
+        (
+            _upstream_status,
+            True,
+            "RuntimeError",
+            "invoice lookup failed",
+            ["RuntimeError", "HTTPStatusError"],
+            503,
         ),
     ],
 )
 async def test_failed_call_carries_the_raised_exception(
-    raise_in_tool, mask_error_details, error_type, message, chain
+    raise_in_tool, mask_error_details, error_type, message, chain, status
 ):
     server = FastMCP("example-server", mask_error_details=mask_error_details)
 
@@ -89,6 +109,7 @@ async def test_failed_call_carries_the_raised_exception(
     assert call["properties"]["$mcp_is_error"] is True
     assert call["properties"]["$mcp_error_type"] == error_type
     assert call["properties"]["$mcp_error_message"] == message
+    assert call["properties"].get("$mcp_error_status") == status
     [exception] = events_named(sink, "$exception")
     exception_list = exception["properties"]["$exception_list"]
     raised = [e for e in exception_list if e["type"] in chain]
