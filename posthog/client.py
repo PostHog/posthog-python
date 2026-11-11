@@ -5679,9 +5679,10 @@ class Client(object):
                     redis_url = f"{parsed.scheme}://"
                     if parsed.username or parsed.password:
                         redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
-                    redis_url += (
-                        f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}"
-                    )
+                    host = parsed.hostname or "localhost"
+                    if ":" in host:
+                        host = f"[{host}]"
+                    redis_url += f"{host}:{parsed.port or 6379}"
                     if parsed.path:
                         redis_url += parsed.path
 
