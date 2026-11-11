@@ -102,6 +102,8 @@ async def test_failed_call_carries_the_raised_exception(
 async def test_exception_caught_by_the_tool_is_not_reported(
     failing_server, instrumented
 ):
+    if not hasattr(FastMCP, "call_tool"):
+        pytest.skip("fastmcp 2 has no public call_tool for a tool to call")
     server = FastMCP("example-server")
     other = FastMCP("other-server")
     instrument(other, FakeClient(), MCPAnalyticsOptions())
@@ -131,3 +133,4 @@ async def test_exception_caught_by_the_tool_is_not_reported(
     [call] = events_named(sink, "$mcp_tool_call")
     assert call["properties"]["$mcp_is_error"] is False
     assert events_named(sink, "$exception") == []
+
