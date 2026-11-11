@@ -75,7 +75,6 @@ def worker_env():
         PYTHONHASHSEED="0",
         PYTHONNOUSERSITE="1",
         PYTHONDONTWRITEBYTECODE="1",
-        POSTHOG_CAPTURE_MODE="v0",
     )
     return env
 
@@ -375,7 +374,7 @@ def main(args=None):
             "file_format": "ALL_ALLOCATIONS",
             "scope": "PYMALLOC_MALLOC/CALLOC/REALLOC requests; all worker threads",
         },
-        "transport": "loopback HTTP receiver in coordinator process; uncompressed v0",
+        "transport": "loopback HTTP receiver in coordinator process; uncompressed capture v1",
         "warmup": "two refreshes; otherwise min(operations, 32 for 1000 flags or 160); verified phase reset before measurement",
         "settling": "two gc.collect calls separated by sleep(0)",
         "memory_sampling": "operation checkpoints; lifetime high-water mark includes setup and warmup",

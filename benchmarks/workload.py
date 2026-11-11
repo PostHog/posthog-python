@@ -38,8 +38,6 @@ class Workload:
             timeout=5,
             max_retries=0,
             feature_flags_request_max_retries=0,
-            gzip=False,
-            capture_mode="v0",
             thread=1,
             on_error=lambda error, _batch: self.errors.append(str(error)),
             **({"personal_api_key": "benchmark-local-only"} if self.flags else {}),

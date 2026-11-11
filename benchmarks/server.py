@@ -102,7 +102,7 @@ class BenchmarkServer:
                                 definitions(spec["flag_count"], generation)
                             ).encode()
                             self.reply(200, b"{}")
-                        elif path == "/batch":
+                        elif path == "/i/v1/analytics/events":
                             if batch_delay:
                                 time.sleep(batch_delay)
                             batch = body["batch"]
@@ -136,7 +136,13 @@ class BenchmarkServer:
                                         owner.seen[sequence] = 1
                                         owner.state["unique_sequences"] += 1
                                         owner.state["missing_sequences"] -= 1
-                            self.reply(200, b'{"status":1}')
+                            # Capture v1 reports a result per event uuid; anything
+                            # else is an unreadable response to the SDK.
+                            results = {
+                                str(event.get("uuid")): {"result": "ok"}
+                                for event in batch
+                            }
+                            self.reply(200, json.dumps({"results": results}).encode())
                         else:
                             self.unexpected(path)
                     except (ValueError, KeyError, TypeError, AttributeError):

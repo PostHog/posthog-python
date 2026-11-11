@@ -71,7 +71,7 @@ Capture fixtures are preconstructed outside measurement: event `benchmark`, iden
 - `capture.drain.steady.*` and `capture.drain.burst.*` record `completion_boundary=completed_delivery`. Steady flushes every 100 captures; burst flushes once after all captures. Parameters record `drain_strategy` and `flush_every`. Both include `flush(timeout_seconds=None)` and reports the complete delivery path's process CPU and allocations, including requests/serialization. The external worker timeout bounds this wait. Verification does not flush again: unfinished measured work cannot be rescued outside the measurement. Server CPU and server allocations are excluded; elapsed time includes loopback transport.
 - Enqueue-only allocation metrics are explicitly unavailable and direct readers to the drain workload.
 
-Capture uses public options `gzip=False`, `capture_mode="v0"`, `max_queue_size=100001`, `flush_at=100000`, and one-hour flush/poll intervals. The native consumer and size-driven batching remain active: burst describes the caller flush schedule, not retained queue size or a guaranteed HTTP request count. These metrics describe their named paths rather than pretending Python and Node have identical asynchronous lifecycles.
+Capture sends uncompressed capture v1 requests and uses public options `max_queue_size=100001`, `flush_at=100000`, and one-hour flush/poll intervals. The native consumer and size-driven batching remain active: burst describes the caller flush schedule, not retained queue size or a guaranteed HTTP request count. These metrics describe their named paths rather than pretending Python and Node have identical asynchronous lifecycles.
 
 ## Measurement methods
 

@@ -373,7 +373,11 @@ class BenchmarksTest(unittest.TestCase):
                         # Replace the final 16 events with the preceding 16: total and
                         # per-identity counts stay identical, but sequences do not.
                         events = events[:-16] + events[-32:-16]
-                    control(server.url, "/batch", {"batch": list(reversed(events))})
+                    control(
+                        server.url,
+                        "/i/v1/analytics/events",
+                        {"batch": list(reversed(events))},
+                    )
                     workload.captured = spec["operations"]
                     for event in workload.events:
                         workload.captured_by_user[event["distinct_id"]] += 1
