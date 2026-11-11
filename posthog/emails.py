@@ -250,8 +250,9 @@ class EmailTracking(TypedDict, total=False):
     Args:
         opens: Counts opens with PostHog's open pixel. Defaults to ``True``.
         clicks: Counts clicks by sending the email's links through PostHog's
-            click tracking. Defaults to ``False``. Needs ``opens``: PostHog
-            refuses a send with ``opens=False`` and ``clicks=True``.
+            click tracking. Defaults to ``False`` for a sensitive email and
+            ``True`` for any other. Needs ``opens``: PostHog refuses a send
+            with ``opens=False`` and ``clicks=True``.
         engagement: Captures the email's engagement events (sent,
             delivered, opened, clicked, bounced) as events of the recipient.
             Defaults to ``True``. A project whose admin turned engagement
@@ -290,18 +291,23 @@ class CodeEmailArgs(_RecipientArgs):
             captures nothing, whatever the send asks. A template made in
             PostHog follows the project's setting, so the template form
             doesn't take it.
+        sensitive: Marks the email as sensitive, such as one that carries
+            login links, reset tokens or codes. A sensitive email keeps its
+            links as they are unless ``tracking`` turns clicks on, leaves its
+            subject off engagement events, and keeps its content out of
+            PostHog's logs. Without it, a send whose ``template_key`` matches
+            a template saved in PostHog follows that template's setting, and
+            any other send is sensitive. The template form doesn't take it.
         tracking: What PostHog tracks for this email. Without it, PostHog
-            counts opens with its open pixel, leaves the links as they are,
-            and captures engagement events. ``True`` turns on opens, clicks
-            and engagement events. ``False`` turns off all tracking,
-            including kinds PostHog adds later: PostHog can't count the
-            email's opens or clicks, and captures no engagement events. An
-            :class:`EmailTracking` dict turns each kind on or off, and a key
-            you leave out keeps its default. Clicks are off by default
-            because PostHog can't tell whether a link carries a login or
-            password reset token. Turn them on only when the email's links
-            are safe to send through PostHog's click tracking. The template
-            form doesn't take it.
+            counts opens with its open pixel, captures engagement events, and
+            counts clicks only when the email isn't sensitive. ``True`` turns
+            on opens, clicks and engagement events. ``False`` turns off all
+            tracking, including kinds PostHog adds later: PostHog can't count
+            the email's opens or clicks, and captures no engagement events.
+            An :class:`EmailTracking` dict turns each kind on or off, and a
+            key you leave out keeps its default. Turn clicks on for a
+            sensitive email only when its links are safe to send through
+            PostHog's click tracking. The template form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -319,6 +325,7 @@ class CodeEmailArgs(_RecipientArgs):
     from_: NotRequired[Optional[str]]
     reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
     capture_engagement: NotRequired[Optional[bool]]
+    sensitive: NotRequired[Optional[bool]]
     tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 
 
@@ -329,6 +336,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "from_",
         "reply_to",
         "capture_engagement",
+        "sensitive",
         "tracking",
     }
 )
@@ -445,11 +453,11 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
     reply_to = _addresses("reply_to", args["reply_to"]) if "reply_to" in args else []
     if reply_to:
         sender["reply_to"] = reply_to
-    if "capture_engagement" in args:
-        capture_engagement = args["capture_engagement"]
-        if not isinstance(capture_engagement, bool):
-            raise TypeError("capture_engagement must be True or False.")
-        sender["capture_engagement"] = capture_engagement
+    for flag in ("capture_engagement", "sensitive"):
+        if flag in args:
+            if not isinstance(args[flag], bool):
+                raise TypeError(f"{flag} must be True or False.")
+            sender[flag] = args[flag]
     if "tracking" in args:
         sender["tracking"] = _tracking(args["tracking"])
     return sender

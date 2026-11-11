@@ -892,6 +892,7 @@ attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+attribute posthog.emails.CodeEmailArgs.sensitive: NotRequired[Optional[bool]]
 attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]

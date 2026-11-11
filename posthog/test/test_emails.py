@@ -734,9 +734,15 @@ def capture_server() -> Iterator[_CaptureServer]:
 @pytest.mark.parametrize(
     "overrides, extra_body",
     [
-        pytest.param({}, {}, id="no_tracking_choice"),
+        pytest.param({}, {}, id="no_tracking_or_sensitive_choice"),
         pytest.param(
-            {"tracking": None, "capture_engagement": None}, {}, id="none_as_left_out"
+            {"tracking": None, "capture_engagement": None, "sensitive": None},
+            {},
+            id="none_as_left_out",
+        ),
+        pytest.param({"sensitive": True}, {"sensitive": True}, id="marked_sensitive"),
+        pytest.param(
+            {"sensitive": False}, {"sensitive": False}, id="marked_not_sensitive"
         ),
         pytest.param({"tracking": False}, {"tracking": False}, id="all_tracking_off"),
         pytest.param({"tracking": True}, {"tracking": True}, id="all_tracking_on"),
@@ -752,7 +758,7 @@ def capture_server() -> Iterator[_CaptureServer]:
         ),
     ],
 )
-def test_a_code_send_delivers_its_tracking_choice(
+def test_a_code_send_delivers_its_tracking_and_sensitive_choice(
     capture_server, overrides, extra_body
 ):
     host = f"http://127.0.0.1:{capture_server.server_port}"
@@ -865,7 +871,18 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
             },
             TypeError,
         ),
+        (
+            "sensitive_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "sensitive": False,
+            },
+            TypeError,
+        ),
         ("tracking_not_bool_or_dict", {"html": HTML, "tracking": "off"}, TypeError),
+        ("sensitive_not_bool", {"html": HTML, "sensitive": "yes"}, TypeError),
     ]
 )
 def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
