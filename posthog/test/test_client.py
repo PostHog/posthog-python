@@ -2597,6 +2597,15 @@ class TestClient(unittest.TestCase):
                 "rediss://user:secret@cache.example.com:6380/1?ttl=120",
                 "rediss://user:secret@cache.example.com:6380/1",
             ),
+            ("redis://[::1]:6379/0?ttl=120", "redis://[::1]:6379/0"),
+            (
+                "rediss://[2001:db8::1]:6380/1?ttl=120",
+                "rediss://[2001:db8::1]:6380/1",
+            ),
+            (
+                "redis://user:p%40ss@[::1]:6379/0?ttl=120",
+                "redis://user:p%40ss@[::1]:6379/0",
+            ),
         ]
     )
     def test_flag_fallback_cache_url_accepts_redis_schemes(
