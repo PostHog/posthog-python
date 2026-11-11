@@ -2,6 +2,7 @@
 
 import json
 
+import httpx
 import pytest
 
 import mcp.types as mcp_types
@@ -17,7 +18,25 @@ from posthog.test.mcp._helpers import (
 )
 
 
-def make_server(*, resource_error: bool = False, listing: str = "resources") -> Server:
+def _boom():
+    raise ValueError("boom")
+
+
+def _upstream_503():
+    request = httpx.Request("GET", "https://api.example.com/invoices/1")
+    httpx.Response(503, request=request).raise_for_status()
+
+
+def _wrapped_upstream_503():
+    try:
+        _upstream_503()
+    except httpx.HTTPStatusError as exc:
+        raise RuntimeError("invoice lookup failed") from exc
+
+
+def make_server(
+    *, resource_error: bool = False, listing: str = "resources", fail=_boom
+) -> Server:
     server = Server("test-lowlevel")
 
     @server.list_tools()
@@ -38,7 +57,7 @@ def make_server(*, resource_error: bool = False, listing: str = "resources") -> 
     async def call_tool(name, arguments):
         if name == "echo":
             return [mcp_types.TextContent(type="text", text=str(arguments.get("msg")))]
-        raise ValueError("boom")
+        fail()
 
     async def list_resources(_request):
         if listing == "error":
@@ -344,26 +363,45 @@ async def test_tool_call_success_captures_intent():
     assert "context" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
-async def test_tool_call_error_captured_from_is_error_result():
-    server = make_server()
+@pytest.mark.parametrize(
+    "fail, name, error_type, chain, status",
+    [
+        (_boom, "fail", "ValueError", ["ValueError"], None),
+        (_upstream_503, "fail", "HTTPStatusError", ["HTTPStatusError"], 503),
+        (
+            _wrapped_upstream_503,
+            "fail",
+            "RuntimeError",
+            ["RuntimeError", "HTTPStatusError"],
+            503,
+        ),
+        # Missing "msg" fails the SDK's input validation before the tool runs.
+        (_boom, "echo", "Error", [], None),
+    ],
+)
+async def test_raise_converted_to_is_error_result_carries_the_raised_exception(
+    fail, name, error_type, chain, status
+):
+    server = make_server(fail=fail)
     client = FakeClient()
     instrument(server, client)
+    await server.request_handlers[mcp_types.ListToolsRequest](None)
 
-    handler = server.request_handlers[mcp_types.CallToolRequest]
-    # "fail" is unlisted -> no validation -> handler raises -> isError result
-    result = await handler(
-        _call_request("fail", {"context": "trying a tool that errors"})
+    result = await server.request_handlers[mcp_types.CallToolRequest](
+        _call_request(name, {"context": "trying a tool that errors"})
     )
     await _flush()
 
     assert result.root.isError is True
-    calls = _events(client, "$mcp_tool_call")
-    assert calls and calls[0]["properties"]["$mcp_is_error"] is True
-    exceptions = _events(client, "$exception")
-    assert (
-        exceptions
-        and "boom" in exceptions[0]["properties"]["$exception_list"][0]["value"]
-    )
+    [call] = _events(client, "$mcp_tool_call")
+    assert call["properties"]["$mcp_is_error"] is True
+    assert call["properties"]["$mcp_error_type"] == error_type
+    assert call["properties"].get("$mcp_error_status") == status
+    [exception] = _events(client, "$exception")
+    exception_list = exception["properties"]["$exception_list"]
+    raised = [e for e in exception_list if e["type"] in chain]
+    assert [e["type"] for e in raised] == chain
+    assert all(e["stacktrace"]["frames"] for e in raised)
 
 
 async def test_initialize_emitted_once():

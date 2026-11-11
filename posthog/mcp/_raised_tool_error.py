@@ -1,13 +1,15 @@
-"""Recover the exception behind a standalone FastMCP ``isError`` tool result.
+"""Recover the exception behind an ``isError`` tool result.
 
-FastMCP's ``tools/call`` handler, the one we wrap, turns whatever its tool
-dispatch raised into ``CallToolResult(isError=True)``, keeping only the
-message text. Wrapping that dispatch on the server instance sees the exception
-first, and hands it to the enclosing handler through a context variable.
+Standalone FastMCP's ``tools/call`` handler, and the mcp 1.x low-level
+``@server.call_tool()`` decorator, turn whatever the tool raised into
+``CallToolResult(isError=True)``, keeping only the message text. A wrapper on
+the server instance sees the exception first, and hands it to the enclosing
+handler through a context variable.
 """
 
 from __future__ import annotations
 
+import sys
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -58,6 +60,24 @@ def wrap_tool_dispatch(server: Any) -> None:
 
     setattr(dispatch, _WRAPPED_FLAG, True)
     setattr(server, method, dispatch)
+
+
+def wrap_error_result(server: Any) -> None:
+    original = getattr(server, "_make_error_result", None)
+    if original is None or getattr(original, _WRAPPED_FLAG, False):
+        return
+
+    def make_error_result(error_message: str) -> Any:
+        # Input and output validation failures also land here from inside an
+        # except block, but with a prefixed message. Only the tool's own raise
+        # is passed through as its bare text.
+        error = sys.exc_info()[1]
+        if isinstance(error, Exception) and error_message == str(error):
+            _settle(server, error)
+        return original(error_message)
+
+    setattr(make_error_result, _WRAPPED_FLAG, True)
+    setattr(server, "_make_error_result", make_error_result)
 
 
 def _settle(server: Any, error: Optional[BaseException]) -> None:
