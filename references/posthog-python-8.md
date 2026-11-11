@@ -125,7 +125,7 @@ In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [
 ### `Client(...)`
 
 ```python
-Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
+Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 ```
 
 Initialize a new PostHog client instance.
@@ -158,8 +158,9 @@ Name | Type | Description | Default
 `app_host` | `Optional[str]` | Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. | `None`
 `email_request_timeout_seconds` | `float` | Timeout in seconds for each email send request. Defaults to 15. | `15`
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
+`migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They also win over an event's legacy property for the same key, such as `$cookieless_mode`, so pass per-event overrides of that key as `options`. | `None`
+`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
@@ -218,7 +219,7 @@ Name | Type | Description | Default
 `flags` |  | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request. | 
 `send_feature_flags` |  | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option set at any layer wins over its legacy `$` property, such as `$process_person_profile`, set at any layer. A `None` option counts as unset. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. | 
 
 **Examples:**
 
@@ -459,10 +460,10 @@ except Exception as e:
 emails: Emails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope. Sends go to `app_host`, or to the PostHog Cloud app host of
 `host`. `email_request_timeout_seconds` and `email_request_max_retries`
 configure each send. A disabled or shut-down client sends nothing. See
@@ -601,6 +602,9 @@ get_feature_flag_result(key: str, distinct_id: ID_TYPES, *, groups: Optional[Map
 Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
 depending on whether local evaluation is enabled and the flag can be locally evaluated.
 This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+When the flag was evaluated remotely and its config version 2 record is a complete experiment
+split (an experiment rule with a rule ID and a variant key), it also captures the
+`$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
 **Examples:**
 
@@ -1698,7 +1702,7 @@ Name | Type | Description | Default
 `client` | `Optional[Client]` | Optional `Client` instance. When provided, all events and exceptions are captured through this client rather than the global `posthog` module. Don't skip this if using a custom flag definition cache provider, and pass the custom `Client` instance here initialized with the custom provider so fork safety for that provider is handled correctly. | `None`
 `capture_exceptions` | `bool` | Whether to capture task exceptions via `capture_exception` (default `True`). | `True`
 `capture_task_lifecycle_events` | `bool` | Whether to emit lifecycle events of the task such as "started", "success", "failure" etc. (default `True`). | `True`
-`propagate_context` | `bool` | Whether to propagate PostHog context (distinct ID, session ID, tags) from the producer to the worker via task headers (default `True`). | `True`
+`propagate_context` | `bool` | Whether to propagate PostHog context (distinct ID, session ID, tags, context options) from the producer to the worker via task headers (default `True`). | `True`
 `task_filter` | `Optional[Callable[[Optional[str], dict[str, Any]], bool]]` | Optional callback `(task_name, task_properties) -> bool` expected to return `False` if a given task should not be tracked. | `None`
 
 **Functions:**
@@ -1843,7 +1847,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
+AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -1902,10 +1906,10 @@ unless the event, a context tag or `super_properties` sets either one.
 emails: AsyncEmails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope, and `posthog[async]`. Sends go to `app_host`, or to the PostHog
 Cloud app host of `host`. `email_request_timeout_seconds` and
 `email_request_max_retries` configure each send. A disabled or shut-down
@@ -3142,6 +3146,13 @@ To narrow the set of flags that get attached to a captured event, use the in-mem
 helpers `only` and `only_accessed`. To narrow the set of flags requested
 from the server in the first place, pass `flag_keys` to `Client.evaluate_flags`.
 
+Reading a flag sends `$feature_flag_called`, deduplicated as `is_enabled`
+describes. When the flag was evaluated remotely and its config version 2 record is
+a complete experiment split (an experiment rule with a rule ID and a variant key),
+the read also sends `$experiment_exposure`. The SDK sends one exposure per
+distinct ID, groups, flag, rule and variant. `send_feature_flag_events=False`
+suppresses both events.
+
 **Functions:**
 
 Name | Description
@@ -3876,12 +3887,12 @@ span.update_name(f"{request.method} {route.pattern}")
 ### `Emails`
 
 ```python
-Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None) -> None
+Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None) -> None
 ```
 
 Bases: `_EmailsBase`
 
-Sends transactional email from PostHog email templates.
+Sends transactional email from PostHog email templates or from content in your code.
 
 `host` is your PostHog app host. PostHog Cloud ingestion hosts map to the
 app host, so `us.i.posthog.com` sends to `us.posthog.com`. Any other
@@ -3891,7 +3902,8 @@ Each send retries network errors, rate limits and an unavailable service up
 to `max_retries` times, with the same idempotency key. Set
 `max_retries=0` when a job runner already retries the send. `timeout`
 is in seconds, per request. Pass `session` to send through your own
-`requests.Session`, for example a test double.
+`requests.Session`, for example a test double. `migrated_from`, such
+as `"resend"`, tells PostHog which provider your sends came from.
 
 **Functions:**
 
@@ -3899,7 +3911,7 @@ Name | Description
 ---- | -----------
 `close` | Close the HTTP connections this client opened. A `session` you passed in stays open.
 `get` | Read what happened to an email that `send` queued.
-`send` | Queue one email from a transactional email template.
+`send` | Queue one email, from a template in PostHog or from content in your code.
 
 **Attributes:**
 
@@ -3908,6 +3920,7 @@ Name | Type | Description
 `disabled` |  | 
 `host` |  | 
 `max_retries` |  | 
+`migrated_from` |  | 
 `secret_key` |  | 
 `timeout` |  | 
 
@@ -3973,6 +3986,12 @@ host = determine_app_host(host)
 max_retries = max_retries
 ```
 
+#### `posthog.emails.Emails.migrated_from`
+
+```python
+migrated_from = migrated_from
+```
+
 #### `posthog.emails.Emails.secret_key`
 
 ```python
@@ -3982,21 +4001,26 @@ secret_key = secret_key.strip() if isinstance(secret_key, str) else None
 #### `posthog.emails.Emails.send`
 
 ```python
-send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendEmailResult
+send(**kwargs: Any) -> SendEmailResult
 ```
 
-Queue one email from a transactional email template.
+Queue one email, from a template in PostHog or from content in your code.
+
+Pass exactly one form. The template form names a template made in
+PostHog with `template_id`. The code form names the email with
+`template_key` and passes `subject` and `html`, `text` or both:
+see `CodeEmailArgs`.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`to` | `str` | One recipient email address. | *required*
-`template_id` | `Union[str, UUID]` | The UUID of a template made transactional in PostHog. | *required*
-`template_data` | `Optional[Mapping[str, Any]]` | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | `None`
-`distinct_id` | `Optional[str]` | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | `None`
-`idempotency_key` | `Optional[str]` | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | `None`
-`max_retries` | `Optional[int]` | Overrides the client's maximum number of retries for this send. `0` turns retries off. | `None`
+`to` |  | One recipient email address. | 
+`template_id` |  | The UUID of a template made transactional in PostHog. | 
+`template_data` |  | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | 
+`distinct_id` |  | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
 
 **Returns:**
 
@@ -4020,6 +4044,13 @@ emails.send(
     template_data={"name": "Ada"},
     distinct_id="user_123",
     idempotency_key="welcome:user_123",
+)
+emails.send(
+    to="user@example.com",
+    template_key="password-reset",
+    subject="Reset your password",
+    html=rendered_html,
+    distinct_id="user_123",
 )
 ```
 
@@ -4207,4 +4238,113 @@ timestamp: NotRequired[Optional[Union[datetime, str]]]
 
 ```python
 uuid: NotRequired[Optional[Union[str, UUID]]]
+```
+
+### `CodeEmailArgs`
+
+Bases: `_RecipientArgs`
+
+A send of email content that your code rendered for one recipient, named by a key.
+
+The content goes out as is. To send a React email, render it to HTML in
+your app first.
+
+An optional field passed as `None` counts as left out.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`to` |  | One recipient email address. | 
+`template_key` |  | Names the email, so its metrics, logs and status group under it. Letters, digits, `-` and `_`, at most 400. | 
+`subject` |  | The subject line. | 
+`html` |  | The HTML body. Give `html`, `text` or both. | 
+`text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
+`from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
+`reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
+`capture_engagement` |  | Capture the email's opens and clicks as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`distinct_id` |  | The recipient's distinct ID in your product. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`capture_engagement` | `NotRequired[Optional[bool]]` | 
+`distinct_id` | `NotRequired[Optional[str]]` | 
+`from_` | `NotRequired[Optional[str]]` | 
+`html` | `NotRequired[Optional[str]]` | 
+`idempotency_key` | `NotRequired[Optional[str]]` | 
+`max_retries` | `NotRequired[Optional[int]]` | 
+`reply_to` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
+`subject` | `str` | 
+`template_key` | `str` | 
+`text` | `NotRequired[Optional[str]]` | 
+`to` | `str` | 
+
+#### `posthog.emails.CodeEmailArgs.capture_engagement`
+
+```python
+capture_engagement: NotRequired[Optional[bool]]
+```
+
+#### `posthog.emails.CodeEmailArgs.distinct_id`
+
+```python
+distinct_id: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.from_`
+
+```python
+from_: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.html`
+
+```python
+html: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.idempotency_key`
+
+```python
+idempotency_key: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.max_retries`
+
+```python
+max_retries: NotRequired[Optional[int]]
+```
+
+#### `posthog.emails.CodeEmailArgs.reply_to`
+
+```python
+reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+```
+
+#### `posthog.emails.CodeEmailArgs.subject`
+
+```python
+subject: str
+```
+
+#### `posthog.emails.CodeEmailArgs.template_key`
+
+```python
+template_key: str
+```
+
+#### `posthog.emails.CodeEmailArgs.text`
+
+```python
+text: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.to`
+
+```python
+to: str
 ```
