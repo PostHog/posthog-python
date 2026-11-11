@@ -172,7 +172,9 @@ def _with_client(
     # Read the built event in before_send: v1 layers flag properties inside _enqueue.
     def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append([message["event"], _flag_event_properties(message)])
-        return None
+        # Keep the event, so capture accepts it and returns its UUID as the real
+        # queue does; flag events dedupe only events that were accepted.
+        return message
 
     try:
         with (
