@@ -22,12 +22,17 @@ _DISPATCH_METHODS = ("call_tool", "_call_tool_middleware")
 
 @dataclass
 class RaisedToolError:
+    error: Optional[BaseException] = None
+
+
+@dataclass
+class _Slot:
     server: Any
     error: Optional[BaseException] = None
     open: bool = True
 
 
-_current: ContextVar[Optional[RaisedToolError]] = ContextVar(
+_current: ContextVar[Optional[_Slot]] = ContextVar(
     "posthog_mcp_raised_tool_error", default=None
 )
 
@@ -58,17 +63,21 @@ def wrap_tool_dispatch(server: Any) -> None:
 def _settle(server: Any, error: Optional[BaseException]) -> None:
     # Another server's dispatch, reached from inside a tool, must not write
     # its outcome onto this call, nor may a background task that outlives it.
-    raised = _current.get()
-    if raised is not None and raised.open and raised.server is server:
-        raised.error = error
+    slot = _current.get()
+    if slot is not None and slot.open and slot.server is server:
+        slot.error = error
 
 
 @contextmanager
 def raised_tool_error(server: Any) -> Iterator[RaisedToolError]:
-    raised = RaisedToolError(server)
-    token = _current.set(raised)
+    slot = _Slot(server)
+    raised = RaisedToolError()
+    token = _current.set(slot)
     try:
         yield raised
     finally:
-        raised.open = False
         _current.reset(token)
+        # A background task started by the tool keeps a copy of this context,
+        # so the slot outlives the call; it must not keep the traceback alive.
+        raised.error, slot.error = slot.error, None
+        slot.open = False

@@ -2,6 +2,11 @@
 before the handler we wrap returns. The failure must still carry what was raised
 (posthog-python#1223)."""
 
+import asyncio
+import gc
+import logging
+import weakref
+
 import pytest
 
 pytest.importorskip("fastmcp")
@@ -158,3 +163,44 @@ async def test_secrets_in_frame_source_lines_are_redacted():
     ]
     assert "db.example.com/app" in repr(frames)
     assert "hunter2" not in repr(frames)
+
+
+@pytest.fixture
+def logging_off():
+    # pytest's log capture keeps fastmcp's "Error calling tool" records, and
+    # their exc_info would keep the traceback alive on its own.
+    logging.disable(logging.CRITICAL)
+    yield
+    logging.disable(logging.NOTSET)
+
+
+async def test_a_background_task_does_not_keep_the_failure_alive(logging_off):
+    server = FastMCP("example-server")
+    release = asyncio.Event()
+    lingering = []
+    payload_refs = []
+
+    class Payload:
+        pass
+
+    @server.tool
+    async def fail() -> str:
+        payload = Payload()
+        payload_refs.append(weakref.ref(payload))
+        lingering.append(asyncio.get_running_loop().create_task(release.wait()))
+        raise RuntimeError("failed")
+
+    sink = FakeClient()
+    instrument(server, sink, MCPAnalyticsOptions())
+
+    async with Client(server) as client:
+        await client.call_tool("fail", {}, raise_on_error=False)
+    await flush_background()
+    gc.collect()
+
+    try:
+        assert not lingering[0].done()
+        assert payload_refs[0]() is None
+    finally:
+        release.set()
+        await lingering[0]
