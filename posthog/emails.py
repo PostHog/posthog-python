@@ -156,6 +156,17 @@ class EmailError(Exception):
     Branch on ``code``, PostHog's stable error code, or on ``name``, a coarse
     category of the failure. The message never contains the secret key or the
     request body.
+
+    Attributes:
+        name: A coarse category of the failure.
+        code: PostHog's stable error code.
+        message: What went wrong. It never contains the secret key or the request body.
+        status_code: The HTTP status of the response, or ``None`` when none arrived.
+        why: PostHog's explanation of the failure, when it gave one.
+        fix: What to change to fix it, when PostHog said.
+        docs_url: A docs page about the error, when PostHog gave one.
+        field: The request field the error is about, when there is one.
+        retry_after: Seconds to wait before retrying, when PostHog said.
     """
 
     def __init__(
@@ -192,7 +203,14 @@ class EmailWarning:
 
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is its message ID."""
+    """The queued email. ``id`` is its message ID.
+
+    Attributes:
+        id: The email's message ID.
+        replayed: ``True`` when the response says PostHog replayed an earlier send for
+            the same ``idempotency_key`` instead of sending again.
+        warnings: Warnings PostHog returned about the request.
+    """
 
     id: str
     replayed: bool = False
@@ -333,6 +351,13 @@ class EmailStatus:
     ``reason`` says why a failed email was not sent, such as
     ``provider_error`` or ``recipient_suppressed``, or gives the bounce type of
     a bounced email: ``hard``, ``soft`` or ``unknown``. It is ``None`` otherwise.
+
+    Attributes:
+        id: The email's message ID.
+        status: Where the email is now, one of the values above.
+        created_at: When PostHog queued the email.
+        status_at: When the email reached its current status.
+        reason: Why a failed email was not sent, or a bounced email's bounce type.
     """
 
     id: str

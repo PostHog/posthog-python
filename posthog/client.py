@@ -770,9 +770,8 @@ class Client(object):
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
-                payloads, and decrypted flag payloads. Example::
-
-                    posthog.Client(project_api_key, secret_key="phx_...")
+                payloads, and decrypted flag payloads. For example,
+                `posthog.Client(project_api_key, secret_key="phx_...")`.
 
             personal_api_key: Deprecated alias for ``secret_key``. Still honored
                 for backwards compatibility; prefer ``secret_key``, which also
@@ -2273,7 +2272,7 @@ class Client(object):
                 # Some code that might fail
                 pass
             except Exception as e:
-                posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+                posthog.capture_exception(e, distinct_id='user_distinct_id', properties=additional_properties)
             ```
 
         Category:
