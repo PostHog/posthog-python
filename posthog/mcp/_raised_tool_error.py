@@ -21,6 +21,10 @@ _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
 # `call_tool` and dispatches through `_call_tool_middleware`.
 _DISPATCH_METHODS = ("call_tool", "_call_tool_middleware")
 
+# The prefixes the mcp 1.x `@server.call_tool()` decorator puts on jsonschema
+# validation failures.
+_VALIDATION_PREFIXES = ("Input validation error: ", "Output validation error: ")
+
 
 @dataclass
 class RaisedToolError:
@@ -68,16 +72,30 @@ def wrap_error_result(server: Any) -> None:
         return
 
     def make_error_result(error_message: str) -> Any:
-        # Input and output validation failures also land here from inside an
-        # except block, but with a prefixed message. Only the catch-all around
-        # the tool call passes an exception's bare text.
         error = sys.exc_info()[1]
-        if isinstance(error, Exception) and error_message == str(error):
+        if isinstance(error, Exception) and _carries_bare_text(error, error_message):
             _settle(server, error)
         return original(error_message)
 
     setattr(make_error_result, _WRAPPED_FLAG, True)
     setattr(server, "_make_error_result", make_error_result)
+
+
+def _carries_bare_text(error: Exception, error_message: str) -> bool:
+    # Input and output validation failures also land here from inside an
+    # except block, with the validator's short message behind a prefix. Only
+    # the catch-all around the tool call passes an exception's bare text.
+    # Rendering a validation error walks the whole instance and schema, so
+    # those results are told apart before `str(error)` runs.
+    try:
+        detail = getattr(error, "message", None)
+        if isinstance(detail, str) and any(
+            error_message == prefix + detail for prefix in _VALIDATION_PREFIXES
+        ):
+            return False
+        return error_message == str(error)
+    except Exception:
+        return False
 
 
 def _settle(server: Any, error: Optional[BaseException]) -> None:

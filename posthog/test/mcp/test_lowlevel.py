@@ -363,24 +363,55 @@ async def test_tool_call_success_captures_intent():
     assert "context" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
+def _worded_like_validation():
+    raise ValueError("Input validation error: quota exceeded")
+
+
+def _nested(depth):
+    value = 0
+    for _ in range(depth):
+        value = [value]
+    return value
+
+
 @pytest.mark.parametrize(
-    "fail, name, error_type, chain, status",
+    "fail, name, payload, error_type, chain, status, response",
     [
-        (_boom, "fail", "ValueError", ["ValueError"], None),
-        (_upstream_503, "fail", "HTTPStatusError", ["HTTPStatusError"], 503),
+        (_boom, "fail", None, "ValueError", ["ValueError"], None, "boom"),
+        (
+            _upstream_503,
+            "fail",
+            None,
+            "HTTPStatusError",
+            ["HTTPStatusError"],
+            503,
+            "Server error '503 Service Unavailable'",
+        ),
         (
             _wrapped_upstream_503,
             "fail",
+            None,
             "RuntimeError",
             ["RuntimeError", "HTTPStatusError"],
             503,
+            "invoice lookup failed",
+        ),
+        (
+            _worded_like_validation,
+            "fail",
+            None,
+            "ValueError",
+            ["ValueError"],
+            None,
+            "Input validation error: quota exceeded",
         ),
         # Missing "msg" fails the SDK's input validation before the tool runs.
-        (_boom, "echo", "Error", [], None),
+        (_boom, "echo", None, "Error", [], None, "Input validation error"),
+        (_boom, "echo", _nested(400), "Error", [], None, "Input validation error"),
     ],
 )
 async def test_raise_converted_to_is_error_result_carries_the_raised_exception(
-    fail, name, error_type, chain, status
+    fail, name, payload, error_type, chain, status, response
 ):
     server = make_server(fail=fail)
     client = FakeClient()
@@ -388,11 +419,14 @@ async def test_raise_converted_to_is_error_result_carries_the_raised_exception(
     await server.request_handlers[mcp_types.ListToolsRequest](None)
 
     result = await server.request_handlers[mcp_types.CallToolRequest](
-        _call_request(name, {"context": "trying a tool that errors"})
+        _call_request(
+            name, {"context": "trying a tool that errors", "payload": payload}
+        )
     )
     await _flush()
 
     assert result.root.isError is True
+    assert result.root.content[0].text.startswith(response)
     [call] = _events(client, "$mcp_tool_call")
     assert call["properties"]["$mcp_is_error"] is True
     assert call["properties"]["$mcp_error_type"] == error_type
