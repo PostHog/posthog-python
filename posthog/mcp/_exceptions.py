@@ -10,7 +10,7 @@ same way as exceptions from any other PostHog SDK.
 
 from __future__ import annotations
 
-from typing import Any, Iterator, List, Optional
+from typing import Any, Iterator, List, Optional, Set
 
 from posthog.exception_utils import exceptions_from_error_tuple
 
@@ -62,7 +62,7 @@ def http_status(error: Any) -> Optional[int]:
 
 def _cause_chain(error: Any) -> Iterator[BaseException]:
     """The chain a traceback prints, capped like ``$exception_list``."""
-    seen = set()
+    seen: Set[int] = set()
     link = error
     while (
         isinstance(link, BaseException)
