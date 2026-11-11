@@ -65,3 +65,10 @@ def test_summaries_keep_the_whole_first_paragraph(pkg):
     generator.clean(cls)
     md = generator.entry(cls, "FeatureFlagEvaluations")
     assert "on the first access per (distinct_id, flag, value) tuple" in md
+
+
+@pytest.mark.parametrize("major, pin", [(7, '"posthog>=7,<8"'), (8, '"posthog>=8,<9"')])
+def test_getting_started_pins_the_install_to_the_page_major(major, pin):
+    text = generator.getting_started(major)
+    assert f"pip install {pin}" in text
+    assert "{major}" not in text and "{next_major}" not in text
