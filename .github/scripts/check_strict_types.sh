@@ -20,9 +20,11 @@ from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
     EvaluationItem,
+    EvaluationResult,
     NumericPassingRule,
     NumericScorerConfig,
     OfflineEvaluations,
+    ScorerComposition,
 )
 
 client = Posthog("phc_test")
@@ -73,6 +75,21 @@ async def offline_evaluation_types(
     async_experiment = await async_client.create_experiment(name="async run")
     await async_experiment.upload_result(item=item, scorer_version_id=boolean.current_version_id, value=False)
     _ = config
+    composition: ScorerComposition = {
+        "expression": "relevance",
+        "inputs": [{"alias": "relevance", "scorer_version_id": numeric.current_version_id}],
+    }
+    overall = sync_client.scorers.create(
+        name="Overall", kind="numeric", config=NumericScorerConfig(min=0, max=1),
+        calculation="composite", composition=composition,
+    )
+    valid: bool = await async_client.scorers.validate_composition(kind="numeric", composition=composition)
+    sync_client.scorers.list(calculation="composite", input_definition_id=numeric.id)
+    experiment.upload_results([
+        EvaluationResult(item=item, scorer_version_id=numeric.current_version_id, value=0.9),
+        EvaluationResult(item=item, scorer_version_id=overall.current_version_id, calculate=True),
+    ])
+    _ = valid
 PY
 
 cat > "$tmp/invalid_types.py" <<'PY'
