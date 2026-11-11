@@ -10,9 +10,9 @@ same way as exceptions from any other PostHog SDK.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, Iterator, List, Optional
 
-from posthog.exception_utils import exceptions_from_error_tuple, walk_exception_chain
+from posthog.exception_utils import exceptions_from_error_tuple
 
 from .types import ErrorProperties
 
@@ -39,6 +39,7 @@ def capture_exception(error: Any) -> ErrorProperties:
 
 
 _STATUS_ATTRIBUTES = ("status_code", "statusCode", "status")
+_MAX_CHAIN_LINKS = 50
 
 
 def http_status(error: Any) -> Optional[int]:
@@ -46,9 +47,7 @@ def http_status(error: Any) -> Optional[int]:
     one found walking the raised exception's cause chain inward, so a status the
     tool raised itself beats the one on the error it wrapped (httpx and requests
     keep theirs on ``response.status_code``)."""
-    if not isinstance(error, BaseException):
-        return None
-    for _, link, _ in walk_exception_chain((type(error), error, error.__traceback__)):
+    for link in _cause_chain(error):
         for holder in (link, _attribute(link, "response")):
             for name in _STATUS_ATTRIBUTES:
                 status = _attribute(holder, name)
@@ -59,6 +58,23 @@ def http_status(error: Any) -> Optional[int]:
                 ):
                     return int(status)
     return None
+
+
+def _cause_chain(error: Any) -> Iterator[BaseException]:
+    """The chain a traceback prints, capped like ``$exception_list``."""
+    seen = set()
+    link = error
+    while (
+        isinstance(link, BaseException)
+        and id(link) not in seen
+        and len(seen) < _MAX_CHAIN_LINKS
+    ):
+        seen.add(id(link))
+        yield link
+        if link.__cause__ is not None:
+            link = link.__cause__
+        else:
+            link = None if link.__suppress_context__ else link.__context__
 
 
 def _attribute(value: Any, name: str) -> Any:

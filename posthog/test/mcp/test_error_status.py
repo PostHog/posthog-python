@@ -58,6 +58,20 @@ def _raised_from_none(outer, inner):
         return error
 
 
+def _cause_without_suppressed_context():
+    error = _raised_during(RuntimeError("lookup failed"), Failure(status=500))
+    error.__cause__ = Failure(status=404)
+    error.__suppress_context__ = False
+    return error
+
+
+def _chain_of(length, status):
+    error = Failure("innermost", status=status)
+    for _ in range(length - 1):
+        error = _raised_from(Failure("wrapper"), error)
+    return error
+
+
 class UnreadableResponse(Exception):
     @property
     def response(self):
@@ -94,6 +108,9 @@ def _cycle():
         (Failure(status_code="503"), None),
         (Failure(status_code=503.0), None),
         (Failure("no status here"), None),
+        (_cause_without_suppressed_context(), 404),
+        (_chain_of(50, 503), 503),
+        (_chain_of(51, 503), None),
         (_cycle(), None),
         (UnreadableResponse("failed"), None),
         ("upstream returned 503", None),
