@@ -84,6 +84,11 @@ class FeatureFlagEvaluationRuntime(str, Enum):
     ``ALL`` means the flag suits both client-side and server-side evaluation, so
     it matches either runtime. Inheriting from ``str`` keeps the members directly
     comparable to their ``"all"`` / ``"client"`` / ``"server"`` values.
+
+    Values:
+        ALL: The flag suits both client-side and server-side evaluation.
+        CLIENT: The flag is meant for client-side evaluation.
+        SERVER: The flag is meant for server-side evaluation.
     """
 
     ALL = "all"
@@ -278,6 +283,7 @@ class FeatureFlag:
         )
 
     def get_value(self) -> FlagValue:
+        """Return the variant for a multivariate flag, otherwise whether the flag is enabled."""
         return self.variant or self.enabled
 
     @classmethod
@@ -294,6 +300,7 @@ class FeatureFlag:
     def from_value_and_payload(
         cls, key: str, value: FlagValue, payload: Any
     ) -> "FeatureFlag":
+        """Build a flag from its value and payload. A string value is a variant, so the flag is enabled."""
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
         return cls(
             key=key,
@@ -389,13 +396,15 @@ def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
         if raw_metadata is None:
             metadata = LegacyFlagMetadata(payload=encoded_payload)
         else:
+            # A number or object value is its own payload; a payload the record also
+            # carries is ignored. A failed record reads as disabled, so it has no
+            # payload, even when the record carries one.
+            payload = encoded_payload
+            if payload is None and not failed:
+                payload = raw_metadata.get("payload")
             metadata = FlagMetadata(
                 id=_read_int(raw_metadata.get("id"), "metadata.id"),
-                # A number or object value is its own payload; a payload the record
-                # also carries is ignored.
-                payload=encoded_payload
-                if encoded_payload is not None
-                else raw_metadata.get("payload"),
+                payload=payload,
                 version=_read_int(raw_metadata.get("version"), "metadata.version"),
                 description=_read_typed(
                     raw_metadata.get("description", ""), "metadata.description", str
@@ -469,6 +478,10 @@ def _parse_older_record(cls: Type[_F], key: str, resp: Dict[str, Any]) -> _F:
     except _MalformedRecord as error:
         return _malformed_record(cls, key, str(error))
 
+    failed = resp.get("failed") is True
+    if failed and raw_metadata:
+        # A failed record has no payload, even when the record carries one.
+        raw_metadata = {**raw_metadata, "payload": None}
     flag = cls(
         key=key,
         # An older server always sends ``enabled``; a record without it keeps
@@ -478,7 +491,7 @@ def _parse_older_record(cls: Type[_F], key: str, resp: Dict[str, Any]) -> _F:
         reason=FlagReason.from_json(raw_reason),
         metadata=FlagMetadata.from_json(raw_metadata),
     )
-    return _set_private_fields(flag, _failed=resp.get("failed") is True)
+    return _set_private_fields(flag, _failed=failed)
 
 
 def _read_record_key(resp: Dict[str, Any]) -> None:
@@ -542,7 +555,12 @@ class FlagsResponse(TypedDict, total=False):
 
 
 class FlagsAndPayloads(TypedDict, total=True):
-    """Feature flag values and payloads keyed by feature flag key."""
+    """Feature flag values and payloads keyed by feature flag key.
+
+    Attributes:
+        featureFlags: Each flag's value, keyed by flag key.
+        featureFlagPayloads: Each flag's payload, keyed by flag key.
+    """
 
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]

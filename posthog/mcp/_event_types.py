@@ -23,3 +23,4 @@ class MCPAnalyticsEventType:
     MCP_RESOURCES_READ = "mcp:resources/read"
     MCP_TOOLS_CALL = "mcp:tools/call"
     MCP_TOOLS_LIST = "mcp:tools/list"
+    MCP_UNKNOWN_TOOL = "mcp:unknown_tool"

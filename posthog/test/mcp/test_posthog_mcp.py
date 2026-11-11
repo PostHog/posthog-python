@@ -269,6 +269,26 @@ def test_prepare_tool_list_injects_context_into_tool_objects(sdk_tool: bool) -> 
     assert "context" not in schema["properties"]
 
 
+# The spec's text, pinned on purpose: every SDK sends this exact string, and
+# importing the constant would make this test agree with any change to it.
+_CROSS_SDK_CONTEXT_DESCRIPTION = (
+    "A few words on why you are calling this tool, for the server developer's "
+    'analytics. Describe people and things by role, such as "a customer". Do not '
+    "quote the user or include names, emails, or other personal details."
+)
+
+
+def test_prepare_tool_list_advertises_the_cross_sdk_context_description():
+    client, _ = make_client()
+    tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
+
+    prepared = client.prepare_tool_list(tools)
+
+    assert prepared[0]["inputSchema"]["properties"]["context"]["description"] == (
+        _CROSS_SDK_CONTEXT_DESCRIPTION
+    )
+
+
 def test_prepare_tool_list_can_be_disabled():
     client, _ = make_client()
     tools = [{"name": "search", "inputSchema": {"type": "object", "properties": {}}}]
@@ -292,7 +312,7 @@ async def test_prepare_and_capture_model(options: dict[str, bool]) -> None:
     prepared_tools = client.prepare_tool_list(tools)
     schema = prepared_tools[0]["inputSchema"]
     assert ("llm_model" in schema["properties"]) == enabled
-    assert ("llm_model" in schema.get("required", [])) == enabled
+    assert "llm_model" not in schema.get("required", [])
 
     call = client.prepare_tool_call(
         "search",
@@ -746,3 +766,17 @@ async def test_capture_tool_call_records_prepared_conversation_and_session():
     props = _events(captured, "$mcp_tool_call")[0]["properties"]
     assert props["$mcp_conversation_id"] == prepared.conversation_id
     assert props["$session_id"] == prepared.session_id
+
+
+def test_capture_without_a_session_gets_a_fresh_one_per_call():
+    client, captured = make_client()
+
+    client.capture_tool_call("t")
+    client.capture_tool_call("t")
+    client.flush()
+
+    first, second = captured
+    session = first["properties"]["$session_id"]
+    assert session.startswith("ses_")
+    assert first["distinct_id"] == session
+    assert second["properties"]["$session_id"] != session

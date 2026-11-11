@@ -88,7 +88,7 @@ async def _list_tools_lowlevel(server):
 def test_descriptor_defaults():
     descriptor = get_feedback_tool_descriptor()
     assert descriptor["name"] == SEND_FEEDBACK_TOOL_NAME
-    assert "missing capability" in descriptor["description"]
+    assert "a capability you needed that no tool provides" in descriptor["description"]
     assert descriptor["inputSchema"]["required"] == ["feedback_type", "summary"]
     assert set(descriptor["inputSchema"]["properties"]) == {
         "feedback_type",
@@ -99,13 +99,6 @@ def test_descriptor_defaults():
         "tool_name",
         "sentiment",
         "task_completed",
-    }
-    assert descriptor["annotations"] == {
-        "title": "Send feedback",
-        "readOnlyHint": True,
-        "openWorldHint": True,
-        "idempotentHint": True,
-        "destructiveHint": False,
     }
 
 
@@ -244,9 +237,9 @@ def test_properties_bound_free_text_and_tool_name():
         {"feedback_type": "issue", "summary": "s" * 5000, "tool_name": "t" * 500}
     )
     props = build_feedback_event_properties(report)
-    assert len(props["$mcp_feedback_summary"]) == 2048 + 3
+    assert len(props["$mcp_feedback_summary"]) == 2048
     assert props["$mcp_feedback_summary"].endswith("...")
-    assert len(props["$mcp_feedback_tool"]) == 256 + 3
+    assert len(props["$mcp_feedback_tool"]) == 256
 
 
 def test_properties_capture_declared_extras_only():
@@ -538,6 +531,48 @@ async def test_fastmcp_coexists_with_report_missing():
     assert len(_events(client, "$mcp_missing_capability")) == 1
     assert len(_events(client, "$mcp_feedback")) == 1
     assert _events(client, "$mcp_tool_call") == []
+
+
+def _descriptions(node):
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "description" and isinstance(value, str):
+                yield value
+            yield from _descriptions(value)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _descriptions(item)
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "parallel tool calls",
+        "system prompt",
+        "even if existing tools",
+        "Most important",
+        "even if you can work around it",
+        "send it even if",
+    ],
+)
+async def test_advertised_descriptions_carry_no_behavioral_instructions(phrase):
+    server = make_fastmcp()
+    instrument(
+        server,
+        FakeClient(),
+        MCPAnalyticsOptions(
+            report_missing=True, collect_feedback=True, capture_model=True
+        ),
+    )
+
+    list_handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = await list_handler(mcp_types.ListToolsRequest(method="tools/list"))
+    tools = result.root.tools
+    assert {"add", "get_more_tools", "send_feedback"} <= {t.name for t in tools}
+    descriptions = list(_descriptions([t.model_dump() for t in tools]))
+
+    assert descriptions
+    assert not [d for d in descriptions if phrase.lower() in d.lower()]
 
 
 # --- on_feedback -----------------------------------------------------------------

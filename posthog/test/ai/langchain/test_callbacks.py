@@ -1736,6 +1736,93 @@ def test_anthropic_provider_subtracts_cache_tokens(mock_client):
     assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
 
+def test_chat_anthropic_invoke_does_not_subtract_cache_tokens_twice(mock_client):
+    """ChatAnthropic.invoke puts the raw API usage, whose input_tokens already
+    exclude the cache, in response_metadata next to the standard usage_metadata."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={"ls_provider": "anthropic", "ls_model_name": "claude-sonnet-4-5"},
+    )
+
+    # The message ChatAnthropic.invoke returns for a cached prompt
+    message = AIMessage(
+        content="Response",
+        response_metadata={
+            "id": "msg_1",
+            "model": "claude-sonnet-4-5",
+            "stop_reason": "end_turn",
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 7,
+                "cache_creation_input_tokens": 100,
+                "cache_read_input_tokens": 1000,
+            },
+            "model_provider": "anthropic",
+        },
+        usage_metadata={
+            "input_tokens": 1110,
+            "output_tokens": 7,
+            "total_tokens": 1117,
+            "input_token_details": {"cache_read": 1000, "cache_creation": 100},
+        },
+    )
+    response = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture_ai.call_args_list[0][1]["properties"]
+    assert props["$ai_input_tokens"] == 10
+    assert props["$ai_output_tokens"] == 7
+    assert props["$ai_cache_read_input_tokens"] == 1000
+    assert props["$ai_cache_creation_input_tokens"] == 100
+
+
+def test_claude_on_vertex_subtracts_cache_tokens(mock_client):
+    """ChatAnthropicVertex reports provider "anthropicvertex" and a bare Claude
+    model name. Its usage_metadata input_tokens include the cache, like
+    ChatAnthropic's, and PostHog prices claude-* models Anthropic-style."""
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata={
+            "ls_provider": "anthropicvertex",
+            "ls_model_name": "claude-sonnet-4-5@20250929",
+        },
+    )
+    message = AIMessage(
+        content="Response",
+        usage_metadata={
+            "input_tokens": 1110,
+            "output_tokens": 7,
+            "total_tokens": 1117,
+            "input_token_details": {"cache_read": 1000, "cache_creation": 100},
+        },
+    )
+    response = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    props = mock_client.capture_ai.call_args_list[0][1]["properties"]
+    assert props["$ai_input_tokens"] == 10
+    assert props["$ai_cache_read_input_tokens"] == 1000
+    assert props["$ai_cache_creation_input_tokens"] == 100
+
+
 def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
     """Test that Anthropic provider correctly subtracts cache write tokens from input tokens."""
     from langchain_core.outputs import LLMResult, ChatGeneration
@@ -2731,6 +2818,26 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     span_props = span_calls[0][1]["properties"]
     assert span_props["$exception_event_id"] == "exception-uuid-456"
     assert span_props["$ai_error"] == "ValueError: test error"
+
+
+def test_exception_autocapture_absent_on_client_still_sends_the_span():
+    """A client without the autocapture setting, such as AsyncPosthog, still gets the failed span."""
+    mock_client = MagicMock(spec=["capture_ai", "capture_exception", "privacy_mode"])
+    mock_client.privacy_mode = False
+
+    def failing_span(_):
+        raise ValueError("test error")
+
+    callbacks = [CallbackHandler(mock_client)]
+    with pytest.raises(ValueError):
+        RunnableLambda(failing_span).invoke({}, config={"callbacks": callbacks})
+
+    assert mock_client.capture_exception.call_count == 0
+    assert mock_client.capture_ai.call_count == 1
+    span_props = mock_client.capture_ai.call_args[1]["properties"]
+    assert span_props["$ai_is_error"] is True
+    assert span_props["$ai_error"] == "ValueError: test error"
+    assert "$exception_event_id" not in span_props
 
 
 @pytest.mark.parametrize(

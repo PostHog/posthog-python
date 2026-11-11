@@ -800,6 +800,7 @@ class Client(object):
         app_host: Optional[str] = None,
         email_request_timeout_seconds: float = 15,
         email_request_max_retries: int = 2,
+        migrated_from: Optional[str] = None,
     ):
         """
         Initialize a new PostHog client instance.
@@ -836,9 +837,8 @@ class Client(object):
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
-                payloads, and decrypted flag payloads. Example::
-
-                    posthog.Client(project_api_key, secret_key="phx_...")
+                payloads, and decrypted flag payloads. For example,
+                `posthog.Client(project_api_key, secret_key="phx_...")`.
 
             personal_api_key: Deprecated alias for ``secret_key``. Still honored
                 for backwards compatibility; prefer ``secret_key``, which also
@@ -867,6 +867,8 @@ class Client(object):
             email_request_max_retries: Number of retries for an email send after a
                 network error, a rate limit, or an unavailable service. Defaults to 2.
                 Set to 0 when a job runner already retries the send.
+            migrated_from: The email provider you moved from, such as
+                ``"resend"``. ``emails`` sends it with every request.
             super_properties: Properties for every captured event. They fill
                 only keys the event leaves unset, before ``before_send`` runs.
                 ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill
@@ -1178,10 +1180,13 @@ class Client(object):
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
-        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        _validate_options(
+            email_request_timeout_seconds, email_request_max_retries, migrated_from
+        )
         self.app_host = app_host
         self.email_request_timeout_seconds = email_request_timeout_seconds
         self.email_request_max_retries = email_request_max_retries
+        self.migrated_from = migrated_from
         if debug:
             # Ensures that debug level messages are logged when debug mode is on.
             # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
@@ -1347,10 +1352,10 @@ class Client(object):
     @property
     def emails(self) -> Emails:
         """
-        Send transactional email from PostHog email templates, and read the
-        status of each email sent with ``get``.
+        Send transactional email from PostHog email templates or from content
+        in your code, and read the status of each email sent with ``get``.
 
-        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        Needs ``secret_key``, a project secret API key with the ``transactional_email:write``
         scope. Sends go to ``app_host``, or to the PostHog Cloud app host of
         ``host``. ``email_request_timeout_seconds`` and ``email_request_max_retries``
         configure each send. A disabled or shut-down client sends nothing. See
@@ -1376,6 +1381,7 @@ class Client(object):
                 app_host=self.app_host,
                 timeout=self.email_request_timeout_seconds,
                 max_retries=self.email_request_max_retries,
+                migrated_from=self.migrated_from,
             )
         return self._emails
 
@@ -2427,7 +2433,7 @@ class Client(object):
                 # Some code that might fail
                 pass
             except Exception as e:
-                posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+                posthog.capture_exception(e, distinct_id='user_distinct_id', properties=additional_properties)
             ```
 
         Category:
@@ -3734,6 +3740,8 @@ class Client(object):
         unresolvable: Dict[str, Tuple[UnresolvedFlagReason, str]] = {}
         for flag in snapshot["flags"]:
             try:
+                if flag.get("evaluation_runtime") == "client":
+                    continue
                 key = flag["key"]
                 reason = _get_definition_unresolved_reason(
                     flag,

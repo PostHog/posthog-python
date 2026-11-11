@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
     "posthog",
-    "litellm==1.88.6",
+    "litellm==1.100.4",
 ]
 
 [tool.uv.sources]

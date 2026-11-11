@@ -157,3 +157,59 @@ def test_streaming_thinking_deltas_accumulate():
             ],
         }
     ]
+
+
+def test_response_usage_maps_thinking_tokens_to_reasoning_tokens():
+    from types import SimpleNamespace
+
+    from posthog.ai.anthropic.anthropic_converter import (
+        extract_anthropic_usage_from_response,
+    )
+
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=50,
+            output_tokens_details=SimpleNamespace(thinking_tokens=30),
+        ),
+        content=[],
+    )
+    usage = extract_anthropic_usage_from_response(response)
+    assert usage["output_tokens"] == 50
+    assert usage["reasoning_tokens"] == 30
+
+
+def test_response_usage_null_output_tokens_details_is_absent():
+    from types import SimpleNamespace
+
+    from posthog.ai.anthropic.anthropic_converter import (
+        extract_anthropic_usage_from_response,
+    )
+
+    response = SimpleNamespace(
+        usage=SimpleNamespace(
+            input_tokens=10, output_tokens=50, output_tokens_details=None
+        ),
+        content=[],
+    )
+    assert "reasoning_tokens" not in extract_anthropic_usage_from_response(response)
+
+
+def test_stream_message_delta_thinking_tokens_not_double_counted():
+    from types import SimpleNamespace
+
+    from posthog.ai.anthropic._anthropic_stream import _AnthropicStreamAccumulator
+
+    acc = _AnthropicStreamAccumulator()
+    for output, thinking in [(20, 10), (50, 30)]:
+        acc.consume(
+            SimpleNamespace(
+                type="message_delta",
+                usage=SimpleNamespace(
+                    output_tokens=output,
+                    output_tokens_details=SimpleNamespace(thinking_tokens=thinking),
+                ),
+            )
+        )
+    assert acc.usage_stats["output_tokens"] == 50
+    assert acc.usage_stats["reasoning_tokens"] == 30

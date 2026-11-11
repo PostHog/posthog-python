@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 import posthog
+from posthog.async_client import AsyncPosthog
 from posthog.client import Client
 from posthog.contexts import (
     get_context_options,
@@ -228,6 +229,21 @@ class TestContexts(unittest.TestCase):
             client.shutdown()
 
         client.capture_exception.assert_not_called()
+
+    def test_new_context_with_async_client_defaults_to_no_exception_capture(self):
+        client = AsyncPosthog("phc_test", disabled=True)
+        client.capture_exception = MagicMock()
+
+        with self.assertRaises(RuntimeError):
+            with new_context(client=client):
+                raise RuntimeError("Context exception")
+        client.capture_exception.assert_not_called()
+
+        test_exception = RuntimeError("Context exception")
+        with self.assertRaises(RuntimeError):
+            with new_context(client=client, capture_exceptions=True):
+                raise test_exception
+        client.capture_exception.assert_called_once_with(test_exception)
 
     def test_identify_context(self):
         with new_context(fresh=True):

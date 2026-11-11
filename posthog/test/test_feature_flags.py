@@ -1192,6 +1192,78 @@ class TestLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(patch_flags.call_count, 1)
 
+    @parameterized.expand(
+        [
+            ("enrollment not passed", {}, 0, "flags-fallback-value", 1, False),
+            (
+                "enrolled",
+                {"$feature_enrollment/beta-feature": "true"},
+                0,
+                True,
+                0,
+                False,
+            ),
+            (
+                "opted out",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "not a true value",
+                {"$feature_enrollment/beta-feature": 1},
+                100,
+                False,
+                0,
+                False,
+            ),
+            (
+                "group flag",
+                {"$feature_enrollment/beta-feature": False},
+                100,
+                "flags-fallback-value",
+                1,
+                True,
+            ),
+        ]
+    )
+    def test_feature_enrollment_flag(
+        self, _name, person_properties, rollout, expected, flags_calls, group
+    ):
+        client = Client(FAKE_TEST_API_KEY, secret_key="test")
+        client.feature_flags = [
+            {
+                "id": 1,
+                "key": "beta-feature",
+                "active": True,
+                "filters": {
+                    "groups": [{"properties": [], "rollout_percentage": rollout}],
+                    "feature_enrollment": True,
+                    "aggregation_group_type_index": 0 if group else None,
+                },
+            }
+        ]
+        client.group_type_mapping = {"0": "company"}
+        with mock.patch("posthog.client.flags") as patch_flags:
+            patch_flags.return_value = {
+                "featureFlags": {"beta-feature": "flags-fallback-value"}
+            }
+            value = client.get_feature_flag(
+                "beta-feature",
+                "distinct_id",
+                person_properties=person_properties,
+                groups={"company": "acme"} if group else None,
+                group_properties={
+                    "company": {"$feature_enrollment/beta-feature": "true"}
+                }
+                if group
+                else None,
+            )
+
+        self.assertEqual((value, patch_flags.call_count), (expected, flags_calls))
+
     @mock.patch.object(Client, "capture")
     @mock.patch("posthog.client.flags")
     def test_get_all_flags_with_fallback(self, patch_flags, patch_capture):
@@ -7174,6 +7246,40 @@ class TestRelativeDateParsing(unittest.TestCase):
             assert relative_date_parse_for_feature_flag_matching(
                 "1y"
             ) == now - relativedelta(years=1)
+
+    def test_month_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2025-03-31T12:00:00Z", "2m", (2025, 1, 28)),
+            ("2024-03-31T12:00:00Z", "2m", (2024, 1, 29)),
+            ("2025-05-31T12:00:00Z", "2m", (2025, 3, 30)),
+            ("2025-05-31T12:00:00Z", "4m", (2025, 1, 28)),
+            ("2025-01-31T12:00:00Z", "11m", (2024, 2, 29)),
+            ("2025-03-30T12:00:00Z", "13m", (2024, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_year_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2024-02-29T12:00:00Z", "4y", (2020, 2, 28)),
+            ("2024-02-29T12:00:00Z", "2y", (2022, 2, 28)),
+            ("2024-03-31T12:00:00Z", "4y", (2020, 3, 31)),
+            ("2024-02-28T12:00:00Z", "4y", (2020, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_month_and_year_parsing_with_zero_keeps_the_date(self):
+        with freeze_time("2024-02-29T12:00:00Z"):
+            now = datetime.datetime.now(datetime.timezone.utc)
+            assert relative_date_parse_for_feature_flag_matching("0m") == now
+            assert relative_date_parse_for_feature_flag_matching("0y") == now
 
     def test_year_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):

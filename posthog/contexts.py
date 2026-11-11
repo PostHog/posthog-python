@@ -184,7 +184,7 @@ def _get_active_span_context() -> Dict[str, Optional[str]]:
 
 def _default_capture_exceptions(client: Optional["Client"] = None) -> bool:
     if client is not None:
-        return client.enable_exception_autocapture
+        return getattr(client, "enable_exception_autocapture", False)
 
     from . import default_client, enable_exception_autocapture
 

@@ -58,7 +58,7 @@ def get_weather(latitude: float, longitude: float, location_name: str) -> str:
 
 
 message = client.messages.create(
-    model="claude-sonnet-4-5-20250929",
+    model="claude-sonnet-5-5",
     max_tokens=1024,
     tools=tools,
     messages=[{"role": "user", "content": "What's the weather like in San Francisco?"}],

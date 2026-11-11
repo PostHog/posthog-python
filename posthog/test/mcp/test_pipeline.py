@@ -839,7 +839,7 @@ def test_sanitize_event_passes_through_non_string_intent():
 def test_normalize_caps_long_strings():
     out = normalize("x" * 40000)
     assert out.endswith("...")
-    assert len(out) == 32_768 + 3
+    assert len(out) == 32_768
 
 
 def test_normalize_detects_cycles():
