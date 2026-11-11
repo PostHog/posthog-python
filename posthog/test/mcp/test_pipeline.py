@@ -73,6 +73,90 @@ def test_sanitize_redacts_sensitive_keys():
     assert out["safe"] == "keep"
 
 
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(
+            '{"user":"ada","password":"hunter2"}',
+            '{"user":"ada","password":"[redacted]"}',
+            id="string",
+        ),
+        pytest.param(
+            '{\n  "Password" : "hun\\"ter2",\n  "n": 1\n}',
+            '{\n  "Password" : "[redacted]",\n  "n": 1\n}',
+            id="escaped quote and spacing",
+        ),
+        pytest.param('{"api_key":12345}', '{"api_key":"[redacted]"}', id="number"),
+        pytest.param(
+            '{"access-token":true}', '{"access-token":"[redacted]"}', id="boolean"
+        ),
+        pytest.param(
+            '{"refresh_token":"abcdefgh',
+            '{"refresh_token":"[redacted]"',
+            id="cut off at the end of the text",
+        ),
+        pytest.param(
+            '{"private_key":"abc\\',
+            '{"private_key":"[redacted]"',
+            id="cut off after an escape",
+        ),
+        pytest.param(
+            '{"Authorization":["Bearer x"]}',
+            '{"Authorization":"[redacted]"}',
+            id="array",
+        ),
+        pytest.param(
+            '{"cookie": [\n  "a=1",\n  "b=2"\n]}',
+            '{"cookie": "[redacted]"}',
+            id="indented array",
+        ),
+        pytest.param(
+            '{"set-cookie":["a=1","b=2',
+            '{"set-cookie":"[redacted]"',
+            id="array cut off",
+        ),
+        pytest.param(
+            'retry failed: "token": "abc"',
+            'retry failed: "token": "[redacted]"',
+            id="inside prose",
+        ),
+        pytest.param(
+            '"token": "abc\nnext "line"',
+            '"token": "[redacted]"\nnext "line"',
+            id="unclosed in prose stops at the line",
+        ),
+        pytest.param(
+            '{"pass\\u0077ord":"hunter2"}',
+            '{"pass\\u0077ord":"[redacted]"}',
+            id="escaped key",
+        ),
+        pytest.param(
+            '        credentials = {"password": "hunter2", "account": "reader"}',
+            '        credentials = {"password": "[redacted]", "account": "reader"}',
+            id="source line",
+        ),
+        pytest.param(
+            '{"password_hint":"pet"}',
+            '{"password_hint":"pet"}',
+            id="key only contains a sensitive word",
+        ),
+        pytest.param('{"token":null}', '{"token":null}', id="null"),
+        pytest.param(
+            '{"secret":{"v":"x"}}',
+            '{"secret":{"v":"x"}}',
+            id="out of scope: nested object",
+        ),
+        pytest.param(
+            '{"body":"{\\"password\\":\\"x\\"}"}',
+            '{"body":"{\\"password\\":\\"x\\"}"}',
+            id="out of scope: JSON inside a JSON string",
+        ),
+    ],
+)
+def test_sanitize_redacts_sensitive_json_members_inside_strings(value, expected):
+    assert sanitize_captured_value(value) == expected
+
+
 def test_sanitize_redacts_large_base64():
     blob = "A" * 11000
     assert sanitize_captured_value(blob).startswith("[binary data redacted")

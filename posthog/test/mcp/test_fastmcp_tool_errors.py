@@ -146,7 +146,8 @@ async def test_secrets_in_frame_source_lines_are_redacted():
     @server.tool
     def fail() -> str:
         dsn = "postgres://admin:hunter2@db.example.com/app"
-        raise RuntimeError(f"connect failed for {dsn.rsplit('@')[-1]}")
+        credentials = {"password": "swordfish", "account": "reader"}
+        raise RuntimeError(f"connect failed for {credentials['account']}@{dsn[-6:]}")
 
     sink = FakeClient()
     instrument(server, sink, MCPAnalyticsOptions())
@@ -162,7 +163,9 @@ async def test_secrets_in_frame_source_lines_are_redacted():
         for frame in entry["stacktrace"]["frames"]
     ]
     assert "db.example.com/app" in repr(frames)
+    assert '"account": "reader"' in repr(frames)
     assert "hunter2" not in repr(frames)
+    assert "swordfish" not in repr(frames)
 
 
 @pytest.fixture

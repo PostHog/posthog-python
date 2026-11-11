@@ -10,6 +10,7 @@ runs later in the pipeline) but before truncation.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
@@ -30,6 +31,22 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"access[-_]?token|refresh[-_]?token|token|password|secret|client[-_]?secret|"
     r"private[-_]?key)$",
     re.IGNORECASE,
+)
+
+# A tool that returns structuredContent also returns it as JSON text, where a
+# credential is a member inside a string rather than a dict key. A JSON string
+# never holds a raw newline, so one cut off by truncation ends at the line or
+# the text instead of swallowing prose up to the next quote. Values that nest
+# objects, and JSON inside a JSON string, are out of scope. Same pattern as
+# posthog-go's jsonMemberPattern and posthog-rs's JSON_MEMBER.
+_JSON_STRING = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
+_JSON_SCALAR = _JSON_STRING + r"|-?\d[\d.eE+-]*|true|false"
+_JSON_MEMBER_PATTERN = re.compile(
+    r'("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:'
+    + _JSON_SCALAR
+    + r"|\[(?:\s*(?:"
+    + _JSON_SCALAR
+    + r"|null)\s*,?)*\s*(?:\]|$))"
 )
 
 # No leading `\b`: a word boundary needs a non-word character before the scheme,
@@ -442,7 +459,30 @@ def _redact_credentials(value: str) -> str:
     entropy detector scans. Running the URL pass last loses nothing — it only
     redacts or percent-encodes, so it never exposes a credential the detectors
     could have matched."""
+    value = _redact_json_members(value)
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
+def _redact_json_members(value: str) -> str:
+    if '"' not in value:
+        return value
+    return _JSON_MEMBER_PATTERN.sub(_redacted_json_member, value)
+
+
+def _redacted_json_member(member: "re.Match[str]") -> str:
+    if _should_redact_key(_decoded_json_key(member.group(2))):
+        return f'{member.group(1)}"{_REDACTED_VALUE}"'
+    return member.group(0)
+
+
+def _decoded_json_key(raw: str) -> str:
+    if "\\" not in raw:
+        return raw
+    try:
+        decoded = json.loads(f'"{raw}"')
+    except ValueError:
+        return raw
+    return decoded if isinstance(decoded, str) else raw
 
 
 def sanitize_free_text(value: Any) -> Any:
