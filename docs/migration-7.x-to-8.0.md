@@ -176,9 +176,9 @@ The SDK moves them out of `properties` for you.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
 - Identify-style events default to person processing on. These are `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set` and `$set_once`, whether `alias`, `group_identify`, `set`, `set_once`, `capture` or `capture_ai` sends them. The SDK sets `process_person_profile: True` on them unless the call sets the `process_person_profile` option or a `$process_person_profile` property. PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning, and ignores the person update of `$set` and `$set_once`.
   - The call's own value wins over context options and tags, `super_options` and `super_properties`, so a `False` set there never reaches these events. In 7.x, `$process_person_profile: False` in `super_properties` reached them too.
-  - When the call sets only the `$process_person_profile` property, the SDK moves it into the option before `before_send` runs. A `None` option or property counts as unset here, so the event gets `True`.
+  - When the call sets only the `$process_person_profile` property, the SDK moves it into the option. A `None` option or property counts as unset here, so the event gets `True`.
   - An event whose distinct ID the SDK generated keeps `process_person_profile: False`.
-  - `before_send` sees the value and can change it. A hook that builds an identify-style event, or renames an event to one, must set the option itself.
+  - `before_send` sees the value and can change it. The SDK first removes any `$process_person_profile` property from these events, including one from a context tag or `super_properties`, so the hook sees only the option. A hook that builds an identify-style event, or renames an event to one, must set the option itself.
 
 ## Tracing headers
 

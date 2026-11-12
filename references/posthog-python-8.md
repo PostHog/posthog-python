@@ -160,7 +160,7 @@ Name | Type | Description | Default
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
 `migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. | `None`
+`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, which default it to `True`. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
@@ -1043,7 +1043,9 @@ Set a capture option for every event captured within the current context.
 Context options fill options an event leaves unset, before
 `before_send` runs, so the hook sees them. They override
 `super_options`. An event's own `options` override them, and
-`before_send` can change them.
+`before_send` can change them. They never set
+`process_person_profile` on identify-style events, such as
+`$identify` or `$set`, which default it to `True`.
 
 **Parameters:**
 
@@ -2215,7 +2217,9 @@ Set a capture option for every event captured within the current context.
 
 Context options fill options an event leaves unset, before `before_send`
 runs, so the hook sees them. They override `super_options`. An event's
-own `options` override them, and `before_send` can change them.
+own `options` override them, and `before_send` can change them. They
+never set `process_person_profile` on identify-style events, such as
+`$identify` or `$set`, which default it to `True`.
 
 **Parameters:**
 
