@@ -185,6 +185,7 @@ The SDK moves them out of `properties` for you.
   - When the call sets only the `$process_person_profile` property, the SDK moves it into the option. A `None` option or property counts as unset here, so the event gets `True`.
   - An event whose distinct ID the SDK generated gets no default: context options and `super_options` still fill it, then the personless `process_person_profile: False`.
   - `before_send` sees the value and can change it. The SDK first removes any `$process_person_profile` property from these events, including one from a context tag or `super_properties`, so the hook sees only the option. A hook that builds an identify-style event, or renames an event to one, must set the option itself.
+  - To send one of these events without person processing, set `process_person_profile: False` on the call or in `before_send`, or turn off person processing for the project in PostHog.
 
 ## Tracing headers
 
