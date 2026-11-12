@@ -323,7 +323,7 @@ with new_context():
     set_context_session(request.get_header("X-POSTHOG-SESSION-ID"))
 ```
 
-> **Using PostHog on your frontend too?** The JavaScript Web SDK generates a session ID for you. Configure [`tracing_headers`](https://posthog.com/docs/libraries/js/reference#add-tracing-headers) for your backend hostname to add the session and distinct ID headers to browser requests. You then extract the header in your request handler. The Django middleware does this for you.
+> **Using PostHog on your frontend too?** The JavaScript Web SDK generates a session ID for you. Configure [`tracing_headers`](https://posthog.com/docs/libraries/js/config#tracing-headers) for your backend hostname to add the session and distinct ID headers to browser requests. You then extract the header in your request handler. The Django middleware does this for you.
 
 A context with a session gives you two things:
 
