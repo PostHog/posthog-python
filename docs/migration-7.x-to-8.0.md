@@ -196,7 +196,7 @@ The SDK sets `process_person_profile: True` on them unless the call sets the `pr
 - **`before_send`.** The hook sees the value and can change it. The SDK first removes any `$process_person_profile` property from these events, including one from a context tag or `super_properties`, so the hook sees only the option.
 - **Built events.** A hook that builds an identify-style event, or renames an event to one, must set the option itself.
 
-To keep one of these events personless, set `process_person_profile: False` on the call or in `before_send`.
+To keep one of these events personless, set `process_person_profile: False` on the call or in `before_send`, or turn off person processing for the project in PostHog.
 
 ### Check event IDs
 
