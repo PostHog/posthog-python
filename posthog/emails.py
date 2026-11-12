@@ -920,6 +920,16 @@ class Emails(_EmailsBase):
             prepared.max_retries,
         )
 
+    def _queue(
+        self, prepared: _PreparedSend, not_done: str, key_needed: str
+    ) -> SendEmailResult:
+        # posthog.push sends through this, so a push gets the same host, key, timeout and retries.
+        finish = self._start(not_done)
+        try:
+            return self._deliver(prepared, self._secret_key(key_needed))
+        finally:
+            finish()
+
     def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
 
@@ -1104,6 +1114,15 @@ class AsyncEmails(_EmailsBase):
             prepared.max_retries,
         )
 
+    async def _queue(
+        self, prepared: _PreparedSend, not_done: str, key_needed: str
+    ) -> SendEmailResult:
+        finish = self._start(not_done)
+        try:
+            return await self._deliver(prepared, self._secret_key(key_needed))
+        finally:
+            finish()
+
     async def get(self, message_id: Union[str, UUID]) -> EmailStatus:
         """Read what happened to an email that :meth:`send` queued.
 
@@ -1234,7 +1253,7 @@ def _client_emails(
     if not is_cloud:
         # A custom host is often an ingestion proxy, which must not receive the secret key.
         emails._host_error = (
-            "The client's host is not PostHog Cloud, so the client can't tell where to send email. "
+            "The client's host is not PostHog Cloud, so the client can't tell where to send requests. "
             "Set app_host to your PostHog app host on the client."
         )
     emails._parent_disabled = is_disabled

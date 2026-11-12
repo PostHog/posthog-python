@@ -270,6 +270,7 @@ alias posthog.client.OptionalCaptureArgs -> posthog.args.OptionalCaptureArgs
 alias posthog.client.OptionalSetArgs -> posthog.args.OptionalSetArgs
 alias posthog.client.Poller -> posthog.poller.Poller
 alias posthog.client.PostHogMetrics -> posthog.metrics_capture.PostHogMetrics
+alias posthog.client.Push -> posthog.push.Push
 alias posthog.client.QuotaLimitError -> posthog.request.QuotaLimitError
 alias posthog.client.RedisFlagCache -> posthog.utils.RedisFlagCache
 alias posthog.client.RequestsConnectionError -> posthog.request.RequestsConnectionError
@@ -764,6 +765,7 @@ attribute posthog.async_client.AsyncClient.migrated_from = migrated_from
 attribute posthog.async_client.AsyncClient.on_error = on_error
 attribute posthog.async_client.AsyncClient.personal_api_key = self.secret_key
 attribute posthog.async_client.AsyncClient.project_root = os.getcwd()
+attribute posthog.async_client.AsyncClient.push: AsyncPush
 attribute posthog.async_client.AsyncClient.raw_host = normalize_host(host)
 attribute posthog.async_client.AsyncClient.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.async_client.AsyncClient.send = send
@@ -838,6 +840,7 @@ attribute posthog.client.Client.poll_interval = poll_interval
 attribute posthog.client.Client.poller: Optional[Poller] = None
 attribute posthog.client.Client.privacy_mode = privacy_mode
 attribute posthog.client.Client.project_root = project_root
+attribute posthog.client.Client.push: Push
 attribute posthog.client.Client.queue: Queue
 attribute posthog.client.Client.raw_host = normalize_host(host)
 attribute posthog.client.Client.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
@@ -1141,6 +1144,17 @@ attribute posthog.poller.Poller.stopped = threading.Event()
 attribute posthog.privacy_mode = False
 attribute posthog.project_api_key = None
 attribute posthog.project_root = None
+attribute posthog.push.PushError.code = code
+attribute posthog.push.PushError.docs_url = docs_url
+attribute posthog.push.PushError.field = field
+attribute posthog.push.PushError.fix = fix
+attribute posthog.push.PushError.message = message
+attribute posthog.push.PushError.name = name
+attribute posthog.push.PushError.retry_after = retry_after
+attribute posthog.push.PushError.status_code = status_code
+attribute posthog.push.PushError.why = why
+attribute posthog.push.SendPushResult.id: str
+attribute posthog.push.SendPushResult.replayed: bool = False
 attribute posthog.release_id.RELEASE_ID_ENV_VAR = 'POSTHOG_RELEASE_ID'
 attribute posthog.request.AI_EVENTS_ENDPOINT = '/i/v0/ai/batch/'
 attribute posthog.request.APIError.message = message
@@ -1381,6 +1395,10 @@ class posthog.mcp.types.ToolInputOptions(should_record_input_key: Optional[Shoul
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
 class posthog.metrics_capture.PostHogMetrics(client, config: Optional[dict] = None)
 class posthog.poller.Poller(interval, execute, *args, **kwargs)
+class posthog.push.AsyncPush(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None)
+class posthog.push.Push(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None)
+class posthog.push.PushError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
+class posthog.push.SendPushResult(id: str, replayed: bool = False)
 class posthog.request.APIError(status: Union[int, str], message: str, retry_after: Optional[float] = None)
 class posthog.request.DatetimeSerializer 
 class posthog.request.GetResponse(data: Any, etag: Optional[str] = None, not_modified: bool = False)
@@ -1905,6 +1923,10 @@ method posthog.metrics_capture.PostHogMetrics.histogram(name: str, value: float,
 method posthog.metrics_capture.PostHogMetrics.reset() -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
+method posthog.push.AsyncPush.aclose() -> None
+method posthog.push.AsyncPush.send(*, template_id: Union[str, UUID], distinct_id: str, template_data: Optional[Mapping[str, Any]] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendPushResult
+method posthog.push.Push.close() -> None
+method posthog.push.Push.send(*, template_id: Union[str, UUID], distinct_id: str, template_data: Optional[Mapping[str, Any]] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendPushResult
 method posthog.request.DatetimeSerializer.default(obj: Any)
 method posthog.request.DatetimeSerializer.encode(o: Any) -> str
 method posthog.request.HTTPAdapterWithSocketOptions.init_poolmanager(*args, **kwargs)
@@ -2014,6 +2036,7 @@ module posthog.mcp.types
 module posthog.mcp.version
 module posthog.metrics_capture
 module posthog.poller
+module posthog.push
 module posthog.release_id
 module posthog.request
 module posthog.tracing
