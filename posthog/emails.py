@@ -48,11 +48,11 @@ posthog.emails.send(
 
 Message categories: an email you send from code is transactional with no
 category unless you pass ``category``. A :class:`MessageCategory` names the
-category by its ``key``: the first send creates it in the project, and a send
-that changes its ``name`` or ``description`` updates it. A marketing send
-honors the recipient's opt-outs, and its body must link
-``{{ unsubscribe_url }}``, which PostHog fills with the recipient's
-preferences link. A ``template_key`` that names a template made in PostHog
+category by its ``key``: the first send creates it in the project with its
+``name`` and ``description``. A later send leaves the category as it is, so
+change its name or description in PostHog. A marketing send honors the
+recipient's opt-outs, and its body must link ``{{ unsubscribe_url }}``,
+which PostHog fills with the recipient's preferences link. A ``template_key`` that names a template made in PostHog
 follows that template's category.
 
 ``posthog.emails`` above is the client's property. For async code, use
@@ -229,8 +229,10 @@ class MessageCategory:
     """A message category of the project, defined in your code.
 
     A send creates the category when the project has no category with
-    ``key``, and updates its ``name`` and ``description`` when they changed.
-    An existing category must have the same ``type``.
+    ``key``, and restores it when it was deleted. Otherwise the send leaves
+    the category as it is: ``name`` and ``description`` apply only when the
+    send creates the category, and you change them later in PostHog. An
+    existing category must have the same ``type``.
 
     Args:
         key: The category's key, unique in the project. Recipients' opt-outs
@@ -239,8 +241,7 @@ class MessageCategory:
             unsubscribe link. ``"transactional"`` files the email under the
             category and skips opt-outs.
         name: The name recipients see on their preferences page.
-        description: What the category's emails are about. ``None`` keeps
-            the category's stored description, and ``""`` clears it.
+        description: What the category's emails are about.
     """
 
     key: str
@@ -304,18 +305,21 @@ class CodeEmailArgs(_RecipientArgs):
         category: Left out, the email follows the category of the template
             that ``template_key`` names, or is transactional with no category.
             :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``) sends
-            transactional email with no category. A :class:`MessageCategory` files the email under that category, and
-            creates or updates it. A marketing send honors the recipient's
-            opt-outs, and its ``html``, or its ``text`` when it has no
-            ``html``, must hold ``{{ unsubscribe_url }}``. PostHog raises
+            transactional email with no category. A
+            :class:`MessageCategory` files the email under that category, and
+            creates it when the project has none with its key. A marketing
+            send honors the recipient's opt-outs, and its ``html``, or its
+            ``text`` when it has no ``html``, must hold
+            ``{{ unsubscribe_url }}``. PostHog raises
             ``category_mismatch`` when the project's category with that key
             has another type, or when ``template_key`` names a template in
             another category, including :data:`TRANSACTIONAL_CATEGORY` for a
             template in a category; ``too_many_categories`` when the send would
             create a category past the project's limit;
             ``unsubscribe_link_required`` for a marketing body without the
-            link; and ``recipient_opted_out`` for a recipient who opted out
-            of the category or of all marketing.
+            link; ``copies_not_allowed`` for a marketing email with copies;
+            and ``recipient_opted_out`` for a recipient who opted out of the
+            category or of all marketing.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for

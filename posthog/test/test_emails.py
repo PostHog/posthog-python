@@ -803,11 +803,12 @@ class FakeSendApi(requests.adapters.BaseAdapter):
             body.get("html") or body.get("text") or ""
         ):
             return 400, {"code": "unsubscribe_link_required", "attr": "html"}
-        stored = stored or {"type": category["type"], "description": ""}
-        stored["name"] = category["name"]
-        if "description" in category:
-            stored["description"] = category["description"]
-        self.categories[category["key"]] = stored
+        if stored is None:
+            self.categories[category["key"]] = {
+                "type": category["type"],
+                "name": category["name"],
+                "description": category.get("description", ""),
+            }
         self.sent.append((body["to"], category["key"]))
         return 202, {"message_id": "msg_1"}
 
@@ -891,17 +892,9 @@ def test_a_send_creates_its_category_in_the_project(_name, category, html, store
     assert api.sent == [("user@example.com", category.key)]
 
 
-@parameterized.expand(
-    [
-        ("unset_keeps_it", None, "Old news"),
-        ("empty_clears_it", "", ""),
-        ("new_text_replaces_it", "Monthly product news", "Monthly product news"),
-    ]
-)
-def test_a_send_updates_its_category_description(_name, description, stored):
-    emails, api = emails_with_send_api(
-        {"newsletter": {"type": "marketing", "name": "News", "description": "Old news"}}
-    )
+def test_a_send_leaves_a_category_it_created_as_it_is():
+    emails, api = emails_with_send_api()
+    send_code(emails, html=MARKETING_HTML, category=NEWSLETTER)
 
     send_code(
         emails,
@@ -909,16 +902,22 @@ def test_a_send_updates_its_category_description(_name, description, stored):
         category=MessageCategory(
             key="newsletter",
             type="marketing",
-            name="Newsletter",
-            description=description,
+            name="Product news",
+            description="Weekly tips",
         ),
     )
 
-    assert api.categories["newsletter"] == {
-        "type": "marketing",
-        "name": "Newsletter",
-        "description": stored,
+    assert api.categories == {
+        "newsletter": {
+            "type": "marketing",
+            "name": "Newsletter",
+            "description": "Monthly product news",
+        }
     }
+    assert api.sent == [
+        ("user@example.com", "newsletter"),
+        ("user@example.com", "newsletter"),
+    ]
 
 
 @parameterized.expand(
