@@ -393,6 +393,8 @@ def test_nested_extras_keep_key_based_redaction():
             {"Get_Organization_Memberships": 1, "ISO_8601_timestamp_UTC": 5},
         ),
         ({"n": 10**5000}, "0000000000", {"n": "[redacted]"}),
+        ({"sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"[redacted]": 1}),
+        ({"key sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"key [redacted]": 1}),
     ],
 )
 def test_object_extras_redact_identifiers_in_keys_and_numbers(

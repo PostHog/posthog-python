@@ -10,6 +10,7 @@ runs later in the pipeline) but before truncation.
 
 from __future__ import annotations
 
+import os
 import re
 import sys
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
@@ -418,37 +419,24 @@ _PHONE_INTL_PATTERN = re.compile(
     r"(?<!\w)\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}(?![\w])", re.ASCII
 )
 
-# Free text is redacted whole up to four times what truncation keeps. Past that
-# the scan costs seconds per megabyte for text truncation would cut anyway, so only
-# a head of twice that is redacted. The head ends at a space no pass can match
-# across, so it redacts exactly as it would inside the whole string. URLs and
-# credential words end at a space; of the patterns above, a card, SSN or phone
-# number can continue across one, but only after a digit or one of these
-# characters (Unicode spaces count as the space they are normalized to). A new
-# pattern that spans a space must extend them.
-_MAX_WHOLE_FREE_TEXT_LENGTH = 4 * _MAX_USER_INTENT_LENGTH
-_SCANNED_FREE_TEXT_LENGTH = 2 * _MAX_USER_INTENT_LENGTH
-_CONTINUES_ACROSS_A_SPACE = "0123456789 ./()+-"
+# The canonical bounded scan: text longer than the limit plus a margin is redacted
+# twice, cut at the margin and at the limit, and only the start both results share
+# is kept. A match split by the limit cut differs between the two, and one split by
+# the margin cut lies past the end of the second, so neither survives raw.
+_SCAN_MARGIN = 1024
 
 
 def _redact_bounded(value: str, redact: Callable[[str], str]) -> str:
-    """``redact`` over ``value``, or over the head of it truncation can keep,
-    followed by the truncation marker. A long value with no head to cut is one
-    word whose redaction depends on all of it, so it is redacted whole."""
-    if len(value) <= _MAX_WHOLE_FREE_TEXT_LENGTH:
+    """``redact`` over ``value``, at a cost bounded by what truncation keeps."""
+    if len(value) <= _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN:
         return redact(value)
-    head = _free_text_head(value)
-    return redact(head) + _TRUNCATION_SUFFIX if head else _REDACTED_VALUE
-
-
-def _free_text_head(value: str) -> str:
-    """The longest head of ``value`` that ends at a space no pass matches across,
-    within the scanned length; empty when there is none."""
-    normalized = _UNICODE_SPACE_PATTERN.sub(" ", value[:_SCANNED_FREE_TEXT_LENGTH])
-    cut = value.rfind(" ", 0, _SCANNED_FREE_TEXT_LENGTH)
-    while cut > 0 and normalized[cut - 1] in _CONTINUES_ACROSS_A_SPACE:
-        cut = value.rfind(" ", 0, cut)
-    return value[: max(cut, 0)]
+    kept = os.path.commonprefix(
+        [
+            redact(value[: _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN]),
+            redact(value[:_MAX_USER_INTENT_LENGTH]),
+        ]
+    )
+    return kept + _TRUNCATION_SUFFIX
 
 
 def _is_record(value: Any) -> bool:
@@ -470,10 +458,10 @@ def _is_binary_blob(value: str) -> bool:
 
 
 def _sanitize_text(value: str) -> str:
-    return _sanitize_urls(_redact_credentials(value))
+    return _sanitize_urls(_redact_credentials(value, _is_secret))
 
 
-def _redact_credentials(value: str) -> str:
+def _redact_credentials(value: str, is_secret: Callable[[str], bool]) -> str:
     """Redact PostHog tokens, then any other word that reads as a credential.
 
     Both run before the URL pass, because rewriting a URL changes the text they
@@ -482,7 +470,9 @@ def _redact_credentials(value: str) -> str:
     entropy detector scans. Running the URL pass last loses nothing — it only
     redacts or percent-encodes, so it never exposes a credential the detectors
     could have matched."""
-    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+    return _redact_secret_tokens(
+        _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value), is_secret
+    )
 
 
 def sanitize_free_text(value: Any) -> Any:
@@ -501,13 +491,11 @@ def sanitize_free_text(value: Any) -> Any:
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    # Redaction can shrink the head below what truncation keeps; the capture is
-    # then shorter, never leakier.
     return _redact_bounded(value, _redact_free_text)
 
 
 def _redact_free_text(value: str) -> str:
-    return _sanitize_urls(redact_pii(_redact_credentials(value)))
+    return _sanitize_urls(redact_pii(_redact_credentials(value, _is_secret)))
 
 
 def _sanitize_resource_name(value: Any) -> Any:
@@ -522,7 +510,7 @@ def _sanitize_resource_name(value: Any) -> Any:
     return _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
-def _redact_secret_tokens(value: str) -> str:
+def _redact_secret_tokens(value: str, is_secret: Callable[[str], bool]) -> str:
     """Redact credential-looking words, leaving the surrounding text intact.
 
     The PostHog-token pattern above only knows ``phc_``/``phx_``; a failure
@@ -538,13 +526,25 @@ def _redact_secret_tokens(value: str) -> str:
     because no single word in it looks like a credential.
     """
     if " " not in value:
-        return _REDACTED_VALUE if _is_secret(value) else value
+        return _REDACTED_VALUE if is_secret(value) else value
     return " ".join(
-        _REDACTED_VALUE if _is_secret(word) else word for word in value.split(" ")
+        _REDACTED_VALUE if is_secret(word) else word for word in value.split(" ")
     )
 
 
 def _is_secret(word: str) -> bool:
+    from posthog.exception_utils import _looks_like_secret
+
+    return _judge_without_markers(word, _looks_like_secret)
+
+
+def _is_known_secret(word: str) -> bool:
+    from posthog.exception_utils import _looks_like_known_secret
+
+    return _judge_without_markers(word, _looks_like_known_secret)
+
+
+def _judge_without_markers(word: str, looks_like_secret: Callable[[str], bool]) -> bool:
     # Judge the word without this sanitizer's own markers. A value can be
     # sanitized twice (a response's content blocks are), and the marker's
     # character mix is enough to push a short uri like
@@ -553,9 +553,7 @@ def _is_secret(word: str) -> bool:
     # the word keeps a real credential written around one detectable.
     word = word.replace(_ENCODED_REDACTED_VALUE, "").replace(_REDACTED_VALUE, "")
     try:
-        from posthog.exception_utils import _looks_like_secret
-
-        return bool(word) and _looks_like_secret(word)
+        return bool(word) and looks_like_secret(word)
     except Exception:  # noqa: BLE001 - redaction must never break capture
         return False
 
@@ -667,15 +665,15 @@ def _sanitize_free_text_leaf(value: Any) -> Any:
 
 
 def _sanitize_free_text_key(key: Any) -> Any:
-    """A key is a name, so like ``_sanitize_resource_name`` it skips the entropy
-    detector, which reads ``Get_Organization_Memberships`` as a credential: two
-    such keys would both become ``[redacted]`` and one value would be lost."""
+    """A key is a name, so it keeps the known credential formats but skips the
+    entropy detector, which reads ``Get_Organization_Memberships`` as a credential:
+    two such keys would both become ``[redacted]`` and one value would be lost."""
     if not isinstance(key, str):
         return _sanitize_free_text_leaf(key)
     return _redact_bounded(
         key,
         lambda text: _sanitize_urls(
-            redact_pii(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, text))
+            redact_pii(_redact_credentials(text, _is_known_secret))
         ),
     )
 

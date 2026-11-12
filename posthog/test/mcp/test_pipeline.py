@@ -739,11 +739,11 @@ def _captured_intent(intent: str) -> str:
     return truncate_event(sanitize_event({"user_intent": intent}))["user_intent"]
 
 
-def _straddling_the_scanned_head(identifier: str) -> str:
-    """An intent whose start shrinks by thousands of characters when redacted,
-    with ``identifier`` starting a few characters before the 4096th."""
-    shrinking_start = "see https://h/?token=" + "x" * 3000
-    padding = ("w " * 1000)[: 4090 - len(shrinking_start) - 1]
+def _straddling(identifier: str, cut: int) -> str:
+    """An intent whose start shrinks by about 1500 characters when redacted, with
+    ``identifier`` starting a few characters before the ``cut``-th."""
+    shrinking_start = "see https://h/?token=" + "x" * 1500
+    padding = ("w " * 1000)[: cut - 4 - len(shrinking_start) - 1]
     return f"{shrinking_start} {padding}{identifier} " + "tail " * 2000
 
 
@@ -760,6 +760,7 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
     assert time.perf_counter() - started < 0.5
 
 
+@pytest.mark.parametrize("cut", [2048, 3072], ids=["at the limit", "at the margin"])
 @pytest.mark.parametrize(
     ("identifier", "fragment"),
     [
@@ -770,8 +771,8 @@ def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
         ("+44\u00a0 20 7946 0958", "+44"),
     ],
 )
-def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment):
-    captured = _captured_intent(_straddling_the_scanned_head(identifier))
+def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment, cut):
+    captured = _captured_intent(_straddling(identifier, cut))
     assert fragment not in captured
 
 
@@ -779,22 +780,13 @@ def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment)
     "intent",
     [
         pytest.param("s" * 9000, id="one long word"),
-        pytest.param("1 2 " * 2500, id="spaces only between digits"),
-    ],
-)
-def test_intent_scan_redacts_a_head_with_no_word_boundary(intent):
-    assert _captured_intent(intent) == "[redacted]"
-
-
-@pytest.mark.parametrize(
-    "intent",
-    [
+        pytest.param("请帮我查询" * 1800, id="long CJK"),
         pytest.param("请帮我查询" * 900, id="CJK"),
         pytest.param("item\n" * 1000, id="newline list"),
         pytest.param("Open /" + "very/long/path/" * 300, id="prose then a long path"),
     ],
 )
-def test_intent_up_to_four_times_the_limit_is_redacted_whole(intent):
+def test_intent_with_no_word_boundary_keeps_its_start(intent):
     assert _captured_intent(intent) == truncate_text(intent, 2048)
 
 
