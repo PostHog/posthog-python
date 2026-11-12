@@ -1304,7 +1304,8 @@ class Client(object):
                 ``options`` and context options override them, and
                 ``before_send`` can change them. They never set
                 ``process_person_profile`` on identify-style events, such as
-                ``$identify`` or ``$set``, which default it to ``True``.
+                ``$identify`` or ``$set``, whose distinct ID the SDK did not
+                generate: those default it to ``True``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1972,7 +1973,8 @@ class Client(object):
         ``super_options``. An event's own ``options`` override them, and
         ``before_send`` can change them. They never set
         ``process_person_profile`` on identify-style events, such as
-        ``$identify`` or ``$set``, which default it to ``True``.
+        ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+        those default it to ``True``.
 
         Args:
             key: The option name, such as ``"process_person_profile"``.

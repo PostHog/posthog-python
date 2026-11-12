@@ -1241,3 +1241,19 @@ async def test_before_send_still_sees_the_layered_legacy_property_on_other_event
     )
     assert seen == [(True, False)]
     _assert_person_processing(events, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", ["super_options", "context_option"])
+@pytest.mark.parametrize("name", IDENTIFY_STYLE_EVENTS)
+async def test_option_layers_still_fill_identify_style_events_with_a_generated_id(
+    mode, layer, name
+):
+    layers = _layers(True)[layer]
+    events = await _wire_events(
+        mode,
+        _layered(lambda c, o, p: c.capture(name), layers),
+        **_client_config(layers),
+    )
+    _assert_person_processing(events, True)

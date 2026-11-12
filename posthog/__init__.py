@@ -315,7 +315,8 @@ def set_context_option(key: str, value: Any) -> None:
     runs, so the hook sees them. They override ``super_options``. An event's
     own ``options`` override them, and ``before_send`` can change them. They
     never set ``process_person_profile`` on identify-style events, such as
-    ``$identify`` or ``$set``, which default it to ``True``.
+    ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+    those default it to ``True``.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
@@ -398,7 +399,8 @@ Attributes:
         unset, before ``before_send`` runs. An event's own ``options`` and
         context options override them, and ``before_send`` can change them.
         They never set ``process_person_profile`` on identify-style events,
-        such as ``$identify`` or ``$set``, which default it to ``True``.
+        such as ``$identify`` or ``$set``, whose distinct ID the SDK did not
+        generate: those default it to ``True``.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``

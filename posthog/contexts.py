@@ -325,7 +325,8 @@ def set_context_option(key: str, value: Any) -> None:
     An event's own ``options`` override them, and ``before_send`` can change
     them. Child contexts inherit them unless they are fresh. They never set
     ``process_person_profile`` on identify-style events, such as ``$identify``
-    or ``$set``, which default it to ``True``.
+    or ``$set``, whose distinct ID the SDK did not generate: those default it
+    to ``True``.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
