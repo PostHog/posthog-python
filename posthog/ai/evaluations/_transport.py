@@ -7,8 +7,8 @@ import random
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from typing import Any
-from urllib.parse import urlsplit, urlunsplit
+from typing import Any, cast
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 import requests
 
@@ -26,6 +26,15 @@ _CLOUD_HOSTS = {
 
 def _normalize_host(host: str | None) -> str:
     parsed = urlsplit((host or "https://us.posthog.com").strip())
+    _validate_host(parsed)
+    # Accessing port also validates malformed port numbers before any I/O.
+    netloc = parsed.netloc
+    if parsed.port in {None, 443} and parsed.scheme == "https":
+        netloc = _CLOUD_HOSTS.get(cast(str, parsed.hostname), netloc)
+    return urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/"), "", ""))
+
+
+def _validate_host(parsed: SplitResult) -> None:
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.hostname
@@ -35,11 +44,6 @@ def _normalize_host(host: str | None) -> str:
         or parsed.fragment
     ):
         raise ValueError("host must be an absolute HTTP(S) URL without credentials")
-    # Accessing port also validates malformed port numbers before any I/O.
-    netloc = parsed.netloc
-    if parsed.port in {None, 443} and parsed.scheme == "https":
-        netloc = _CLOUD_HOSTS.get(parsed.hostname, netloc)
-    return urlunsplit((parsed.scheme, netloc, parsed.path.rstrip("/"), "", ""))
 
 
 def _validate_options(
@@ -57,6 +61,10 @@ def _validate_options(
         or any(character.isspace() for character in secret_key)
     ):
         raise ValueError("secret_key must be a nonempty credential without whitespace")
+    _validate_retry_options(timeout, max_retries)
+
+
+def _validate_retry_options(timeout: float, max_retries: int) -> None:
     if (
         isinstance(timeout, bool)
         or not isinstance(timeout, (int, float))

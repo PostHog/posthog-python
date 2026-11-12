@@ -378,14 +378,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         raise ValueError(
             "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
         )
-    content = {"subject": _nonempty_text(args, "subject")}
-    content.update(
-        {field: _string(args, field) for field in ("html", "text") if field in args}
-    )
-    if "html" not in content and "text" not in content:
-        raise TypeError("send() needs html, text or both.")
-    if not (content.get("html") or content.get("text")):
-        raise ValueError("html or text must be a nonempty string.")
+    content = _code_content(args)
 
     payload: dict[str, Any] = {"to": to, "template_key": template_key, **content}
     if distinct_id is not None:
@@ -397,6 +390,19 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         idempotency_key=idempotency_key,
         max_retries=max_retries,
     )
+
+
+def _code_content(args: Mapping[str, Any]) -> dict[str, str]:
+    content = {"subject": _nonempty_text(args, "subject")}
+    content.update(
+        {field: _string(args, field) for field in ("html", "text") if field in args}
+    )
+    if "html" not in content and "text" not in content:
+        raise TypeError("send() needs html, text or both.")
+    if not (content.get("html") or content.get("text")):
+        raise ValueError("html or text must be a nonempty string.")
+
+    return content
 
 
 def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
@@ -523,13 +529,7 @@ def _status_path(message_id: Union[str, UUID]) -> str:
 def _validate_options(
     timeout: float, max_retries: int, migrated_from: Optional[str]
 ) -> None:
-    if (
-        isinstance(timeout, bool)
-        or not isinstance(timeout, (int, float))
-        or not math.isfinite(timeout)
-        or timeout <= 0
-    ):
-        raise ValueError("timeout must be a finite positive number of seconds.")
+    _validate_timeout(timeout)
     if (
         isinstance(max_retries, bool)
         or not isinstance(max_retries, int)
@@ -544,6 +544,16 @@ def _validate_options(
         )
 
 
+def _validate_timeout(timeout: float) -> None:
+    if (
+        isinstance(timeout, bool)
+        or not isinstance(timeout, (int, float))
+        or not math.isfinite(timeout)
+        or timeout <= 0
+    ):
+        raise ValueError("timeout must be a finite positive number of seconds.")
+
+
 def _text(value: Any) -> Optional[str]:
     return value if isinstance(value, str) and value else None
 
@@ -553,32 +563,33 @@ def _error_name(status: Optional[int], code: str) -> str:
         return "missing_api_key"
     if status is None:
         return "service_unavailable" if code == "network_error" else "application_error"
-    if status == 400:
-        return "validation_error"
-    if status == 403:
-        return "invalid_permission"
-    if status == 404:
-        return "not_found"
+    if status in (409, 422):
+        return _idempotency_error_name(status, code)
+    if status == 429:
+        return (
+            "monthly_quota_exceeded" if code in _QUOTA_CODES else "rate_limit_exceeded"
+        )
+    return {
+        400: "validation_error",
+        403: "invalid_permission",
+        404: "not_found",
+        503: "service_unavailable",
+    }.get(status, "application_error")
+
+
+def _idempotency_error_name(status: int, code: str) -> str:
     if status == 409:
         return (
             "validation_error"
             if code == "template_outdated"
             else "concurrent_idempotent_requests"
         )
-    if status == 422:
-        # The template send route also answers 422 for send checks such as recipient_suppressed.
-        return (
-            "invalid_idempotent_request"
-            if code == "idempotency_key_reused"
-            else "validation_error"
-        )
-    if status == 429:
-        return (
-            "monthly_quota_exceeded" if code in _QUOTA_CODES else "rate_limit_exceeded"
-        )
-    if status == 503:
-        return "service_unavailable"
-    return "application_error"
+    # The template send route also answers 422 for send checks such as recipient_suppressed.
+    return (
+        "invalid_idempotent_request"
+        if code == "idempotency_key_reused"
+        else "validation_error"
+    )
 
 
 def _sdk_error(code: str, message: str, status: Optional[int] = None) -> EmailError:
@@ -608,19 +619,21 @@ def _parse_response(
         return SendEmailResult(
             id=message_id,
             replayed=fields.get("replayed") is True,
-            warnings=tuple(
-                EmailWarning(
-                    code=_text(warning.get("code")) or "warning",
-                    message=_text(warning.get("detail"))
-                    or _text(warning.get("message"))
-                    or "",
-                    fix=_text(warning.get("fix")),
-                )
-                for warning in (warnings if isinstance(warnings, list) else [])
-                if isinstance(warning, dict)
-            ),
+            warnings=_parse_warnings(warnings),
         )
     raise _response_error(fields, status, retry_after_header)
+
+
+def _parse_warnings(warnings: Any) -> tuple[EmailWarning, ...]:
+    return tuple(
+        EmailWarning(
+            code=_text(warning.get("code")) or "warning",
+            message=_text(warning.get("detail")) or _text(warning.get("message")) or "",
+            fix=_text(warning.get("fix")),
+        )
+        for warning in (warnings if isinstance(warnings, list) else [])
+        if isinstance(warning, dict)
+    )
 
 
 def _timestamp(value: Any) -> Optional[datetime]:

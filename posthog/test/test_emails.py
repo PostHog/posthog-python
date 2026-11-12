@@ -799,3 +799,100 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
         )
 
     assert adapter.requests == []
+
+
+@pytest.mark.parametrize("factory", [Emails, AsyncEmails])
+@pytest.mark.parametrize(
+    "options, message",
+    [
+        ({"timeout": True}, "timeout must be a finite positive number of seconds."),
+        ({"timeout": "3"}, "timeout must be a finite positive number of seconds."),
+        (
+            {"timeout": float("inf")},
+            "timeout must be a finite positive number of seconds.",
+        ),
+        (
+            {"timeout": float("nan")},
+            "timeout must be a finite positive number of seconds.",
+        ),
+        ({"timeout": 0}, "timeout must be a finite positive number of seconds."),
+        ({"max_retries": True}, "max_retries must be a nonnegative integer."),
+        ({"max_retries": None}, "max_retries must be a nonnegative integer."),
+        ({"max_retries": -1}, "max_retries must be a nonnegative integer."),
+        (
+            {"migrated_from": "re send"},
+            "migrated_from must be visible ASCII characters, such as 'resend'.",
+        ),
+    ],
+)
+def test_invalid_transport_options_are_rejected_at_construction(
+    factory, options, message
+):
+    with pytest.raises(ValueError) as raised:
+        factory(SECRET_KEY, **options)
+    assert str(raised.value) == message
+
+
+@pytest.mark.parametrize("warnings", [None, {}, "not a warning list"])
+def test_non_list_warnings_are_ignored(warnings):
+    emails, _ = emails_with([accepted(warnings=warnings, replayed=1)])
+    result = send(emails)
+    assert result.warnings == ()
+    assert result.replayed is False
+
+
+def test_warning_parsing_keeps_order_fallback_fields_and_safe_defaults(caplog):
+    emails, _ = emails_with(
+        [
+            accepted(
+                warnings=[
+                    None,
+                    {
+                        "code": "first",
+                        "detail": "preferred",
+                        "message": "ignored",
+                        "fix": "update",
+                    },
+                    {"code": "", "detail": 42, "message": "fallback", "fix": False},
+                    {},
+                ]
+            )
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        result = send(emails)
+    assert [(w.code, w.message, w.fix) for w in result.warnings] == [
+        ("first", "preferred", "update"),
+        ("warning", "fallback", None),
+        ("warning", "", None),
+    ]
+    assert len(caplog.records) == 3
+    assert all(
+        record.getMessage().endswith(message)
+        for record, message in zip(
+            caplog.records,
+            [
+                "PostHog email warning first: preferred",
+                "PostHog email warning warning: fallback",
+                "PostHog email warning warning: ",
+            ],
+        )
+    )
+
+
+def test_code_send_preserves_utf8_and_compact_json_bytes():
+    emails, adapter = emails_with([accepted()])
+    send_code(emails, subject="Bonjour é", html="<p>你好</p>")
+    assert adapter.requests[0].body == (
+        '{"to":"user@example.com","template_key":"password-reset",'
+        '"subject":"Bonjour é","html":"<p>你好</p>","capture_engagement":true}'
+    ).encode("utf-8")
+
+
+def test_code_send_validation_order_still_checks_recipient_before_template_and_content():
+    emails, adapter = emails_with([])
+    with pytest.raises(TypeError, match="to must be one email address as a string"):
+        send_code(emails, to=[], template_key="bad key", subject=123, html=123)
+    with pytest.raises(ValueError, match="template_key can only have letters"):
+        send_code(emails, template_key="bad key", subject=123, html=123)
+    assert adapter.requests == []

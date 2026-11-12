@@ -202,11 +202,7 @@ class SpanExporter:
         while True:
             removed, stop = self._drain(deadline)
             if not stop:
-                if (
-                    removed
-                    and self._queue
-                    and (deadline is None or time.monotonic() < deadline)
-                ):
+                if self._followup_due(removed, deadline):
                     self._drain(deadline)
                 return
             if deadline is None or not retry:
@@ -217,6 +213,13 @@ class SpanExporter:
                 return
             if self._wait_for_retry(min(wait, remaining)):
                 return
+
+    def _followup_due(self, removed: int, deadline: Optional[float]) -> bool:
+        return bool(
+            removed
+            and self._queue
+            and (deadline is None or time.monotonic() < deadline)
+        )
 
     def _retry_wait_locked(self) -> Optional[float]:
         """The backoff to wait out before retrying, or ``None`` when there is nothing to retry."""
@@ -281,6 +284,11 @@ class SpanExporter:
             if self._is_closed() or self._discard_if_disabled_locked():
                 return 0, True
             remaining = len(self._queue)
+        return self._drain_batches(remaining, deadline)
+
+    def _drain_batches(
+        self, remaining: int, deadline: Optional[float]
+    ) -> Tuple[int, bool]:
         removed = 0
         sent_any = False
         # A batch the SDK measured as too large says nothing about the batches
@@ -292,69 +300,87 @@ class SpanExporter:
                     return removed, True
                 if not self._queue:
                     break
-                # A retried batch cannot grow to take in spans behind it.
-                cap = (
-                    min(self._max_export_batch_size, self._head_batch_size)
-                    if self._head_batch_failures
-                    else self._max_export_batch_size
-                )
-                if local_cap is not None:
-                    cap = min(cap, local_cap)
-                size = max(1, min(cap, remaining, len(self._queue)))
-                batch = self._queue[:size]
-                # Read before the send. A send inside an open Retry-After
-                # window is caller-driven and exempt from the wait, and so from
-                # the charge.
-                chargeable = (
-                    time.monotonic() >= self._head_batch_chargeable_at
-                    and not self._retry_after.is_open()
-                )
+                batch, chargeable = self._batch_locked(remaining, local_cap)
+                size = len(batch)
 
-            spans, failed = self._encode(batch)
-            if failed:
-                # Out of the queue before the send is settled, so a failed
-                # send does not count them a second time.
-                with self._lock:
-                    if self._is_closed():
-                        return removed, True
-                    for index in reversed(failed):
-                        del self._queue[index]
-                    if not spans:
-                        self._reset_head_batch_budget_locked()
-                size -= len(failed)
-                remaining -= len(failed)
-                removed += len(failed)
-                if not spans:
-                    continue
+            spans, failed = self._encode_queued_batch(batch)
+            if spans is None:
+                return removed, True
+            size -= failed
+            remaining -= failed
+            removed += failed
+            if not spans:
+                continue
 
             # The first request is exempt, so a flush called with no budget left
             # (a serverless handler, say) still ships a batch.
-            if sent_any and deadline is not None and time.monotonic() >= deadline:
+            if _request_budget_spent(sent_any, deadline):
                 return removed, True
             sent_any = True
-            try:
-                outcome = self._send(
-                    self._client, build_traces_payload(spans, self._resource)
-                )
-            except Exception:
-                log.debug("Span batch send failed", exc_info=True)
-                outcome = SendOutcome("retry-later")
-
-            with self._lock:
-                if self._is_closed():
-                    return removed, True
-                taken, stop, note = self._apply_outcome_locked(
-                    outcome, size, chargeable
-                )
-            if note:
-                log.debug(note)
-            if outcome.measured_locally and not taken:
-                local_cap = max(1, size // 2)
+            outcome, taken, stop = self._send_and_settle(spans, size, chargeable)
+            local_cap = _local_batch_cap(outcome, taken, size, local_cap)
             remaining -= taken
             removed += taken
             if stop:
                 return removed, True
         return removed, False
+
+    def _send_and_settle(
+        self, spans: List[dict], size: int, chargeable: bool
+    ) -> Tuple[SendOutcome, int, bool]:
+        try:
+            outcome = self._send(
+                self._client, build_traces_payload(spans, self._resource)
+            )
+        except Exception:
+            log.debug("Span batch send failed", exc_info=True)
+            outcome = SendOutcome("retry-later")
+
+        with self._lock:
+            if self._is_closed():
+                return outcome, 0, True
+            taken, stop, note = self._apply_outcome_locked(outcome, size, chargeable)
+        if note:
+            log.debug(note)
+        return outcome, taken, stop
+
+    def _encode_queued_batch(
+        self, batch: List[SpanRecord]
+    ) -> Tuple[Optional[List[dict]], int]:
+        spans, failed = self._encode(batch)
+        if failed:
+            # Out of the queue before the send is settled, so a failed
+            # send does not count them a second time.
+            with self._lock:
+                if self._is_closed():
+                    return None, 0
+                for index in reversed(failed):
+                    del self._queue[index]
+                if not spans:
+                    self._reset_head_batch_budget_locked()
+        return spans, len(failed)
+
+    def _batch_locked(
+        self, remaining: int, local_cap: Optional[int]
+    ) -> Tuple[List[SpanRecord], bool]:
+        # A retried batch cannot grow to take in spans behind it.
+        cap = (
+            min(self._max_export_batch_size, self._head_batch_size)
+            if self._head_batch_failures
+            else self._max_export_batch_size
+        )
+        if local_cap is not None:
+            cap = min(cap, local_cap)
+        size = max(1, min(cap, remaining, len(self._queue)))
+        batch = self._queue[:size]
+        # Read before the send. A send inside an open Retry-After
+        # window is caller-driven and exempt from the wait, and so from
+        # the charge.
+        chargeable = (
+            time.monotonic() >= self._head_batch_chargeable_at
+            and not self._retry_after.is_open()
+        )
+        return batch, chargeable
 
     def _apply_outcome_locked(
         self, outcome: SendOutcome, size: int, chargeable: bool
@@ -373,30 +399,7 @@ class SpanExporter:
             return size, False, None
 
         if outcome.kind == "too-large":
-            if size == 1:
-                del self._queue[:1]
-                self._end_failure_sequence_locked()
-                self._drops.record(1, "it is too large for the ingestion endpoint")
-                # The oversized span is gone; the batches after it are not suspect.
-                if self._batch_size_before_halving is not None:
-                    self._max_export_batch_size = self._batch_size_before_halving
-                    self._batch_size_before_halving = None
-                return 1, False, None
-            # Halve the refused batch, not the configured size: a shallow queue
-            # would otherwise resend the same body.
-            halved = max(1, size // 2)
-            if not outcome.measured_locally:
-                if self._batch_size_before_halving is None:
-                    self._batch_size_before_halving = self._max_export_batch_size
-                self._max_export_batch_size = halved
-            self._reset_head_batch_budget_locked()
-            return (
-                0,
-                False,
-                "Span batch too large; retrying the same spans in batches of {}".format(
-                    halved
-                ),
-            )
+            return self._apply_too_large_locked(outcome, size)
 
         if outcome.kind == "retry-later":
             self._consecutive_failures += 1
@@ -427,6 +430,34 @@ class SpanExporter:
         self._end_failure_sequence_locked()
         self._drops.record(size, "the ingestion endpoint rejected the batch")
         return size, False, None
+
+    def _apply_too_large_locked(
+        self, outcome: SendOutcome, size: int
+    ) -> Tuple[int, bool, Optional[str]]:
+        if size == 1:
+            del self._queue[:1]
+            self._end_failure_sequence_locked()
+            self._drops.record(1, "it is too large for the ingestion endpoint")
+            # The oversized span is gone; the batches after it are not suspect.
+            if self._batch_size_before_halving is not None:
+                self._max_export_batch_size = self._batch_size_before_halving
+                self._batch_size_before_halving = None
+            return 1, False, None
+        # Halve the refused batch, not the configured size: a shallow queue
+        # would otherwise resend the same body.
+        halved = max(1, size // 2)
+        if not outcome.measured_locally:
+            if self._batch_size_before_halving is None:
+                self._batch_size_before_halving = self._max_export_batch_size
+            self._max_export_batch_size = halved
+        self._reset_head_batch_budget_locked()
+        return (
+            0,
+            False,
+            "Span batch too large; retrying the same spans in batches of {}".format(
+                halved
+            ),
+        )
 
     def _is_closed(self) -> bool:
         # A method, so the check after each send is not narrowed away.
@@ -534,3 +565,15 @@ class SpanExporter:
 
 def _draw_jitter() -> float:
     return 1 - FLUSH_BACKOFF_JITTER + random.random() * FLUSH_BACKOFF_JITTER * 2
+
+
+def _request_budget_spent(sent_any: bool, deadline: Optional[float]) -> bool:
+    return sent_any and deadline is not None and time.monotonic() >= deadline
+
+
+def _local_batch_cap(
+    outcome: SendOutcome, taken: int, size: int, current: Optional[int]
+) -> Optional[int]:
+    if outcome.measured_locally and not taken:
+        return max(1, size // 2)
+    return current

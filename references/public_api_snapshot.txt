@@ -789,6 +789,7 @@ attribute posthog.capture_v1.CaptureV1Error.request_id = request_id
 attribute posthog.capture_v1.CaptureV1Error.retry_exhausted = retry_exhausted or []
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.app_host = app_host
+attribute posthog.client.Client.before_send = before_send
 attribute posthog.client.Client.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
 attribute posthog.client.Client.capture_mode = _resolve_capture_mode(capture_mode)

@@ -71,36 +71,7 @@ def _format_part(part: Any) -> Optional[FormattedContentItem]:
     if "file_data" in plain:
         media = _format_media_payload(plain["file_data"])
         return {"type": _kind_from_mime(media.get("mime_type")), "file_data": media}
-    # Gemini-native function_call/function_response parts are normalized to the
-    # provider-agnostic tool-call/tool-result blocks. Emitting the raw Gemini
-    # shape leaves them unrenderable and invisible to evals.
-    if "function_call" in plain:
-        call = to_plain(plain["function_call"]) or {}
-        block: Dict[str, Any] = {
-            "type": "function",
-            "function": {
-                "name": call.get("name"),
-                "arguments": call.get("args"),
-            },
-        }
-        if isinstance(call.get("id"), str):
-            block["id"] = call["id"]
-        return block
-    if "function_response" in plain:
-        response = to_plain(plain["function_response"]) or {}
-        response_block: Dict[str, Any] = {
-            "type": "function",
-            "tool_name": response.get("name") or "",
-            "content": response.get("response"),
-        }
-        if isinstance(response.get("id"), str):
-            response_block["tool_use_id"] = response["id"]
-        return response_block
-    if not plain:
-        return None
-    key = next(iter(plain))
-    fallback: Dict[str, Any] = {"type": key, key: to_plain(plain[key])}
-    return cast(FormattedContentItem, fallback)
+    return _format_gemini_tool_part(plain)
 
 
 class GeminiPart(TypedDict, total=False):
@@ -157,23 +128,15 @@ def _format_dict_message(item: Dict[str, Any]) -> FormattedMessage:
 
     # Handle dict with content field
     if "content" in item:
-        content = item["content"]
-
-        if isinstance(content, list):
-            # If content is a list, format it as content blocks
-            content_blocks = _format_parts_as_content_blocks(content)
-            return {"role": item.get("role", "user"), "content": content_blocks}
-
-        elif not isinstance(content, str):
-            content = str(content)
-
-        return {"role": item.get("role", "user"), "content": content}
+        # Lists become content blocks; other non-string content is stringified.
+        return {
+            "role": item.get("role", "user"),
+            "content": _format_message_content(item["content"]),
+        }
 
     if "role" not in item:
         plain = to_plain(item)
-        if isinstance(plain, dict) and _BARE_PART_KEYS.intersection(
-            normalize_part_keys(plain)
-        ):
+        if _is_bare_part(plain):
             return {"role": "user", "content": _format_parts_as_content_blocks([item])}
 
     # Handle dict with text field
@@ -198,11 +161,7 @@ def _format_object_message(item: Any) -> FormattedMessage:
     # Handle object with parts attribute
     if hasattr(item, "parts") and hasattr(item.parts, "__iter__"):
         content_blocks = _format_parts_as_content_blocks(list(item.parts))
-        role = getattr(item, "role", "user") if hasattr(item, "role") else "user"
-
-        # Ensure role is a string
-        if not isinstance(role, str):
-            role = "user"
+        role = _object_message_role(item)
 
         return {"role": role, "content": content_blocks}
 
@@ -210,38 +169,20 @@ def _format_object_message(item: Any) -> FormattedMessage:
     # be caught before the "text" branch below, which would otherwise treat an
     # unset `.text` as empty content and drop any other part kind it carries
     plain = to_plain(item)
-    if isinstance(plain, dict) and _BARE_PART_KEYS.intersection(
-        normalize_part_keys(plain)
-    ):
+    if _is_bare_part(plain):
         return {"role": "user", "content": _format_parts_as_content_blocks([item])}
 
     # Handle object with text attribute
     if hasattr(item, "text"):
-        role = getattr(item, "role", "user") if hasattr(item, "role") else "user"
-
-        # Ensure role is a string
-        if not isinstance(role, str):
-            role = "user"
+        role = _object_message_role(item)
 
         return {"role": role, "content": item.text}
 
     # Handle object with content attribute
     if hasattr(item, "content"):
-        role = getattr(item, "role", "user") if hasattr(item, "role") else "user"
+        role = _object_message_role(item)
 
-        # Ensure role is a string
-        if not isinstance(role, str):
-            role = "user"
-
-        content = item.content
-
-        if isinstance(content, list):
-            content_blocks = _format_parts_as_content_blocks(content)
-            return {"role": role, "content": content_blocks}
-
-        elif not isinstance(content, str):
-            content = str(content)
-        return {"role": role, "content": content}
+        return {"role": role, "content": _format_message_content(item.content)}
 
     # Fallback to string representation
     return {"role": "user", "content": str(item)}
@@ -265,55 +206,9 @@ def format_gemini_response(response: Any) -> List[FormattedMessage]:
 
     if hasattr(response, "candidates") and response.candidates:
         for candidate in response.candidates:
-            if hasattr(candidate, "content") and candidate.content:
-                content: List[FormattedContentItem] = []
-
-                if hasattr(candidate.content, "parts") and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        # Checked ahead of _format_part so loosely-specced MagicMock
-                        # fixtures (which report a truthy .text but aren't real Part
-                        # objects) still resolve to a text block — must stay ahead of
-                        # the _format_part delegation below.
-                        text = getattr(part, "text", None)
-                        if isinstance(text, str) and text:
-                            # `is True` so loosely-specced mocks (whose .thought is a
-                            # truthy Mock) still land on the text branch below.
-                            if getattr(part, "thought", None) is True:
-                                content.append({"type": "thinking", "thinking": text})
-                            else:
-                                content.append({"type": "text", "text": text})
-                            continue
-
-                        if hasattr(part, "function_call") and part.function_call:
-                            function_call = part.function_call
-                            content.append(
-                                _function_call_block(
-                                    function_call.name,
-                                    function_call.args,
-                                    getattr(function_call, "id", None),
-                                )
-                            )
-                            continue
-
-                        block = _format_part(part)
-                        if block is not None:
-                            content.append(block)
-
-                if content:
-                    output.append(
-                        {
-                            "role": "assistant",
-                            "content": content,
-                        }
-                    )
-
-            elif hasattr(candidate, "text") and candidate.text:
-                output.append(
-                    {
-                        "role": "assistant",
-                        "content": [{"type": "text", "text": candidate.text}],
-                    }
-                )
+            message = _format_response_candidate(candidate)
+            if message is not None:
+                output.append(message)
 
     elif hasattr(response, "text") and response.text:
         output.append(
@@ -479,40 +374,10 @@ def extract_gemini_web_search_count(response: Any) -> int:
     # Check for grounding_metadata in candidates
     if hasattr(response, "candidates") and response.candidates:
         for candidate in response.candidates:
-            if (
-                hasattr(candidate, "grounding_metadata")
-                and candidate.grounding_metadata
-            ):
-                grounding_metadata = candidate.grounding_metadata
-
-                # Check if web_search_queries exists and is non-empty
-                if hasattr(grounding_metadata, "web_search_queries"):
-                    queries = grounding_metadata.web_search_queries
-
-                    if queries is not None and len(queries) > 0:
-                        return 1
-
-                # Check if grounding_chunks exists and is non-empty
-                if hasattr(grounding_metadata, "grounding_chunks"):
-                    chunks = grounding_metadata.grounding_chunks
-
-                    if chunks is not None and len(chunks) > 0:
-                        return 1
-
-            # Also check for google_search or grounding in function call names
-            if hasattr(candidate, "content") and candidate.content:
-                if hasattr(candidate.content, "parts") and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "function_call") and part.function_call:
-                            function_name = getattr(
-                                part.function_call, "name", ""
-                            ).lower()
-
-                            if (
-                                "google_search" in function_name
-                                or "grounding" in function_name
-                            ):
-                                return 1
+            if _has_grounding_metadata(candidate):
+                return 1
+            if _has_search_function(candidate):
+                return 1
 
     return 0
 
@@ -556,23 +421,7 @@ def _extract_usage_from_metadata(
         output_tokens=getattr(metadata, "candidates_token_count", 0),
     )
 
-    # Add cache tokens if present (don't add if 0)
-    if hasattr(metadata, "cached_content_token_count"):
-        cache_tokens = metadata.cached_content_token_count
-        if cache_tokens and cache_tokens > 0:
-            usage["cache_read_input_tokens"] = cache_tokens
-            # Gemini counts cached_content_token_count inside prompt_token_count, so
-            # declare the accounting model rather than leaving ingestion to infer it.
-            # Under explicit context caching the two counts come from separate
-            # measurements and can disagree by a few percent, which makes inference
-            # from the token counts alone unreliable.
-            usage["cache_reporting_exclusive"] = False
-
-    # Add reasoning tokens if present (don't add if 0)
-    if hasattr(metadata, "thoughts_token_count"):
-        reasoning_tokens = metadata.thoughts_token_count
-        if reasoning_tokens and reasoning_tokens > 0:
-            usage["reasoning_tokens"] = reasoning_tokens
+    _add_gemini_detail_usage(usage, metadata)
 
     # Capture raw usage metadata for backend processing
     # Serialize to dict here in the converter (not in utils)
@@ -665,23 +514,7 @@ def extract_gemini_content_from_chunk(
 
     if hasattr(chunk, "candidates") and chunk.candidates:
         for candidate in chunk.candidates:
-            if hasattr(candidate, "content") and candidate.content:
-                if hasattr(candidate.content, "parts") and candidate.content.parts:
-                    for part in candidate.content.parts:
-                        if hasattr(part, "function_call") and part.function_call:
-                            function_call = part.function_call
-                            blocks.append(
-                                _function_call_block(
-                                    function_call.name,
-                                    function_call.args,
-                                    getattr(function_call, "id", None),
-                                )
-                            )
-                            continue
-
-                        block = _format_part(part)
-                        if block is not None:
-                            blocks.append(block)
+            blocks.extend(_format_candidate_parts(candidate, streaming=True))
 
     if not blocks and hasattr(chunk, "text") and chunk.text:
         blocks.append({"type": "text", "text": chunk.text})
@@ -711,60 +544,8 @@ def format_gemini_streaming_output(
             }
         ]
 
-    # Handle list input
     if isinstance(accumulated_content, list):
-        content: List[FormattedContentItem] = []
-        text_parts = []
-
-        for item in accumulated_content:
-            if isinstance(item, str):
-                # Legacy support: accumulate strings
-                text_parts.append(item)
-            elif isinstance(item, dict):
-                # New format: content blocks
-                if item.get("type") == "text":
-                    text_parts.append(item.get("text", ""))
-                elif item.get("type") == "function":
-                    # If we have accumulated text, add it first
-                    if text_parts:
-                        content.append(
-                            {
-                                "type": "text",
-                                "text": "".join(text_parts),
-                            }
-                        )
-                        text_parts = []
-
-                    # Add the function call
-                    function_block: Dict[str, Any] = {
-                        "type": "function",
-                        "function": item.get("function", {}),
-                    }
-                    if isinstance(item.get("id"), str):
-                        function_block["id"] = item["id"]
-                    content.append(function_block)
-                else:
-                    if text_parts:
-                        content.append(
-                            {
-                                "type": "text",
-                                "text": "".join(text_parts),
-                            }
-                        )
-                        text_parts = []
-
-                    content.append(item)
-
-        # Add any remaining text
-        if text_parts:
-            content.append(
-                {
-                    "type": "text",
-                    "text": "".join(text_parts),
-                }
-            )
-
-        # If we have content, return it
+        content = _merge_streaming_blocks(accumulated_content)
         if content:
             return [{"role": "assistant", "content": content}]
 
@@ -788,3 +569,235 @@ def extract_gemini_embedding_token_count(response) -> Optional[int]:
                     total += int(token_count)
                     reported = True
     return total if reported else None
+
+
+def _format_gemini_tool_part(plain: Dict[str, Any]) -> Optional[FormattedContentItem]:
+    # Gemini-native function_call/function_response parts are normalized to the
+    # provider-agnostic tool-call/tool-result blocks. Emitting the raw Gemini
+    # shape leaves them unrenderable and invisible to evals.
+    if "function_call" in plain:
+        call = to_plain(plain["function_call"]) or {}
+        block: Dict[str, Any] = {
+            "type": "function",
+            "function": {
+                "name": call.get("name"),
+                "arguments": call.get("args"),
+            },
+        }
+        if isinstance(call.get("id"), str):
+            block["id"] = call["id"]
+        return block
+    if "function_response" in plain:
+        response = to_plain(plain["function_response"]) or {}
+        response_block: Dict[str, Any] = {
+            "type": "function",
+            "tool_name": response.get("name") or "",
+            "content": response.get("response"),
+        }
+        if isinstance(response.get("id"), str):
+            response_block["tool_use_id"] = response["id"]
+        return response_block
+    if not plain:
+        return None
+    key = next(iter(plain))
+    fallback: Dict[str, Any] = {"type": key, key: to_plain(plain[key])}
+    return cast(FormattedContentItem, fallback)
+
+
+def _format_message_content(content: Any) -> Any:
+    if isinstance(content, list):
+        return _format_parts_as_content_blocks(content)
+    if not isinstance(content, str):
+        return str(content)
+    return content
+
+
+def _is_bare_part(plain: Any) -> bool:
+    return isinstance(plain, dict) and bool(
+        _BARE_PART_KEYS.intersection(normalize_part_keys(plain))
+    )
+
+
+def _object_message_role(item: Any) -> str:
+    role = getattr(item, "role", "user") if hasattr(item, "role") else "user"
+    # Ensure role is a string
+    return role if isinstance(role, str) else "user"
+
+
+def _format_response_part(part: Any) -> Optional[FormattedContentItem]:
+    # Checked ahead of _format_part so loosely-specced MagicMock
+    # fixtures (which report a truthy .text but aren't real Part
+    # objects) still resolve to a text block — must stay ahead of
+    # the _format_part delegation below.
+    text = getattr(part, "text", None)
+    if isinstance(text, str) and text:
+        # `is True` so loosely-specced mocks (whose .thought is a
+        # truthy Mock) still land on the text branch below.
+        if getattr(part, "thought", None) is True:
+            return {"type": "thinking", "thinking": text}
+        else:
+            return {"type": "text", "text": text}
+
+    return _format_streaming_part(part)
+
+
+def _format_response_candidate(candidate: Any) -> Optional[FormattedMessage]:
+    if hasattr(candidate, "content") and candidate.content:
+        content = _format_candidate_parts(candidate, streaming=False)
+
+        if content:
+            return {
+                "role": "assistant",
+                "content": content,
+            }
+
+    elif hasattr(candidate, "text") and candidate.text:
+        return {
+            "role": "assistant",
+            "content": [{"type": "text", "text": candidate.text}],
+        }
+
+    return None
+
+
+def _has_grounding_metadata(candidate: Any) -> bool:
+    if hasattr(candidate, "grounding_metadata") and candidate.grounding_metadata:
+        grounding_metadata = candidate.grounding_metadata
+
+        # Check if web_search_queries exists and is non-empty
+        if hasattr(grounding_metadata, "web_search_queries"):
+            queries = grounding_metadata.web_search_queries
+
+            if queries is not None and len(queries) > 0:
+                return True
+
+        # Check if grounding_chunks exists and is non-empty
+        if hasattr(grounding_metadata, "grounding_chunks"):
+            chunks = grounding_metadata.grounding_chunks
+
+            if chunks is not None and len(chunks) > 0:
+                return True
+
+    return False
+
+
+def _has_search_function(candidate: Any) -> bool:
+    # Also check for google_search or grounding in function call names
+    if hasattr(candidate, "content") and candidate.content:
+        if hasattr(candidate.content, "parts") and candidate.content.parts:
+            for part in candidate.content.parts:
+                if _is_search_function_part(part):
+                    return True
+    return False
+
+
+def _add_gemini_detail_usage(usage: TokenUsage, metadata: Any) -> None:
+    # Add cache tokens if present (don't add if 0)
+    if hasattr(metadata, "cached_content_token_count"):
+        cache_tokens = metadata.cached_content_token_count
+        if cache_tokens and cache_tokens > 0:
+            usage["cache_read_input_tokens"] = cache_tokens
+            # Gemini counts cached_content_token_count inside prompt_token_count, so
+            # declare the accounting model rather than leaving ingestion to infer it.
+            # Under explicit context caching the two counts come from separate
+            # measurements and can disagree by a few percent, which makes inference
+            # from the token counts alone unreliable.
+            usage["cache_reporting_exclusive"] = False
+
+    # Add reasoning tokens if present (don't add if 0)
+    if hasattr(metadata, "thoughts_token_count"):
+        reasoning_tokens = metadata.thoughts_token_count
+        if reasoning_tokens and reasoning_tokens > 0:
+            usage["reasoning_tokens"] = reasoning_tokens
+
+
+def _format_streaming_part(part: Any) -> Optional[FormattedContentItem]:
+    if hasattr(part, "function_call") and part.function_call:
+        function_call = part.function_call
+        return _function_call_block(
+            function_call.name,
+            function_call.args,
+            getattr(function_call, "id", None),
+        )
+
+    return _format_part(part)
+
+
+def _merge_streaming_blocks(
+    accumulated_content: List[Any],
+) -> List[FormattedContentItem]:
+    content: List[FormattedContentItem] = []
+    text_parts = []
+
+    for item in accumulated_content:
+        if isinstance(item, str):
+            # Legacy support: accumulate strings
+            text_parts.append(item)
+        elif isinstance(item, dict):
+            # New format: content blocks
+            if item.get("type") == "text":
+                text_parts.append(item.get("text", ""))
+            else:
+                # If we have accumulated text, add it first
+                if text_parts:
+                    content.append(
+                        {
+                            "type": "text",
+                            "text": "".join(text_parts),
+                        }
+                    )
+                    text_parts = []
+
+                if item.get("type") == "function":
+                    content.append(_format_streaming_function(item))
+                else:
+                    content.append(item)
+
+    # Add any remaining text
+    if text_parts:
+        content.append(
+            {
+                "type": "text",
+                "text": "".join(text_parts),
+            }
+        )
+
+    return content
+
+
+def _format_streaming_function(item: Dict[str, Any]) -> FormattedContentItem:
+    # Add the function call
+    function_block: Dict[str, Any] = {
+        "type": "function",
+        "function": item.get("function", {}),
+    }
+    if isinstance(item.get("id"), str):
+        function_block["id"] = item["id"]
+    return function_block
+
+
+def _format_candidate_parts(
+    candidate: Any, streaming: bool
+) -> List[FormattedContentItem]:
+    content: List[FormattedContentItem] = []
+    if not (hasattr(candidate, "content") and candidate.content):
+        return content
+    if hasattr(candidate.content, "parts") and candidate.content.parts:
+        for part in candidate.content.parts:
+            block = (
+                _format_streaming_part(part)
+                if streaming
+                else _format_response_part(part)
+            )
+            if block is not None:
+                content.append(block)
+    return content
+
+
+def _is_search_function_part(part: Any) -> bool:
+    if hasattr(part, "function_call") and part.function_call:
+        function_name = getattr(part.function_call, "name", "").lower()
+
+        if "google_search" in function_name or "grounding" in function_name:
+            return True
+    return False

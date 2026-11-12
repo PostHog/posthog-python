@@ -1,4 +1,4 @@
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 try:
     from claude_agent_sdk import ToolUseBlock
@@ -53,3 +53,26 @@ def format_assistant_blocks(blocks: Any) -> List[Dict[str, Any]]:
         else:
             out.append(to_plain(block))
     return out
+
+
+def _format_user_input(
+    content: Any, client: Any, previous: Optional[List[Dict[str, Any]]]
+) -> Optional[List[Dict[str, Any]]]:
+    if isinstance(content, str):
+        return [{"role": "user", "content": content}]
+    if isinstance(content, list):
+        formatted: List[Dict[str, Any]] = []
+        for block in content:
+            if hasattr(block, "tool_use_id"):
+                formatted.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": block.tool_use_id,
+                        "content": format_tool_result_content(block, client),
+                    }
+                )
+            elif hasattr(block, "text"):
+                formatted.append({"type": "text", "text": block.text})
+        if formatted:
+            return [{"role": "user", "content": formatted}]
+    return previous

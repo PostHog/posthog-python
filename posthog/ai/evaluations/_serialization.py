@@ -109,19 +109,15 @@ def _encode(value: object, *, sort_keys: bool = True) -> bytes:
         ) from exc
 
 
+def _invalid_json_key(key: object) -> bool:
+    return not isinstance(key, str) or "\x00" in key
+
+
 def _validate_json(value: object, depth: int = 1) -> None:
     if isinstance(value, (dict, list)):
         if depth > 32:
             raise ValueError("Payload JSON nesting must not exceed 32 levels.")
-        children: Iterable[object]
-        if isinstance(value, dict):
-            if any(not isinstance(key, str) or "\x00" in key for key in value):
-                raise ValueError(
-                    "JSON object keys must be strings without null characters."
-                )
-            children = value.values()
-        else:
-            children = value
+        children = _json_children(value)
         for child in children:
             _validate_json(child, depth + 1)
     elif isinstance(value, str):
@@ -129,6 +125,19 @@ def _validate_json(value: object, depth: int = 1) -> None:
             raise ValueError("JSON strings must not contain null characters.")
     elif value is not None and type(value) not in (bool, int, float):
         raise ValueError("Provide JSON values, without automatic object conversion.")
+
+
+def _json_children(value: dict | list) -> Iterable[object]:
+    children: Iterable[object]
+    if isinstance(value, dict):
+        if any(_invalid_json_key(key) for key in value):
+            raise ValueError(
+                "JSON object keys must be strings without null characters."
+            )
+        children = value.values()
+    else:
+        children = value
+    return children
 
 
 def _payload(
@@ -149,12 +158,7 @@ def _payload(
         supplied = explicit
     elif not supplied:
         return _UNSET
-    metadata = supplied.get("metadata")
-    if metadata is not None and not isinstance(metadata, dict):
-        raise ValueError("metadata must be a JSON object or None.")
-    for field in ("reasoning", "error_message"):
-        if supplied.get(field) is not None and not isinstance(supplied[field], str):
-            raise ValueError(f"{field} must be a string or None.")
+    _validate_payload_fields(supplied)
     _validate_json(supplied)
     encoded = _encode(supplied)
     if len(encoded) > limit:
@@ -162,30 +166,24 @@ def _payload(
     return json.loads(encoded)
 
 
+def _validate_payload_fields(supplied: dict[str, JSONValue]) -> None:
+    metadata = supplied.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise ValueError("metadata must be a JSON object or None.")
+    for field in ("reasoning", "error_message"):
+        if supplied.get(field) is not None and not isinstance(supplied[field], str):
+            raise ValueError(f"{field} must be a string or None.")
+
+
 def _score(value: object) -> bool | float | list[str]:
     if type(value) is bool:
         return value
     if type(value) in (int, float):
-        try:
-            number = float(cast(Union[int, float], value))
-        except OverflowError as exc:
-            raise ValueError(
-                "Numeric scores must fit a finite binary64 number."
-            ) from exc
-        if not math.isfinite(number):
-            raise ValueError("Numeric scores must be finite.")
-        if type(value) is int and number != value:
-            raise ValueError(
-                "Integer scores must be exactly representable as a binary64 number."
-            )
-        return number
+        return _numeric_score(value)
     if (
         isinstance(value, list)
         and value
-        and all(
-            isinstance(key, str) and key and len(key) <= 128 and "\x00" not in key
-            for key in value
-        )
+        and all(_valid_category_key(key) for key in value)
     ):
         if len(set(value)) != len(value):
             raise ValueError("Categorical scores must contain distinct keys.")
@@ -193,6 +191,24 @@ def _score(value: object) -> bool | float | list[str]:
     raise ValueError(
         "A score must be a boolean, finite number, or nonempty list of category keys."
     )
+
+
+def _numeric_score(value: object) -> float:
+    try:
+        number = float(cast(Union[int, float], value))
+    except OverflowError as exc:
+        raise ValueError("Numeric scores must fit a finite binary64 number.") from exc
+    if not math.isfinite(number):
+        raise ValueError("Numeric scores must be finite.")
+    if type(value) is int and number != value:
+        raise ValueError(
+            "Integer scores must be exactly representable as a binary64 number."
+        )
+    return number
+
+
+def _valid_category_key(key: object) -> bool:
+    return isinstance(key, str) and bool(key) and len(key) <= 128 and "\x00" not in key
 
 
 def _count(value: object, field: str) -> int | None:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import AsyncIterator, Literal, Sequence
+from typing import AsyncIterator, Literal, Sequence, cast
 from uuid import UUID
 
 from ._dataset_serialization import (
@@ -387,10 +387,15 @@ class AsyncDatasets:
             return AsyncDatasetSnapshot(
                 dataset, selected, dataset.current_revision_id, self
             )
+        return await self._historical_snapshot(dataset, selected)
+
+    async def _historical_snapshot(
+        self, dataset: Dataset, selected: int
+    ) -> AsyncDatasetSnapshot:
         # Revisions are consecutive and newest first. Concurrent writes can
         # shift their offsets, so verify the result and scan on a miss.
         page = await self.list_revisions(
-            dataset.id, limit=1, offset=dataset.current_revision - selected
+            dataset.id, limit=1, offset=cast(int, dataset.current_revision) - selected
         )
         for candidate in page.results:
             if candidate.revision == selected:

@@ -15,6 +15,7 @@ from ._event_types import MCPAnalyticsEventType
 from ._internal import MCPAnalyticsData
 from .logger import log
 from ._sink import McpCaptureOptions
+from .types import UserIdentity
 from .version import __version__
 
 
@@ -53,9 +54,7 @@ def capture_event(
         "protocol_version": event_input.get("protocol_version"),
         "client_user_agent": event_input.get("client_user_agent"),
         "vendor_client": event_input.get("vendor_client"),
-        "identify_actor_given_id": actor.distinct_id if actor else None,
-        "identify_actor_data": (actor.properties or {}) if actor else {},
-        "groups": actor.groups if actor else None,
+        **_actor_fields(actor),
         "resource_name": event_input.get("resource_name"),
         "tool_category": event_input.get("tool_category"),
         "tool_description": event_input.get("tool_description"),
@@ -82,3 +81,11 @@ def capture_event(
 
 def log_capture_skipped() -> None:
     log("Warning: Server tracking data not found. Event will not be published.")
+
+
+def _actor_fields(actor: Optional[UserIdentity]) -> Dict[str, Any]:
+    return {
+        "identify_actor_given_id": actor.distinct_id if actor else None,
+        "identify_actor_data": (actor.properties or {}) if actor else {},
+        "groups": actor.groups if actor else None,
+    }

@@ -62,16 +62,10 @@ def to_epoch_ns(value: Any) -> Optional[int]:
     """A ``datetime`` or epoch seconds as unix nanoseconds; ``None`` when unusable."""
     if value is None or isinstance(value, bool):
         return None
-    ns: int
+    ns: Optional[int]
     if isinstance(value, datetime):
-        try:
-            if value.tzinfo is None:
-                value = value.astimezone()
-            delta = value - _EPOCH
-            ns = (
-                delta.days * 86400 + delta.seconds
-            ) * 10**9 + delta.microseconds * 1000
-        except Exception:
+        ns = _datetime_epoch_ns(value)
+        if ns is None:
             return None
     elif isinstance(value, int):
         ns = value * 10**9
@@ -82,9 +76,19 @@ def to_epoch_ns(value: Any) -> Optional[int]:
         ns = int(round(scaled))
     else:
         return None
-    if ns < MIN_TIMESTAMP_NS or ns > MAX_TIMESTAMP_NS:
+    if not MIN_TIMESTAMP_NS <= ns <= MAX_TIMESTAMP_NS:
         return None
     return ns
+
+
+def _datetime_epoch_ns(value: datetime) -> Optional[int]:
+    try:
+        if value.tzinfo is None:
+            value = value.astimezone()
+        delta = value - _EPOCH
+        return (delta.days * 86400 + delta.seconds) * 10**9 + delta.microseconds * 1000
+    except Exception:
+        return None
 
 
 def resolve_start_ns(value: Any, now_ns: int) -> int:

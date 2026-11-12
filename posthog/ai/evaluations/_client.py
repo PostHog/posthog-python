@@ -69,17 +69,21 @@ def _experiment_body(name: str, options: ExperimentOptions) -> bytes:
     for key, value in options.items():
         if key in ("id", "started_at"):
             continue
-        if key == "run_source":
-            if value is not None and value not in ("ci", "local", "scheduled"):
-                raise ValueError("run_source must be ci, local, scheduled, or None.")
-            data[key] = value
-        elif key in ("expected_item_count", "expected_result_count"):
-            data[key] = _count(value, key)
-        elif key == "dataset_revision_id":
-            data[key] = None if value is None else _uuid(value)
-        else:
-            data[key] = _identifier(value, key)
+        data[key] = _experiment_option(key, value)
     return _encode(data)
+
+
+def _experiment_option(key: str, value: Any) -> Any:
+    if key == "run_source":
+        if value is not None and value not in ("ci", "local", "scheduled"):
+            raise ValueError("run_source must be ci, local, scheduled, or None.")
+        return value
+    elif key in ("expected_item_count", "expected_result_count"):
+        return _count(value, key)
+    elif key == "dataset_revision_id":
+        return None if value is None else _uuid(value)
+    else:
+        return _identifier(value, key)
 
 
 @dataclass(frozen=True)
@@ -95,9 +99,7 @@ def _upload_body(items: list[bytes], results: list[bytes]) -> bytes:
     )
 
 
-def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
-    # Validate the finite submission before sending any chunk. Receipts and
-    # prepared bodies use memory proportional to this caller-sized sequence.
+def _result_declarations(results: tuple[EvaluationResult, ...]) -> dict[str, bytes]:
     identities: set[tuple[str, str]] = set()
     declarations: dict[str, bytes] = {}
     for result in results:
@@ -114,6 +116,36 @@ def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
             if previous != result.item._json:
                 raise ValueError("Conflicting declarations for the same item UUID.")
 
+    return declarations
+
+
+def _chunk_full(
+    results: list[bytes], items: list[bytes], item: bytes | None, size: int
+) -> bool:
+    return (
+        len(results) >= _MAX_RESULTS
+        or len(items) + (item is not None) > _MAX_ITEMS
+        or size > _MAX_REQUEST_BYTES
+    )
+
+
+def _chunk_extra(
+    result: EvaluationResult,
+    item: bytes | None,
+    results: list[bytes],
+    items: list[bytes],
+) -> int:
+    extra = len(result._json) + bool(results)
+    if item is not None:
+        extra += len(item) + bool(items)
+    return extra
+
+
+def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
+    # Validate the finite submission before sending any chunk. Receipts and
+    # prepared bodies use memory proportional to this caller-sized sequence.
+    declarations = _result_declarations(results)
+
     chunks: list[_Chunk] = []
     item_ids: set[str] = set()
     items: list[bytes] = []
@@ -126,14 +158,8 @@ def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
         item = (
             declarations.get(result.item_id) if result.item_id not in item_ids else None
         )
-        extra = len(result._json) + bool(encoded_results)
-        if item is not None:
-            extra += len(item) + bool(items)
-        if encoded_results and (
-            len(encoded_results) >= _MAX_RESULTS
-            or len(items) + (item is not None) > _MAX_ITEMS
-            or size + extra > _MAX_REQUEST_BYTES
-        ):
+        extra = _chunk_extra(result, item, encoded_results, items)
+        if encoded_results and _chunk_full(encoded_results, items, item, size + extra):
             chunks.append(
                 _Chunk(
                     start, results[start:index], _upload_body(items, encoded_results)

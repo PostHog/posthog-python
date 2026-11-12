@@ -191,6 +191,17 @@ class EvaluationItem:
         return cls(**dict(data))
 
 
+def _validate_result_status(
+    status: ResultStatus, value: ScoreValue | None, error_code: str | None
+) -> None:
+    if status not in ("ok", "error", "skipped", "not_applicable"):
+        raise ValueError("Unsupported result status.")
+    if status != "ok" and value is not None:
+        raise ValueError("Only an ok result may contain a score.")
+    if status != "error" and error_code is not None:
+        raise ValueError("Only an error result may contain an error_code.")
+
+
 @dataclass(frozen=True, init=False)
 class EvaluationResult:
     """One scorer outcome for an item and an exact scorer-version UUID.
@@ -222,12 +233,7 @@ class EvaluationResult:
     ) -> None:
         item_id = item.id if isinstance(item, EvaluationItem) else _uuid(item)
         version_id = _uuid(scorer_version_id)
-        if status not in ("ok", "error", "skipped", "not_applicable"):
-            raise ValueError("Unsupported result status.")
-        if status != "ok" and value is not None:
-            raise ValueError("Only an ok result may contain a score.")
-        if status != "error" and error_code is not None:
-            raise ValueError("Only an error result may contain an error_code.")
+        _validate_result_status(status, value, error_code)
         data: dict[str, Any] = {
             "item_id": item_id,
             "scorer_version_id": version_id,
@@ -253,8 +259,7 @@ class EvaluationResult:
             _MAX_RESULT_BYTES,
         )
         if not isinstance(prepared, _Unset):
-            if status != "error" and prepared.get("error_message") is not None:
-                raise ValueError("Only an error result may contain an error_message.")
+            _validate_result_payload(status, prepared)
             data["payload"] = prepared
         object.__setattr__(
             self, "item", item if isinstance(item, EvaluationItem) else item_id
@@ -425,18 +430,39 @@ def _upload_receipt(
             )
             for row in data["results"]
         )
-        if len(items) != len({item.id for item in items}) or {
-            item.id for item in items
-        } != {result.item_id for result in results}:
-            raise ValueError("Incomplete item acknowledgments.")
-        if [(result.item_id, result.scorer_version_id) for result in outcomes] != [
-            (result.item_id, result.scorer_version_id) for result in results
-        ]:
-            raise ValueError("Incomplete result acknowledgments.")
-        if len({result.id for result in outcomes}) != len(outcomes):
-            raise ValueError("Duplicate result identities in acknowledgment.")
+        _validate_upload_identities(items, outcomes, results)
         return UploadReceipt(items=items, results=outcomes)
     except (KeyError, TypeError, ValueError):
         raise EvaluationAPIError(
             code="invalid_response", persistence="unknown"
         ) from None
+
+
+def _validate_upload_identities(
+    items: tuple[ItemReceipt, ...],
+    outcomes: tuple[ResultReceipt, ...],
+    results: tuple[EvaluationResult, ...],
+) -> None:
+    _validate_item_acknowledgments(items, results)
+    if [(result.item_id, result.scorer_version_id) for result in outcomes] != [
+        (result.item_id, result.scorer_version_id) for result in results
+    ]:
+        raise ValueError("Incomplete result acknowledgments.")
+    if len({result.id for result in outcomes}) != len(outcomes):
+        raise ValueError("Duplicate result identities in acknowledgment.")
+
+
+def _validate_result_payload(
+    status: ResultStatus, payload: dict[str, JSONValue]
+) -> None:
+    if status != "error" and payload.get("error_message") is not None:
+        raise ValueError("Only an error result may contain an error_message.")
+
+
+def _validate_item_acknowledgments(
+    items: tuple[ItemReceipt, ...], results: tuple[EvaluationResult, ...]
+) -> None:
+    if len(items) != len({item.id for item in items}) or {
+        item.id for item in items
+    } != {result.item_id for result in results}:
+        raise ValueError("Incomplete item acknowledgments.")
