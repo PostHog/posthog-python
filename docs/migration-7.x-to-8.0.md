@@ -32,7 +32,7 @@ Read the checklist first, then the sections that apply to you.
 - [ ] You test the AI integrations with a mock client and assert on `capture` → [Route AI events](#route-ai-events)
 - [ ] You pass your own client object to the AI integrations → [Route AI events](#route-ai-events)
 - [ ] You call `alias()` without a `distinct_id` and rely on the context distinct ID → [Fix identity calls](#fix-identity-calls)
-- [ ] You turn person processing off in bulk and call `alias`, `group_identify`, `set`, or `set_once` → [Fix identity calls](#fix-identity-calls)
+- [ ] You turn person processing off with `super_options`, `super_properties`, a context option, or a context tag, and expect identify-style events, such as those from `alias`, `group_identify`, `set`, or `set_once`, to follow it → [Fix identity calls](#fix-identity-calls)
 - [ ] You reuse one event `uuid` for more than one event → [Check event IDs](#check-event-ids)
 - [ ] You expect `super_properties` to override a call's properties, including `$set` and `$groups` → [Check property precedence](#check-property-precedence)
 - [ ] You set `$is_server`, `$geoip_disable`, or a system property such as `$os`, and expect the SDK's value to win → [Check property precedence](#check-property-precedence)
@@ -128,6 +128,8 @@ To change an option, edit `options`. A hook that returns a new dict must copy `o
 
 That includes the `process_person_profile = false` the SDK sets for an event without a distinct ID. Without it, PostHog would create a person for the event's generated ID.
 
+A hook that builds an identify-style event, or renames an event to one, must set the `process_person_profile` option itself (see [Fix identity calls](#fix-identity-calls)).
+
 A hook that spreads the event into the new dict keeps `options`:
 
 ```python
@@ -183,24 +185,18 @@ The module-level client has no AI lane settings. To change them, create a `Clien
 - **Alias.** `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the SDK drops the call with a warning.
 - **Context values.** Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
 
-`process_person_profile: False` reaches identity calls too. Where you set it decides which calls it reaches:
+Identify-style events default to person processing on. These are `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set`, and `$set_once`, whether `alias`, `group_identify`, `set`, `set_once`, `capture`, or `capture_ai` sends them.
 
-- **A context option, `super_options`, or a `$process_person_profile` entry in `super_properties`.** It reaches `alias`, `group_identify`, `set`, and `set_once`.
-- **A `$process_person_profile` context tag.** It reaches only `alias` and `group_identify`, because `set` and `set_once` add context tags to the person properties they set.
+The SDK sets `process_person_profile: True` on them unless the call sets the `process_person_profile` option or a `$process_person_profile` property, or the SDK generated the distinct ID. PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning, and ignores the person update of `$set` and `$set_once`.
 
-Context tags and options are new on `alias` and `group_identify`. `super_properties` already reached them in 7.x.
+- **Call values.** The call's own value wins over context options and tags, `super_options`, and `super_properties`. So a `False` set there never reaches these events when the SDK didn't generate the distinct ID. In 7.x.x, `$process_person_profile: False` in `super_properties` reached them too.
+- **Legacy property.** When the call sets only the `$process_person_profile` property, the SDK moves it into the option.
+- **`None` values.** A `None` option or property counts as unset here, so the event gets `True`.
+- **Generated IDs.** An event whose distinct ID the SDK generated gets no default. Context options and `super_options` still fill it, then the personless `process_person_profile: False`.
+- **`before_send`.** The hook sees the value and can change it. The SDK first removes any `$process_person_profile` property from these events, including one from a context tag or `super_properties`, so the hook sees only the option.
+- **Built events.** A hook that builds an identify-style event, or renames an event to one, must set the option itself.
 
-PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning. They never merge a person or update a group.
-
-PostHog keeps the event from `set` or `set_once` but ignores its person update. Once the person exists, events sent with `process_person_profile: False` are still linked to it and billed as identified events.
-
-Capture accepts these events, so `on_error` doesn't report the drop. To keep them, pass the option on the call, which wins over context and `super_options`, or set it in `before_send`:
-
-```python
-posthog.alias(previous_id="anon-1", distinct_id="user-1", options={"process_person_profile": True})
-posthog.group_identify("company", "acme", {"name": "Acme"}, options={"process_person_profile": True})
-posthog.set(distinct_id="user-1", properties={"plan": "pro"}, options={"process_person_profile": True})
-```
+To keep one of these events personless, set `process_person_profile: False` on the call or in `before_send`.
 
 ### Check event IDs
 
@@ -213,7 +209,7 @@ posthog.set(distinct_id="user-1", properties={"plan": "pro"}, options={"process_
 
 An event's options and properties come from five steps, in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. The `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`.
+1. The `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`. An identify-style event also gets `process_person_profile: True` here when the call leaves it unset and the SDK didn't generate its distinct ID (see [Fix identity calls](#fix-identity-calls)).
 2. Context options and tags.
 3. `super_options` and `super_properties`.
 4. Values the SDK sets:
