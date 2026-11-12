@@ -12,13 +12,14 @@ import threading
 import time
 import traceback
 import tracemalloc
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from ipaddress import ip_address
 from pathlib import Path
-from typing import Any, Callable, Iterator, Mapping, Optional, Protocol, Union
+from typing import Any, Callable, Iterator, Mapping, Optional, Union
 from unittest import mock
 from urllib.parse import parse_qsl, urlencode, urlsplit
 from uuid import uuid4
@@ -1371,21 +1372,8 @@ def lowercase(headers: Any) -> dict[str, str]:
     return {name.lower(): value for name, value in headers.items()}
 
 
-class Server(Protocol):
-    def handle(self, incoming: Incoming) -> Answer: ...
-
-
-class AnotherServer:
-    def __init__(self) -> None:
-        self.received: list[bytes] = []
-
-    def handle(self, incoming: Incoming) -> Answer:
-        self.received.append(incoming.body)
-        return Answer(200)
-
-
 class FakePostHogAdapter(requests.adapters.BaseAdapter):
-    def __init__(self, posthog: Server) -> None:
+    def __init__(self, posthog: FakePostHog) -> None:
         super().__init__()
         self.posthog = posthog
 
@@ -1414,7 +1402,7 @@ class FakePostHogAdapter(requests.adapters.BaseAdapter):
         pass
 
 
-def httpx_transport(posthog: Server) -> httpx.MockTransport:
+def httpx_transport(posthog: FakePostHog) -> httpx.MockTransport:
     def handle(request: httpx.Request) -> httpx.Response:
         incoming = Incoming(
             request.method, str(request.url), lowercase(request.headers), request.read()
@@ -2458,8 +2446,52 @@ async def test_async_upload_never_follows_a_storage_redirect_even_when_the_clien
     assert not PostHogWithARedirectingStorage.redirect_followed
 
 
-ELSEWHERE = "http://elsewhere.example"
-REDIRECTED_ELSEWHERE = Answer(307, headers={"Location": f"{ELSEWHERE}/bucket/copy"})
+class ServerElsewhere(BaseHTTPRequestHandler):
+    requests_received = 0
+
+    def do_PUT(self) -> None:
+        type(self).requests_received += 1
+        self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    do_GET = do_POST = do_PUT
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
+class PostHogWithStorageRedirectingElsewhere(PostHogWithARedirectingStorage):
+    elsewhere = ""
+
+    def do_PUT(self) -> None:
+        self.rfile.read(int(self.headers["Content-Length"]))
+        self.send_response(307)
+        self.send_header("Location", f"{self.elsewhere}/bucket/copy")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+@contextmanager
+def serving(handler: type[BaseHTTPRequestHandler]) -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        yield f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@contextmanager
+def posthog_redirecting_storage_elsewhere() -> Iterator[tuple[str, str]]:
+    ServerElsewhere.requests_received = 0
+    PostHogWithStorageRedirectingElsewhere.emails_sent = 0
+    with serving(ServerElsewhere) as elsewhere:
+        PostHogWithStorageRedirectingElsewhere.elsewhere = elsewhere
+        with serving(PostHogWithStorageRedirectingElsewhere) as posthog:
+            yield posthog, elsewhere
 
 
 def error_text(error: EmailError) -> str:
@@ -2467,53 +2499,53 @@ def error_text(error: EmailError) -> str:
 
 
 def test_an_upload_never_follows_storage_to_another_server():
-    posthog, elsewhere = FakePostHog(), AnotherServer()
-    posthog.inject("storage", answers(REDIRECTED_ELSEWHERE))
-    session = session_on(posthog)
-    session.mount(ELSEWHERE, FakePostHogAdapter(elsewhere))
+    session = requests.Session()
+    session.trust_env = False
 
-    with pytest.raises(EmailError) as raised:
-        send_code(
-            Emails(SECRET_KEY, session=session), html=HTML, attachments=[INVITE_FILE]
-        )
+    with posthog_redirecting_storage_elsewhere() as (posthog, elsewhere):
+        with pytest.raises(EmailError) as raised:
+            send_code(
+                Emails(SECRET_KEY, host=posthog, max_retries=0, session=session),
+                html=HTML,
+                attachments=[INVITE_FILE],
+            )
 
     assert (raised.value.code, raised.value.field) == (
         "attachment_upload_failed",
         "attachments__0",
     )
-    assert "elsewhere.example" not in error_text(raised.value)
-    assert "files.example.com" not in error_text(raised.value)
-    assert elsewhere.received == []
-    assert posthog.delivered == []
+    assert elsewhere not in error_text(raised.value)
+    assert "/bucket/" not in error_text(raised.value)
+    assert ServerElsewhere.requests_received == 0
+    assert PostHogWithStorageRedirectingElsewhere.emails_sent == 0
 
 
 @pytest.mark.asyncio
 async def test_async_upload_never_follows_storage_to_another_server():
-    posthog, elsewhere = FakePostHog(), AnotherServer()
-    posthog.inject("storage", answers(REDIRECTED_ELSEWHERE))
-    emails = async_emails_on(
-        posthog,
-        follow_redirects=True,
-        mounts={ELSEWHERE: httpx_transport(elsewhere)},
-    )
-
-    with pytest.raises(EmailError) as raised:
-        await emails.send(
-            to="user@example.com",
-            template_key="password-reset",
-            subject="Reset your password",
-            html=HTML,
-            attachments=[INVITE_FILE],
+    with posthog_redirecting_storage_elsewhere() as (posthog, elsewhere):
+        emails = AsyncEmails(
+            SECRET_KEY,
+            host=posthog,
+            max_retries=0,
+            http_client=httpx.AsyncClient(follow_redirects=True, trust_env=False),
         )
+        with pytest.raises(EmailError) as raised:
+            await emails.send(
+                to="user@example.com",
+                template_key="password-reset",
+                subject="Reset your password",
+                html=HTML,
+                attachments=[INVITE_FILE],
+            )
 
     assert (raised.value.code, raised.value.field) == (
         "attachment_upload_failed",
         "attachments__0",
     )
-    assert "elsewhere.example" not in error_text(raised.value)
-    assert "files.example.com" not in error_text(raised.value)
-    assert elsewhere.received == []
-    assert posthog.delivered == []
+    assert elsewhere not in error_text(raised.value)
+    assert "/bucket/" not in error_text(raised.value)
+    assert ServerElsewhere.requests_received == 0
+    assert PostHogWithStorageRedirectingElsewhere.emails_sent == 0
 
 
 @pytest.mark.asyncio
