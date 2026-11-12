@@ -1,5 +1,11 @@
 # posthog
 
+## 7.87.2 — 2026-11-12
+
+### Patch changes
+
+- [5378ece8](https://github.com/posthog/posthog-python/commit/5378ece8efd17c9ca626346b8c1f7136dc1eb8cb) Keep `frozenset` and `deque` property values when cleaning events instead of replacing them with `None`. — Thanks @Ishkirat-Singh for your first contribution 🎉!
+
 ## 7.87.1 — 2026-11-11
 
 ### Patch changes
