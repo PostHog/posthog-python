@@ -1,5 +1,11 @@
 # posthog
 
+## 7.88.0 — 2026-11-12
+
+### Minor changes
+
+- [9636fa20](https://github.com/posthog/posthog-python/commit/9636fa20e4ea4315e8b6b6fd43c0ee63ec9bf054) Support versioned composite scorers for offline evaluations, including formula validation, dependency metadata, explicit server calculations, stored outcome receipts, and composite-safe bulk uploads. — Thanks @Radu-Raicea!
+
 ## 7.87.2 — 2026-11-12
 
 ### Patch changes

@@ -22,9 +22,11 @@ from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
     EvaluationItem,
+    EvaluationResult,
     NumericPassingRule,
     NumericScorerConfig,
     OfflineEvaluations,
+    ScorerComposition,
 )
 
 client = Posthog("phc_test")
@@ -54,7 +56,10 @@ canceled: CancelEmailResult = emails.cancel(scheduled_send.id)
 page: EmailList = emails.list(cursor=None, limit=50)
 next_page: EmailList | None = emails.list(cursor=page.next) if page.next else None
 first_time: datetime = page.results[0].scheduled_at
-_ = (template_send, rendered_send, scheduled_status, scheduled_time, moved, canceled, next_page, first_time)
+tracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking={"clicks": True, "engagement": False})
+untracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking=False)
+not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", template_key="newsletter", subject="News", html="<p>News</p>", sensitive=False)
+_ = (template_send, rendered_send, tracked_send, untracked_send, scheduled_status, scheduled_time, moved, canceled, next_page, first_time)
 
 
 async def async_email_types() -> None:
@@ -87,6 +92,21 @@ async def offline_evaluation_types(
     async_experiment = await async_client.create_experiment(name="async run")
     await async_experiment.upload_result(item=item, scorer_version_id=boolean.current_version_id, value=False)
     _ = config
+    composition: ScorerComposition = {
+        "expression": "relevance",
+        "inputs": [{"alias": "relevance", "scorer_version_id": numeric.current_version_id}],
+    }
+    overall = sync_client.scorers.create(
+        name="Overall", kind="numeric", config=NumericScorerConfig(min=0, max=1),
+        calculation="composite", composition=composition,
+    )
+    valid: bool = await async_client.scorers.validate_composition(kind="numeric", composition=composition)
+    sync_client.scorers.list(calculation="composite", input_definition_id=numeric.id)
+    experiment.upload_results([
+        EvaluationResult(item=item, scorer_version_id=numeric.current_version_id, value=0.9),
+        EvaluationResult(item=item, scorer_version_id=overall.current_version_id, calculate=True),
+    ])
+    _ = valid
 PY
 
 cat > "$tmp/invalid_types.py" <<'PY'
@@ -103,6 +123,9 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_key="welcome", html="<p>Hi</p>")  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", cc="team@example.com")  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", capture_engagement=False)  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", tracking=False)  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", sensitive=False)  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", tracking={"open": False})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", cc="team@example.com")  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", scheduled_at=1796115600)  # expected-type-error

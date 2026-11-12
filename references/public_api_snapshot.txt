@@ -488,6 +488,7 @@ attribute posthog.ai.evaluations.EvaluationAPIError.retry_after = retry_after
 attribute posthog.ai.evaluations.EvaluationAPIError.status = status
 attribute posthog.ai.evaluations.EvaluationAPIError.submission = deepcopy(submission)
 attribute posthog.ai.evaluations.EvaluationItem.id: str
+attribute posthog.ai.evaluations.EvaluationResult.calculate: bool
 attribute posthog.ai.evaluations.EvaluationResult.item: EvaluationItem | str
 attribute posthog.ai.evaluations.EvaluationResult.item_id: str
 attribute posthog.ai.evaluations.EvaluationResult.scorer_version_id: str
@@ -529,6 +530,7 @@ attribute posthog.ai.evaluations.NumericScorerConfig.passing_rule: NumericPassin
 attribute posthog.ai.evaluations.NumericScorerConfig.step: float | None
 attribute posthog.ai.evaluations.OfflineEvaluations.datasets = Datasets(self._transport, project_id)
 attribute posthog.ai.evaluations.OfflineEvaluations.scorers = Scorers(self._transport, project_id)
+attribute posthog.ai.evaluations.ResultOptions.calculate: bool
 attribute posthog.ai.evaluations.ResultOptions.error_code: str | None
 attribute posthog.ai.evaluations.ResultOptions.error_message: str | None
 attribute posthog.ai.evaluations.ResultOptions.evaluated_at: datetime | str | None
@@ -538,25 +540,45 @@ attribute posthog.ai.evaluations.ResultOptions.payload: dict[str, JSONValue]
 attribute posthog.ai.evaluations.ResultOptions.reasoning: str | None
 attribute posthog.ai.evaluations.ResultOptions.status: ResultStatus
 attribute posthog.ai.evaluations.ResultOptions.value: ScoreValue | None
+attribute posthog.ai.evaluations.ResultReceipt.error_code: str | None = None
 attribute posthog.ai.evaluations.ResultReceipt.item_id: str
 attribute posthog.ai.evaluations.ResultReceipt.scorer_version_id: str
+attribute posthog.ai.evaluations.ResultReceipt.status: ResultStatus | None = None
 attribute posthog.ai.evaluations.ResultStatus = Literal['ok', 'error', 'skipped', 'not_applicable']
 attribute posthog.ai.evaluations.RunSource = Literal['ci', 'local', 'scheduled']
 attribute posthog.ai.evaluations.ScoreValue = bool | int | float | list[str]
 attribute posthog.ai.evaluations.Scorer.archived: bool
+attribute posthog.ai.evaluations.Scorer.calculation: ScorerCalculation = 'reported'
+attribute posthog.ai.evaluations.Scorer.composition: ScorerComposition | None = None
 attribute posthog.ai.evaluations.Scorer.config: _ConfigT
 attribute posthog.ai.evaluations.Scorer.created_at: datetime
 attribute posthog.ai.evaluations.Scorer.created_by: dict[str, Any] | None
 attribute posthog.ai.evaluations.Scorer.current_version: int
 attribute posthog.ai.evaluations.Scorer.current_version_id: str
+attribute posthog.ai.evaluations.Scorer.dependent_composite_count: int = 0
 attribute posthog.ai.evaluations.Scorer.description: str
 attribute posthog.ai.evaluations.Scorer.id: str
+attribute posthog.ai.evaluations.Scorer.input_scorers: tuple[ScorerInput, ...] = ()
 attribute posthog.ai.evaluations.Scorer.kind: ScorerKind
 attribute posthog.ai.evaluations.Scorer.name: str
 attribute posthog.ai.evaluations.Scorer.tags: tuple[str, ...] = ()
 attribute posthog.ai.evaluations.Scorer.team: int
 attribute posthog.ai.evaluations.Scorer.updated_at: datetime
+attribute posthog.ai.evaluations.ScorerCalculation = Literal['reported', 'composite']
+attribute posthog.ai.evaluations.ScorerComposition.expression: str
+attribute posthog.ai.evaluations.ScorerComposition.inputs: list[ScorerCompositionInput]
+attribute posthog.ai.evaluations.ScorerCompositionInput.alias: str
+attribute posthog.ai.evaluations.ScorerCompositionInput.scorer_version_id: str
 attribute posthog.ai.evaluations.ScorerConfig = BooleanScorerConfig | NumericScorerConfig | CategoricalScorerConfig
+attribute posthog.ai.evaluations.ScorerInput.alias: str
+attribute posthog.ai.evaluations.ScorerInput.config: ScorerConfig
+attribute posthog.ai.evaluations.ScorerInput.definition_id: str
+attribute posthog.ai.evaluations.ScorerInput.kind: ScorerKind
+attribute posthog.ai.evaluations.ScorerInput.latest_version: int | None
+attribute posthog.ai.evaluations.ScorerInput.latest_version_id: str | None
+attribute posthog.ai.evaluations.ScorerInput.name: str
+attribute posthog.ai.evaluations.ScorerInput.scorer_version_id: str
+attribute posthog.ai.evaluations.ScorerInput.version: int
 attribute posthog.ai.evaluations.ScorerKind = Literal['boolean', 'numeric', 'categorical']
 attribute posthog.ai.evaluations.ScorerOrder = Literal['name', '-name', 'kind', '-kind', 'created_at', '-created_at', 'updated_at', '-updated_at', 'current_version', '-current_version']
 attribute posthog.ai.evaluations.ScorerPage.count: int
@@ -564,6 +586,8 @@ attribute posthog.ai.evaluations.ScorerPage.next: str | None
 attribute posthog.ai.evaluations.ScorerPage.next_offset: int | None
 attribute posthog.ai.evaluations.ScorerPage.previous: str | None
 attribute posthog.ai.evaluations.ScorerPage.results: tuple[Scorer[ScorerConfig], ...]
+attribute posthog.ai.evaluations.ScorerVersion.calculation: ScorerCalculation = 'reported'
+attribute posthog.ai.evaluations.ScorerVersion.composition: ScorerComposition | None = None
 attribute posthog.ai.evaluations.ScorerVersion.config: _ConfigT
 attribute posthog.ai.evaluations.ScorerVersion.created_at: datetime
 attribute posthog.ai.evaluations.ScorerVersion.created_by: dict[str, Any] | None
@@ -894,9 +918,11 @@ attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+attribute posthog.emails.CodeEmailArgs.sensitive: NotRequired[Optional[bool]]
 attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.CodeEmailArgs.tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -913,6 +939,9 @@ attribute posthog.emails.EmailStatus.id: str
 attribute posthog.emails.EmailStatus.reason: Optional[str] = None
 attribute posthog.emails.EmailStatus.status: str
 attribute posthog.emails.EmailStatus.status_at: datetime
+attribute posthog.emails.EmailTracking.clicks: bool
+attribute posthog.emails.EmailTracking.engagement: bool
+attribute posthog.emails.EmailTracking.opens: bool
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
@@ -1282,7 +1311,7 @@ class posthog.ai.evaluations.DatasetSnapshot(dataset: Dataset, revision: int, re
 class posthog.ai.evaluations.Datasets(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.EvaluationAPIError(*, status: int | None = None, code: str | None = None, detail: Any = None, attr: str | None = None, errors: Any = None, response: dict[str, Any] | None = None, retry_after: float | None = None, persistence: Literal['rejected', 'unknown', 'not_sent'] = 'unknown', submission: dict[str, Any] | None = None)
 class posthog.ai.evaluations.EvaluationItem(*, id: str | UUID | None = None, input: JSONValue | _Unset = _UNSET, output: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, case_key: str | None = None, trial: str | None = None, dataset_item_identifier: str | None = None, dataset_item_version_identifier: str | None = None, dataset_item_version_id: str | UUID | None = None, application_trace_id: str | None = None, model_version: str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
-class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
+class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, calculate: bool = False, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
 class posthog.ai.evaluations.Experiment(transport: SyncTransport, project_id: int, id: str, *, receipt: ExperimentReceipt | None = None, submission: bytes | None = None)
 class posthog.ai.evaluations.ExperimentOptions
 class posthog.ai.evaluations.ExperimentReceipt(id: str, status: Literal['uploading', 'completed', 'failed'], created: bool, started_at: datetime, created_at: datetime, finished_at: datetime | None, expected_item_count: int | None, expected_result_count: int | None, accepted_item_count: int, accepted_result_count: int)
@@ -1291,10 +1320,13 @@ class posthog.ai.evaluations.NumericPassingRule
 class posthog.ai.evaluations.NumericScorerConfig
 class posthog.ai.evaluations.OfflineEvaluations(*, project_id: int, secret_key: str, host: str | None = None, timeout: float = 15, max_retries: int = 3)
 class posthog.ai.evaluations.ResultOptions
-class posthog.ai.evaluations.ResultReceipt(id: str, created: bool, accepted_at: datetime, item_id: str, scorer_version_id: str)
-class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int, tags: tuple[str, ...] = ())
+class posthog.ai.evaluations.ResultReceipt(id: str, created: bool, accepted_at: datetime, item_id: str, scorer_version_id: str, status: ResultStatus | None = None, error_code: str | None = None)
+class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int, tags: tuple[str, ...] = (), calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None, input_scorers: tuple[ScorerInput, ...] = (), dependent_composite_count: int = 0)
+class posthog.ai.evaluations.ScorerComposition
+class posthog.ai.evaluations.ScorerCompositionInput
+class posthog.ai.evaluations.ScorerInput(alias: str, scorer_version_id: str, definition_id: str, name: str, kind: ScorerKind, version: int, config: ScorerConfig, latest_version_id: str | None, latest_version: int | None)
 class posthog.ai.evaluations.ScorerPage(count: int, results: tuple[Scorer[ScorerConfig], ...], next: str | None, previous: str | None, next_offset: int | None)
-class posthog.ai.evaluations.ScorerVersion(id: str, definition_id: str, version: int, kind: ScorerKind, config: _ConfigT, created_at: datetime, created_by: dict[str, Any] | None)
+class posthog.ai.evaluations.ScorerVersion(id: str, definition_id: str, version: int, kind: ScorerKind, config: _ConfigT, created_at: datetime, created_by: dict[str, Any] | None, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
 class posthog.ai.evaluations.ScorerVersionPage(count: int, results: tuple[ScorerVersion[ScorerConfig], ...], next_cursor: str | None)
 class posthog.ai.evaluations.Scorers(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.UploadReceipt(items: tuple[ItemReceipt, ...], results: tuple[ResultReceipt, ...])
@@ -1361,6 +1393,7 @@ class posthog.emails.CodeEmailArgs
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
 class posthog.emails.EmailList(results: tuple[ScheduledEmail, ...], next: Optional[str] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
+class posthog.emails.EmailTracking 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
 class posthog.emails.ScheduledEmail(id: str, to: str, scheduled_at: datetime, created_at: datetime)
@@ -1686,13 +1719,14 @@ method posthog.ai.evaluations.AsyncExperiment.upload_results(results: Sequence[E
 method posthog.ai.evaluations.AsyncOfflineEvaluations.aclose()
 method posthog.ai.evaluations.AsyncOfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.AsyncOfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
-method posthog.ai.evaluations.AsyncScorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
+method posthog.ai.evaluations.AsyncScorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, composition: ScorerComposition | None = None)
 method posthog.ai.evaluations.AsyncScorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.AsyncScorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any', calculation: ScorerCalculation | None = None, input_definition_id: str | UUID | None = None)
 method posthog.ai.evaluations.AsyncScorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
 method posthog.ai.evaluations.AsyncScorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.validate_composition(*, kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None = None)
 method posthog.ai.evaluations.DatasetSnapshot.iter_items(*, page_size: int = 25)
 method posthog.ai.evaluations.Datasets.archive(dataset_id: str | UUID)
 method posthog.ai.evaluations.Datasets.archive_item(item_id: str | UUID, *, base_version: int)
@@ -1723,13 +1757,14 @@ method posthog.ai.evaluations.Experiment.upload_results(results: Sequence[Evalua
 method posthog.ai.evaluations.OfflineEvaluations.close()
 method posthog.ai.evaluations.OfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.OfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
-method posthog.ai.evaluations.Scorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
+method posthog.ai.evaluations.Scorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, composition: ScorerComposition | None = None)
 method posthog.ai.evaluations.Scorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.Scorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any', calculation: ScorerCalculation | None = None, input_definition_id: str | UUID | None = None)
 method posthog.ai.evaluations.Scorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
 method posthog.ai.evaluations.Scorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
+method posthog.ai.evaluations.Scorers.validate_composition(*, kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None = None)
 method posthog.ai.gemini.gemini.Models.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.gemini.gemini.Models.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.gemini.gemini.Models.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
