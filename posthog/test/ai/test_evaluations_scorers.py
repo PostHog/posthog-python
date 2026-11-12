@@ -26,6 +26,298 @@ VERSION_ID = "f72481ec-1310-41de-b5bb-d20e1c59f121"
 BASE = "/api/projects/123/llm_analytics/score_definitions/"
 
 
+def composition():
+    return {
+        "expression": "number(correct)",
+        "inputs": [{"alias": "correct", "scorer_version_id": VERSION_ID}],
+    }
+
+
+def input_scorer():
+    return {
+        "alias": "correct",
+        "scorer_version_id": VERSION_ID,
+        "definition_id": SCORER_ID,
+        "name": "Correct",
+        "kind": "boolean",
+        "version": 1,
+        "config": {"true_is_failure": True},
+        "latest_version_id": "f72481ec-1310-41de-b5bb-d20e1c59f122",
+        "latest_version": 2,
+    }
+
+
+@pytest.mark.parametrize(
+    "kind,config,expression",
+    [
+        ("numeric", {"min": 0, "max": 1}, "number(correct)"),
+        ("boolean", {"true_is_failure": False}, "correct"),
+        (
+            "categorical",
+            {"options": [{"key": "good", "label": "Good"}]},
+            '"good" if correct else "good"',
+        ),
+    ],
+)
+def test_composite_creation_and_detached_pinned_metadata(
+    scorers, kind, config, expression
+):
+    namespace, transport = scorers
+    formula = composition()
+    formula["expression"] = expression
+    response = scorer_response(
+        kind=kind,
+        config=config,
+        calculation="composite",
+        composition=formula,
+        input_scorers=[input_scorer()],
+        dependent_composite_count=2,
+    )
+    transport.request.return_value = response
+    scorer = invoke(
+        namespace.create,
+        name="Overall",
+        kind=kind,
+        config=config,
+        calculation="composite",
+        composition=formula,
+    )
+    sent = json.loads(transport.request.call_args.kwargs["body"])
+    assert sent == {
+        "name": "Overall",
+        "kind": kind,
+        "config": config,
+        "calculation": "composite",
+        "composition": formula,
+    }
+    assert transport.request.call_args.kwargs["retry_safe"] is False
+    assert scorer.calculation == "composite"
+    assert scorer.composition == formula
+    assert scorer.dependent_composite_count == 2
+    pinned = scorer.input_scorers[0]
+    assert (pinned.version, pinned.latest_version) == (1, 2)
+    assert pinned.scorer_version_id == VERSION_ID
+    assert pinned.config == {"true_is_failure": True}
+    formula["inputs"][0]["alias"] = "changed"
+    response["input_scorers"][0]["config"]["true_is_failure"] = False
+    assert scorer.composition["inputs"][0]["alias"] == "correct"
+    assert pinned.config["true_is_failure"] is True
+    assert json.loads(transport.request.call_args.kwargs["body"]) == sent
+
+
+def test_composite_versioning_history_and_dependency_filters(scorers):
+    namespace, transport = scorers
+    formula = composition()
+    transport.request.return_value = scorer_response(
+        calculation="composite", composition=formula
+    )
+    invoke(
+        namespace.create_version,
+        SCORER_ID,
+        config={},
+        composition=formula,
+        base_version=1,
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "config": {},
+        "composition": formula,
+        "base_version": 1,
+    }
+    assert transport.request.call_args.kwargs["retry_safe"] is False
+    transport.request.return_value = version_response(
+        calculation="composite", composition=formula
+    )
+    version = invoke(namespace.get_version, SCORER_ID, VERSION_ID)
+    assert version.composition == formula
+    assert version.calculation == "composite"
+    transport.request.return_value = {
+        "count": 1,
+        "results": [version_response(calculation="composite", composition=formula)],
+        "next_cursor": None,
+    }
+    assert invoke(namespace.list_versions, SCORER_ID).results == (version,)
+    transport.request.return_value = {
+        "count": 0,
+        "results": [],
+        "next": None,
+        "previous": None,
+    }
+    invoke(
+        namespace.list,
+        calculation="composite",
+        input_definition_id=UUID(SCORER_ID),
+        kind="numeric",
+        tags=["quality"],
+        offset=100,
+    )
+    params = transport.request.call_args.kwargs["params"]
+    assert params["calculation"] == "composite"
+    assert params["input_definition_id"] == SCORER_ID
+    assert params["kind"] == "numeric" and params["offset"] == 100
+
+
+def test_legacy_scorers_and_versions_default_to_reported(scorers):
+    namespace, transport = scorers
+    scorer = invoke(
+        namespace.create,
+        name="Reported",
+        kind="numeric",
+        config={},
+        calculation="reported",
+    )
+    assert json.loads(transport.request.call_args.kwargs["body"]) == {
+        "name": "Reported",
+        "kind": "numeric",
+        "config": {},
+    }
+    assert (
+        scorer.calculation,
+        scorer.composition,
+        scorer.input_scorers,
+        scorer.dependent_composite_count,
+    ) == (
+        "reported",
+        None,
+        (),
+        0,
+    )
+    transport.request.return_value = version_response()
+    version = invoke(namespace.get_version, SCORER_ID, VERSION_ID)
+    assert (version.calculation, version.composition) == ("reported", None)
+
+
+@pytest.mark.parametrize("config", [None, {}, {"min": 0, "max": 1}])
+def test_validate_composition_is_read_only_and_preserves_optional_config(
+    scorers, config
+):
+    namespace, transport = scorers
+    transport.request.return_value = {"valid": True}
+    assert (
+        invoke(
+            namespace.validate_composition,
+            kind="numeric",
+            composition=composition(),
+            config=config,
+        )
+        is True
+    )
+    assert transport.request.call_args.args == ("POST", BASE + "validate_composition/")
+    body = json.loads(transport.request.call_args.kwargs["body"])
+    assert body == {
+        "kind": "numeric",
+        "composition": composition(),
+        **({"config": config} if config is not None else {}),
+    }
+    transport.request.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "response", [{}, {"valid": False}, {"valid": 1}, {"valid": "true"}]
+)
+def test_malformed_formula_validation_is_not_success(scorers, response):
+    namespace, transport = scorers
+    transport.request.return_value = response
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(
+            namespace.validate_composition, kind="numeric", composition=composition()
+        )
+    assert caught.value.code == "invalid_response"
+
+
+def test_formula_validation_surfaces_server_access_and_formula_errors(scorers):
+    namespace, transport = scorers
+    for status, code in [(403, "permission_denied"), (400, "invalid_input")]:
+        error = EvaluationAPIError(status=status, code=code, persistence="rejected")
+        transport.request.side_effect = error
+        with pytest.raises(EvaluationAPIError) as caught:
+            invoke(
+                namespace.validate_composition,
+                kind="numeric",
+                composition=composition(),
+            )
+        assert caught.value is error
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        {},
+        {"expression": "", "inputs": []},
+        {"expression": "x" * 1025, "inputs": composition()["inputs"]},
+        {"expression": "correct", "inputs": []},
+        {"expression": "correct", "inputs": composition()["inputs"] * 17},
+        {"expression": "correct", "inputs": composition()["inputs"] * 2},
+        {
+            "expression": "correct",
+            "inputs": [{"alias": "number", "scorer_version_id": VERSION_ID}],
+        },
+        {
+            "expression": "correct",
+            "inputs": [{"alias": "bad-name", "scorer_version_id": VERSION_ID}],
+        },
+        {
+            "expression": "correct",
+            "inputs": [{"alias": "correct", "scorer_version_id": "not-a-uuid"}],
+        },
+    ],
+)
+def test_invalid_compositions_fail_before_io(scorers, formula):
+    namespace, transport = scorers
+    with pytest.raises(ValueError):
+        invoke(
+            namespace.create,
+            name="Overall",
+            kind="numeric",
+            config={},
+            calculation="composite",
+            composition=formula,
+        )
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"calculation": "unknown"},
+        {"calculation": "reported", "composition": composition()},
+        {"calculation": "composite"},
+        {
+            "calculation": "composite",
+            "composition": composition(),
+            "config": {"step": 0.1},
+        },
+    ],
+)
+def test_invalid_calculation_configuration_fails_before_io(scorers, options):
+    namespace, transport = scorers
+    with pytest.raises(ValueError):
+        invoke(
+            namespace.create,
+            **({"name": "Overall", "kind": "numeric", "config": {}} | options),
+        )
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"calculation": "unknown"},
+        {"calculation": "composite"},
+        {"composition": composition()},
+        {"dependent_composite_count": -1},
+        {"input_scorers": None},
+        {"input_scorers": [input_scorer() | {"scorer_version_id": "invalid"}]},
+        {"input_scorers": [input_scorer() | {"version": True}]},
+    ],
+)
+def test_malformed_composite_metadata_is_not_acknowledged(scorers, overrides):
+    namespace, transport = scorers
+    transport.request.return_value = scorer_response(**overrides)
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(namespace.get, SCORER_ID)
+    assert caught.value.code == "invalid_response"
+
+
 def scorer_response(**overrides):
     return {
         "id": SCORER_ID,
