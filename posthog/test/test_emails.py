@@ -834,6 +834,7 @@ def test_send_schedules_both_forms_for_a_time_with_an_offset(_name, value, wire)
     for result in (template_result, code_result):
         assert result.status == "scheduled"
         assert result.scheduled_at == datetime(2026, 12, 1, 7, tzinfo=timezone.utc)
+        assert result.warnings == ()
     assert [
         json.loads(request.body)["scheduled_at"] for request in adapter.requests
     ] == [
@@ -885,7 +886,7 @@ def test_a_time_at_or_before_now_reads_as_the_servers_queued_answer():
 
     result = send(emails, scheduled_at="2020-01-01T00:00:00Z")
 
-    assert (result.status, result.scheduled_at) == ("queued", None)
+    assert (result.status, result.scheduled_at, result.warnings) == ("queued", None, ())
 
 
 @parameterized.expand(
