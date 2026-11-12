@@ -52,8 +52,10 @@ category by its ``key``: the first send creates it in the project with its
 ``name`` and ``description``. A later send leaves the category as it is, so
 change its name or description in PostHog. A marketing send honors the
 recipient's opt-outs, and its body must link ``{{ unsubscribe_url }}``,
-which PostHog fills with the recipient's preferences link. A ``template_key`` that names a template made in PostHog
-follows that template's category.
+which PostHog fills with the recipient's preferences link. A ``template_key``
+that names a template made in PostHog follows that template's category. A
+template made in PostHog is transactional: PostHog refuses one in a marketing
+category with ``marketing_template``.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -304,6 +306,9 @@ class CodeEmailArgs(_RecipientArgs):
             template form doesn't take it.
         category: Left out, the email follows the category of the template
             that ``template_key`` names, or is transactional with no category.
+            A template made in PostHog is transactional, so PostHog raises
+            ``marketing_template`` for a ``template_key`` that names a template
+            in a marketing category.
             :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``) sends
             transactional email with no category. A
             :class:`MessageCategory` files the email under that category, and

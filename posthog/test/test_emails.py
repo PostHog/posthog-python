@@ -816,6 +816,8 @@ class FakeSendApi(requests.adapters.BaseAdapter):
         self, body: dict[str, Any], category: Any
     ) -> tuple[int, dict[str, Any]]:
         key = self.templates[body["template_key"]]
+        if key is not None and self.categories[key]["type"] == "marketing":
+            return 400, {"code": "marketing_template"}
         if key is None:
             matches = category in (None, "transactional")
         else:
@@ -936,41 +938,57 @@ def test_a_send_without_a_category_is_transactional(_name, overrides):
     assert api.categories == {}
 
 
-def emails_with_a_newsletter_template() -> tuple[Emails, FakeSendApi]:
+def emails_with_a_receipt_template() -> tuple[Emails, FakeSendApi]:
     return emails_with_send_api(
         {
-            "newsletter": {
-                "type": "marketing",
-                "name": "Newsletter",
+            "receipts": {
+                "type": "transactional",
+                "name": "Receipts",
                 "description": "",
             }
         },
-        templates={"november-digest": "newsletter"},
+        templates={"order-receipt": "receipts"},
     )
 
 
 @parameterized.expand([("left_out", {}), ("none", {"category": None})])
-def test_a_send_for_a_marketing_template_follows_its_category(_name, overrides):
-    emails, api = emails_with_a_newsletter_template()
+def test_a_send_for_a_template_in_a_category_follows_its_category(_name, overrides):
+    emails, api = emails_with_a_receipt_template()
 
-    send_code(emails, template_key="november-digest", html=MARKETING_HTML, **overrides)
+    send_code(emails, template_key="order-receipt", html=HTML, **overrides)
 
-    assert api.sent == [("user@example.com", "newsletter")]
+    assert api.sent == [("user@example.com", "receipts")]
 
 
-def test_transactional_on_a_marketing_template_is_refused():
-    emails, api = emails_with_a_newsletter_template()
+def test_transactional_on_a_template_in_a_category_is_refused():
+    emails, api = emails_with_a_receipt_template()
 
     with pytest.raises(EmailError) as raised:
         send_code(
             emails,
-            template_key="november-digest",
-            html=MARKETING_HTML,
+            template_key="order-receipt",
+            html=HTML,
             category=TRANSACTIONAL_CATEGORY,
         )
 
     assert (raised.value.code, raised.value.name) == (
         "category_mismatch",
+        "validation_error",
+    )
+    assert api.sent == []
+
+
+def test_a_send_for_a_marketing_template_is_refused():
+    emails, api = emails_with_send_api(
+        {"newsletter": {"type": "marketing", "name": "Newsletter", "description": ""}},
+        templates={"november-digest": "newsletter"},
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, template_key="november-digest", html=MARKETING_HTML)
+
+    assert (raised.value.code, raised.value.name) == (
+        "marketing_template",
         "validation_error",
     )
     assert api.sent == []
