@@ -1,5 +1,8 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import json
+import re
+import random
 from datetime import datetime, timezone
 
 import pytest
@@ -9,6 +12,7 @@ from posthog.mcp.constants import (
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
+import posthog.mcp._sanitization as sanitization
 from posthog.mcp._event_types import MCPAnalyticsEventType
 from posthog.mcp._exceptions import capture_exception
 from posthog.mcp._ids import deterministic_prefixed_id, new_prefixed_id
@@ -164,10 +168,45 @@ def test_sanitize_redacts_sensitive_json_members_inside_strings(value, expected)
         pytest.param('{"note":[' + "1" * 40 + "!", id="digits"),
         pytest.param('{"note":[' + "1 " * 40 + "!", id="spaced digits"),
         pytest.param('{"note":[' + "1," * 20_000 + "!", id="long array"),
+        pytest.param('\\"' * 32_000, id="escaped quotes"),
+        pytest.param(json.dumps('"' * 32_000), id="JSON-encoded quotes"),
     ],
 )
-def test_json_member_redaction_runs_in_linear_time_on_malformed_arrays(value):
+def test_json_member_redaction_runs_in_linear_time_on_adversarial_text(value):
     assert sanitize_captured_value(value) == value
+
+
+# The pattern posthog-go and posthog-rs match JSON members with (with every
+# array item after the first needing its comma), run on Python's re. The SDK's
+# scanner must find exactly its members, only without its quadratic retries.
+_JSON_STRING_ORACLE = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
+_JSON_SCALAR_ORACLE = _JSON_STRING_ORACLE + r"|-?\d[\d.eE+-]*|true|false"
+_JSON_ITEM_ORACLE = r"(?:" + _JSON_SCALAR_ORACLE + r"|null)\s*"
+_JSON_MEMBER_ORACLE = re.compile(
+    r'("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:'
+    + _JSON_SCALAR_ORACLE
+    + r"|\[\s*(?:"
+    + _JSON_ITEM_ORACLE
+    + r"(?:,\s*"
+    + _JSON_ITEM_ORACLE
+    + r")*(?:,\s*)?)?(?:\]|$))"
+)
+
+
+def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
+    monkeypatch.setattr(sanitization, "_should_redact_key", lambda key: True)
+    rng = random.Random(1223)
+    alphabet = ['"', '"', "\\", ":", ",", "[", "]", " ", "\n", "1", "-", "e", "x"]
+    words = ["true", "false", "null", '"k"', '"k": ', "[1, 2]", '\\"']
+    texts = [
+        "".join(rng.choice(alphabet + words) for _ in range(rng.randrange(16)))
+        for _ in range(30_000)
+    ]
+    for text in texts:
+        expected = _JSON_MEMBER_ORACLE.sub(
+            lambda member: member.group(1) + '"[redacted]"', text
+        )
+        assert sanitization._redact_json_members(text) == expected, repr(text)
 
 
 def test_sanitize_redacts_large_base64():
