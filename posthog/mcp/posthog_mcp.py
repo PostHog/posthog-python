@@ -888,9 +888,9 @@ class PostHogMCP(Client):
         advertise: bool = True,
     ) -> List[Any]:
         """Add the conversation fields to ``tools`` and record which ones the SDK
-        owns. A listing that does not ``advertise`` them still records
-        ``conversation_id`` ownership, so a later call strips an echoed handle, but
-        declares no ``_mcp_instructions`` and so records none."""
+        owns. A listing that does not ``advertise`` them records the same
+        ownership: what one client is shown must not change what another
+        client's listing declares or its calls return."""
         if not self._enable_conversation_id:
             self._conversation_ownership = {}
             return tools
@@ -902,12 +902,7 @@ class PostHogMCP(Client):
                     previous.output_instructions and current.output_instructions,
                 )
         if not advertise:
-            self._conversation_ownership.update(
-                {
-                    name: _ConversationOwnership(owned.conversation_id, False)
-                    for name, owned in ownership.items()
-                }
-            )
+            self._conversation_ownership.update(ownership)
             return tools
         prepared = []
         for tool in tools:

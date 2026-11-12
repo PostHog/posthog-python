@@ -551,3 +551,42 @@ async def test_modern_client_tools_list_still_emits(make):
 
     assert response.status_code == 200
     assert len(_events(client, "$mcp_tools_list")) == 1
+
+
+async def test_a_fresh_lowlevel_server_strips_injected_arguments_from_a_strict_tool():
+    received = []
+    strict = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[mcp_types.Tool(name="search_docs", input_schema=strict)]
+        )
+
+    async def on_call_tool(ctx, params):
+        received.append(dict(params.arguments or {}))
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="ok")]
+        )
+
+    server = Server("strict", on_call_tool=on_call_tool, on_list_tools=on_list_tools)
+    instrument(server, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=True))
+
+    async with wire(server) as http:
+        response = await modern_call(
+            http,
+            "search_docs",
+            {
+                "query": "flags",
+                "context": "find docs",
+                "llm_model": "model-a",
+                "conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f",
+            },
+        )
+
+    assert "error" not in response.json(), response.text
+    assert received == [{"query": "flags"}]

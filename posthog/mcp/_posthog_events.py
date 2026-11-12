@@ -36,8 +36,12 @@ _P = PostHogMCPAnalyticsProperty
 
 # `$mcp_session_source` is `conversation`, `transport`, `client_metadata` or
 # `generated`. A session token and a transport MCP session id are both transport
-# carried, so they share one value.
-_WIRE_SESSION_SOURCE = {"token": "transport", "mcp": "transport"}
+# carried, so they share one value, and the SDK generates a request's own session.
+_WIRE_SESSION_SOURCE = {
+    "token": "transport",
+    "mcp": "transport",
+    "request": "generated",
+}
 
 
 def _get_distinct_id(event: Event) -> str:

@@ -8,7 +8,9 @@ import json
 from datetime import timedelta
 from types import SimpleNamespace
 
+import jsonschema
 import pytest
+from pydantic import BaseModel, ConfigDict
 
 from posthog.mcp import McpAnalytics, PostHogMCP
 from posthog.mcp._client_conversation import (
@@ -28,7 +30,8 @@ from posthog.mcp.session import (
     resolve_session_id_with_source,
 )
 from posthog.mcp.session_token import SessionTokenPayload
-from posthog.mcp.types import MCPAnalyticsOptions
+from posthog.mcp.request_headers import get_request_headers
+from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -84,6 +87,7 @@ def start_call(
     client_name=None,
     mcp_session_id=None,
     token=None,
+    user=None,
 ):
     return start_tool_call_lifecycle(
         data,
@@ -96,7 +100,7 @@ def start_call(
         client_name=client_name,
         client_version=None,
         protocol_version=None,
-        extra=http_extra(user_agent),
+        extra=http_extra(user_agent, **({"x-user": user} if user else {})),
     )
 
 
@@ -336,6 +340,120 @@ async def test_chatgpt_calls_on_a_shared_http_pod_keep_no_session_alive():
     assert calls[0]["$session_id"] != calls[-1]["$session_id"]
 
 
+async def test_a_long_call_grouped_by_a_client_id_keeps_the_connection_alive():
+    client = FakeClient()
+    data = fresh_data(client, enable_conversation_id=False)
+
+    async def call(meta=None, lasts=0):
+        lifecycle = start_call(data, client_name="codex-mcp-client", meta=meta)
+        await lifecycle.prime_session()
+        data.last_activity -= timedelta(minutes=lasts)
+        await lifecycle.record_result(
+            {"content": []}, 1.0, conversation_id_delivered=False
+        )
+
+    await call()
+    await call({"sessionId": CODEX_ID}, lasts=40)
+    await call()
+    await _flush()
+
+    first, _, last = (e["properties"] for e in _events(client, "$mcp_tool_call"))
+    assert last["$session_id"] == first["$session_id"]
+
+
+def identify_by_user_header(request, extra):
+    who = (get_request_headers(extra) or {}).get("x-user")
+    return UserIdentity(distinct_id=who, properties={f"{who}_only": "present"})
+
+
+def shared_http_server(client, enable_conversation_id=True):
+    key = FakeServer()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(
+            enable_conversation_id=enable_conversation_id,
+            identify=identify_by_user_header,
+        ),
+        sink=McpEventSink(client),
+        session_id=new_session_id(),
+    )
+    set_server_tracking_data(key, data)
+    return key, data
+
+
+async def run_call(data, **call_input):
+    lifecycle = start_call(data, **call_input)
+    await lifecycle.prime_session()
+    await lifecycle.record_result(
+        {"content": []},
+        1.0,
+        conversation_id_delivered=bool(lifecycle.minted_conversation_id),
+    )
+
+
+@pytest.mark.parametrize(
+    "bob_token",
+    [None, SessionTokenPayload(session_id="ses_bob")],
+    ids=["bob without a token", "bob with his own token"],
+)
+async def test_custom_capture_in_a_metadata_call_is_not_the_previous_callers(
+    bob_token,
+):
+    client = FakeClient()
+    key, data = shared_http_server(client, enable_conversation_id=False)
+    await run_call(
+        data,
+        user_agent=OTHER,
+        user="alice",
+        token=SessionTokenPayload(session_id="ses_alice"),
+    )
+
+    bob = start_call(
+        data, user_agent=CHATGPT, user="bob", meta=CHATGPT_META, token=bob_token
+    )
+    await bob.prime_session()
+    await McpAnalytics(key).capture("inside_tool")
+    await _flush()
+
+    (event,) = _events(client, "inside_tool")
+    assert event["distinct_id"] != "alice"
+    assert "alice_only" not in json.dumps(event["properties"])
+    assert event["properties"]["$session_id"] not in ("ses_alice", CHATGPT_SESSION)
+    if bob_token:
+        assert event["properties"]["$session_id"] == "ses_bob"
+
+
+@pytest.mark.parametrize(
+    "meta", [None, {"openai/session": ""}], ids=["absent", "empty"]
+)
+async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions(
+    meta,
+):
+    client = FakeClient()
+    _, data = shared_http_server(client)
+
+    for user in ("alice", "bob"):
+        await run_call(data, user_agent=CHATGPT, user=user, meta=meta)
+    await _flush()
+
+    alice, bob = (e for e in _events(client, "$mcp_tool_call"))
+    assert alice["properties"]["$session_id"] != bob["properties"]["$session_id"]
+    assert bob["properties"]["$set"] == {"bob_only": "present"}
+    assert bob["properties"]["$mcp_session_source"] == "generated"
+    assert _events(client, "$mcp_initialize") == []
+
+
+async def test_a_one_client_connection_keeps_its_session_without_a_client_id():
+    client = FakeClient()
+    data = fresh_data(client, enable_conversation_id=False)
+
+    for _ in range(2):
+        await run_call(data, client_name="codex-mcp-client")
+    await _flush()
+
+    first, second = (e["properties"] for e in _events(client, "$mcp_tool_call"))
+    assert first["$session_id"] == second["$session_id"]
+
+
 async def test_a_client_conversation_session_is_not_a_synthesized_handshake():
     client = FakeClient()
 
@@ -491,6 +609,45 @@ def test_prepare_tool_list_advertises_conversation_id(user_agent, advertised):
     assert ("conversation_id" in prepared["inputSchema"]["properties"]) is advertised
 
 
+STRICT_OUTPUT_TOOL = {
+    "name": "probe",
+    "inputSchema": {"type": "object", "properties": {}},
+    "outputSchema": {
+        "type": "object",
+        "properties": {"value": {"type": "integer"}},
+        "additionalProperties": False,
+    },
+}
+
+
+@pytest.mark.parametrize(
+    "listings", [[OTHER], [CHATGPT, OTHER], [OTHER, CHATGPT, OTHER]]
+)
+def test_an_ordinary_result_matches_its_listing_after_a_chatgpt_listing(listings):
+    client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
+    for user_agent in listings:
+        (listed,) = client.prepare_tool_list(
+            [STRICT_OUTPUT_TOOL], context=False, headers={"user-agent": user_agent}
+        )
+
+    call = client.prepare_tool_call(
+        "probe",
+        {},
+        original_tool=STRICT_OUTPUT_TOOL,
+        headers={"user-agent": OTHER},
+    )
+    prepared = client.prepare_tool_result(
+        {
+            "content": [{"type": "text", "text": "ok"}],
+            "structuredContent": {"value": 7},
+        },
+        call,
+    )
+
+    jsonschema.validate(prepared.result["structuredContent"], listed["outputSchema"])
+    assert "_mcp_instructions" in prepared.result["structuredContent"]
+
+
 def test_a_chatgpt_listing_still_lets_prepare_tool_call_strip_the_handle():
     client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
     tool = {"name": "search_docs", "inputSchema": {"type": "object", "properties": {}}}
@@ -580,3 +737,56 @@ async def test_a_chatgpt_listing_reads_no_client_conversation(kind):
     assert listing["properties"]["$session_id"] != derive_session_id_from_mcp_session(
         CHATGPT_ID
     )
+
+
+class StrictResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: int
+
+
+def register_strict_probe(server):
+    @server.tool()
+    def probe() -> StrictResult:
+        return StrictResult(value=7)
+
+
+@pytest.mark.parametrize("kind", ["official", "fastmcp"])
+async def test_a_chatgpt_listing_keeps_an_ordinary_strict_result_valid(kind):
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=True)
+    async with fleet(
+        client, pods=1, kind=kind, options=options, register=register_strict_probe
+    ) as lb:
+        for request_id, user_agent in enumerate((OTHER, CHATGPT), start=1):
+            await lb.post(rpc("tools/list", {}, request_id), _headers(user_agent))
+        response = await lb.post(
+            rpc("tools/call", {"name": "probe", "arguments": {}}, 3), _headers(OTHER)
+        )
+
+    result = response.json()["result"]
+    assert not result.get("isError"), response.text
+    assert result["structuredContent"]["value"] == 7
+
+
+@pytest.mark.parametrize("kind", KINDS)
+async def test_chatgpt_calls_without_their_id_stay_apart_on_a_shared_pod(kind):
+    client = FakeClient()
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=True, identify=identify_by_user_header
+    )
+    async with fleet(client, pods=1, kind=kind, options=options) as lb:
+        for request_id, user in enumerate(("alice", "bob"), start=1):
+            response = await lb.post(
+                rpc(
+                    "tools/call",
+                    {"name": "add", "arguments": {"a": 1, "b": 2}, "_meta": {}},
+                    request_id,
+                ),
+                {**_headers(CHATGPT), "x-user": user},
+            )
+            assert "conversation_id" not in response.text
+    await _flush()
+
+    alice, bob = _events(client, "$mcp_tool_call")
+    assert alice["properties"]["$session_id"] != bob["properties"]["$session_id"]
+    assert bob["properties"]["$set"] == {"bob_only": "present"}

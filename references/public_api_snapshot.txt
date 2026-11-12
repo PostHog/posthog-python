@@ -375,6 +375,7 @@ alias posthog.mcp.asgi.SessionTokenPayload -> posthog.mcp.session_token.SessionT
 alias posthog.mcp.asgi.decode_session_id -> posthog.mcp.session_token.decode_session_id
 alias posthog.mcp.asgi.encode_session_id -> posthog.mcp.session_token.encode_session_id
 alias posthog.mcp.asgi.handshake_session -> posthog.mcp.session.handshake_session
+alias posthog.mcp.asgi.handshake_session_id -> posthog.mcp.session.handshake_session_id
 alias posthog.mcp.asgi.log -> posthog.mcp.logger.log
 alias posthog.mcp.asgi.new_session_id -> posthog.mcp.session.new_session_id
 alias posthog.mcp.asgi.read_mcp_session_header -> posthog.mcp.session_token.read_mcp_session_header

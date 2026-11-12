@@ -64,6 +64,7 @@ from ._client_conversation import (
 )
 from .session import (
     ResolvedSession,
+    new_session_id,
     resolve_session_id,
     resolve_session_id_with_source,
     touch_connection_session,
@@ -319,10 +320,11 @@ def _first_request_stands_in_for_initialize(
     conversation-anchored session: it belongs to a chat, not to a handshake, and
     synthesizing one there is how a single connection used to report two. So a
     client whose first request already echoes a conversation reports no initialize
-    here. The same goes for a session anchored by the client's own conversation id."""
+    here. The same goes for a session anchored by the client's own conversation id,
+    and for one that lives for a single sessionless request."""
     if data.handshake_observed_in_process:
         return False
-    if session_source in ("conversation", "client_metadata"):
+    if session_source in ("conversation", "client_metadata", "request"):
         return False
     scope = getattr(get_request(extra), "scope", None)
     return not (isinstance(scope, dict) and scope.get(HANDSHAKE_OBSERVER_KEY) is data)
@@ -401,7 +403,7 @@ async def prime_session(
     *,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload] = None,
-    client_conversation: Optional[ClientConversation] = None,
+    request_session_id: Optional[str] = None,
 ) -> None:
     """Point the shared per-server session at *this* request before the tool body runs.
 
@@ -411,9 +413,13 @@ async def prime_session(
     this the tool body would read whatever the *previous* request left behind
     and attribute a custom event to the wrong caller. Emits nothing — it only
     settles the transport/memory session an in-tool event should belong to.
+
+    A client conversation id never reaches this shared state: it names one chat,
+    and a concurrent request would read it. A call that carries one is primed
+    like any other, which also counts its arrival on a one-client connection.
     """
     await resolve_session_id(
-        data, mcp_session_id, token=token, client_conversation=client_conversation
+        data, mcp_session_id, token=token, request_session_id=request_session_id
     )
 
 
@@ -469,6 +475,7 @@ async def prepare_request(
     protocol_version: Optional[str] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
+    request_session_id: Optional[str] = None,
 ) -> ResolvedSession:
     """Resolve the session, run identify, then emit initialize if this request
     has to stand in for an unobserved handshake. Returns the session to stamp on
@@ -507,6 +514,7 @@ async def prepare_request(
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
+        request_session_id=request_session_id,
     )
     if (
         session.source == "generated"
@@ -536,6 +544,7 @@ class ToolCallLifecycle:
     request_meta: Optional[Dict[str, Any]]
     client: Optional[ClientConversationRow]
     client_conversation: Optional[ClientConversation]
+    request_session_id: Optional[str]
     allow_self_reported_model: bool
     analytics_owned_parameters: Optional[FrozenSet[str]]
     request: Dict[str, Any]
@@ -572,6 +581,13 @@ class ToolCallLifecycle:
         )
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
+        on_one_client_connection = (
+            get_request(self.extra) is None
+            and self.token is None
+            and not self.mcp_session_id
+        )
+        if self.client_conversation is not None and on_one_client_connection:
+            await touch_connection_session(self.data)
         return await prepare_request(
             self.data,
             mcp_session_id=self.mcp_session_id,
@@ -583,6 +599,7 @@ class ToolCallLifecycle:
             token=self.token,
             conversation_id=conversation_id,
             client_conversation=self.client_conversation,
+            request_session_id=self.request_session_id,
         )
 
     async def prime_session(self) -> None:
@@ -590,15 +607,8 @@ class ToolCallLifecycle:
             self.data,
             mcp_session_id=self.mcp_session_id,
             token=self.token,
-            client_conversation=self.client_conversation,
+            request_session_id=self.request_session_id,
         )
-        on_one_client_connection = (
-            get_request(self.extra) is None
-            and self.token is None
-            and not self.mcp_session_id
-        )
-        if self.client_conversation is not None and on_one_client_connection:
-            await touch_connection_session(self.data)
 
     def virtual_result_texts(self, primary_text: str) -> List[str]:
         """Build the text payload for an SDK virtual-tool result."""
@@ -614,6 +624,7 @@ class ToolCallLifecycle:
     async def record_missing_capability(
         self, *, conversation_id_delivered: bool = False
     ) -> None:
+        await self.prime_session()
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         await record_missing_capability(
@@ -636,6 +647,7 @@ class ToolCallLifecycle:
         handler and return the reply text for the agent. The event is captured
         whether or not the handler raises."""
         report = parse_feedback_report(self.arguments, self.feedback_options)
+        await self.prime_session()
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         await record_feedback(
@@ -761,17 +773,27 @@ def start_tool_call_lifecycle(
         request_user_agent(extra), meta_client_name(request_meta) or client_name
     )
     client_conversation = read_client_conversation(client, request_meta)
+    carries_session = token is not None or bool(mcp_session_id)
+    handle_free = client is not None and client.handle_free
+    # Over HTTP the process session would mix this call with other clients': one
+    # its client id groups (an in-tool event reads it before the call), or one a
+    # handle-free client sends without its id and so with no handle either. A
+    # one-client connection keeps the process session.
+    request_session_id = (
+        new_session_id()
+        if (client_conversation is not None or (minted and handle_free))
+        and not carries_session
+        and get_request(extra) is not None
+        and not _is_sse_request(extra)
+        else None
+    )
     # The client's own id wins, so a handle the agent echoes alongside it is
     # ignored. A carried session stays stable until the agent supplies its own
     # handle, and a handle-free client names its conversation itself, so neither
     # is minted one.
     if client_conversation is not None:
         conversation_id, minted = None, False
-    elif minted and (
-        token is not None
-        or bool(mcp_session_id)
-        or (client is not None and client.handle_free)
-    ):
+    elif minted and (carries_session or handle_free):
         conversation_id, minted = None, False
     return ToolCallLifecycle(
         data=data,
@@ -780,6 +802,7 @@ def start_tool_call_lifecycle(
         request_meta=request_meta,
         client=client,
         client_conversation=client_conversation,
+        request_session_id=request_session_id,
         allow_self_reported_model=allow_self_reported_model,
         analytics_owned_parameters=analytics_owned_parameters,
         request=build_tool_call_request(name, arguments),
@@ -1291,9 +1314,11 @@ def mutate_tool_schema(
             setattr(tool, schema_attribute, schema)
         except Exception:  # noqa: BLE001 - some schema attrs may be read-only
             log(f"WARN: could not set {schema_attribute} on tool {tool.name}")
-    if advertises_conversation_id:
-        data.tool_output_instructions[tool.name] = add_instructions_to_output_schema(
-            tool
+    if data.options.enable_conversation_id:
+        # The framework validates the next result against the latest listing, so
+        # a listing that declares nothing turns mirroring off until one declares.
+        data.tool_output_instructions[tool.name] = (
+            advertise_conversation_id and add_instructions_to_output_schema(tool)
         )
 
 

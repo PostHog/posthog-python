@@ -26,7 +26,8 @@ __all__ = [
 
 class ResolvedSession(NamedTuple):
     """A request's session id and where it came from: ``"conversation"``,
-    ``"token"``, ``"mcp"``, ``"client_metadata"`` or ``"generated"``."""
+    ``"token"``, ``"mcp"``, ``"client_metadata"``, ``"request"`` (generated for
+    one sessionless HTTP request) or ``"generated"``."""
 
     session_id: str
     source: str
@@ -75,6 +76,7 @@ async def resolve_session_id(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
+    request_session_id: Optional[str] = None,
 ) -> str:
     """The session id for this request. See :func:`resolve_session_id_with_source`,
     which this wraps -- callers that need to know *where* the session came from
@@ -85,6 +87,7 @@ async def resolve_session_id(
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
+        request_session_id=request_session_id,
     )
     return session_id
 
@@ -110,6 +113,15 @@ async def handshake_session(
     return await resolve_session_id_with_source(data, None)
 
 
+async def handshake_session_id(
+    data: MCPAnalyticsData,
+    mcp_session_id: Optional[str],
+    token: Optional[SessionTokenPayload],
+) -> str:
+    """The id of :func:`handshake_session`, kept for callers of the earlier API."""
+    return (await handshake_session(data, mcp_session_id, token)).session_id
+
+
 async def resolve_session_id_with_source(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
@@ -117,6 +129,7 @@ async def resolve_session_id_with_source(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
+    request_session_id: Optional[str] = None,
 ) -> ResolvedSession:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
@@ -149,6 +162,10 @@ async def resolve_session_id_with_source(
     for a request that didn't replay the token would merge unrelated clients under
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
+
+    ``request_session_id`` is a session the caller reserved for one HTTP request
+    in place of process memory, which belongs to a one-client connection and on a
+    shared HTTP server would group unrelated clients.
     """
     if client_conversation is not None:
         return ResolvedSession(
@@ -180,6 +197,13 @@ async def resolve_session_id_with_source(
             data.last_activity = now
             return ResolvedSession(data.session_id, "mcp")
 
+        if request_session_id:
+            # Stored only so an in-tool custom event lands in this request's
+            # session. No later request reuses a "request" session.
+            data.session_id = request_session_id
+            data.session_source = "request"
+            return ResolvedSession(request_session_id, "request")
+
         # Once a session is MCP-derived, keep it even if a later request arrives
         # without the MCP session id, so the session doesn't fragment.
         if data.session_source == "mcp" and data.last_mcp_session_id:
@@ -203,17 +227,12 @@ def _is_stale(data: MCPAnalyticsData, now: datetime) -> bool:
 
 
 async def touch_connection_session(data: MCPAnalyticsData) -> None:
-    """A one-client connection's id rotates on the first tool call that arrives 30
-    minutes or more after the previous one, whichever source grouped that call. So
-    a call grouped by the client still rotates a stale id and resets the clock, or
-    a later call without one would rotate early.
+    """Count a finished call grouped by the client as connection activity, so a
+    later call without an id does not rotate a live one-client connection's id.
+    Rotation itself happens when a call arrives (see ``prime_session``).
 
     Only for a one-client connection (stdio): on a shared HTTP instance, keeping
     the instance's own session alive would group unrelated clients' requests."""
     async with data.session_lock:
-        if data.session_source != "generated":
-            return
-        now = datetime.now(timezone.utc)
-        if _is_stale(data, now):
-            data.session_id = new_session_id()
-        data.last_activity = now
+        if data.session_source == "generated":
+            data.last_activity = datetime.now(timezone.utc)

@@ -54,6 +54,7 @@ from ._instrumentation import (
     copy_tools_list_result,
     is_first_listing_page,
     is_tool_result_error,
+    lists_conversation_id,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
@@ -814,31 +815,37 @@ def _wrap_v2_list_tools(
     data.raw_tool_names_probe = probe_raw_tool_names
 
     async def handler(ctx: Any, params: Any) -> Any:
-        if _is_internal_dispatch(ctx):
-            return await original(ctx, params)
         token, client_name, client_version, protocol_version, mcp_session_id = (
             _resolve_ctx(ctx)
         )
         request = params_to_request_dict(_LIST_METHOD, params, by_alias=True)
         extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
+        advertise_conversation_id = lists_conversation_id(extra, client_name)
         # Resolve session, emit $mcp_initialize (once per session) and identify
-        # here too — a client may list tools without ever calling one.
-        lifecycle = await start_tools_list_lifecycle(
-            data,
-            request=request,
-            extra=extra,
-            mcp_session_id=mcp_session_id,
-            token=token,
-            client_name=client_name,
-            client_version=client_version,
-            protocol_version=protocol_version,
+        # here too — a client may list tools without ever calling one. The SDK's
+        # own listing is no client request, so it records nothing, but its tools
+        # still get the ownership a call is stripped by.
+        lifecycle = (
+            None
+            if _is_internal_dispatch(ctx)
+            else await start_tools_list_lifecycle(
+                data,
+                request=request,
+                extra=extra,
+                mcp_session_id=mcp_session_id,
+                token=token,
+                client_name=client_name,
+                client_version=client_version,
+                protocol_version=protocol_version,
+            )
         )
 
         start = time.monotonic()
         try:
             result = copy_tools_list_result(await original(ctx, params))
         except Exception as error:
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
+            if lifecycle is not None:
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
             raise
         duration_ms = (time.monotonic() - start) * 1000
 
@@ -864,7 +871,7 @@ def _wrap_v2_list_tools(
                 owns_context=owns_context,
                 context_required=context_required,
                 is_sdk_virtual_tool=False,
-                advertise_conversation_id=lifecycle.advertises_conversation_id,
+                advertise_conversation_id=advertise_conversation_id,
             )
         result = apply_virtual_tool_injection(
             result,
@@ -872,15 +879,16 @@ def _wrap_v2_list_tools(
             names,
             data,
             schema_field="input_schema",
-            advertise_conversation_id=lifecycle.advertises_conversation_id,
+            advertise_conversation_id=advertise_conversation_id,
         )
 
-        await lifecycle.record_result(
-            names=names,
-            result=result,
-            duration_ms=duration_ms,
-            is_empty=empty,
-        )
+        if lifecycle is not None:
+            await lifecycle.record_result(
+                names=names,
+                result=result,
+                duration_ms=duration_ms,
+                is_empty=empty,
+            )
 
         return result
 
