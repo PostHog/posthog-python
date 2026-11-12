@@ -79,3 +79,10 @@ def test_several_migration_guides_keep_their_h1s():
     head, *guides = generator.migration_page(["# Guide 2\n\nB.", "# Guide 1\n\nA."])
     assert 'title: "PostHog Python SDK migration guides"' in head
     assert guides == ["# Guide 2\n\nB.", "# Guide 1\n\nA."]
+
+
+@pytest.mark.parametrize("major, pin", [(7, '"posthog>=7,<8"'), (8, '"posthog>=8,<9"')])
+def test_getting_started_pins_the_install_to_the_page_major(major, pin):
+    text = generator.getting_started(major)
+    assert f"pip install {pin}" in text
+    assert "{major}" not in text and "{next_major}" not in text

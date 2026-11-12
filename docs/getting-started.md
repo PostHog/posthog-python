@@ -7,7 +7,7 @@ To send your first event, install the package, create a client, capture an event
 ## Install
 
 ```bash
-pip install posthog
+pip install "posthog>={major},<{next_major}"
 ```
 
 ## Initialize

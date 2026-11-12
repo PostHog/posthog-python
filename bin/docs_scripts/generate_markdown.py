@@ -224,6 +224,16 @@ def migration_page(guides: list[str]) -> list[str]:
     return [head, *guides]
 
 
+def getting_started(major: int) -> str:
+    """docs/getting-started.md for one major. Its install line pins that major, so a
+    reader never installs a major the page doesn't describe."""
+    text = (ROOT / "docs/getting-started.md").read_text()
+    if "{major}" not in text:
+        raise SystemExit("docs/getting-started.md: the install line must pin {major}")
+    pinned = text.replace("{major}", str(major))
+    return nest(pinned.replace("{next_major}", str(major + 1)))
+
+
 def write(name: str, sections: list[str]) -> None:
     (ROOT / "references" / name).write_text("\n\n".join(sections) + "\n")
     print(f"wrote references/{name}")
@@ -249,7 +259,7 @@ def main() -> None:
         (ROOT / "posthog/version.py").read_text().split('"')[1].split(".")[0]
     )
     major = opts.major or declared
-    started = nest((ROOT / "docs/getting-started.md").read_text())
+    started = getting_started(major)
     body = [
         "## Getting started",
         started,
