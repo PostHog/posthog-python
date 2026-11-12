@@ -4022,7 +4022,9 @@ Name | Type | Description | Default
 `text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
 `from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
 `reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
-`capture_engagement` |  | Capture the email's opens and clicks as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`capture_engagement` |  | Deprecated, use `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both `capture_engagement` and `tracking`. Captures the email's engagement events as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`sensitive` |  | Marks the email as sensitive, such as one that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. The template form doesn't take it. | 
+`tracking` |  | What PostHog tracks for this email. Without it, PostHog counts opens with its open pixel, captures engagement events, and counts clicks only when the email isn't sensitive. `True` turns on opens, clicks and engagement events. `False` turns off all tracking, including kinds PostHog adds later: PostHog can't count the email's opens or clicks, and captures no engagement events. An `EmailTracking` dict turns each kind on or off, and a key you leave out keeps its default. Turn clicks on for a sensitive email only when its links are safe to send through PostHog's click tracking. The template form doesn't take it. | 
 `distinct_id` |  | The recipient's distinct ID in your product. | 
 `idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
 `max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
@@ -4038,10 +4040,12 @@ Name | Type | Description
 `idempotency_key` | `NotRequired[Optional[str]]` | 
 `max_retries` | `NotRequired[Optional[int]]` | 
 `reply_to` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
+`sensitive` | `NotRequired[Optional[bool]]` | 
 `subject` | `str` | 
 `template_key` | `str` | 
 `text` | `NotRequired[Optional[str]]` | 
 `to` | `str` | 
+`tracking` | `NotRequired[Optional[Union[bool, EmailTracking]]]` | 
 
 #### `posthog.emails.CodeEmailArgs.capture_engagement`
 
@@ -4085,6 +4089,12 @@ max_retries: NotRequired[Optional[int]]
 reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
 ```
 
+#### `posthog.emails.CodeEmailArgs.sensitive`
+
+```python
+sensitive: NotRequired[Optional[bool]]
+```
+
 #### `posthog.emails.CodeEmailArgs.subject`
 
 ```python
@@ -4107,4 +4117,10 @@ text: NotRequired[Optional[str]]
 
 ```python
 to: str
+```
+
+#### `posthog.emails.CodeEmailArgs.tracking`
+
+```python
+tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 ```
