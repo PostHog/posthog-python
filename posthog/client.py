@@ -3459,9 +3459,9 @@ class Client(object):
         the way out); or call ``end()`` yourself for a span that cannot wrap a
         block. Spans started inside the block nest under it automatically.
         Always returns a usable handle, even when tracing is off, so calling
-        code never branches. Once ``max_live_spans`` spans are open, the
-        returned span isn't recorded. Spans open longer than ``max_span_age``
-        seconds are then treated as leaked and never exported.
+        code never branches. At ``max_live_spans`` open spans, the SDK first
+        evicts spans open longer than ``max_span_age`` seconds, which are never
+        exported. If it is still at the limit, the returned span isn't recorded.
 
         Args:
             name: A low-cardinality operation name, e.g. ``GET /users/:id``.
