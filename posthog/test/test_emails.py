@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import threading
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, Union
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from typing import Any, Iterator, Optional, Union
 from unittest import mock
 
 import httpx
@@ -693,9 +695,86 @@ def test_rendered_content_is_posted_as_is(_name, overrides, extra_body):
         "to": "user@example.com",
         "template_key": "password-reset",
         "subject": "Reset your password",
-        "capture_engagement": True,
         **extra_body,
     }
+
+
+class _CaptureServer(HTTPServer):
+    received: list[Any]
+
+
+class _CaptureHandler(BaseHTTPRequestHandler):
+    server: _CaptureServer
+
+    def do_POST(self) -> None:
+        body = self.rfile.read(int(self.headers["Content-Length"]))
+        self.server.received.append(json.loads(body))
+        reply = json.dumps({"message_id": "msg_1", "replayed": False}).encode()
+        self.send_response(202)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(reply)))
+        self.end_headers()
+        self.wfile.write(reply)
+
+    def log_message(self, *args: Any) -> None:
+        pass
+
+
+@pytest.fixture
+def capture_server() -> Iterator[_CaptureServer]:
+    server = _CaptureServer(("127.0.0.1", 0), _CaptureHandler)
+    server.received = []
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    yield server
+    server.shutdown()
+    server.server_close()
+
+
+@pytest.mark.parametrize(
+    "overrides, extra_body",
+    [
+        pytest.param({}, {}, id="no_tracking_or_sensitive_choice"),
+        pytest.param(
+            {"tracking": None, "capture_engagement": None, "sensitive": None},
+            {},
+            id="none_as_left_out",
+        ),
+        pytest.param({"sensitive": True}, {"sensitive": True}, id="marked_sensitive"),
+        pytest.param(
+            {"sensitive": False}, {"sensitive": False}, id="marked_not_sensitive"
+        ),
+        pytest.param({"tracking": False}, {"tracking": False}, id="all_tracking_off"),
+        pytest.param({"tracking": True}, {"tracking": True}, id="all_tracking_on"),
+        pytest.param(
+            {"tracking": {"opens": True, "clicks": True, "engagement": False}},
+            {"tracking": {"opens": True, "clicks": True, "engagement": False}},
+            id="each_kind_of_tracking_chosen",
+        ),
+        pytest.param(
+            {"capture_engagement": False},
+            {"capture_engagement": False},
+            id="deprecated_capture_engagement",
+        ),
+    ],
+)
+def test_a_code_send_delivers_its_tracking_and_sensitive_choice(
+    capture_server, overrides, extra_body
+):
+    host = f"http://127.0.0.1:{capture_server.server_port}"
+    with Emails(SECRET_KEY, host=host) as emails:
+        result = send_code(emails, html=HTML, **overrides)
+
+    assert result.id == "msg_1"
+    assert capture_server.received == [
+        {
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            "html": HTML,
+            **extra_body,
+        }
+    ]
 
 
 @pytest.mark.asyncio
@@ -782,6 +861,28 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
             },
             TypeError,
         ),
+        (
+            "tracking_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "tracking": False,
+            },
+            TypeError,
+        ),
+        (
+            "sensitive_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "sensitive": False,
+            },
+            TypeError,
+        ),
+        ("tracking_not_bool_or_dict", {"html": HTML, "tracking": "off"}, TypeError),
+        ("sensitive_not_bool", {"html": HTML, "sensitive": "yes"}, TypeError),
     ]
 )
 def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error):
