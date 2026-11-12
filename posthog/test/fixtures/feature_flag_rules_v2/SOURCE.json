@@ -1,14 +1,14 @@
 {
   "description": "Copied unchanged from the released feature flag rules v2 contract in PostHog/posthog-sdk-test-harness. Do not edit these files; copy a newer release instead.",
   "repository": "https://github.com/PostHog/posthog-sdk-test-harness",
-  "release": "1.22.0",
-  "revision": "17d861f8e230fe943934d70e3eebf5cff6bf3aa4",
+  "release": "1.30.0",
+  "revision": "6414114501396d96aadf2412fdd8054a03076782",
   "contract_directory": "contracts/feature_flag_rules_v2",
-  "contract_version": "7.0.0",
+  "contract_version": "10.0.0",
   "files": {
     "readers.json": {
       "source_path": "fixtures/wire/readers.json",
-      "sha256": "fd8edd89f827b732c4659ce7246eab534b0106b96a465a4a2d98cfa0a17d7827"
+      "sha256": "e75abb9bf6656989a147dda4c6e5232e7b544b657d7d540164dce65688641501"
     },
     "responses.json": {
       "source_path": "fixtures/wire/responses.json",
@@ -21,6 +21,14 @@
     "v2_value_evaluation.json": {
       "source_path": "corpus/v2_value_evaluation.json",
       "sha256": "aaddd05e47fc5a4ae07ea42ada5a659798f4b5fc8d0c0827f6a68e4daf68c128"
+    },
+    "feature_flag_called_context.schema.json": {
+      "source_path": "schemas/feature_flag_called_context.schema.json",
+      "sha256": "8a475f5ab56ba4dba76501c4a4e23f26b62c2c2f8037f23d21d0ea7650bd2cf8"
+    },
+    "experiment_exposure_properties.schema.json": {
+      "source_path": "schemas/experiment_exposure_properties.schema.json",
+      "sha256": "4b1af8fc98b6f6cb49f974970eb289ca85a78a978e1e74fc4d417eee9adee449"
     }
   }
 }
