@@ -161,8 +161,6 @@ The module-level client has no AI lane settings. To change them, create a `Clien
 
 ### Fix identity calls
 
-Identity calls change in 8.x.x:
-
 - **Empty IDs.** An empty or whitespace-only `distinct_id` counts as missing, so the event gets a generated personless distinct ID. 7.x.x sent a whitespace-only ID, and capture dropped the event.
 - **Generated IDs.** Generated personless distinct IDs are UUIDv7. 7.x.x generated UUIDv4.
 - **Group fallback.** `group_identify` uses the `distinct_id` you pass, then the context distinct ID, then `$<group_type>_<group_key>`. 7.x.x fell back to a random ID, which created a new person on every call.
@@ -249,8 +247,6 @@ You can set them in a call's `properties`, a context tag, or `super_properties`.
 
 If you set `$lib` without `$lib_version`, the SDK adds its own version only when `$lib` is `posthog-python`. The SDK replaces a `$lib_version` that has no `$lib` with its own.
 
-This changes what your events carry:
-
 | You set | 8.x.x sends | 7.x.x sent |
 | --- | --- | --- |
 | `$lib` or `$lib_version` in a call or a context tag | Your value | The SDK's value. The SDK overwrote yours. |
@@ -298,7 +294,7 @@ Every capture failure is a `CaptureError`, a subclass of `APIError`. It has `end
 - **Event content.** The SDK's own log lines no longer contain event content. The debug line for a queued event names the event and the lane. The invalid timestamp warning no longer includes the value. To inspect events, use `before_send`.
 - **Hook errors.** When your `before_send` hook raises, the error line names the event and the exception type, not the exception message. The message can hold the data the hook was removing. The SDK logs the traceback at debug level.
 
-Retries change too:
+Retries differ from 7.x.x in four ways:
 
 | Behavior | 7.x.x | 8.x.x |
 | --- | --- | --- |
@@ -334,7 +330,7 @@ Capture v1 sends `$session_id` and `$window_id` as top-level event fields, not a
 - **`None`.** It counts as unset, and the SDK removes it.
 - **Any other value.** The SDK removes it and doesn't send it, because capture would reject the whole batch. 7.x.x sent it as a property. The SDK logs a warning for each one, with the key and the value's type but not the value.
 
-Size limits change too:
+8.x.x applies these size and batch rules:
 
 - **Analytics events.** The SDK drops and logs an analytics event over 10 MiB, because no capture request can carry it. 7.x.x dropped events over 900 KiB.
 - **Capture's own limit.** Capture drops an event over its own per-event limit and reports it in `CaptureError.drops` as `event_too_big`.
