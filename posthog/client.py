@@ -4,6 +4,7 @@ import inspect
 import json
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -11,14 +12,33 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
-from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.args import (
+    ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    _PinnedProperties,
+)
 from posthog.metrics_capture import (
     _DEFAULT_FLUSH_INTERVAL_SECONDS,
     PostHogMetrics,
@@ -353,6 +373,20 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
     }
 )
 
+# A config version 2 event also keeps its attribution when minimized. Only those
+# events use this wider allowlist, so a config version 1 event is trimmed as before,
+# even when super properties happen to use these names.
+_MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+    | {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant_key",
+    }
+)
+
 
 def _parse_has_experiment(value: Any) -> Optional[bool]:
     """Server-reported experiment linkage; anything but an explicit bool means unknown."""
@@ -363,6 +397,401 @@ def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
     """Server-reported experiment linkage from flag metadata; ``None`` when absent
     (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
     return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
+# The reason code and rule type of the one outcome that sends ``$experiment_exposure``:
+# a variant assigned by an experiment rule.
+_EXPERIMENT_SPLIT_REASON = "experiment_split"
+_EXPERIMENT_RULE_TYPE = "experiment"
+
+# The reason codes of a config version 2 record that report the rule that produced
+# the result, and the rule types each one allows. Any other reason code, and any
+# failed record, reports no rule, even if the record names one.
+_RULE_TYPES_BY_REASON_CODE: Dict[str, FrozenSet[str]] = {
+    "targeting_match": frozenset({"targeted_release", "percentage_rollout"}),
+    _EXPERIMENT_SPLIT_REASON: frozenset({_EXPERIMENT_RULE_TYPE}),
+    "rollout_miss": frozenset({"percentage_rollout", _EXPERIMENT_RULE_TYPE}),
+    "experiment_paused": frozenset({_EXPERIMENT_RULE_TYPE}),
+    "holdout": frozenset({_EXPERIMENT_RULE_TYPE}),
+}
+
+# Properties a super property must not add to, or change on, a config version 2
+# ``$feature_flag_called``: the attribution, which is set again from the record
+# after super properties are merged, and the fields such an event never carries.
+# The flag identity of the read is set again with the attribution.
+_V2_FLAG_CALLED_PINNED = frozenset(
+    {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant_key",
+        "$feature_flag_reason",
+        "$feature_flag_forced_variant",
+        "$feature_flag_experiment_id",
+    }
+)
+
+# Properties an ``$experiment_exposure`` never carries, even from a super property.
+_EXPOSURE_FORBIDDEN = frozenset(
+    {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_type",
+        "$experiment_exposure_source",
+        "$feature_flag_experiment_id",
+        "$feature_flag_forced_variant",
+    }
+)
+
+# ``$experiment_exposure`` copies these from the ``$feature_flag_called`` of the same
+# read, when it has them.
+_EXPOSURE_PROPERTIES_FROM_FLAG_CALLED = (
+    "$feature_flag_id",
+    "$feature_flag_version",
+    "$feature_flag_request_id",
+    "$feature_flag_evaluated_at",
+)
+
+
+def _v4_field(record: Any, name: str) -> Any:
+    """Read a ``/flags?v=4`` field of a parsed flag record or its metadata, such as
+    ``failed`` or ``config_version``.
+
+    These fields stay private, as ``_failed``, ``_config_version`` and so on, until
+    the typed flag accessors make them public under their wire names. Either spelling
+    is read, so the two changes can land in either order.
+    """
+    return getattr(record, name, getattr(record, f"_{name}", None))
+
+
+# The rule ID's wire format: a hyphenated UUID, as the contract's event schemas
+# require.
+_UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _is_uuid(value: Any) -> bool:
+    return isinstance(value, str) and _UUID_PATTERN.fullmatch(value) is not None
+
+
+class _RuleAttribution(NamedTuple):
+    """What a config version 2 flag record reports on its flag events."""
+
+    reason_code: Optional[str]
+    rule_id: Optional[str]
+    rule_type: Optional[str]
+    # Set only for a complete experiment split, the outcome that sends an exposure.
+    variant_key: Optional[str]
+
+    def flag_called_properties(self) -> Dict[str, Any]:
+        properties: Dict[str, Any] = {"$feature_flag_config_version": 2}
+        if self.reason_code is not None:
+            properties["$feature_flag_reason_code"] = self.reason_code
+        if self.rule_id is not None:
+            properties["$feature_flag_rule_id"] = self.rule_id
+        if self.rule_type is not None:
+            properties["$feature_flag_rule_type"] = self.rule_type
+        if self.variant_key is not None:
+            properties["$feature_flag_variant_key"] = self.variant_key
+        return properties
+
+
+def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttribution]:
+    """Read the event attribution of a config version 2 flag record.
+
+    Returns ``None`` for anything else: no record, an unreadable record, a config
+    version 1 record, or a record from a server without typed values. Only the
+    evaluation details are read, never the value a getter returned.
+
+    The config version and reason code are always reported. The rule ID and rule
+    type are reported together or not at all, only for a targeting match, a rollout
+    miss, a paused experiment, a holdout and a complete experiment split, and only
+    with a rule type the reason code allows (``_RULE_TYPES_BY_REASON_CODE``). A
+    record with no rule ID, no rule type or another rule type, such as a targeting
+    match that names an experiment rule, reports neither. A rule ID that is not a
+    UUID counts as missing. So does a failed record or any other reason code,
+    including one this SDK does not know, and a record with no reason code. The
+    variant key is reported only for a complete experiment split: reason
+    ``experiment_split``, rule type ``experiment``, a rule ID and a variant key (any
+    string, including an empty one). A split without all of them is malformed. A
+    record that reports no rule keeps its reason, reports no rule ID, rule type or
+    variant, and sends no exposure. Its identity is never guessed from the value,
+    the key or an earlier result.
+    """
+    if details is None or not isinstance(details.metadata, FlagMetadata):
+        return None
+    metadata = details.metadata
+    if _v4_field(metadata, "config_version") != 2:
+        return None
+    reason_code = (details.reason.code if details.reason else None) or None
+    allowed_rule_types = _RULE_TYPES_BY_REASON_CODE.get(reason_code or "")
+    if _v4_field(details, "failed") is True or allowed_rule_types is None:
+        return _RuleAttribution(reason_code, None, None, None)
+    rule_id = _v4_field(metadata, "rule_id")
+    rule_type = _v4_field(metadata, "rule_type")
+    if not _is_uuid(rule_id) or rule_type not in allowed_rule_types:
+        return _RuleAttribution(reason_code, None, None, None)
+    if reason_code != _EXPERIMENT_SPLIT_REASON:
+        # Only an experiment split assigns a variant.
+        return _RuleAttribution(reason_code, rule_id, rule_type, None)
+    variant_key = _v4_field(metadata, "variant_key")
+    if not isinstance(variant_key, str):
+        return _RuleAttribution(reason_code, None, None, None)
+    return _RuleAttribution(reason_code, rule_id, rule_type, variant_key)
+
+
+_flag_events_log = logging.getLogger("posthog")
+
+# Guards the check and the reservation of config version 2 flag event dedupe keys on
+# both clients. It is held only for the dict and set operations, never while an event
+# is captured.
+_flag_event_keys_lock = threading.Lock()
+
+
+def _reinit_flag_event_keys_lock_after_fork() -> None:
+    global _flag_event_keys_lock
+    # A parent thread can hold the lock at fork time. Replace it, never acquire it.
+    _flag_event_keys_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reinit_flag_event_keys_lock_after_fork)
+
+
+def _reserve_dedupe_key(
+    reported_by_distinct_id: Dict[Any, Any], distinct_id: Any, dedupe_key: Any
+) -> Optional[Set[Any]]:
+    """Reserve ``dedupe_key`` for ``distinct_id`` unless a read already holds it.
+
+    The check and the reservation are one step, so when concurrent reads have the
+    same key, only one of them gets it. Returns the set that now holds the key, for
+    ``_capture_once``. Returns ``None`` when the key is already there: the event was
+    reported, or another read is capturing it.
+    """
+    with _flag_event_keys_lock:
+        reported = reported_by_distinct_id.get(distinct_id)
+        if reported is None:
+            reported = set()
+            reported_by_distinct_id[distinct_id] = reported
+        if dedupe_key in reported:
+            return None
+        reported.add(dedupe_key)
+        return reported
+
+
+def _capture_once(
+    capture: Callable[..., Any],
+    reported: Set[Any],
+    dedupe_key: Any,
+    event: str,
+    **kwargs: Any,
+) -> None:
+    """Capture one flag event whose key ``_reserve_dedupe_key`` reserved, and keep
+    the key unless capture failed.
+
+    The key stays reserved while capture runs, so concurrent reads do not send the
+    same event twice. It is released when capture raises, or returns ``None``
+    because the event could not be queued (a full or closed queue, opt-out or a
+    disabled client), so a later read tries again. An event that ``before_send``
+    drops keeps its key: the application chose to drop it, and every later read
+    would be dropped the same way. A failure is logged and never reaches the read.
+    """
+    before_send_drops: List[str] = []
+    try:
+        accepted = capture(
+            event, _before_send_drops=before_send_drops, **kwargs
+        ) is not None or bool(before_send_drops)
+    except Exception:
+        _flag_events_log.exception("[FEATURE FLAGS] Failed to capture %s", event)
+        accepted = False
+    if not accepted:
+        with _flag_event_keys_lock:
+            reported.discard(dedupe_key)
+
+
+def _capture_flag_events(
+    capture: Callable[..., Any],
+    flag_calls_reported: Dict[Any, Any],
+    exposures_reported: Dict[Any, Any],
+    *,
+    distinct_id: ID_TYPES,
+    key: str,
+    response: Optional[FlagValue],
+    properties: Dict[str, Any],
+    groups: Optional[Mapping[str, Union[str, int]]],
+    capture_groups: Mapping[str, Any],
+    disable_geoip: Optional[bool],
+    has_experiment: Optional[bool],
+    minimal_flag_called_events: bool,
+    details: Optional[FeatureFlag],
+    value_from_details: bool,
+) -> None:
+    """Send the flag events of one flag read: ``$feature_flag_called`` and, for an
+    experiment split, ``$experiment_exposure``.
+
+    Every read that sends flag events comes here, on both clients: the single-flag
+    getters and the reads of an ``evaluate_flags()`` snapshot. Both events are built
+    from ``details``, the parsed ``/flags`` record that supplied the value, and the
+    call's ``properties``; the flag is never evaluated again.
+
+    ``$feature_flag_called`` is sent if the (distinct_id, flag, response, groups)
+    tuple hasn't already been reported on this client. Group context is included so
+    that group-scoped flags fire a separate event for each group a user is evaluated
+    under. A config version 2 record that supplied the reported value
+    (``value_from_details``) adds its attribution to the event and to that tuple, so
+    equal-valued A/A arms, successive experiments of one flag, and holdouts are each
+    reported. Its reason code replaces the human-readable ``$feature_flag_reason``.
+    A config version 1 event and tuple are unchanged, and so are those of a read
+    whose value the record did not supply.
+
+    ``has_experiment`` is the server-reported signal for whether the flag is linked
+    to an experiment (``None`` when the server did not report it). When the
+    server-controlled gate is on and the flag is known non-experiment, the event is
+    trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+    and experiment-linked flags keep the full set for exposure analysis.
+
+    ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+    produced ``response``, not a fresh read of client-wide state: both callers
+    resolve it themselves (the snapshot pins it at construction; the single-flag
+    path reads it from the specific local/remote source that produced the value) so
+    a concurrent poller refresh or another ``/flags`` call can't reshape an event
+    after the fact.
+
+    ``$experiment_exposure`` is sent for a complete config version 2 experiment
+    split whose record supplied the reported value (``value_from_details``), once
+    per distinct ID, groups, flag, rule and variant. It has its own dedupe, so a
+    ``$feature_flag_called`` already reported never suppresses it.
+
+    Both config version 2 events are attempted independently: a failed capture of
+    one does not stop the other, and keeps no dedupe key, so a later read tries
+    again. An event that ``before_send`` drops keeps its key. Each key is reserved
+    before its capture, in the same step as the check, so concurrent reads of one
+    outcome send each event once. Their attribution is pinned after super properties
+    are merged, so a super property can neither change it nor add a field the event
+    never carries. The flag key, the response and the evaluation source are pinned
+    the same way on both events, so the pair always reports the same read.
+    Config version 1 events are sent and deduped as before.
+    """
+    groups_key = (
+        tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+    )
+    # Only a record that supplied the reported value attributes it. A caller's
+    # match_value and a stale cached value are reported as before, with no config
+    # version 2 properties, even when a config version 2 record came with them.
+    attribution = _rule_attribution(details) if value_from_details else None
+    # What both config version 2 events report about the read itself. Each event
+    # pins it, so a super property cannot make the pair disagree.
+    flag_identity = {
+        "$feature_flag": key,
+        "$feature_flag_response": response,
+        "locally_evaluated": properties.get("locally_evaluated") is True,
+    }
+    feature_flag_reported_key: Tuple[Any, ...] = (key, response, groups_key)
+    if attribution is not None:
+        feature_flag_reported_key += (2, *attribution)
+
+    # The set this read records its $feature_flag_called key in, or None when the
+    # read sends no $feature_flag_called.
+    reported_flags: Optional[Set[Any]]
+    if attribution is None:
+        reported_flags = flag_calls_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            flag_calls_reported[distinct_id] = reported_flags
+        if feature_flag_reported_key in reported_flags:
+            reported_flags = None
+    else:
+        reported_flags = _reserve_dedupe_key(
+            flag_calls_reported, distinct_id, feature_flag_reported_key
+        )
+
+    if reported_flags is not None:
+        if attribution is not None:
+            properties.pop("$feature_flag_reason", None)
+            properties.update(attribution.flag_called_properties())
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: Dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+                if attribution is None
+                else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
+        if attribution is None:
+            # Config version 1 events are sent and deduped as before.
+            capture(
+                "$feature_flag_called",
+                distinct_id=distinct_id,
+                properties=properties,
+                groups=capture_groups,
+                disable_geoip=disable_geoip,
+                **extra_capture_kwargs,
+            )
+            reported_flags.add(feature_flag_reported_key)
+        else:
+            _capture_once(
+                capture,
+                reported_flags,
+                feature_flag_reported_key,
+                "$feature_flag_called",
+                distinct_id=distinct_id,
+                properties=properties,
+                groups=capture_groups,
+                disable_geoip=disable_geoip,
+                _pinned_properties=_PinnedProperties(
+                    _V2_FLAG_CALLED_PINNED,
+                    {**attribution.flag_called_properties(), **flag_identity},
+                ),
+                **extra_capture_kwargs,
+            )
+
+    if attribution is None or attribution.variant_key is None:
+        return
+
+    # The value, request ID, evaluation time and evaluation source are left out, so
+    # one assignment is one exposure however often it is read.
+    exposure_key = (key, groups_key, 2, attribution.rule_id, attribution.variant_key)
+    reported_exposures = _reserve_dedupe_key(
+        exposures_reported, str(distinct_id), exposure_key
+    )
+    if reported_exposures is None:
+        return
+
+    exposure_properties: Dict[str, Any] = {
+        name: properties[name]
+        for name in _EXPOSURE_PROPERTIES_FROM_FLAG_CALLED
+        if name in properties
+    }
+    exposure_identity = {
+        **flag_identity,
+        "$feature_flag_variant_key": attribution.variant_key,
+        "$feature_flag_rule_id": attribution.rule_id,
+    }
+    exposure_properties.update(exposure_identity)
+    _capture_once(
+        capture,
+        reported_exposures,
+        exposure_key,
+        "$experiment_exposure",
+        distinct_id=distinct_id,
+        properties=exposure_properties,
+        groups=capture_groups,
+        disable_geoip=disable_geoip,
+        _pinned_properties=_PinnedProperties(_EXPOSURE_FORBIDDEN, exposure_identity),
+    )
 
 
 class _Lane:
@@ -770,9 +1199,8 @@ class Client(object):
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
-                payloads, and decrypted flag payloads. Example::
-
-                    posthog.Client(project_api_key, secret_key="phx_...")
+                payloads, and decrypted flag payloads. For example,
+                `posthog.Client(project_api_key, secret_key="phx_...")`.
 
             personal_api_key: Deprecated alias for ``secret_key``. Still honored
                 for backwards compatibility; prefer ``secret_key``, which also
@@ -944,6 +1372,9 @@ class Client(object):
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
@@ -1844,6 +2275,8 @@ class Client(object):
         # Internal, set for minimal $feature_flag_called events: a strict allowlist
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
+        pinned_properties = kwargs.get("_pinned_properties", None)
+        before_send_drops = kwargs.get("_before_send_drops", None)
 
         properties = {**(properties or {}), **system_context()}
 
@@ -1961,7 +2394,12 @@ class Client(object):
             msg["properties"] = properties
 
         return self._enqueue(
-            msg, disable_geoip, lane, property_allowlist=property_allowlist
+            msg,
+            disable_geoip,
+            lane,
+            property_allowlist=property_allowlist,
+            pinned_properties=pinned_properties,
+            before_send_drops=before_send_drops,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2273,7 +2711,7 @@ class Client(object):
                 # Some code that might fail
                 pass
             except Exception as e:
-                posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+                posthog.capture_exception(e, distinct_id='user_distinct_id', properties=additional_properties)
             ```
 
         Category:
@@ -2570,7 +3008,15 @@ class Client(object):
             # Always send a uuid, so we can always return one
             msg["uuid"] = stringify_id(uuid4())
 
-    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
+    def _enqueue(
+        self,
+        msg,
+        disable_geoip,
+        lane=None,
+        property_allowlist=None,
+        pinned_properties=None,
+        before_send_drops=None,
+    ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
 
@@ -2622,6 +3068,11 @@ class Client(object):
         # Applied after every enrichment step (system context, context tags, super
         # properties, $lib/$lib_version) so the final event shape is exactly the
         # allowlist regardless of where a property came from.
+        # After every enrichment step, so a super property never changes or adds
+        # config version 2 flag attribution.
+        if pinned_properties is not None:
+            msg["properties"] = pinned_properties.apply(msg["properties"])
+
         if property_allowlist is not None:
             msg["properties"] = {
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
@@ -2636,6 +3087,8 @@ class Client(object):
                 modified_msg = self.before_send(msg)
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
+                    if before_send_drops is not None:
+                        before_send_drops.append(msg["event"])
                     return None
                 if not isinstance(modified_msg, dict):
                     raise TypeError("before_send must return a dict or None")
@@ -3231,6 +3684,11 @@ class Client(object):
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",
             self.distinct_ids_feature_flags_reported.clear,
+            errors,
+        )
+        self._run_lifecycle_cleanup(
+            "Failed to clear experiment exposure deduplication state on shutdown",
+            self._experiment_exposures_reported.clear,
             errors,
         )
 
@@ -4103,6 +4561,9 @@ class Client(object):
 
         flag_result = None
         flag_details = None
+        # Whether flag_details supplied the value this read reports. Only then may the
+        # read report config version 2 attribution or send $experiment_exposure.
+        value_from_details = False
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
@@ -4216,6 +4677,11 @@ class Client(object):
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
+                # A payload lookup for a caller's match_value reports that value, not
+                # the record's. A failure above falls back to a stale cached value.
+                value_from_details = (
+                    flag_details is not None and override_match_value is None
+                )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 feature_flag_error = FeatureFlagError.QUOTA_LIMITED
@@ -4277,6 +4743,7 @@ class Client(object):
                 minimal_flag_called_events,
                 local_flag_id=local_flag_id,
                 local_flag_version=local_flag_version,
+                value_from_details=value_from_details,
             )
 
         return flag_result
@@ -4298,6 +4765,9 @@ class Client(object):
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be locally evaluated.
         This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+        When the flag was evaluated remotely and its config version 2 record is a complete experiment
+        split (an experiment rule with a rule ID and a variant key), it also captures the
+        `$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
         Examples:
             ```python
@@ -4568,6 +5038,11 @@ class Client(object):
         minimal_flag_called_events: bool = False,
         local_flag_id: Optional[int] = None,
         local_flag_version: Optional[int] = None,
+        *,
+        # Keyword-only, and false by default: a caller that does not say the record
+        # supplied the value reports no config version 2 attribution and sends no
+        # $experiment_exposure.
+        value_from_details: bool = False,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -4608,6 +5083,8 @@ class Client(object):
             disable_geoip=disable_geoip,
             has_experiment=has_experiment,
             minimal_flag_called_events=minimal_flag_called_events,
+            details=flag_details,
+            value_from_details=value_from_details,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -4621,66 +5098,35 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[FeatureFlag] = None,
+        value_from_details: bool = False,
     ) -> None:
-        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
-        groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a user
-        is evaluated under. Shared by the single-flag evaluation path and
-        ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
-        identically.
+        """Send the flag events of a flag read: ``$feature_flag_called`` and, for an
+        experiment split, ``$experiment_exposure``. See ``_capture_flag_events``.
 
-        ``has_experiment`` is the server-reported signal for whether the flag is linked
-        to an experiment (``None`` when the server did not report it). When the
-        server-controlled gate is on and the flag is known non-experiment, the event is
-        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
-        and experiment-linked flags keep the full set for exposure analysis.
-
-        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
-        produced ``response``, not a fresh read of client-wide state: both callers
-        resolve it themselves (the snapshot pins it at construction; the single-flag
-        path reads it from the specific local/remote source that produced the value)
-        so a concurrent poller refresh or another ``/flags`` call can't reshape an
-        event after the fact.
+        Shared by the single-flag evaluation path and the reads of a
+        ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
+        identically. ``details`` is the parsed ``/flags`` record of the read, or
+        ``None`` for a locally evaluated flag. ``value_from_details`` says whether that
+        record supplied the reported value; only then does the read report config
+        version 2 attribution or send an exposure.
         """
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        feature_flag_reported_key = (key, response, groups_key)
-
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-
-        if feature_flag_reported_key in reported_flags:
-            return
-
-        # Record the server's experiment signal when known, so minimization's impact
-        # can be measured by segmenting on it.
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-
-        # Minimize iff the server-controlled gate is on AND the flag is known to have
-        # no linked experiment. Any missing signal (gate absent, has_experiment
-        # missing) fails safe to the full legacy shape.
-        should_minimize = minimal_flag_called_events and has_experiment is False
-        # Only thread the internal allowlist through when minimizing, so the
-        # full-property path's capture() call signature stays unchanged.
-        extra_capture_kwargs: dict[str, Any] = {}
-        if should_minimize:
-            extra_capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
-
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=groups or {},
+            groups=groups,
+            capture_groups=groups or {},
             disable_geoip=disable_geoip,
-            **extra_capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         """
@@ -5233,9 +5679,10 @@ class Client(object):
                     redis_url = f"{parsed.scheme}://"
                     if parsed.username or parsed.password:
                         redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
-                    redis_url += (
-                        f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}"
-                    )
+                    host = parsed.hostname or "localhost"
+                    if ":" in host:
+                        host = f"[{host}]"
+                    redis_url += f"{host}:{parsed.port or 6379}"
                     if parsed.path:
                         redis_url += parsed.path
 

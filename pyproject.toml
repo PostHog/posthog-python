@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.86.4"
+version = "7.87.2"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -64,6 +64,7 @@ metrics = [
 dev = [
     "django-stubs",
     "griffe",
+    "griffe2md",
     "lxml",
     "mypy",
     "mypy-baseline",
@@ -123,6 +124,9 @@ test = [
     "opentelemetry-instrumentation-django>=0.60b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
+    # posthog/test/test_reference_markdown.py checks the reference generator's output.
+    "griffe",
+    "griffe2md",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.
     "gevent>=25.4.1; implementation_name == 'cpython'",
 ]

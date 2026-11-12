@@ -38,8 +38,8 @@ from .capture_compression import (
 from .capture_mode import CaptureMode, _resolve_capture_mode
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
-    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
+    _capture_flag_events,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -77,6 +77,7 @@ from .feature_flag_evaluations import (
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
+from .types import FeatureFlag as _FeatureFlag
 from .types import (
     FlagValue,
     _has_untyped_flag_records,
@@ -196,6 +197,9 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -468,6 +472,7 @@ class AsyncClient:
         msg: dict[str, Any],
         disable_geoip: Optional[bool],
         property_allowlist=None,
+        pinned_properties=None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if self.disabled or not self._accepting:
             return None, None
@@ -499,6 +504,10 @@ class AsyncClient:
             msg["properties"].setdefault("$release_id", self._release_id)
         if self.is_server:
             msg["properties"]["$is_server"] = True
+        # After every enrichment step, so a super property never changes or adds
+        # config version 2 flag attribution.
+        if pinned_properties is not None:
+            msg["properties"] = pinned_properties.apply(msg["properties"])
         if property_allowlist is not None:
             msg["properties"] = {
                 key: value
@@ -531,7 +540,7 @@ class AsyncClient:
 
     def _build_capture_event(
         self, event: str, kwargs: OptionalCaptureArgs
-    ) -> tuple[dict[str, Any], Optional[bool], Any]:
+    ) -> tuple[dict[str, Any], Optional[bool], Any, Any]:
         properties = {**(kwargs.get("properties") or {}), **system_context()}
         if self.capture_trace_context:
             properties = {**_get_current_otel_span_properties(), **properties}
@@ -567,6 +576,7 @@ class AsyncClient:
             },
             kwargs.get("disable_geoip"),
             kwargs.get("_property_allowlist"),
+            kwargs.get("_pinned_properties"),
         )
 
     def capture(
@@ -574,11 +584,11 @@ class AsyncClient:
     ) -> Optional[str]:
         """Queue an event without blocking for network delivery."""
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, pinned_properties = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, pinned_properties
             )
             if prepared is None or sent_uuid is None:
                 return None
@@ -622,11 +632,11 @@ class AsyncClient:
         self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
+            msg, disable_geoip, property_allowlist, pinned_properties = (
+                self._build_capture_event(event, kwargs)
             )
             prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
+                msg, disable_geoip, property_allowlist, pinned_properties
             )
             if prepared is None or sent_uuid is None:
                 return None
@@ -1090,38 +1100,29 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[_FeatureFlag] = None,
+        value_from_details: bool = False,
     ) -> None:
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        reported_key = (key, response, groups_key)
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-        if reported_key in reported_flags:
-            return
-
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-        capture_kwargs: dict[str, Any] = {}
-        if minimal_flag_called_events and has_experiment is False:
-            capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
         capture_groups = {
             str(group_type): _stringify_id(group_key)
             for group_type, group_key in (groups or {}).items()
         }
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=capture_groups,
+            groups=groups,
+            capture_groups=capture_groups,
             disable_geoip=disable_geoip,
-            **capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(reported_key)
 
     def _pending_queue_items(self) -> int:
         return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
@@ -1283,6 +1284,7 @@ class AsyncClient:
                 errors.append(error)
 
             self.distinct_ids_feature_flags_reported.clear()
+            self._experiment_exposures_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]
