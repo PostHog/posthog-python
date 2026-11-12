@@ -1295,32 +1295,8 @@ def test_a_cancel_reply_without_a_canceled_email_raises(_name, body):
     assert raised.value.code == "api_error"
 
 
-@pytest.mark.asyncio
-async def test_async_client_schedules_moves_cancels_and_lists():
+def async_emails_with(replies: list[httpx.Response]):
     seen: list[httpx.Request] = []
-    replies = [
-        httpx.Response(
-            202,
-            json={
-                "message_id": MESSAGE_ID,
-                "status": "scheduled",
-                "scheduled_at": "2026-12-01T07:00:00Z",
-            },
-        ),
-        httpx.Response(503, json={"code": "delivery_unavailable"}),
-        httpx.Response(
-            200,
-            json={
-                "id": MESSAGE_ID,
-                "status": "scheduled",
-                "scheduled_at": "2026-12-02T07:00:00Z",
-            },
-        ),
-        httpx.Response(503, json={"code": "delivery_unavailable"}),
-        httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"}),
-        httpx.Response(200, json=list_reply()[1]),
-        httpx.Response(503, json={"code": "delivery_unavailable"}),
-    ]
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
@@ -1330,34 +1306,112 @@ async def test_async_client_schedules_moves_cancels_and_lists():
         SECRET_KEY,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
     )
+    return emails, seen
+
+
+def unavailable() -> httpx.Response:
+    return httpx.Response(503, json={"code": "delivery_unavailable"})
+
+
+@pytest.mark.asyncio
+async def test_async_send_schedules_an_email():
+    emails, seen = async_emails_with(
+        [
+            httpx.Response(
+                202,
+                json={
+                    "message_id": MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-01T07:00:00Z",
+                },
+            )
+        ]
+    )
+
+    sent = await emails.send(
+        to="user@example.com", template_id=TEMPLATE_ID, scheduled_at=LATER
+    )
+
+    assert (sent.status, sent.scheduled_at, sent.warnings) == (
+        "scheduled",
+        datetime(2026, 12, 1, 7, tzinfo=timezone.utc),
+        (),
+    )
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("POST", SEND_URL)
+    ]
+    assert json.loads(seen[0].content)["scheduled_at"] == "2026-12-01T07:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_async_update_retries_an_unavailable_service_and_moves_the_email():
+    emails, seen = async_emails_with(
+        [
+            unavailable(),
+            httpx.Response(
+                200,
+                json={
+                    "id": MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-02T07:00:00Z",
+                },
+            ),
+        ]
+    )
 
     with mock.patch("posthog.emails.asyncio.sleep"):
-        sent = await emails.send(
-            to="user@example.com", template_id=TEMPLATE_ID, scheduled_at=LATER
-        )
         moved = await emails.update(
             MESSAGE_ID, scheduled_at="2026-12-02T09:00:00+02:00"
         )
+
+    assert moved.scheduled_at == datetime(2026, 12, 2, 7, tzinfo=timezone.utc)
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("PATCH", STATUS_URL),
+        ("PATCH", STATUS_URL),
+    ]
+    assert json.loads(seen[0].content) == {"scheduled_at": "2026-12-02T09:00:00+02:00"}
+    assert "Idempotency-Key" not in seen[0].headers
+
+
+@pytest.mark.asyncio
+async def test_async_cancel_retries_an_unavailable_service_and_cancels_the_email():
+    emails, seen = async_emails_with(
+        [
+            unavailable(),
+            httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"}),
+        ]
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
         canceled = await emails.cancel(MESSAGE_ID)
-        page = await emails.list(limit=10)
+
+    assert canceled.status == "canceled"
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("POST", CANCEL_URL),
+        ("POST", CANCEL_URL),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_list_reads_a_page():
+    emails, seen = async_emails_with([httpx.Response(200, json=list_reply()[1])])
+
+    page = await emails.list(limit=10)
+
+    assert [email.id for email in page.results] == [MESSAGE_ID]
+    assert [str(request.url) for request in seen] == [
+        LIST_URL + "?status=scheduled&limit=10"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_list_never_retries():
+    emails, seen = async_emails_with(
+        [unavailable(), httpx.Response(200, json=list_reply()[1])]
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
         with pytest.raises(EmailError):
             await emails.list()
 
-    assert (sent.status, moved.scheduled_at, canceled.status) == (
-        "scheduled",
-        datetime(2026, 12, 2, 7, tzinfo=timezone.utc),
-        "canceled",
-    )
-    assert [email.id for email in page.results] == [MESSAGE_ID]
-    assert [(request.method, str(request.url)) for request in seen] == [
-        ("POST", SEND_URL),
-        ("PATCH", STATUS_URL),
-        ("PATCH", STATUS_URL),
-        ("POST", CANCEL_URL),
-        ("POST", CANCEL_URL),
-        ("GET", LIST_URL + "?status=scheduled&limit=10"),
-        ("GET", LIST_URL + "?status=scheduled"),
-    ]
-    assert json.loads(seen[0].content)["scheduled_at"] == "2026-12-01T07:00:00Z"
-    assert json.loads(seen[1].content) == {"scheduled_at": "2026-12-02T09:00:00+02:00"}
-    assert "Idempotency-Key" not in seen[1].headers
+    assert len(seen) == 1
