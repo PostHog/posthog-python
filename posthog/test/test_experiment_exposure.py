@@ -517,18 +517,28 @@ def _attribution_response(source: str) -> Dict[str, Any]:
     "source, expected", ATTRIBUTION_CASES, ids=[c[0] for c in ATTRIBUTION_CASES]
 )
 def test_flag_called_attribution_follows_the_record(source, expected, path):
-    events = _read_events(path, _attribution_response(source), key="garden-layout")
+    response = _attribution_response(source)
+    failed = response["flags"]["garden-layout"].get("failed") is True
+    events = _read_events(path, response, key="garden-layout")
 
     [called] = _named(events, FLAG_CALLED, "garden-layout")
     assert _attribution(called.properties) == expected
-    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
+    if failed:
+        # The vendored schema predates the no-result sentinel for failed records.
+        assert called.properties["$feature_flag_response"] is None
+        assert set(called.properties["$feature_flag_error"].split(",")) == {
+            "evaluation_failed",
+            "errors_while_computing_flags",
+        }
+    else:
+        FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
     exposures = _named(events, EXPOSURE, "garden-layout")
     assert len(exposures) == (1 if "$feature_flag_variant_key" in expected else 0)
 
 
 # A record whose reason names no rule, or that failed, reports no rule even when it
-# carries one. Neither sends an exposure. The last element says whether the record is
-# a valid server outcome, which the contract's event schema then accepts.
+# carries one. Neither sends an exposure. The last element says whether a successful
+# record is a valid server outcome, which the contract's event schema then accepts.
 STRAY_RULE_CASES = [
     ("no_rule_match", {}, True),
     ("missing_group_key", {}, True),
@@ -569,7 +579,10 @@ def test_rule_fields_are_sent_only_for_reasons_that_name_a_rule(
         "$feature_flag_reason_code": code,
     }
     assert _named(events, EXPOSURE) == []
-    if valid_outcome:
+    if fields.get("failed") is True:
+        assert called.properties["$feature_flag_response"] is None
+        assert called.properties["$feature_flag_error"] == "evaluation_failed"
+    elif valid_outcome:
         FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
