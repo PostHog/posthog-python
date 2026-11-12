@@ -1344,8 +1344,11 @@ class Client(object):
                 ``super_properties`` stops the SDK adding either ID. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
-            traces: Config dict for distributed tracing: ``service_name``,
-                ``service_version``, ``environment``, ``resource_attributes``,
+            traces: Config dict for distributed tracing. Non-empty string values for
+                ``service.name``, ``service.version`` and ``deployment.environment``
+                in ``resource_attributes`` take precedence over ``service_name``,
+                ``service_version`` and ``environment``, respectively. Options include
+                ``service_name``, ``service_version``, ``environment``, ``resource_attributes``,
                 ``flush_interval`` (5 s), ``max_queue_size`` (2048),
                 ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
                 ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
@@ -3447,6 +3450,9 @@ class Client(object):
     ) -> Span:
         """
         Start a span for distributed tracing. Alpha.
+
+        The span API is experimental and can change in a minor release. Spans
+        already sent are kept; the SDK API isn't frozen yet.
 
         Returns a span handle. Use it as a context manager to make it the active
         span for the block and end it on exit (recording a raised exception on
