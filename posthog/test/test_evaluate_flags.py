@@ -885,17 +885,58 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
         self.assertEqual(flags.get_flag("target"), "a")
         patch_flags.assert_not_called()
 
+    @parameterized.expand([(True,), (False,)])
     @mock.patch("posthog.client.flags")
-    def test_flag_resolved_by_remote_fallback_is_not_unresolved(self, patch_flags):
+    def test_flag_resolved_by_remote_fallback_is_not_unresolved(
+        self, enabled, patch_flags
+    ):
         patch_flags.return_value = {
-            "flags": {"checkout": {"enabled": True, "variant": None}}
+            "flags": {"checkout": {"enabled": enabled, "variant": None}}
         }
 
         flags = self.client.evaluate_flags("user-123")
 
-        self.assertIs(flags.get_flag("checkout"), True)
+        self.assertIs(flags.get_flag("checkout"), enabled)
         self.assertEqual(sorted(flags.keys), ["beta-ui", "checkout"])
         self.assertEqual(dict(flags.unresolved_flags), {})
+        patch_flags.assert_called_once()
+
+    @parameterized.expand([(None,), (False,), (True,)])
+    @mock.patch("posthog.client.flags")
+    @mock.patch.object(Client, "capture")
+    def test_failed_remote_fallback_preserves_unresolved_reason(
+        self, error_bit, patch_capture, patch_flags
+    ):
+        response = {
+            "flags": {
+                key: {
+                    "enabled": False,
+                    "failed": True,
+                    "metadata": {"payload": '"placeholder"'},
+                }
+                for key in ("checkout", "remote-only")
+            }
+        }
+        if error_bit is not None:
+            response["errorsWhileComputingFlags"] = error_bit
+        patch_flags.return_value = response
+
+        flags = self.client.evaluate_flags("user-123")
+
+        self.assertEqual(
+            dict(flags.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.EXPERIENCE_CONTINUITY},
+        )
+        self.assertEqual(flags.keys, ["beta-ui"])
+        self.assertIsNone(flags.get_flag("checkout", send_feature_flag_events=False))
+        self.assertTrue(
+            flags.is_enabled("checkout", True, send_feature_flag_events=False)
+        )
+        self.assertIsNone(flags.get_flag_payload("checkout"))
+        self.assertNotIn("$feature/checkout", flags._get_event_properties())
+        self.assertEqual(dict(flags.only(["checkout"]).unresolved_flags), {})
+        self.assertEqual(dict(flags.only_accessed().unresolved_flags), {})
+        patch_capture.assert_not_called()
         patch_flags.assert_called_once()
 
     @parameterized.expand(

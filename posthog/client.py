@@ -5563,7 +5563,14 @@ class Client(object):
             quota_limited=quota_limited,
             minimal_flag_called_events=minimal_flag_called_events,
             unresolved_flags={
-                key: reason for key, reason in unresolved.items() if key not in records
+                key: reason
+                for key, reason in unresolved.items()
+                if key not in records
+                or (
+                    isinstance(record := records[key], _RemoteFlagRecord)
+                    and record.details._failed
+                    and record.details._malformed_field is None
+                )
             },
         )
 
