@@ -98,6 +98,7 @@ def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
         "historical_migration",
     } <= set(capabilities)
     assert "flags_response_v4" in capabilities
+    assert "feature_flag_payloads" in capabilities
     assert "capture_v0" not in capabilities
     assert "capture_ai_v0" not in capabilities
     assert [c for c in capabilities if c.startswith("encoding_")] == [
@@ -232,10 +233,59 @@ def test_force_remote_bypasses_loaded_local_definitions(adapter, monkeypatch):
     remote.assert_called_once()
 
 
-def test_rejects_conflicting_evaluation_modes(adapter):
+def test_payload_route_reads_remotely_and_returns_the_parsed_payload(
+    adapter, monkeypatch
+):
+    client = initialize(adapter)
+    remote = Mock(
+        return_value=posthog.client.normalize_flags_response(
+            {
+                "featureFlags": {"flag": True},
+                "featureFlagPayloads": {"flag": '{"columns": 2}'},
+            }
+        )
+    )
+    monkeypatch.setattr(adapter.state.remote_client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag_payload", json={"key": "flag", "distinct_id": "user"}
+    )
+    assert response.json == {"success": True, "value": {"columns": 2}}
+    remote.assert_called_once()
+    assert (
+        client.post("/get_feature_flag_payload", json={"key": "flag"}).status_code
+        == 400
+    )
+
+
+def test_payload_route_honors_local_only_evaluation(adapter, monkeypatch):
+    client = initialize(adapter)
+    local = definitions()
+    local["flags"][0]["filters"]["payloads"] = {"true": '{"columns": 2}'}
+    monkeypatch.setattr(
+        posthog.client, "get", Mock(return_value=GetResponse(data=local))
+    )
+    client.post("/reload_feature_flag_definitions", json={})
+    remote = Mock(side_effect=AssertionError("Local-only must never request /flags"))
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    monkeypatch.setattr(adapter.state.remote_client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag_payload",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_properties": {"plan": "banana"},
+            "only_evaluate_locally": True,
+        },
+    )
+    assert response.json == {"success": True, "value": {"columns": 2}}
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/get_feature_flag", "/get_feature_flag_payload"])
+def test_rejects_conflicting_evaluation_modes(adapter, route):
     client = initialize(adapter)
     response = client.post(
-        "/get_feature_flag",
+        route,
         json={
             "key": "flag",
             "distinct_id": "user",

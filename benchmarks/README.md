@@ -1,0 +1,122 @@
+# Python SDK benchmarks
+
+PR-only, paired measurements of independently installed Python SDK revisions. Each workload/pass/repetition runs in a fresh process against the target's non-editable wheel. Benchmark code comes from one checkout and emits `base.json` and `head.json` using the shared reporting contract. Suite version 2 implements [sdk-benchmarks/v1](https://github.com/PostHog/.github/blob/main/.github/workflows/sdk-benchmark-specification.md).
+
+## Setup and local execution
+
+Use **CPython 3.12.12** and **uv 0.13.4**, matching `.github/workflows/benchmarks.yml`.
+
+From the checkout containing this suite, prepare each revision:
+
+```sh
+python benchmarks/prepare.py /absolute/path/to/head
+python benchmarks/prepare.py /absolute/path/to/base
+```
+
+Each target gets its own `.venv-benchmark`. Preparation installs the SDK and runtime dependencies from that revision's frozen `uv.lock`, builds a non-editable SDK wheel, then installs hash-pinned benchmark instrumentation from this suite's `requirements.txt`. Preparation fails if instrumentation changes an already installed SDK dependency version. Both environments precompile bytecode: importing cached bytecode on one side and compiling source on the other can otherwise create an apparent RSS regression even with identical SDK source. Workers do not write new bytecode. The benchmark environment is disposable and separate from the ordinary development `.venv`.
+
+Run the controls and benchmarks using the head environment:
+
+```sh
+.venv-benchmark/bin/python -B benchmarks/test_benchmarks.py
+.venv-benchmark/bin/python -B benchmarks/run.py \
+  --base /absolute/path/to/base \
+  --head /absolute/path/to/head \
+  --output /tmp/python-benchmark-results \
+  --repetitions 6
+```
+
+`--smoke --repetitions 1` checks integration quickly; smoke results are not suitable for performance conclusions. `--filter flags.all.` selects workload IDs by prefix. `--shard flags-single` selects one fixed group from `shards.json`: `flags-single`, `flags-scaling`, `flags-memory`, or `capture`. Shard selection and prefix filtering are mutually exclusive; omitting both runs the full inventory. The manifest must partition both full and smoke inventories exactly, without duplicate workloads. Each invocation creates a fresh pair ID for its own base/head documents. Using the same revision on both sides measures repeatability, not an improvement.
+
+Rerun preparation after changing SDK source. Preparation forces a `posthog` rebuild/reinstall so source-only changes cannot reuse uv's cached wheel. The worker deliberately does not import the repository source tree. Results fingerprint the installed package's Python files and record its entry path, SDK commit/dirty state, package version, lockfile digest, actual installed dependency/tool versions, benchmark source digest, runtime, fixture digest, and paired-run ID.
+
+To update benchmark tooling, use a supported uv version and review the regenerated lock:
+
+```sh
+uv pip compile benchmarks/requirements.in --python-version 3.12 --universal \
+  --generate-hashes --exclude-newer '7 days' --output-file benchmarks/requirements.txt
+```
+
+## Workloads
+
+| Workload | Public path | Measurements |
+| --- | --- | --- |
+| Nine single-flag cases | `get_feature_flag` | Elapsed time/op, process CPU/op, Python allocator bytes/calls per op |
+| All flags: 10, 100, 1,000 | `get_all_flags` | Same metrics per complete all-flags call |
+| Sustained 1,000-flag evaluation | Eight threads calling `get_all_flags` | RSS observations and post-settling RSS |
+| Forty definition refreshes | `load_feature_flags` | Memory checkpoints after every refresh |
+| Capture: 32-byte and 4,096-byte string properties | `capture` | Foreground elapsed time and caller-thread CPU per event |
+| Steady delivery: both payload sizes | `capture`, `flush` every 100 events | Full-pipeline time, process CPU, allocator bytes/calls, and memory |
+| Burst delivery: both payload sizes | `capture`, one final `flush` | Full-pipeline time, process CPU, allocator bytes/calls, and memory |
+
+The 20 workload IDs and operation counts follow the specification. Full single-flag workloads use 16,000 evaluations; all-flags workloads use 1,600/160/160 for 10/100/1,000 definitions. Allocation passes use 2,000 single-flag and 160/16/16 all-flags evaluations, with the actual denominator recorded. Load uses 1,600 evaluations; refresh uses 40 reloads. Every capture workload and pass uses 1,000 events. Smoke uses 160 single-flag, 16 all-flags, 32 load evaluations, four refreshes, and 200 captures.
+
+The flag mix and sixteen identities follow the shared fixtures: boolean, percentage rollout, multivariate assignment, person properties, regex, cohort, early/late/no-match, and inactive flags. Expected values are computed independently of the SDK. Every identity is validated before and after measurement. All measured flag phases start at generation 0, restored through public reload after warmup. Refreshes load generations 1–40 (1–4 for smoke), checking each definitions request. Full result sweeps occur before and after measurement, not inside the refresh loop. Controls separately check every changing generation and reload result.
+
+The suite covers the supported legacy flag getters, not `evaluate_flags` snapshots. Deprecation warnings are encountered during setup. Eight threads are **GIL-constrained concurrency**, not a claim of eight-way parallel Python execution.
+
+### Transport and lifecycle
+
+Python has no public fetch adapter. A bounded loopback HTTP server runs in the coordinator process, outside the measured worker, and serves definitions and accepts uncompressed v0 batches. Its routes are limited to the fixture protocol and a control/inspection interface. It retains bounded counters, per-identity counts, and a preallocated sequence bitmap, not event history. Remote flag fallback is unexpected and fails verification.
+
+The SDK uses real requests, JSON parsing/serialization, background consumers, flag loading, flush, and shutdown. No private queue, evaluator, or poller is replaced. Automatic polling and partial-batch deadlines are set to one hour, longer than the worker timeout. Refreshes and draining use public methods. Worker shutdown must stop SDK threads.
+
+Capture fixtures are preconstructed outside measurement: event `benchmark`, identity `benchmark-user-<sequence modulo 16>`, and separate caller-owned property dictionaries containing exactly 32 or 4,096 ASCII `x` characters as `payload`, `plan=pro`, and integer `sequence`. Warmup delivery is flushed and verified before receiver/capture state is reset; measured sequences restart at zero. Capture checks require the correct event name, exact payload and plan, sequence-to-identity mapping, and exactly one delivery of each expected sequence. Balanced loss/duplication fails even with matching totals and per-user counts; arrival order is unrestricted. Rejected captures, timeouts that leave undelivered events, malformed payloads, and remote fallback cannot appear as successful low-cost work.
+
+### Capture measurement boundaries
+
+`capture()` returns after foreground preparation/enqueue, while a consumer can concurrently prepare its batch. There is no public completion boundary for that background preparation short of flushing. Therefore:
+
+- `capture.enqueue.*` records `completion_boundary=api_return` and reports foreground elapsed time and **caller-thread CPU**, not process-wide CPU or allocation totals. Its explicit flush and delivery checks occur afterward, outside measurement.
+- `capture.drain.steady.*` and `capture.drain.burst.*` record `completion_boundary=completed_delivery`. Steady flushes every 100 captures; burst flushes once after all captures. Parameters record `drain_strategy` and `flush_every`. Both include `flush(timeout_seconds=None)` and reports the complete delivery path's process CPU and allocations, including requests/serialization. The external worker timeout bounds this wait. Verification does not flush again: unfinished measured work cannot be rescued outside the measurement. Server CPU and server allocations are excluded; elapsed time includes loopback transport.
+- Enqueue-only allocation metrics are explicitly unavailable and direct readers to the drain workload.
+
+Capture sends uncompressed capture v1 requests and uses public options `max_queue_size=100001`, `flush_at=100000`, and one-hour flush/poll intervals. The native consumer and size-driven batching remain active: burst describes the caller flush schedule, not retained queue size or a guaranteed HTTP request count. These metrics describe their named paths rather than pretending Python and Node have identical asynchronous lifecycles.
+
+## Measurement methods
+
+Base/head alternate first position between independent repetitions and never benchmark concurrently. The same head-side fixtures and measurement code run against both installations. The runner verifies matching Python, profiler, psutil, OS, and architecture versions. Both workers use a fixed hash seed and a clean Python configuration environment.
+
+Warmup and correctness checks happen outside measurement. Warmup uses two refreshes, otherwise the smaller of the operation count and 32 (1,000-flag workloads) or 160 (other workloads); both revisions use the same policy. Timing, allocation profiling, and memory observation are separate passes. Allocation passes use smaller fixed operation counts where tracing every Python allocation would otherwise produce excessive profiler files; the actual count is included in each result and used as its denominator. These counts are identical for base and head.
+
+### Time and CPU
+
+- `elapsed_time_per_op`: `time.perf_counter_ns`, normalized over a batch.
+- `process_cpu_time_per_op`: `time.process_time_ns`, including all worker threads.
+- `caller_thread_cpu_time_per_op`: `time.thread_time_ns`, for foreground enqueue only.
+
+The metrics include the small benchmark-loop overhead. Elapsed time is not CPU utilization.
+
+### Allocations
+
+Memray runs with `trace_python_allocators=True` and `FileFormat.ALL_ALLOCATIONS`. After tracking stops, the adapter streams all records and sums `PYMALLOC_MALLOC`, `PYMALLOC_CALLOC`, and `PYMALLOC_REALLOC` requests. This includes requests whose allocations were already freed. It excludes free records and native backing allocations, avoiding interpreting backing arenas as individual Python allocations.
+
+- `allocated_bytes_per_op` is cumulative **requested Python allocator bytes**. A reallocation contributes its requested size, not just its growth.
+- `allocations_per_op` is **Python allocator calls, including reallocations**, not a count of distinct Python objects.
+- Both are measured counters, unlike Node's estimated V8 allocation bytes. They are still not cross-language-comparable totals.
+- Native-library allocations outside Python's allocators are not included. RSS covers the whole process.
+
+Profiler capture and aggregation do not contribute to reported timing. Profiles are streamed and removed after aggregation so repeated runs do not retain large binary captures. Raw counters and profiler versions remain in the JSON.
+
+The controls also cover full/smoke inventory, flush schedules, phase reset and input ownership, reordered delivery, balanced duplicates/loss, failed delivery without a rescuing flush, refresh resets, and deterministic memory checkpoints. The control suite demonstrates that this configuration records freed small allocations that default Memray tracking does not expose as Python allocator requests. Other controls preserve SDK outputs while adding CPU work and allocation churn; both must be detected. See [Memray's allocator documentation](https://bloomberg.github.io/memray/python_allocators.html) and [API documentation](https://bloomberg.github.io/memray/api.html).
+
+### Memory
+
+- Idle RSS: after imports, definitions, validation, warmup, and settling.
+- Observed workload peak RSS: maximum of before-work, operation checkpoints, and end-of-work observations; can miss intervening spikes. Checkpoints follow each 32 completed load evaluations, each refresh, or each 100 captures, including a final partial interval. Steady checkpoints follow scheduled flushes; burst checkpoints precede its final flush. A separate after-work snapshot includes completed delivery.
+- Lifetime peak RSS: `resource.getrusage`, normalized from platform-specific units. Includes setup and warmup, not just measured work.
+- Post-settling RSS: after two `gc.collect()` calls separated by a scheduler yield. Python reference counting also frees objects during ordinary execution.
+
+CPython has no uninstrumented total managed-heap byte counter equivalent to Node's `heapUsed`. `post_settling_heap_used` is explicitly unsupported; enabling tracing in the RSS pass would change the measurement. Retained RSS alone does not prove a leak because allocators can keep arenas resident. Natural GC stays enabled, but no forced GC runs during work or checkpoint callbacks. Explicit settling occurs before and after memory measurement; final correctness sweeps follow the post-settling snapshot. A public-entry control deliberately retains 8 MiB on each refresh and verifies that checkpoint RSS exposes the growth.
+
+SDK identity subprocesses have a two-minute deadline. Each worker has a two-minute timeout and an externally monitored **512 MiB RSS ceiling**, checked approximately every 20 ms. This is a safety bound, not an exact OS-enforced limit: short spikes can exceed it between observations. A ceiling violation is reported as `error` with `rss_limit_exceeded`, not falsely described as a confirmed OS OOM. An explicit Python `MemoryError` is classified as OOM; a generic kill is not. The suite stops after two worker timeouts, after completing the current base/head pair, and preserves partial results for upload. Results retain the complete selected workload inventory: unvisited workloads are marked `error` with a not-run reason and no samples, so the failed shard can still be collected and published. Worker temporary files, including profiler traces, are owned and removed by the coordinator even when a worker is killed.
+
+## Results and CI
+
+The shared JSON format uses `schema_version: 1`, with the same top-level revision, suite, execution, benchmark, metric, sample, and status structure as Node. Measurement IDs, units, method names, and quality are explicit. Python's intentional differences are allocator-call counts, foreground-thread CPU for enqueue, unavailable uninstrumented heap size, and a separate HTTP receiver. The contract, semantic validation, comparisons, and rendering live in [PostHog/.github](https://github.com/PostHog/.github/blob/main/.github/workflows/sdk-benchmark-report.md).
+
+The workflow runs for every pull request opened, reopened, or updated in `PostHog/posthog-python`. Four independent runner jobs build the merge base and exact head into isolated environments and each run one fixed shard. All six alternating paired repetitions and native measurement passes for a workload stay on one runner, with fresh worker processes and no same-host measurement concurrency. Shard jobs have a ten-minute safety timeout, with an eight-minute measurement step limit to leave time for artifact upload, and do not cancel siblings on failure. Each uploads `base.json`, `head.json`, and `revisions.json` in its own `benchmark-shard-<id>` artifact, including available partial results after failure.
+
+A separate read-only, five-minute collection job downloads the shard artifacts and invokes the SHA-pinned reporting action in `PostHog/.github` with the head-side manifest and matrix result. It validates complete coverage and renders one comparison in the job summary; a failed source job suppresses numeric comparisons. Suite metadata, including the source digest covering `shards.json`, is identical across shards. Each document records its shard as `execution.shard_id`, retaining each runner's environment and SDK build identity. The canonical `python-benchmark-results` artifact contains only `bundle.json` and `revisions.json`; Markdown and comparison JSON are uploaded separately as `python-benchmark-report`. The workflow requests read-only permissions, uses pinned actions, and requires no service credentials.
+
+Correctness failures and broken execution fail the job. Performance differences do not: this producer does not compute regression verdicts. Comparisons expose descriptive medians and variability rather than calibrated regression verdicts. A separate `workflow_run` caller uses the SHA-pinned reusable workflow in `PostHog/.github` to verify source-run/artifact/PR identities and publish comments without executing PR code with write permissions. This caller must land on the default branch before automatic comments are active, including for fork PRs. Calibrate on the actual Linux runner before introducing performance gates; local macOS results are not a CI noise floor.

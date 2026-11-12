@@ -69,7 +69,7 @@ from .feedback import (
     resolve_collect_feedback_options,
     resolve_send_feedback_tool_name,
 )
-from .session import derive_session_id_from_conversation
+from .session import derive_session_id_from_conversation, new_session_id
 from .tools import build_report_missing_descriptor
 from .types import (
     CollectFeedbackOptions,
@@ -744,7 +744,7 @@ class PostHogMCP(Client):
     ) -> Dict[str, Any]:
         event: Dict[str, Any] = {
             "event_type": event_type,
-            "session_id": session_id,
+            "session_id": session_id or new_session_id(),
             "conversation_id": conversation_id,
             "timestamp": timestamp or datetime.now(timezone.utc),
             "properties": properties,

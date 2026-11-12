@@ -5,7 +5,7 @@ requires-python = ">=3.10"
 dependencies = [
     "posthog",
     "dspy>=2.5.0",
-    "litellm==1.88.6",
+    "litellm==1.100.4",
 ]
 
 [tool.uv.sources]

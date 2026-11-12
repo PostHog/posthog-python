@@ -32,7 +32,13 @@ from ._async_request import (
     async_flags as _async_flags,
     async_remote_config as _async_remote_config,
 )
-from .args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from .args import (
+    ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    _PinnedProperties,
+)
 from .capture_compression import (
     CaptureCompression,
     _resolve_capture_ai_compression,
@@ -49,9 +55,9 @@ from .capture_event import (
 from .capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
-    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
     _add_context_session_id,
+    _capture_flag_events,
     _context_tag_defaults,
     _explicit_distinct_id,
     _group_identify_distinct_id,
@@ -97,6 +103,7 @@ from .feature_flag_evaluations import (
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
+from .types import FeatureFlag as _FeatureFlag
 from .types import (
     FlagValue,
     _has_untyped_flag_records,
@@ -179,6 +186,7 @@ class AsyncClient:
         app_host: Optional[str] = None,
         email_request_timeout_seconds: float = 15,
         email_request_max_retries: int = 2,
+        migrated_from: Optional[str] = None,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -239,10 +247,13 @@ class AsyncClient:
             else resolved_secret_key
         ) or None
         self.personal_api_key = self.secret_key
-        _validate_options(email_request_timeout_seconds, email_request_max_retries)
+        _validate_options(
+            email_request_timeout_seconds, email_request_max_retries, migrated_from
+        )
         self.app_host = app_host
         self.email_request_timeout_seconds = email_request_timeout_seconds
         self.email_request_max_retries = email_request_max_retries
+        self.migrated_from = migrated_from
         self.feature_flags_request_timeout_seconds = (
             feature_flags_request_timeout_seconds
         )
@@ -250,6 +261,9 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -346,10 +360,10 @@ class AsyncClient:
     @property
     def emails(self) -> AsyncEmails:
         """
-        Send transactional email from PostHog email templates, and read the
-        status of each email sent with ``get``.
+        Send transactional email from PostHog email templates or from content
+        in your code, and read the status of each email sent with ``get``.
 
-        Needs ``secret_key``, a project secret API key with the ``hog_flow:write``
+        Needs ``secret_key``, a project secret API key with the ``transactional_email:write``
         scope, and ``posthog[async]``. Sends go to ``app_host``, or to the PostHog
         Cloud app host of ``host``. ``email_request_timeout_seconds`` and
         ``email_request_max_retries`` configure each send. A disabled or shut-down
@@ -374,6 +388,7 @@ class AsyncClient:
                 app_host=self.app_host,
                 timeout=self.email_request_timeout_seconds,
                 max_retries=self.email_request_max_retries,
+                migrated_from=self.migrated_from,
             )
         return self._emails
 
@@ -533,6 +548,7 @@ class AsyncClient:
         self,
         msg: dict[str, Any],
         property_allowlist=None,
+        pinned_properties=None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if self.disabled or not self._accepting:
             return None, None
@@ -608,6 +624,7 @@ class AsyncClient:
         system_properties: Optional[dict[str, Any]] = None,
         flag_properties: Optional[dict[str, Any]] = None,
         trace_properties: Optional[dict[str, Any]] = None,
+        pinned_properties: Optional[_PinnedProperties] = None,
     ) -> _EventDefaults:
         return _build_event_defaults(
             super_properties=self.super_properties,
@@ -625,6 +642,7 @@ class AsyncClient:
             trace_properties=trace_properties,
             library_id="posthog-python",
             library_version=VERSION,
+            pinned_properties=pinned_properties,
         )
 
     def _build_capture_event(
@@ -669,6 +687,7 @@ class AsyncClient:
                 disable_geoip=kwargs.get("disable_geoip"),
                 system_properties=system_context(),
                 flag_properties=flag_properties,
+                pinned_properties=kwargs.get("_pinned_properties"),
                 trace_properties=(
                     _get_current_otel_span_properties()
                     if self.capture_trace_context
@@ -1265,38 +1284,29 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[_FeatureFlag] = None,
+        value_from_details: bool = False,
     ) -> None:
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        reported_key = (key, response, groups_key)
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-        if reported_key in reported_flags:
-            return
-
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-        capture_kwargs: dict[str, Any] = {}
-        if minimal_flag_called_events and has_experiment is False:
-            capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
         capture_groups = {
             str(group_type): _stringify_id(group_key)
             for group_type, group_key in (groups or {}).items()
         }
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=capture_groups,
+            groups=groups,
+            capture_groups=capture_groups,
             disable_geoip=disable_geoip,
-            **capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(reported_key)
 
     def _pending_queue_items(self) -> int:
         return sum(lane.pending_items() for lane in self._lanes)
@@ -1470,6 +1480,7 @@ class AsyncClient:
                 errors.append(error)
 
             self.distinct_ids_feature_flags_reported.clear()
+            self._experiment_exposures_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]

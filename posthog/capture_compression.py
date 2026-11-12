@@ -29,6 +29,12 @@ class CaptureCompression(str, Enum):
     server decodes (``br`` is accepted by the server too but is intentionally
     left out for now). Inheriting from ``str`` keeps the members comparable to
     and serializable as their token values.
+
+    Values:
+        NONE: Sends the body uncompressed.
+        GZIP: gzip, from the standard library.
+        DEFLATE: zlib (RFC 1950), from the standard library.
+        ZSTD: Faster and smaller, but needs ``pip install posthog[zstd]``.
     """
 
     NONE = "none"

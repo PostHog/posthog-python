@@ -25,11 +25,14 @@ import re
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 from posthog.utils import _normalize_timestamp, _rfc3339_timestamp, _uuid7
 from posthog.utils import clean as _clean
+
+if TYPE_CHECKING:
+    from posthog.args import _PinnedProperties
 
 log = logging.getLogger("posthog")
 
@@ -137,6 +140,7 @@ class _EventDefaults:
     property_allowlist: Optional[Collection[str]] = None
     trace_properties: Optional[Mapping[str, Any]] = None
     library: Optional[tuple[str, str]] = None
+    pinned_properties: Optional["_PinnedProperties"] = None
 
 
 def _is_library_value(value: Any) -> bool:
@@ -161,6 +165,7 @@ def _build_event_defaults(
     trace_properties: Optional[Mapping[str, Any]] = None,
     library_id: str,
     library_version: str,
+    pinned_properties: Optional["_PinnedProperties"] = None,
 ) -> _EventDefaults:
     """Order the layers: per-call arguments, context, global, then SDK values.
 
@@ -173,6 +178,8 @@ def _build_event_defaults(
     active OpenTelemetry span) are SDK values that fill as a pair.
     ``library_id`` and ``library_version`` are the SDK's own ``$lib`` and
     ``$lib_version``. They fill as a pair below every other layer.
+    ``pinned_properties`` is config version 2 flag attribution that no layer
+    may change or add to; it applies after every layer.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
@@ -201,6 +208,7 @@ def _build_event_defaults(
         property_allowlist=property_allowlist,
         trace_properties=trace_properties,
         library=(library_id, library_version),
+        pinned_properties=pinned_properties,
     )
 
 
@@ -251,6 +259,13 @@ def _fill_event_defaults(
                 properties[key] = _clean(value)
     if defaults.library is not None:
         _fill_library(properties, defaults.library, allowlist)
+    if defaults.pinned_properties is not None:
+        # After every layer, so a context tag or super property never changes
+        # or adds config version 2 flag attribution. The allowlist still wins.
+        properties = defaults.pinned_properties.apply(properties)
+        if allowlist is not None:
+            properties = {k: v for k, v in properties.items() if k in allowlist}
+        msg["properties"] = properties
     options = _event_options(msg.get("options"))
     for option_layer in defaults.option_layers:
         for key, value in option_layer.items():

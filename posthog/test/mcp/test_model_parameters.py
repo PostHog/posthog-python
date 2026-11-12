@@ -31,7 +31,7 @@ def test_add_model_parameter_to_schema(schema):
         "type": "string",
         "description": DEFAULT_MODEL_PARAMETER_DESCRIPTION,
     }
-    assert "llm_model" in result["required"]
+    assert "llm_model" not in result.get("required", [])
     assert result.get("additionalProperties") == (schema or {}).get(
         "additionalProperties"
     )

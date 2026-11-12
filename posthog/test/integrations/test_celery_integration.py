@@ -290,6 +290,53 @@ class TestPosthogCeleryIntegration(unittest.TestCase):
         # close out the task lifecycle so the test doesn't leave context hanging around
         integration._on_task_success(sender=task)
 
+    @parameterized.expand(
+        [
+            # name, publishing task (name, id, retries), running task (name, id, retries)
+            ("child_task", ("app.parent", "parent-1", 0), ("app.child", "child-1", 0)),
+            ("retry", ("app.flaky", "flaky-1", 0), ("app.flaky", "flaky-1", 1)),
+            (
+                "chord_callback",
+                ("app.header", "header-1", 0),
+                ("app.callback", "callback-1", 0),
+            ),
+        ]
+    )
+    def test_task_published_from_a_task_keeps_its_own_celery_tags(
+        self, _name, publisher, worker
+    ):
+        integration = PosthogCeleryIntegration(client=Mock())
+
+        def run_task(name, task_id, retries, headers):
+            request = SimpleNamespace(
+                headers=headers, delivery_info={}, hostname="worker-1", retries=retries
+            )
+            task = SimpleNamespace(name=name, request=request)
+            integration._on_task_prerun(sender=task, task_id=task_id)
+            return task
+
+        publisher_task = run_task(
+            *publisher,
+            {
+                CONTEXT_DISTINCT_ID_HEADER: "user-1",
+                CONTEXT_TAGS_HEADER: '{"request_id": "abc"}',
+            },
+        )
+        headers = {}
+        integration._on_before_task_publish(sender=worker[0], headers=headers)
+        integration._on_task_success(sender=publisher_task)
+
+        worker_task = run_task(*worker, headers["headers"])
+        tags = contexts.get_tags()
+        integration._on_task_success(sender=worker_task)
+
+        worker_name, worker_id, worker_retries = worker
+        self.assertEqual(tags["celery_task_name"], worker_name)
+        self.assertEqual(tags["celery_task_id"], worker_id)
+        self.assertEqual(tags["celery_retry_count"], worker_retries)
+        # Other context still propagates from the publishing task.
+        self.assertEqual(tags["request_id"], "abc")
+
     def test_before_task_publish_respects_propagate_context_flag(self):
         integration = PosthogCeleryIntegration(propagate_context=False)
         headers = {}

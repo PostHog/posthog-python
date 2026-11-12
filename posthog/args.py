@@ -5,6 +5,9 @@ from typing import (
     Any,
     Dict,
     FrozenSet,
+    List,
+    Mapping,
+    NamedTuple,
     Union,
     Tuple,
     Type,
@@ -72,6 +75,27 @@ class OptionalCaptureArgs(TypedDict):
     _capture_trace_context: NotRequired[
         bool
     ]  # Internal: add the active OpenTelemetry span's ids even when capture_trace_context is off. Used by capture_exception.
+    _pinned_properties: NotRequired[
+        Optional["_PinnedProperties"]
+    ]  # Internal: properties fixed after super properties are merged. Used by config version 2 flag events.
+    _before_send_drops: NotRequired[
+        Optional[List[str]]
+    ]  # Internal: gets the event name when before_send drops the event. Used by flag event dedupe.
+
+
+class _PinnedProperties(NamedTuple):
+    """Internal: event properties that super properties cannot change.
+
+    Applied to the fully-enriched properties, after super properties are merged and
+    before any allowlist: ``removed`` names are dropped, then ``values`` are set.
+    """
+
+    removed: FrozenSet[str]
+    values: Mapping[str, Any]
+
+    def apply(self, properties: Dict[str, Any]) -> Dict[str, Any]:
+        kept = {k: v for k, v in properties.items() if k not in self.removed}
+        return {**kept, **self.values}
 
 
 class OptionalSetArgs(TypedDict):

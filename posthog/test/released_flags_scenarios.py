@@ -76,7 +76,8 @@ GETTER_FLAGS = [
     _flag("v2-number", 12.5, config_version=2),
     _flag("v2-object", {"layout": "compact", "n": [1, True]}, config_version=2),
     _flag("sparse", "compact", metadata={}, has_experiment=None, reason=None),
-    _flag("server-failed", "compact", failed=True),
+    # A failed record that still carries a payload.
+    _flag("server-failed", "compact", failed=True, payload='{"columns": 2}'),
 ]
 
 
@@ -171,7 +172,9 @@ def _with_client(
     # Read the built event in before_send: v1 layers flag properties inside _enqueue.
     def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append([message["event"], _flag_event_properties(message)])
-        return None
+        # Keep the event, so capture accepts it and returns its UUID as the real
+        # queue does; flag events dedupe only events that were accepted.
+        return message
 
     try:
         with (

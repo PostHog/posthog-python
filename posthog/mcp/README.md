@@ -34,6 +34,10 @@ but anyone wrapping a server already has it.
 MCP analytics events report `$lib: "posthog-python-mcp"` and the installed `posthog` package version in `$lib_version`, so SDK Health can compare MCP traffic with Python SDK releases.
 The client's other events, request headers and feature flag requests keep reporting `posthog-python`, so one client can serve both.
 
+## Versioning
+
+`posthog.mcp` is stable. It ships inside the `posthog` package, so it follows that package's version rather than its own. A minor or patch release of `posthog` doesn't change the `posthog.mcp` API in a breaking way, and doesn't rename or remove a `$mcp_*` event or property, change its type, or change which requests send an event, so saved insights keep working across upgrades. It may add events and properties, and redact more of a captured value. The rules come from the [MCP analytics spec](https://github.com/PostHog/sdk-specs/blob/main/openspec/specs/mcp-analytics/spec.md), section "Event schema stability".
+
 ## Defaults and opt-outs
 
 A valid echoed conversation handle takes precedence over transport sessions. A request that already carries a transport session or a PostHog session token does not mint a new handle or append a prompt-back block. Requests carrying neither use the conversation fallback.
@@ -190,9 +194,9 @@ contains the sanitized tool arguments and their original names.
 Custom dispatchers can call `get_tool_input_properties()` and add its result to
 the `properties` argument of `capture_tool_call()`.
 
-Model capture adds an `llm_model` argument to compatible tool schemas, required on the official
-high-level adapters and optional elsewhere. Dispatch never enforces it, so servers keep working;
-strict-schema clients see the new field. Set `capture_model=False` to leave schemas untouched.
+Model capture adds an optional `llm_model` argument to compatible tool schemas. Dispatch never
+enforces it, so servers keep working; strict-schema clients see the new field. Set
+`capture_model=False` to leave schemas untouched.
 Conversation correlation adds an optional `conversation_id` argument and returns a handle in
 eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
 Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
@@ -206,11 +210,9 @@ The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
 string to each compatible tool schema as a fallback, recorded with source
-`self_reported`. It is required for custom dispatchers and the official high-level
-MCP SDK adapters. Raw low-level servers and standalone `fastmcp.FastMCP` advertise
-it as optional; the standalone adapter strips it before input validation, so
-requiring it would reject calls. Existing schema strictness is preserved when
-analytics fields are added.
+`self_reported`. It is always optional: an agent that does not know its model would
+otherwise guess one. Existing schema strictness is preserved when analytics fields
+are added.
 
 The recognized metadata path is Codex's `x-codex-turn-metadata.model` field in
 request `_meta`. Other clients, including Claude Code, use the self-report path
@@ -238,8 +240,10 @@ On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute
 When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
 replica cannot safely distinguish that field from a replacement tool's own argument.
 Client metadata capture remains enabled. This also applies to pass-through logging or
-authorization middleware with those hooks; argument-based model capture is skipped so an
-application-owned value cannot be mistaken for analytics. No additional catalog lookup runs
+authorization middleware of your own with those hooks; argument-based model capture is skipped
+so an application-owned value cannot be mistaken for analytics. FastMCP's stock middleware,
+such as `LoggingMiddleware`, `TimingMiddleware`, and `ErrorHandlingMiddleware`, never reroutes a
+tool and does not count; its tool-injection middleware does. No additional catalog lookup runs
 during a tool call.
 
 For a custom dispatcher, `PostHogMCP` enables model capture and conversation correlation
@@ -385,6 +389,23 @@ call = posthog.prepare_tool_call(
     tool_name, raw_args, original_tool=my_tools.get(tool_name)
 )
 ```
+
+## Calls to tools your server does not have
+
+A `tools/call` naming a tool your server never registered is not a tool call.
+`instrument()` sends `$mcp_unknown_tool` with the requested name as
+`$mcp_tool_name`, and no `$mcp_tool_call` or `$exception`. The agent gets the
+same error as before. A call naming no tool sends nothing.
+
+The SDK asks the tool registry only after the call fails, and records a failed
+tool call whenever the registry can't rule the tool out:
+
+- A disabled tool, or a tool called with invalid arguments, still exists.
+- A raw low-level server has no registry the SDK can read.
+- On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
+  listing or dispatch hook can serve tools the registry lacks.
+- On standalone `fastmcp.FastMCP` 3 and later, a mounted server, proxy, or
+  other provider hides its disabled tools.
 
 ## Virtual tools on a paginated `tools/list`
 

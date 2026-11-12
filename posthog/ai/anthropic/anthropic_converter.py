@@ -242,6 +242,15 @@ def extract_anthropic_stop_reason(response: Any) -> Optional[str]:
     return getattr(response, "stop_reason", None)
 
 
+def _extract_thinking_tokens(usage: Any) -> int:
+    """Return usage.output_tokens_details.thinking_tokens (0 if absent or null)."""
+    details = getattr(usage, "output_tokens_details", None)
+    thinking = getattr(details, "thinking_tokens", None)
+    if isinstance(thinking, int) and not isinstance(thinking, bool):
+        return thinking
+    return 0
+
+
 def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     """
     Extract usage from a full Anthropic response (non-streaming).
@@ -272,6 +281,10 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
         cache_creation = response.usage.cache_creation_input_tokens
         if cache_creation and cache_creation > 0:
             result["cache_creation_input_tokens"] = cache_creation
+
+    thinking_tokens = _extract_thinking_tokens(response.usage)
+    if thinking_tokens > 0:
+        result["reasoning_tokens"] = thinking_tokens
 
     web_search_count = extract_anthropic_web_search_count(response)
     if web_search_count > 0:
@@ -318,6 +331,10 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
     # Handle usage stats from message_delta event
     if hasattr(event, "usage") and event.usage:
         usage["output_tokens"] = getattr(event.usage, "output_tokens", 0)
+
+        thinking_tokens = _extract_thinking_tokens(event.usage)
+        if thinking_tokens > 0:
+            usage["reasoning_tokens"] = thinking_tokens
 
         # Extract web search count from usage
         if hasattr(event.usage, "server_tool_use"):

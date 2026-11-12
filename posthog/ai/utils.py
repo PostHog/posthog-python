@@ -1163,9 +1163,7 @@ def capture_streaming_event(
             event_data["privacy_mode"],
             finalize_ai_content(event_data["formatted_output"], ph_client),
         ),
-        "$ai_http_status": (
-            getattr(error, "status_code", 0) if error is not None else 200
-        ),
+        "$ai_http_status": (_get_http_status(error) if error is not None else 200),
         **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
         **({"$ai_output_tokens": output_tokens} if output_tokens is not None else {}),
         "$ai_latency": event_data["latency"],
@@ -1216,6 +1214,9 @@ def capture_streaming_event(
         cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
         event_properties["$ai_cache_read_input_tokens"] = cache_read
         event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+        reasoning = event_data["usage_stats"].get("reasoning_tokens")
+        if isinstance(reasoning, int) and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
     else:
         optional_token_fields = [
             "cache_read_input_tokens",
