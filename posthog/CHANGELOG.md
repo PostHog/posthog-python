@@ -1,5 +1,37 @@
 # posthog
 
+## 7.88.0 — 2026-11-12
+
+### Minor changes
+
+- [9636fa20](https://github.com/posthog/posthog-python/commit/9636fa20e4ea4315e8b6b6fd43c0ee63ec9bf054) Support versioned composite scorers for offline evaluations, including formula validation, dependency metadata, explicit server calculations, stored outcome receipts, and composite-safe bulk uploads. — Thanks @Radu-Raicea!
+
+## 7.87.2 — 2026-11-12
+
+### Patch changes
+
+- [5378ece8](https://github.com/posthog/posthog-python/commit/5378ece8efd17c9ca626346b8c1f7136dc1eb8cb) Keep `frozenset` and `deque` property values when cleaning events instead of replacing them with `None`. — Thanks @Ishkirat-Singh for your first contribution 🎉!
+
+## 7.87.1 — 2026-11-11
+
+### Patch changes
+
+- [c28716c2](https://github.com/posthog/posthog-python/commit/c28716c20d75b4ca5dfe2aaedd4f14ff7086a769) Fix `flag_fallback_cache_url` for Redis URLs with an IPv6 host: the brackets are kept, so the Redis flag cache is no longer disabled. — Thanks @ioannisj!
+
+## 7.87.0 — 2026-11-11
+
+### Minor changes
+
+- [5febfd9b](https://github.com/posthog/posthog-python/commit/5febfd9b13d9d78e2f0cd253356badabf4e51c65) Send `$experiment_exposure` for config version 2 experiment splits, and send the reason code and rule attribution on `$feature_flag_called` for config version 2 flags in place of `$feature_flag_reason`. — Thanks @andehen!
+
+## 7.86.6 — 2026-11-10
+
+### Patch changes
+
+- [4d732304](https://github.com/posthog/posthog-python/commit/4d732304a94f06f12ad61ec538832c9a671ceeb1) The Anthropic wrapper now reports `$ai_reasoning_tokens` from `usage.output_tokens_details.thinking_tokens`, for both regular and streaming responses. — Thanks @pcbeingused333!
+- [1342bb0b](https://github.com/posthog/posthog-python/commit/1342bb0bac0de26c81bcef95206a2a3db36b9025) Treat NaN exception rate-limit settings as invalid numbers so autocapture keeps working and bucket limits remain finite. — Thanks @peterolkhov for your first contribution 🎉!
+- [8c6b328d](https://github.com/posthog/posthog-python/commit/8c6b328d3440409887636ccd96d6e19b9825eb55) Local evaluation of relative date filters now clamps the day after every month or year subtracted, as the SDK spec requires. A `2m` filter evaluated on March 31 resolved to January 31 and now resolves to January 28, and `4y` on February 29 resolves to February 28 of the target year. — Thanks @luantaraschi!
+
 ## 7.86.5 — 2026-11-10
 
 ### Patch changes

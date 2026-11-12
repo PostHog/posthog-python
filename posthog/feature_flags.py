@@ -99,6 +99,9 @@ class InconclusiveMatchError(Exception):
     """
     Raised when local evaluation can't determine a flag's value. ``reason`` says
     why, as reported by ``FeatureFlagEvaluations.unresolved_flags``.
+
+    Attributes:
+        reason: Why local evaluation couldn't resolve the flag.
     """
 
     reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
@@ -116,6 +119,9 @@ class RequiresServerEvaluation(Exception):
 
     This error should propagate immediately to trigger API fallback, unlike
     InconclusiveMatchError which allows trying other conditions.
+
+    Attributes:
+        reason: Why the flag needs server-side evaluation.
     """
 
     reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
@@ -1609,14 +1615,20 @@ def parse_datetime(value: str) -> datetime.datetime:
 
 
 # Python's stdlib doesn't provide a calendar-aware month/year delta.
-# Clamp the day to the target month's end to match dateutil.relativedelta behavior.
+# Subtract one unit at a time and clamp the day after every step, so March 31
+# minus two months is January 28 (through February 28), as the SDK spec requires.
 def _subtract_months(dt: datetime.datetime, months: int) -> Optional[datetime.datetime]:
-    month_index = dt.year * 12 + dt.month - 1 - months
+    current_index = dt.year * 12 + dt.month - 1
+    month_index = current_index - months
     year = month_index // 12
     month = month_index % 12 + 1
     if not 1 <= year <= 9999:
         return None
-    day = min(dt.day, calendar.monthrange(year, month)[1])
+    day = dt.day
+    for index in range(current_index - 1, month_index - 1, -1):
+        if day <= 28:  # Every month has at least 28 days, so nothing clamps further.
+            break
+        day = min(day, calendar.monthrange(index // 12, index % 12 + 1)[1])
     return dt.replace(year=year, month=month, day=day)
 
 
@@ -1624,7 +1636,9 @@ def _subtract_years(dt: datetime.datetime, years: int) -> Optional[datetime.date
     year = dt.year - years
     if not 1 <= year <= 9999:
         return None
-    day = min(dt.day, calendar.monthrange(year, dt.month)[1])
+    # The year before a leap year is never a leap year, so February 29 clamps on
+    # the first step and stays on the 28th.
+    day = 28 if years > 0 and (dt.month, dt.day) == (2, 29) else dt.day
     return dt.replace(year=year, day=day)
 
 

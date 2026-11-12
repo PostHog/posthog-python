@@ -29,8 +29,8 @@ def resolve_version(evaluations: OfflineEvaluations) -> str:
             "Set POSTHOG_SCORER_ID or POSTHOG_SCORER_VERSION_ID, or run --create-scorer once."
         )
     scorer = evaluations.scorers.get(scorer_id)
-    if scorer.kind != "boolean":
-        raise ValueError("This example requires a boolean scorer.")
+    if scorer.kind != "boolean" or scorer.calculation != "reported":
+        raise ValueError("This example requires a reported boolean scorer.")
     return scorer.current_version_id
 
 
@@ -67,6 +67,7 @@ def prepare_state(
     *,
     dataset_id: str | None = None,
     dataset_revision: int | None = None,
+    composite_version_id: str | None = None,
 ) -> dict[str, Any]:
     version_id = resolve_version(evaluations)
     cases = [
@@ -100,7 +101,17 @@ def prepare_state(
             )
             for case in cases
         ]
-    results = [exact_match_result(item, version_id) for item in items]
+    results = []
+    for item in items:
+        results.append(exact_match_result(item, version_id))
+        if composite_version_id is not None:
+            results.append(
+                EvaluationResult(
+                    item=item,
+                    scorer_version_id=composite_version_id,
+                    calculate=True,
+                )
+            )
     return {
         "project_id": project_id,
         "host": host,
@@ -153,6 +164,10 @@ def main() -> None:
         type=int,
         help="Pin this numeric revision; defaults to latest once.",
     )
+    parser.add_argument(
+        "--composite-version-id",
+        help="Also calculate this composite version, which must pin the configured boolean scorer version.",
+    )
     args = parser.parse_args()
     if args.dataset_revision is not None and args.dataset_id is None:
         parser.error("--dataset-revision requires --dataset-id")
@@ -186,6 +201,7 @@ def main() -> None:
                 host,
                 dataset_id=args.dataset_id,
                 dataset_revision=args.dataset_revision,
+                composite_version_id=args.composite_version_id,
             )
             save_state(args.state, state)
 
@@ -215,6 +231,16 @@ def main() -> None:
         print(
             f"Acknowledged {sum(len(chunk.results) for chunk in receipt.chunks)} results across {len(receipt.chunks)} chunks."
         )
+        errors = [
+            result
+            for chunk in receipt.chunks
+            for result in chunk.results
+            if result.status == "error"
+        ]
+        if errors:
+            print(
+                f"Accepted {len(errors)} error outcomes: {[result.error_code for result in errors]}"
+            )
         print(
             f"Keep {args.state} for exact replay; choose a different --state path for a new experiment."
         )

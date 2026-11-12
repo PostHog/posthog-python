@@ -30,7 +30,7 @@ def results(request: Any) -> Dict[str, Any]:
     return scenarios.run_all(request.param)
 
 
-def test_every_legacy_getter_and_event_matches_7_82_1(results):
+def test_every_legacy_getter_and_event_matches_7_82_1(request, results):
     expected = copy.deepcopy(RELEASED["getters"])
     # A record without a flag ID or version reads them as absent (None), where 7.82.1
     # read 0. Events already left out both, so only the parsed record differs.
@@ -57,6 +57,21 @@ def test_every_legacy_getter_and_event_matches_7_82_1(results):
     assert failed_events
     for properties in failed_events:
         assert properties.pop("$feature_flag_payload") == {"columns": 2}
+
+    if request.node.callspec.params["results"] == "v4":
+        # A $feature_flag_called for a config version 2 record carries its config
+        # version and reason code in place of the reason text. Only the v4 shape says
+        # a record is config version 2; config version 1 events are unchanged.
+        for name, properties in expected["events"]:
+            if name == "$feature_flag_called" and properties[
+                "$feature_flag"
+            ].startswith("v2-"):
+                assert (
+                    properties.pop("$feature_flag_reason")
+                    == scenarios.MATCHED["description"]
+                )
+                properties["$feature_flag_config_version"] = 2
+                properties["$feature_flag_reason_code"] = scenarios.MATCHED["code"]
 
     assert results["getters"] == expected
 

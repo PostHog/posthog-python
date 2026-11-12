@@ -62,6 +62,12 @@ class _AnthropicStreamAccumulator:
                 # (server tools can emit several in one stream). Keep the
                 # latest total; a field the event omits leaves the prior one.
                 self.usage_stats["output_tokens"] = output_tokens
+            # thinking tokens on a message_delta are cumulative as well
+            thinking_tokens = extract_anthropic_usage_from_event(event).get(
+                "reasoning_tokens"
+            )
+            if thinking_tokens is not None:
+                self.usage_stats["reasoning_tokens"] = thinking_tokens
 
         if getattr(event, "type", None) == "content_block_start":
             block, tool = handle_anthropic_content_block_start(event)

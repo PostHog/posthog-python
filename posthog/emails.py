@@ -170,6 +170,7 @@ __all__ = [
     "EmailAttachment",
     "EmailError",
     "EmailStatus",
+    "EmailTracking",
     "EmailWarning",
     "Emails",
     "SendEmailResult",
@@ -204,6 +205,17 @@ class EmailError(Exception):
     Branch on ``code``, PostHog's stable error code, or on ``name``, a coarse
     category of the failure. The message never contains the secret key or the
     request body.
+
+    Attributes:
+        name: A coarse category of the failure.
+        code: PostHog's stable error code.
+        message: What went wrong. It never contains the secret key or the request body.
+        status_code: The HTTP status of the response, or ``None`` when none arrived.
+        why: PostHog's explanation of the failure, when it gave one.
+        fix: What to change to fix it, when PostHog said.
+        docs_url: A docs page about the error, when PostHog gave one.
+        field: The request field the error is about, when there is one.
+        retry_after: Seconds to wait before retrying, when PostHog said.
     """
 
     def __init__(
@@ -240,7 +252,14 @@ class EmailWarning:
 
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is its message ID."""
+    """The queued email. ``id`` is its message ID.
+
+    Attributes:
+        id: The email's message ID.
+        replayed: ``True`` when the response says PostHog replayed an earlier send for
+            the same ``idempotency_key`` instead of sending again.
+        warnings: Warnings PostHog returned about the request.
+    """
 
     id: str
     replayed: bool = False
@@ -292,6 +311,28 @@ class TemplateEmailArgs(_RecipientArgs):
     template_data: NotRequired[Optional[Mapping[str, Any]]]
 
 
+class EmailTracking(TypedDict, total=False):
+    """Which kinds of tracking a send with ``template_key`` turns on.
+
+    A key you leave out keeps its default.
+
+    Args:
+        opens: Counts opens with PostHog's open pixel. Defaults to ``True``.
+        clicks: Counts clicks by sending the email's links through PostHog's
+            click tracking. Defaults to ``False`` for a sensitive email and
+            ``True`` for any other. Needs ``opens``: PostHog refuses a send
+            with ``opens=False`` and ``clicks=True``.
+        engagement: Captures the email's engagement events (sent,
+            delivered, opened, clicked, bounced) as events of the recipient.
+            Defaults to ``True``. A project whose admin turned engagement
+            capture off captures nothing, whatever the send asks.
+    """
+
+    opens: bool
+    clicks: bool
+    engagement: bool
+
+
 class CodeEmailArgs(_RecipientArgs):
     """A send of email content that your code rendered for one recipient, named by a key.
 
@@ -325,11 +366,31 @@ class CodeEmailArgs(_RecipientArgs):
             PostHog doesn't hold yet, then sends the email. A file the client
             can't send raises :class:`EmailError` with ``code``
             ``invalid_attachment``.
-        capture_engagement: Capture the email's opens and clicks as events of
-            the recipient. Defaults to ``True``. A project whose admin turned
-            engagement capture off captures nothing, whatever the send asks. A
-            template made in PostHog follows the project's setting, so the
-            template form doesn't take it.
+        capture_engagement: Deprecated, use ``tracking={"engagement": False}``.
+            It keeps working, but PostHog refuses a send that sets both
+            ``capture_engagement`` and ``tracking``. Captures the email's
+            engagement events as events of the recipient. Defaults to
+            ``True``. A project whose admin turned engagement capture off
+            captures nothing, whatever the send asks. A template made in
+            PostHog follows the project's setting, so the template form
+            doesn't take it.
+        sensitive: Marks the email as sensitive, such as one that carries
+            login links, reset tokens or codes. A sensitive email keeps its
+            links as they are unless ``tracking`` turns clicks on, leaves its
+            subject off engagement events, and keeps its content out of
+            PostHog's logs. Without it, a send whose ``template_key`` matches
+            a template saved in PostHog follows that template's setting, and
+            any other send is sensitive. The template form doesn't take it.
+        tracking: What PostHog tracks for this email. Without it, PostHog
+            counts opens with its open pixel, captures engagement events, and
+            counts clicks only when the email isn't sensitive. ``True`` turns
+            on opens, clicks and engagement events. ``False`` turns off all
+            tracking, including kinds PostHog adds later: PostHog can't count
+            the email's opens or clicks, and captures no engagement events.
+            An :class:`EmailTracking` dict turns each kind on or off, and a
+            key you leave out keeps its default. Turn clicks on for a
+            sensitive email only when its links are safe to send through
+            PostHog's click tracking. The template form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -350,6 +411,8 @@ class CodeEmailArgs(_RecipientArgs):
     bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
     attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
     capture_engagement: NotRequired[Optional[bool]]
+    sensitive: NotRequired[Optional[bool]]
+    tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 
 
 _ATTACHMENT_FIELDS = frozenset(EmailAttachment.__annotations__)
@@ -363,6 +426,8 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "bcc",
         "attachments",
         "capture_engagement",
+        "sensitive",
+        "tracking",
     }
 )
 
@@ -384,6 +449,13 @@ class EmailStatus:
     ``reason`` says why a failed email was not sent, such as
     ``provider_error`` or ``recipient_suppressed``, or gives the bounce type of
     a bounced email: ``hard``, ``soft`` or ``unknown``. It is ``None`` otherwise.
+
+    Attributes:
+        id: The email's message ID.
+        status: Where the email is now, one of the values above.
+        created_at: When PostHog queued the email.
+        status_at: When the email reached its current status.
+        reason: Why a failed email was not sent, or a bounced email's bounce type.
     """
 
     id: str
@@ -497,11 +569,24 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
         addresses = _addresses(field, args[field]) if field in args else []
         if addresses:
             sender[field] = addresses
-    capture_engagement = args.get("capture_engagement", True)
-    if not isinstance(capture_engagement, bool):
-        raise TypeError("capture_engagement must be True or False.")
-    sender["capture_engagement"] = capture_engagement
+    for flag in ("capture_engagement", "sensitive"):
+        if flag in args:
+            if not isinstance(args[flag], bool):
+                raise TypeError(f"{flag} must be True or False.")
+            sender[flag] = args[flag]
+    if "tracking" in args:
+        sender["tracking"] = _tracking(args["tracking"])
     return sender
+
+
+def _tracking(value: Any) -> Union[bool, dict[str, Any]]:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, Mapping):
+        return dict(value)
+    raise TypeError(
+        "tracking must be True, False or a dict of opens, clicks and engagement."
+    )
 
 
 def _addresses(field: str, value: Any) -> list[str]:

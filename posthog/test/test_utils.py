@@ -3,6 +3,7 @@ import os
 import sys
 import time
 import unittest
+from collections import deque
 from contextlib import ExitStack
 from unittest import mock
 from dataclasses import dataclass
@@ -314,6 +315,16 @@ class TestUtils(unittest.TestCase):
             1.5,
             "12345678-1234-5678-1234-567812345678",
         ]
+
+        assert utils.clean(
+            {
+                "frozenset": frozenset([Decimal("1.5")]),
+                "deque": deque([UUID("12345678123456781234567812345678")]),
+            }
+        ) == {
+            "frozenset": [1.5],
+            "deque": ["12345678-1234-5678-1234-567812345678"],
+        }
 
         bad_value = object()
 

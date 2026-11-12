@@ -4,7 +4,7 @@ import numbers
 import re
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
@@ -89,7 +89,7 @@ def clean(item):
         return str(item)
     if isinstance(item, (str, bool, numbers.Number, datetime, date, type(None))):
         return item
-    if isinstance(item, (set, list, tuple)):
+    if isinstance(item, (set, frozenset, list, tuple, deque)):
         return _clean_list(item)
 
     item = _clean_pydantic_model(item)
