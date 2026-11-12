@@ -2327,6 +2327,9 @@ class Client(object):
                 ``super_options``, which fill in before ``before_send`` runs.
                 An option overrides its legacy ``$`` property, such as
                 ``$process_person_profile``. A ``None`` option counts as unset.
+                An identify-style event, such as ``$identify`` or ``$set``,
+                gets ``process_person_profile: True`` when this call leaves it
+                unset, unless the SDK generated its distinct ID.
 
         Examples:
             ```python
@@ -2527,6 +2530,7 @@ class Client(object):
             context_properties=_context_tag_defaults(),
             context_options=_context_get_context_options(),
             derived_options=_personless_options(personless),
+            generated_distinct_id=personless,
             system_properties=system_context(),
             flag_properties=extra_properties,
             trace_properties=trace_properties,
@@ -2709,6 +2713,7 @@ class Client(object):
                 Falls back to the context distinct ID, then to
                 ``$<group_type>_<group_key>``.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -2787,6 +2792,7 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -3152,6 +3158,7 @@ class Client(object):
         context_properties=None,
         context_options=None,
         derived_options=None,
+        generated_distinct_id=False,
         system_properties=None,
         flag_properties=None,
         trace_properties=None,
@@ -3207,6 +3214,7 @@ class Client(object):
                 library_id=self._library_id,
                 library_version=self._library_version,
                 pinned_properties=pinned_properties,
+                generated_distinct_id=generated_distinct_id,
             ),
         )
 

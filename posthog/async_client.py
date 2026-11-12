@@ -625,6 +625,7 @@ class AsyncClient:
         flag_properties: Optional[dict[str, Any]] = None,
         trace_properties: Optional[dict[str, Any]] = None,
         pinned_properties: Optional[_PinnedProperties] = None,
+        generated_distinct_id: bool = False,
     ) -> _EventDefaults:
         return _build_event_defaults(
             super_properties=self.super_properties,
@@ -643,6 +644,7 @@ class AsyncClient:
             library_id="posthog-python",
             library_version=VERSION,
             pinned_properties=pinned_properties,
+            generated_distinct_id=generated_distinct_id,
         )
 
     def _build_capture_event(
@@ -683,6 +685,7 @@ class AsyncClient:
                 context_properties=_context_tag_defaults(),
                 context_options=_get_context_options(),
                 derived_options=_personless_options(personless),
+                generated_distinct_id=personless,
                 property_allowlist=kwargs.get("_property_allowlist"),
                 disable_geoip=kwargs.get("disable_geoip"),
                 system_properties=system_context(),

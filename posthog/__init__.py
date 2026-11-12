@@ -720,7 +720,8 @@ def group_identify(
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
         distinct_id: Optional distinct ID of the user performing the action
-        options: Optional capture options for the event, sent as given
+        options: Optional capture options for the event, sent as given.
+            ``process_person_profile`` is ``True`` unless this call sets it.
 
     Examples:
         ```python
@@ -766,7 +767,8 @@ def alias(
             datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
-        options: Optional capture options for the event, sent as given
+        options: Optional capture options for the event, sent as given.
+            ``process_person_profile`` is ``True`` unless this call sets it.
 
     Details:
         To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after they e.g. register, login, or perform some other identifying action.
