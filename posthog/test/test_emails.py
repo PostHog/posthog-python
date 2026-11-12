@@ -844,21 +844,40 @@ def test_send_schedules_both_forms_for_a_time_with_an_offset(_name, value, wire)
 
 @parameterized.expand(
     [
-        ("left_out", {}, {}),
-        ("passed_as_none", {"scheduled_at": None}, {}),
-        ("code_form_as_none", {"scheduled_at": None, "template_key": "x"}, {}),
+        ("left_out", lambda emails: send(emails)),
+        ("passed_as_none", lambda emails: send(emails, scheduled_at=None)),
+        (
+            "code_form_as_none",
+            lambda emails: send_code(emails, html=HTML, scheduled_at=None),
+        ),
     ]
 )
-def test_a_send_now_carries_no_scheduled_at_and_reads_queued(_name, overrides, _):
+def test_a_send_now_carries_no_scheduled_at_and_reads_queued(_name, call):
     emails, adapter = emails_with([accepted()])
 
-    if "template_key" in overrides:
-        result = send_code(emails, html=HTML, scheduled_at=None)
-    else:
-        result = send(emails, **overrides)
+    result = call(emails)
+
+    assert (result.status, result.scheduled_at, result.warnings) == ("queued", None, ())
+    assert "scheduled_at" not in json.loads(adapter.requests[0].body)
+
+
+@parameterized.expand(
+    [
+        ("template_form", lambda emails: send(emails, scheduled_at=LATER)),
+        (
+            "code_form",
+            lambda emails: send_code(emails, html=HTML, scheduled_at=LATER),
+        ),
+    ]
+)
+def test_a_server_without_scheduled_sends_warns_that_it_sent_now(_name, call):
+    # A PostHog that predates scheduled sends drops scheduled_at, sends at once and answers no status.
+    emails, _ = emails_with([accepted()])
+
+    result = call(emails)
 
     assert (result.status, result.scheduled_at) == ("queued", None)
-    assert "scheduled_at" not in json.loads(adapter.requests[0].body)
+    assert [w.code for w in result.warnings] == ["scheduling_unsupported"]
 
 
 def test_a_time_at_or_before_now_reads_as_the_servers_queued_answer():
@@ -990,6 +1009,7 @@ def test_list_reads_scheduled_emails_a_page_at_a_time(_name, args, query, next_c
         ("a_bool", {"limit": True}, TypeError),
         ("empty_cursor", {"cursor": ""}, ValueError),
         ("empty_status", {"status": ""}, ValueError),
+        ("another_status", {"status": "sent"}, ValueError),
     ]
 )
 def test_list_refuses_bad_arguments_before_any_request(_name, args, error):
@@ -1077,19 +1097,26 @@ def test_update_and_cancel_retry_like_a_send(
         assert len(adapter.requests) == 1
 
 
-@parameterized.expand([("already_sending",), ("canceled",)])
-def test_a_cancel_or_move_too_late_keeps_posthogs_code(code):
-    emails, _ = emails_with([rejected(409, code)])
+@parameterized.expand(
+    [
+        ("move_while_sending", MANAGE_CALLS[0][1], "already_sending"),
+        ("move_after_a_cancel", MANAGE_CALLS[0][1], "canceled"),
+        ("cancel_while_sending", MANAGE_CALLS[1][1], "already_sending"),
+    ]
+)
+def test_a_cancel_or_move_too_late_is_a_validation_error(_name, call, code):
+    emails, adapter = emails_with([rejected(409, code)])
 
     with pytest.raises(EmailError) as raised:
-        emails.cancel(MESSAGE_ID)
+        call(emails)
 
-    # The shared SDK spec names every 409 but template_outdated this way.
+    # As with template_outdated, a retry can't resolve it, so posthog-node names it this way too.
     assert (raised.value.status_code, raised.value.code, raised.value.name) == (
         409,
         code,
-        "concurrent_idempotent_requests",
+        "validation_error",
     )
+    assert len(adapter.requests) == 1
 
 
 @parameterized.expand(
@@ -1133,13 +1160,35 @@ def test_manage_calls_need_the_secret_key_and_an_enabled_client(_name, call, cod
     assert adapter.requests == []
 
 
-def test_a_malformed_list_page_raises_instead_of_dropping_emails():
-    emails, _ = emails_with(
-        [(200, {"results": [{"id": MESSAGE_ID}], "next": None}, {})]
-    )
+@parameterized.expand(
+    [
+        ("row_without_fields", {"results": [{"id": MESSAGE_ID}], "next": None}),
+        ("next_not_a_string", {**list_reply()[1], "next": 123}),
+        ("next_empty", {**list_reply()[1], "next": ""}),
+        ("next_left_out", {"results": list_reply()[1]["results"]}),
+    ]
+)
+def test_a_malformed_list_page_raises_instead_of_dropping_emails(_name, body):
+    # A page that loses its next cursor would end a caller's loop early and hide emails that still go out.
+    emails, _ = emails_with([(200, body, {})])
 
     with pytest.raises(EmailError) as raised:
         emails.list()
+
+    assert raised.value.code == "api_error"
+
+
+@parameterized.expand(
+    [
+        ("no_status", {"id": MESSAGE_ID}),
+        ("still_scheduled", {"id": MESSAGE_ID, "status": "scheduled"}),
+    ]
+)
+def test_a_cancel_reply_without_a_canceled_email_raises(_name, body):
+    emails, _ = emails_with([(200, body, {})])
+
+    with pytest.raises(EmailError) as raised:
+        emails.cancel(MESSAGE_ID)
 
     assert raised.value.code == "api_error"
 

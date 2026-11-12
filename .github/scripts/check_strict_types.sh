@@ -109,6 +109,7 @@ Emails("phs_example").send(to="user@example.com", template_key="welcome", subjec
 Emails("phs_example").update("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b")  # expected-type-error
 Emails("phs_example").update("0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", "2026-12-01T09:00:00Z")  # expected-type-error
 Emails("phs_example").list("scheduled")  # expected-type-error
+Emails("phs_example").list(status="sent")  # expected-type-error
 
 
 async def invalid_async_email() -> None:

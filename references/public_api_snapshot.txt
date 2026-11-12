@@ -1867,13 +1867,13 @@ method posthog.contexts.ContextScope.set_session_id(session_id: str)
 method posthog.emails.AsyncEmails.aclose() -> None
 method posthog.emails.AsyncEmails.cancel(message_id: Union[str, UUID]) -> CancelEmailResult
 method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
-method posthog.emails.AsyncEmails.list(*, status: str = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
+method posthog.emails.AsyncEmails.list(*, status: Literal['scheduled'] = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
 method posthog.emails.AsyncEmails.send(**kwargs: Any) -> SendEmailResult
 method posthog.emails.AsyncEmails.update(message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]) -> UpdateEmailResult
 method posthog.emails.Emails.cancel(message_id: Union[str, UUID]) -> CancelEmailResult
 method posthog.emails.Emails.close() -> None
 method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
-method posthog.emails.Emails.list(*, status: str = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
+method posthog.emails.Emails.list(*, status: Literal['scheduled'] = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
 method posthog.emails.Emails.send(**kwargs: Any) -> SendEmailResult
 method posthog.emails.Emails.update(message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]) -> UpdateEmailResult
 method posthog.exception_capture.ExceptionCapture.capture_exception(exception, metadata=None)
