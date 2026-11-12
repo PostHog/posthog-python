@@ -15,7 +15,7 @@ import atexit
 
 import posthog
 from posthog import FeatureFlagEvaluations, FlagValue, Posthog
-from posthog.emails import AsyncEmails, Emails, SendEmailResult
+from posthog.emails import TRANSACTIONAL_CATEGORY, AsyncEmails, Emails, MessageCategory, SendEmailResult
 from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
@@ -43,8 +43,9 @@ _ = (flag_value, all_flags, enabled, payload, evaluations, active)
 
 emails = Emails("phs_example")
 template_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_data={"name": "Ada"})
-rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"], capture_engagement=False, max_retries=0)
-_ = (template_send, rendered_send)
+rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key="password-reset", subject="Reset", html="<p>Reset</p>", from_="Acme <security@example.com>", reply_to=["help@example.com"], capture_engagement=False, category=MessageCategory(key="newsletter", type="marketing", name="Newsletter", description="Monthly product news"), max_retries=0)
+transactional_send: SendEmailResult = emails.send(to="user@example.com", template_key="receipt", subject="Receipt", html="<p>Paid</p>", category=TRANSACTIONAL_CATEGORY)
+_ = (template_send, rendered_send, transactional_send)
 
 
 async def async_email_types() -> None:
@@ -78,7 +79,7 @@ PY
 cat > "$tmp/invalid_types.py" <<'PY'
 # pyright: strict
 from posthog.ai.evaluations import BooleanScorerConfig, CategoricalScorerConfig, NumericPassingRule, NumericScorerConfig, OfflineEvaluations
-from posthog.emails import AsyncEmails, Emails
+from posthog.emails import AsyncEmails, Emails, MessageCategory
 
 client = OfflineEvaluations(project_id=123, secret_key="phx_example")
 NumericPassingRule(operator="gt", threshold=0.8)  # expected-type-error
@@ -91,6 +92,9 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", capture_engagement=False)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", cc="team@example.com")  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", category="newsletter")  # expected-type-error
+MessageCategory(key="newsletter", type="promo", name="Newsletter")  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", category="transactional")  # expected-type-error
 
 
 async def invalid_async_email() -> None:

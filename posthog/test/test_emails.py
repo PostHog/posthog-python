@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Union
@@ -14,7 +15,14 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.emails import AsyncEmails, EmailError, Emails, EmailStatus
+from posthog.emails import (
+    TRANSACTIONAL_CATEGORY,
+    AsyncEmails,
+    EmailError,
+    Emails,
+    EmailStatus,
+    MessageCategory,
+)
 from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
@@ -742,6 +750,269 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
     }
 
 
+_UNSUBSCRIBE_LINK = re.compile(r"\{\{\s*unsubscribe_url\s*\}\}")
+_CODE_SEND_FIELDS = {
+    "to",
+    "template_key",
+    "subject",
+    "html",
+    "text",
+    "from",
+    "reply_to",
+    "capture_engagement",
+    "distinct_id",
+    "category",
+}
+_CATEGORY_FIELDS = {"key", "type", "name", "description"}
+
+
+class FakeSendApi(requests.adapters.BaseAdapter):
+    def __init__(
+        self,
+        categories: Optional[dict[str, dict[str, str]]] = None,
+        templates: Optional[dict[str, Optional[str]]] = None,
+    ):
+        super().__init__()
+        self.categories = categories or {}
+        self.templates = templates or {}
+        self.sent: list[tuple[str, Optional[str]]] = []
+
+    def send(
+        self, request: requests.PreparedRequest, **kwargs: Any
+    ) -> requests.Response:
+        body = json.loads(request.body or b"{}")
+        status, reply = self._handle(body)
+        response = requests.Response()
+        response.status_code = status
+        response._content = json.dumps(reply).encode()
+        return response
+
+    def _handle(self, body: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        category = body.get("category")
+        if set(body) - _CODE_SEND_FIELDS or not _is_valid_category(category):
+            return 400, {"code": "invalid_input", "attr": "category"}
+        if body["template_key"] in self.templates:
+            return self._send_for_template(body, category)
+        if not isinstance(category, dict):
+            self.sent.append((body["to"], None))
+            return 202, {"message_id": "msg_1"}
+        stored = self.categories.get(category["key"])
+        if stored is not None and stored["type"] != category["type"]:
+            return 400, {"code": "category_mismatch", "attr": "category"}
+        if category["type"] == "marketing" and not _UNSUBSCRIBE_LINK.search(
+            body.get("html") or body.get("text") or ""
+        ):
+            return 400, {"code": "unsubscribe_link_required", "attr": "html"}
+        if stored is None:
+            self.categories[category["key"]] = {
+                "type": category["type"],
+                "name": category["name"],
+                "description": category.get("description", ""),
+            }
+        self.sent.append((body["to"], category["key"]))
+        return 202, {"message_id": "msg_1"}
+
+    def _send_for_template(
+        self, body: dict[str, Any], category: Any
+    ) -> tuple[int, dict[str, Any]]:
+        key = self.templates[body["template_key"]]
+        if key is not None and self.categories[key]["type"] == "marketing":
+            return 400, {"code": "marketing_template"}
+        if key is None:
+            matches = category in (None, "transactional")
+        else:
+            matches = category is None or (
+                isinstance(category, dict)
+                and category["key"] == key
+                and category["type"] == self.categories[key]["type"]
+            )
+        if not matches:
+            return 400, {"code": "category_mismatch", "attr": "category"}
+        self.sent.append((body["to"], key))
+        return 202, {"message_id": "msg_1"}
+
+    def close(self) -> None:
+        pass
+
+
+def _is_valid_category(category: Any) -> bool:
+    if category is None or category == "transactional":
+        return True
+    return (
+        isinstance(category, dict)
+        and {"key", "type", "name"} <= set(category) <= _CATEGORY_FIELDS
+        and category["type"] in ("marketing", "transactional")
+        and all(isinstance(value, str) for value in category.values())
+    )
+
+
+def emails_with_send_api(
+    categories: Optional[dict[str, dict[str, str]]] = None,
+    templates: Optional[dict[str, Optional[str]]] = None,
+) -> tuple[Emails, FakeSendApi]:
+    api = FakeSendApi(categories, templates)
+    session = requests.Session()
+    session.mount("https://", api)
+    return Emails(SECRET_KEY, session=session, max_retries=0), api
+
+
+MARKETING_HTML = "<p>News. <a href='{{ unsubscribe_url }}'>Unsubscribe</a></p>"
+NEWSLETTER = MessageCategory(
+    key="newsletter",
+    type="marketing",
+    name="Newsletter",
+    description="Monthly product news",
+)
+
+
+@parameterized.expand(
+    [
+        (
+            "marketing",
+            NEWSLETTER,
+            MARKETING_HTML,
+            {
+                "type": "marketing",
+                "name": "Newsletter",
+                "description": "Monthly product news",
+            },
+        ),
+        (
+            "transactional",
+            MessageCategory(key="receipts", type="transactional", name="Receipts"),
+            "<p>Your receipt</p>",
+            {"type": "transactional", "name": "Receipts", "description": ""},
+        ),
+    ]
+)
+def test_a_send_creates_its_category_in_the_project(_name, category, html, stored):
+    emails, api = emails_with_send_api()
+
+    send_code(emails, html=html, category=category)
+
+    assert api.categories == {category.key: stored}
+    assert api.sent == [("user@example.com", category.key)]
+
+
+def test_a_send_leaves_a_category_it_created_as_it_is():
+    emails, api = emails_with_send_api()
+    send_code(emails, html=MARKETING_HTML, category=NEWSLETTER)
+
+    send_code(
+        emails,
+        html=MARKETING_HTML,
+        category=MessageCategory(
+            key="newsletter",
+            type="marketing",
+            name="Product news",
+            description="Weekly tips",
+        ),
+    )
+
+    assert api.categories == {
+        "newsletter": {
+            "type": "marketing",
+            "name": "Newsletter",
+            "description": "Monthly product news",
+        }
+    }
+    assert api.sent == [
+        ("user@example.com", "newsletter"),
+        ("user@example.com", "newsletter"),
+    ]
+
+
+@parameterized.expand(
+    [
+        ("left_out", {}),
+        ("none", {"category": None}),
+        ("built_in_transactional", {"category": TRANSACTIONAL_CATEGORY}),
+    ]
+)
+def test_a_send_without_a_category_is_transactional(_name, overrides):
+    emails, api = emails_with_send_api()
+
+    send_code(emails, html=HTML, **overrides)
+
+    assert api.sent == [("user@example.com", None)]
+    assert api.categories == {}
+
+
+def emails_with_a_receipt_template() -> tuple[Emails, FakeSendApi]:
+    return emails_with_send_api(
+        {
+            "receipts": {
+                "type": "transactional",
+                "name": "Receipts",
+                "description": "",
+            }
+        },
+        templates={"order-receipt": "receipts"},
+    )
+
+
+@parameterized.expand([("left_out", {}), ("none", {"category": None})])
+def test_a_send_for_a_template_in_a_category_follows_its_category(_name, overrides):
+    emails, api = emails_with_a_receipt_template()
+
+    send_code(emails, template_key="order-receipt", html=HTML, **overrides)
+
+    assert api.sent == [("user@example.com", "receipts")]
+
+
+def test_transactional_on_a_template_in_a_category_is_refused():
+    emails, api = emails_with_a_receipt_template()
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            template_key="order-receipt",
+            html=HTML,
+            category=TRANSACTIONAL_CATEGORY,
+        )
+
+    assert (raised.value.code, raised.value.name) == (
+        "category_mismatch",
+        "validation_error",
+    )
+    assert api.sent == []
+
+
+def test_a_send_for_a_marketing_template_is_refused():
+    emails, api = emails_with_send_api(
+        {"newsletter": {"type": "marketing", "name": "Newsletter", "description": ""}},
+        templates={"november-digest": "newsletter"},
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(emails, template_key="november-digest", html=MARKETING_HTML)
+
+    assert (raised.value.code, raised.value.name) == (
+        "marketing_template",
+        "validation_error",
+    )
+    assert api.sent == []
+
+
+def test_a_category_of_another_type_is_refused():
+    emails, api = emails_with_send_api(
+        {"receipts": {"type": "transactional", "name": "Receipts", "description": ""}}
+    )
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails,
+            html=MARKETING_HTML,
+            category=MessageCategory(key="receipts", type="marketing", name="Receipts"),
+        )
+
+    assert (raised.value.code, raised.value.name) == (
+        "category_mismatch",
+        "validation_error",
+    )
+    assert api.sent == []
+
+
 @parameterized.expand(
     [
         ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
@@ -766,6 +1037,32 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
         ("empty_html_and_text", {"html": "", "text": ""}, ValueError),
         ("blank_reply_to", {"html": HTML, "reply_to": " "}, ValueError),
         ("reply_to_not_text", {"html": HTML, "reply_to": 123}, TypeError),
+        ("category_not_a_category", {"html": HTML, "category": 1}, TypeError),
+        (
+            "category_as_a_key",
+            {"html": HTML, "category": "product-updates"},
+            TypeError,
+        ),
+        (
+            "category_type_unknown",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="product-updates", type="promo", name="Product updates"
+                ),
+            },
+            ValueError,
+        ),
+        (
+            "category_name_not_text",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="product-updates", type="marketing", name=None
+                ),
+            },
+            TypeError,
+        ),
         (
             "template_data_on_code_form",
             {"html": HTML, "template_data": {"first_name": "Jane"}},
@@ -779,6 +1076,16 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
                 "template_key": None,
                 "subject": None,
                 "capture_engagement": False,
+            },
+            TypeError,
+        ),
+        (
+            "category_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "category": TRANSACTIONAL_CATEGORY,
             },
             TypeError,
         ),

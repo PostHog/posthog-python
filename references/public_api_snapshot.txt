@@ -889,6 +889,7 @@ attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeEmailArgs.category: NotRequired[Optional[Union[Literal['transactional'], MessageCategory]]]
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
@@ -912,9 +913,14 @@ attribute posthog.emails.EmailStatus.status_at: datetime
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
+attribute posthog.emails.MessageCategory.description: Optional[str] = None
+attribute posthog.emails.MessageCategory.key: str
+attribute posthog.emails.MessageCategory.name: str
+attribute posthog.emails.MessageCategory.type: Literal['marketing', 'transactional']
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
+attribute posthog.emails.TRANSACTIONAL_CATEGORY: Final = 'transactional'
 attribute posthog.emails.TemplateEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.TemplateEmailArgs.template_id: Union[str, UUID]
 attribute posthog.enable_exception_autocapture = False
@@ -1348,6 +1354,7 @@ class posthog.emails.EmailError(*, name: str, code: str, message: str, status_co
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
+class posthog.emails.MessageCategory(key: str, type: Literal['marketing', 'transactional'], name: str, description: Optional[str] = None)
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
 class posthog.emails.TemplateEmailArgs 
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
