@@ -639,7 +639,7 @@ class FeatureFlagResult:
             FeatureFlagResult | None: A new FeatureFlagResult instance, or None if details is None.
         """
 
-        if details is None:
+        if details is None or (details._failed and details._malformed_field is None):
             return None
 
         if override_match_value is not None:
@@ -720,6 +720,7 @@ def to_values(response: FlagsResponse) -> Optional[dict[str, FlagValue]]:
         key: value.get_value()
         for key, value in flags.items()
         if isinstance(value, FeatureFlag)
+        and not (value._failed and value._malformed_field is None)
     }
 
 
@@ -731,6 +732,7 @@ def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:
         key: value.metadata.payload
         for key, value in response.get("flags", {}).items()
         if isinstance(value, FeatureFlag)
+        and not value._failed
         and value.enabled
         and value.metadata.payload is not None
     }

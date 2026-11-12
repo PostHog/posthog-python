@@ -4646,6 +4646,8 @@ class Client(object):
                     errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
                 if flag_details is None:
                     errors.append(FeatureFlagError.FLAG_MISSING)
+                elif flag_details._failed:
+                    errors.append("evaluation_failed")
                 if errors:
                     feature_flag_error = ",".join(errors)
 
@@ -4677,10 +4679,11 @@ class Client(object):
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
-                # A payload lookup for a caller's match_value reports that value, not
-                # the record's. A failure above falls back to a stale cached value.
-                value_from_details = (
-                    flag_details is not None and override_match_value is None
+                # A successful payload override reports the caller's value. A
+                # failed record still supplies diagnostics, never the override.
+                value_from_details = flag_details is not None and (
+                    override_match_value is None
+                    or (flag_details._failed and flag_details._malformed_field is None)
                 )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
@@ -5321,7 +5324,32 @@ class Client(object):
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                     device_id=device_id,
                 )
-                response = to_flags_and_payloads(decide_response)
+                remote_response = to_flags_and_payloads(decide_response)
+                # Only explicit failed records preserve same-context local pairs;
+                # successful remote records retain the existing precedence.
+                failed_keys = {
+                    key
+                    for key, detail in decide_response.get("flags", {}).items()
+                    if detail._failed and detail._malformed_field is None
+                }
+                response = {
+                    "featureFlags": {
+                        **{
+                            k: v
+                            for k, v in (response["featureFlags"] or {}).items()
+                            if k in failed_keys
+                        },
+                        **(remote_response["featureFlags"] or {}),
+                    },
+                    "featureFlagPayloads": {
+                        **{
+                            k: v
+                            for k, v in (response["featureFlagPayloads"] or {}).items()
+                            if k in failed_keys
+                        },
+                        **(remote_response["featureFlagPayloads"] or {}),
+                    },
+                }
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"

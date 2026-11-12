@@ -152,7 +152,14 @@ class FeatureFlagEvaluations:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
         self._host = host
         self._distinct_id = distinct_id
-        self._flags = flags
+        self._failed_flags = {
+            key: flag
+            for key, flag in flags.items()
+            if isinstance(flag, _RemoteFlagRecord)
+            and flag.details._failed
+            and flag.details._malformed_field is None
+        }
+        self._flags = {k: v for k, v in flags.items() if k not in self._failed_flags}
         self._groups: Dict[str, Union[str, int]] = dict(groups or {})
         self._disable_geoip = disable_geoip
         self._request_id = request_id
@@ -337,8 +344,9 @@ class FeatureFlagEvaluations:
         if not self._distinct_id:
             return
 
-        flag = self._flags.get(key)
-        if flag is None:
+        failed = key in self._failed_flags
+        flag = self._flags.get(key) or self._failed_flags.get(key)
+        if flag is None or failed:
             response: Optional[FlagValue] = None
         elif not flag.enabled:
             response = False
@@ -376,7 +384,9 @@ class FeatureFlagEvaluations:
             errors.append("errors_while_computing_flags")
         if self._quota_limited:
             errors.append("quota_limited")
-        if flag is None:
+        if failed:
+            errors.append("evaluation_failed")
+        elif flag is None:
             errors.append(
                 "local_evaluation_inconclusive"
                 if key in self._unresolved_flags
