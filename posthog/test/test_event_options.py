@@ -1177,3 +1177,67 @@ async def test_identify_style_default_leaves_the_call_dicts_unchanged(
     assert options == {"cookieless_mode": True}
     assert caller_properties == properties
     assert events[0]["options"] == {"cookieless_mode": True, PP: expected}
+
+
+LEGACY_FALSE_LAYERS = ["super_properties", "context_tag"]
+
+
+def _record_person_processing(seen, drop_options=False):
+    def hook(msg):
+        seen.append((msg["options"].get(PP), msg["properties"].get(LEGACY_PP, "unset")))
+        if drop_options:
+            return {k: v for k, v in msg.items() if k != "options"}
+        return msg
+
+    return hook
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+@pytest.mark.parametrize("emitter", list(IDENTIFY_STYLE_EMITTERS))
+async def test_before_send_sees_no_layered_legacy_property_on_identify_style_events(
+    mode, layer, emitter
+):
+    layers = _layers(False)[layer]
+    seen: list = []
+    await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS[emitter], layers),
+        before_send=_record_person_processing(seen),
+        **_client_config(layers),
+    )
+    assert seen == [(True, "unset")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+async def test_hook_that_drops_options_sends_no_layered_legacy_false(mode, layer):
+    layers = _layers(False)[layer]
+    events = await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS["alias"], layers),
+        before_send=_record_person_processing([], drop_options=True),
+        **_client_config(layers),
+    )
+    assert PP not in events[0]["options"]
+    assert LEGACY_PP not in events[0]["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+async def test_before_send_still_sees_the_layered_legacy_property_on_other_events(
+    mode, layer
+):
+    layers = {**_layers(False)[layer], "super_options": {PP: True}}
+    seen: list = []
+    events = await _wire_events(
+        mode,
+        _layered(_capture_as("e"), layers),
+        before_send=_record_person_processing(seen),
+        **_client_config(layers),
+    )
+    assert seen == [(True, False)]
+    _assert_person_processing(events, True)

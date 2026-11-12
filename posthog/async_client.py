@@ -61,7 +61,6 @@ from .client import (
     _context_tag_defaults,
     _explicit_distinct_id,
     _group_identify_distinct_id,
-    _personless_options,
     _positive_config_value,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
@@ -618,14 +617,13 @@ class AsyncClient:
         self,
         context_properties: Optional[dict[str, Any]] = None,
         context_options: Optional[dict[str, Any]] = None,
-        derived_options: Optional[dict[str, Any]] = None,
+        personless: bool = False,
         property_allowlist=None,
         disable_geoip: Optional[bool] = None,
         system_properties: Optional[dict[str, Any]] = None,
         flag_properties: Optional[dict[str, Any]] = None,
         trace_properties: Optional[dict[str, Any]] = None,
         pinned_properties: Optional[_PinnedProperties] = None,
-        generated_distinct_id: bool = False,
     ) -> _EventDefaults:
         return _build_event_defaults(
             super_properties=self.super_properties,
@@ -633,7 +631,7 @@ class AsyncClient:
             release_id=self._release_id,
             context_properties=context_properties,
             context_options=context_options,
-            derived_options=derived_options,
+            personless=personless,
             property_allowlist=property_allowlist,
             is_server=self.is_server,
             disable_geoip=self.disable_geoip,
@@ -644,7 +642,6 @@ class AsyncClient:
             library_id="posthog-python",
             library_version=VERSION,
             pinned_properties=pinned_properties,
-            generated_distinct_id=generated_distinct_id,
         )
 
     def _build_capture_event(
@@ -684,8 +681,7 @@ class AsyncClient:
             self._event_defaults(
                 context_properties=_context_tag_defaults(),
                 context_options=_get_context_options(),
-                derived_options=_personless_options(personless),
-                generated_distinct_id=personless,
+                personless=personless,
                 property_allowlist=kwargs.get("_property_allowlist"),
                 disable_geoip=kwargs.get("disable_geoip"),
                 system_properties=system_context(),

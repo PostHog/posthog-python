@@ -323,7 +323,9 @@ def set_context_option(key: str, value: Any) -> None:
     Context options fill options an event leaves unset, before ``before_send``
     runs, so the hook sees them. They override the client's ``super_options``.
     An event's own ``options`` override them, and ``before_send`` can change
-    them. Child contexts inherit them unless they are fresh.
+    them. Child contexts inherit them unless they are fresh. They never set
+    ``process_person_profile`` on identify-style events, such as ``$identify``
+    or ``$set``, which default it to ``True``.
 
     Args:
         key: The option name, such as ``"process_person_profile"``
