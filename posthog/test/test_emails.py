@@ -817,6 +817,7 @@ LATER = datetime(2026, 12, 1, 9, 0, tzinfo=timezone(timedelta(hours=2)))
             "2026-12-01T09:00:00.250+02:00",
             "2026-12-01T09:00:00.250+02:00",
         ),
+        ("space_separated_as_given", "2026-12-01 07:00Z", "2026-12-01 07:00Z"),
     ]
 )
 def test_send_schedules_both_forms_for_a_time_with_an_offset(_name, value, wire):
@@ -874,6 +875,7 @@ def test_a_time_at_or_before_now_reads_as_the_servers_queued_answer():
         ("string_without_offset", "2026-12-01T09:00:00", ValueError),
         ("date_only_string", "2026-12-01", ValueError),
         ("natural_language", "in 1 min", ValueError),
+        ("not_a_date", "2026-13-01T09:00:00Z", ValueError),
         ("empty_string", "", ValueError),
         ("unix_timestamp", 1796115600, TypeError),
         ("date", date(2026, 12, 1), TypeError),

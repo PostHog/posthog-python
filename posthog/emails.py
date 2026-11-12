@@ -167,10 +167,6 @@ _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
 _CANCEL_PATH = _STATUS_PATH + "cancel/"
 _LIST_PATH = "/api/projects/@current/messaging/emails/"
 _MAX_LIST_LIMIT = 100
-# An ISO 8601 date and time that ends in an offset, such as Z or +02:00. PostHog parses the rest.
-_TIME_WITH_OFFSET = re.compile(
-    r"\d{4}-\d{2}-\d{2}[Tt ]\d{2}:\d{2}(?::\d{2}(?:[.,]\d+)?)?(?:[Zz]|[+-]\d{2}(?::?\d{2})?)"
-)
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -645,7 +641,8 @@ def _scheduled_at(value: Any) -> str:
             )
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
     if isinstance(value, str):
-        if not _TIME_WITH_OFFSET.fullmatch(value):
+        parsed = _timestamp(value)
+        if parsed is None or parsed.utcoffset() is None:
             raise ValueError(
                 "scheduled_at must be an ISO 8601 time with a timezone offset, "
                 "such as 2026-12-01T09:00:00Z or 2026-12-01T09:00:00+02:00."
