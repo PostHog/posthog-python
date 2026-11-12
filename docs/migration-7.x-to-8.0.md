@@ -29,7 +29,7 @@ You need to change code if your app does any of these:
 - passes a personal API key (`phx_...`) as the project API key
 - reads event content from the SDK's debug log
 - calls `alias()` without a `distinct_id` and relies on the context distinct ID
-- turns person processing off with `super_options`, `super_properties`, a context option or a context tag, and calls `alias`, `group_identify`, `set` or `set_once` (see [Identity and request context](#identity-and-request-context))
+- turns person processing off with `super_options`, `super_properties`, a context option or a context tag, and expects identify-style events, such as those from `alias`, `group_identify`, `set` or `set_once`, to follow it: they now default to person processing on (see [Identity and request context](#identity-and-request-context))
 - runs the Django, Flask or ASGI integration on 7.68 to 7.70 without tracing headers turned on (they are now read by default)
 
 ## Endpoints
@@ -174,13 +174,11 @@ The SDK moves them out of `properties` for you.
 - `group_identify` no longer adds the context session ID. A session takes the person of its latest event, and this event's distinct ID is not the session's user.
 - `alias()` needs an explicit `distinct_id`. It no longer falls back to the context distinct ID, which can come from a request header the client controls. Without one, the call is dropped with a warning.
 - Context tags and context options now apply to `alias` and `group_identify`, below the call's own values, as they do for `capture`.
-- `process_person_profile: False` from a context option, `super_options` or a `$process_person_profile` entry in `super_properties` reaches `alias`, `group_identify`, `set` and `set_once` too. A `$process_person_profile` context tag reaches only `alias` and `group_identify`, because `set` and `set_once` add context tags to the person properties they set. Context tags and options are new on `alias` and `group_identify`; `super_properties` already reached them in 7.x. PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning, so they never merge a person or update a group. It keeps the event from `set` or `set_once` but ignores its person update. Once the person exists, events sent with `process_person_profile: False` are still linked to it and billed as identified events. Capture accepts these events, so `on_error` does not report the drop. To keep them, pass the option on the call, which wins over context and `super_options`, or set it in `before_send`:
-
-  ```python
-  posthog.alias(previous_id="anon-1", distinct_id="user-1", options={"process_person_profile": True})
-  posthog.group_identify("company", "acme", {"name": "Acme"}, options={"process_person_profile": True})
-  posthog.set(distinct_id="user-1", properties={"plan": "pro"}, options={"process_person_profile": True})
-  ```
+- Identify-style events default to person processing on. These are `$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set` and `$set_once`, whether `alias`, `group_identify`, `set`, `set_once`, `capture` or `capture_ai` sends them. The SDK sets `process_person_profile: True` on them unless the call sets the `process_person_profile` option or a `$process_person_profile` property. PostHog drops the `$create_alias` and `$groupidentify` events when person processing is off, with an ingestion warning, and ignores the person update of `$set` and `$set_once`.
+  - The call's own value wins over context options and tags, `super_options` and `super_properties`, so a `False` set there never reaches these events. In 7.x, `$process_person_profile: False` in `super_properties` reached them too.
+  - When the call sets only the `$process_person_profile` property, the SDK moves it into the option before `before_send` runs. A `None` option or property counts as unset here, so the event gets `True`.
+  - An event whose distinct ID the SDK generated keeps `process_person_profile: False`.
+  - `before_send` sees the value and can change it. A hook that builds an identify-style event, or renames an event to one, must set the option itself.
 
 ## Tracing headers
 
@@ -235,7 +233,7 @@ Capture v1 sends processing options in an `options` object, next to `properties`
 
 Values apply in this order. Steps 2 to 4 fill only the options and properties that the steps before them left unset:
 
-1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`
+1. the `options` and `properties` of the call, then the call's `disable_geoip` argument, which fills `$geoip_disable`. An identify-style event also gets `process_person_profile: True` here when the call leaves it unset and the SDK did not generate its distinct ID (see [Identity and request context](#identity-and-request-context))
 2. context options and tags
 3. `super_options` and `super_properties`
 4. values the SDK sets: `$lib` and `$lib_version` as a pair (see [SDK identity](#sdk-identity)), `$is_server` from `is_server`, `$geoip_disable` from the client's `disable_geoip` setting, system properties such as `$os` and `$python_version`, the `$feature/<key>` and `$active_feature_flags` properties from `flags` or `send_feature_flags`, `$trace_id` and `$span_id` from the active OpenTelemetry span (in `capture` and `capture_ai` only with `capture_trace_context=True`, and always in `capture_exception`), `options.process_person_profile = false` for events without a distinct ID, and `$release_id` from `POSTHOG_RELEASE_ID`
