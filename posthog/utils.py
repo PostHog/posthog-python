@@ -21,7 +21,7 @@ log = logging.getLogger("posthog")
 
 def is_naive(dt: datetime) -> bool:
     """Determines if a given datetime.datetime is naive."""
-    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None  # pragma: no mutate
+    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
 
 
 def total_seconds(delta: timedelta) -> float:
@@ -36,14 +36,12 @@ def guess_timezone(dt: datetime) -> datetime:
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
         delta = total_seconds(datetime.now() - dt)
-        if 0 <= delta < 5:  # pragma: no mutate
+        if 0 <= delta < 5:
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
             # Equivalent to converting the naive value directly because this path
             # only handles values created in the current local timezone.
-            dt = dt.replace(
-                tzinfo=datetime.now().astimezone().tzinfo
-            )  # pragma: no mutate
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
         else:
             # at this point, the best we can do is guess UTC
             dt = dt.replace(tzinfo=timezone.utc)
@@ -62,7 +60,7 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
         try:
             # Python 3.10 needs the replacements; on 3.11+ fromisoformat accepts Z
             # and compact UTC offsets such as +0530.
-            normalized_timestamp = timestamp.replace("Z", "+00:00")  # pragma: no mutate
+            normalized_timestamp = timestamp.replace("Z", "+00:00")
             normalized_timestamp = re.sub(
                 r"([+-]\d{2})(\d{2})$", r"\1:\2", normalized_timestamp
             )
@@ -162,7 +160,7 @@ def _coerce_unicode(cmplx: Any) -> Optional[str]:
     item = None
     try:
         if isinstance(cmplx, bytes):
-            item = cmplx.decode("utf-8", "strict")  # pragma: no mutate
+            item = cmplx.decode("utf-8", "strict")
         elif isinstance(cmplx, str):
             item = cmplx
     except Exception as exception:
@@ -569,7 +567,7 @@ class RedisFlagCache:
                 self._delete_keys_with_version(keys, old_version)
 
                 if cursor == 0:
-                    break  # pragma: no mutate
+                    break
 
         except Exception:
             # Redis error - silently fail
@@ -641,7 +639,7 @@ class RedisFlagCache:
                 if keys:
                     self.redis.delete(*keys)
                 if cursor == 0:
-                    break  # pragma: no mutate
+                    break
         except Exception:
             # Redis error - silently fail
             pass
