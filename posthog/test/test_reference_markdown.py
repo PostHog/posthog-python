@@ -65,3 +65,17 @@ def test_summaries_keep_the_whole_first_paragraph(pkg):
     generator.clean(cls)
     md = generator.entry(cls, "FeatureFlagEvaluations")
     assert "on the first access per (distinct_id, flag, value) tuple" in md
+
+
+def test_one_migration_guide_titles_the_page_with_its_h1():
+    head, body = generator.migration_page(
+        ["# Migrate the Python SDK from 7.x.x to 8.0.0\n\nIntro."]
+    )
+    assert 'title: "Migrate the Python SDK from 7.x.x to 8.0.0"' in head
+    assert body == "Intro."
+
+
+def test_several_migration_guides_keep_their_h1s():
+    head, *guides = generator.migration_page(["# Guide 2\n\nB.", "# Guide 1\n\nA."])
+    assert 'title: "PostHog Python SDK migration guides"' in head
+    assert guides == ["# Guide 2\n\nB.", "# Guide 1\n\nA."]
