@@ -1,6 +1,6 @@
 # Migrate the Python SDK from 7.x.x to 8.0.0
 
-The Python SDK 8.x.x sends every event to the [capture v1](https://posthog.com/docs/api/capture-v1) endpoints, `/i/v1/analytics/events` and `/i/v1/ai/events`.
+The Python SDK 8.x.x sends every event to the [capture v1](https://posthog.com/docs/api/capture-v1) endpoints, `/i/v1/analytics/events` and `/i/v1/ai/events`, and removes the legacy capture path. Most apps upgrade without code changes.
 
 Use the top right copy page button to work through this with your agents.
 
@@ -16,6 +16,7 @@ Read the checklist first, then the sections that apply to you.
 
 **Before you upgrade**
 
+- [ ] You send events to a self-hosted PostHog that doesn't serve the capture v1 endpoints → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You send events through your own proxy → [Prepare your proxy](#prepare-your-proxy)
 - [ ] A proxy redirects capture requests to another host → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You pass a personal API key (`phx_...`) as the project token → [Use a project token](#use-a-project-token)
@@ -58,6 +59,8 @@ Read the checklist first, then the sections that apply to you.
 | `capture`, `set`, `set_once`, `alias`, `group_identify`, `capture_exception`, `AsyncPosthog.capture_immediate` | `/i/v1/analytics/events` |
 | `capture_ai`, `capture_ai_immediate`, and the AI wrapper integrations | `/i/v1/ai/events` |
 | OpenTelemetry (`posthog.ai.otel`) | `/i/v0/ai/otel`, unchanged |
+
+If you send events to a self-hosted PostHog, check that it serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before you upgrade. Self-hosted PostHog serves the AI endpoint from a separate capture service, so check each route. An endpoint that isn't served drops every event sent to it.
 
 If you send events through your own reverse proxy, update it before you upgrade:
 
@@ -201,7 +204,7 @@ posthog.set(distinct_id="user-1", properties={"plan": "pro"}, options={"process_
 
 ### Check event IDs
 
-- **Duplicates.** Each event needs its own UUID. Capture keeps the first event for each UUID in a request and drops the later copies. `on_error` reports each dropped copy in `CaptureError.drops` as `(uuid, "duplicate_event_uuid")`. 7.x.x sent every copy.
+- **Duplicates.** Each event needs its own UUID. Capture keeps the first event for each UUID in a request and drops the later copies. `on_error` reports each dropped copy in `CaptureError.drops` as `(uuid, "duplicate_event_uuid")`. 7.x.x sent every copy. Older PostHog versions reject the whole batch with a 400 `duplicate_event_uuid` instead.
 - **Accepted forms.** The SDK accepts a UUID with hyphens, 32 hex digits, `{...}` braces, or a `urn:uuid:` prefix, in any case. It sends the lowercase hyphenated form and returns that form from `capture`.
 - **Other values.** The SDK replaces any other value with a generated UUID. It logs one warning that names the rule, not the value. An empty string counts as unset, so the SDK generates a UUID without a warning. This applies to `AsyncPosthog` too.
 - **Generated UUIDs.** Generated UUIDs are UUIDv7.
@@ -325,6 +328,8 @@ A `Retry-After` header sets a minimum wait, up to 30 seconds.
 
 Capture itself doesn't return `429`, but a proxy in front of it can.
 
+A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route, for example an older self-hosted install.
+
 ### Check dropped events
 
 Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only the invalid event, so the rest of the batch is delivered.
@@ -334,7 +339,7 @@ Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only t
 | The name is missing, `None`, empty, or not a string | Dropped, with a warning | Sent |
 | A `before_send` hook sets `distinct_id` to `None` or a non-string | Dropped, with a warning | Sent, and capture rejected the whole batch |
 | The name is over 200 UTF-8 bytes | Dropped by PostHog as `event_name_too_long` | Sent, with no name limit |
-| A `NaN` or infinite `float` value | Sent as `null` | Invalid JSON before 7.75.0, so capture rejected the whole batch |
+| A `NaN` or infinite `float` value | Sent as `null`, as in 7.75.0 and later | Invalid JSON before 7.75.0, so capture rejected the whole batch |
 | It can't be serialized to JSON, for example with a circular reference | Dropped and logged | Logged the same line |
 | A property or option key JSON can't represent, such as a tuple | Key dropped without a log | Event dropped |
 | A key is an `int`, finite `float`, `bool`, or `None` | Key converted to a string | Key converted to a string |
