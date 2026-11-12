@@ -172,8 +172,6 @@ _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
-# A cancel or move that comes too late: PostHog is sending the email, or it was canceled.
-_TOO_LATE_CODES = frozenset({"already_sending", "canceled"})
 _QUOTA_CODES = frozenset({"quota_limited"})
 
 
@@ -720,7 +718,7 @@ def _error_name(status: Optional[int], code: str) -> str:
     if status == 409:
         return (
             "validation_error"
-            if code == "template_outdated" or code in _TOO_LATE_CODES
+            if code == "template_outdated"
             else "concurrent_idempotent_requests"
         )
     if status == 422:

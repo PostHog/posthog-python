@@ -1077,22 +1077,18 @@ def test_update_and_cancel_retry_like_a_send(
         assert len(adapter.requests) == 1
 
 
-@parameterized.expand(
-    [
-        ("already_sending", "validation_error"),
-        ("canceled", "validation_error"),
-    ]
-)
-def test_a_cancel_or_move_too_late_is_a_validation_error(code, name):
+@parameterized.expand([("already_sending",), ("canceled",)])
+def test_a_cancel_or_move_too_late_keeps_posthogs_code(code):
     emails, _ = emails_with([rejected(409, code)])
 
     with pytest.raises(EmailError) as raised:
         emails.cancel(MESSAGE_ID)
 
+    # The shared SDK spec names every 409 but template_outdated this way.
     assert (raised.value.status_code, raised.value.code, raised.value.name) == (
         409,
         code,
-        name,
+        "concurrent_idempotent_requests",
     )
 
 
