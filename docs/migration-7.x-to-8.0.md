@@ -89,13 +89,21 @@ A personal API key (`phx_...`) passed as the project token disables the client a
 
 | Removed | Use instead |
 | --- | --- |
-| `capture_mode`, `CaptureMode`, `POSTHOG_CAPTURE_MODE` | Nothing. Capture v1 is the only path. Setting `posthog.capture_mode` on the module has no effect. |
-| `gzip=True` | `capture_compression=CaptureCompression.GZIP`. The default is no compression. `POSTHOG_CAPTURE_COMPRESSION` still works. |
-| `CaptureV1Error` (`from posthog.capture_v1 import CaptureV1Error`) | `CaptureError` (`from posthog import CaptureError`). There is no alias. |
+| `capture_mode`, `CaptureMode`, `POSTHOG_CAPTURE_MODE` | Nothing |
+| `gzip=True` | `capture_compression` |
+| `CaptureV1Error` | `CaptureError` |
 | `posthog.capture_v1` | `posthog.capture_event` and `posthog.capture_send` |
-| `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Nothing. Send events through a client. |
-| The `gzip` parameter of `request.post` and `request.flags` | Nothing. The parameters after `path` in `post` and after `host` in `flags` are keyword-only, so a 7.x.x call that passes them by position raises `TypeError`. A `gzip=` keyword raises no error: it is sent as a field in the request body. |
-| The `backoff` dependency | Add it to your own requirements if your code imports it. |
+| `request.batch_post`, `async_batch_post`, `EVENTS_ENDPOINT`, `AI_EVENTS_ENDPOINT` | Send events through a client |
+| The `gzip` parameter of `request.post` and `request.flags` | Nothing |
+| The `backoff` dependency | Your own requirements, if your code imports it |
+
+Capture v1 is the only path. Setting `posthog.capture_mode` on the module has no effect.
+
+For gzip, set `capture_compression=CaptureCompression.GZIP`. `capture_compression` defaults to no compression. `POSTHOG_CAPTURE_COMPRESSION` still works.
+
+Replace `from posthog.capture_v1 import CaptureV1Error` with `from posthog import CaptureError`. There is no alias.
+
+The parameters after `path` in `request.post` and after `host` in `request.flags` are keyword-only, so a 7.x.x call that passes them by position raises `TypeError`. A `gzip=` keyword raises no error. It's sent as a field in the request body.
 
 The `posthoganalytics` package has the same changes. For example, import `CaptureError` from `posthoganalytics`.
 
@@ -150,10 +158,12 @@ An MCP hook that returns a new dict must copy them, or the event is sent without
 
 | Argument | Default |
 | --- | --- |
-| `capture_ai_compression` | No compression. `POSTHOG_CAPTURE_COMPRESSION` doesn't apply to it. |
+| `capture_ai_compression` | No compression |
 | `capture_ai_max_queue_size` | 1000 |
 | `capture_ai_timeout` | 30 seconds |
-| `capture_ai_max_event_bytes` | 8 MiB plus 64 KiB. You can only lower it. |
+| `capture_ai_max_event_bytes` | 8 MiB plus 64 KiB |
+
+`POSTHOG_CAPTURE_COMPRESSION` doesn't apply to `capture_ai_compression`. You can only lower `capture_ai_max_event_bytes`.
 
 The AI lane doesn't use `max_queue_size`, `timeout`, or `capture_compression`. An invalid `capture_ai_*` value raises `ValueError` when you create the client.
 
@@ -249,7 +259,7 @@ If you set `$lib` without `$lib_version`, the SDK adds its own version only when
 
 | You set | 8.x.x sends | 7.x.x sent |
 | --- | --- | --- |
-| `$lib` or `$lib_version` in a call or a context tag | Your value | The SDK's value. The SDK overwrote yours. |
+| `$lib` or `$lib_version` in a call or a context tag | Your value | The SDK's value |
 | `super_properties={"$lib": "my-lib"}` | No `$lib_version` | The SDK version |
 | `super_properties={"$lib_version": "1.0"}` without a `$lib` | The SDK's `$lib` and version | `1.0` |
 
@@ -275,11 +285,15 @@ Every capture failure is a `CaptureError`, a subclass of `APIError`. It has `end
 
 | Field | Holds |
 | --- | --- |
-| `status` | The HTTP status, or `0` when the request never got a response. With `0`, `__cause__` holds the network error. In 7.x.x, `on_error` received the raw `requests` exception. |
+| `status` | The HTTP status, or `0` when the request never got a response |
 | `drops` | `(uuid, details)` pairs for the events capture dropped in a 2xx response |
 | `retry_exhausted` | The UUIDs still waiting for a retry after the last attempt |
-| `event_results` | A `CaptureEventResult(result, details)` for each UUID that got a result in a 2xx response, from `posthog.capture_send`. An event missing from it never got a result. |
+| `event_results` | A `CaptureEventResult(result, details)` for each UUID that got a result in a 2xx response |
 | `verdict_summary()` | Counts such as `drop/llm_events_over_quota=1, retry/not_persisted=1` |
+
+When `status` is `0`, `__cause__` holds the network error. In 7.x.x, `on_error` received the raw `requests` exception.
+
+`CaptureEventResult` comes from `posthog.capture_send`. An event missing from `event_results` never got a result.
 
 `on_error` and the SDK's log lines change with it:
 
@@ -298,10 +312,12 @@ Retries differ from 7.x.x in four ways:
 
 | Behavior | 7.x.x | 8.x.x |
 | --- | --- | --- |
-| Statuses retried | `429` and every 5xx, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, and `504` responses, and network errors. Other error statuses fail the batch at once, including the other 5xx codes. |
-| Connection tries in each attempt | One, plus up to two retries of a failed connection. A capture request could block for up to three times the `timeout` per attempt. | One |
-| First retry wait | Up to 1 second | Retries start at 100 ms |
+| Statuses retried | `429` and every 5xx, but not `404` | `404`, `408`, `429`, `500`, `502`, `503`, `504`, and network errors |
+| Connection tries in each attempt | Up to three | One |
+| First retry wait | Up to 1 second | 100 ms |
 | `Consumer` default retries | 10 | 3 |
+
+In 8.x.x, any other error status fails the batch at once, including the other 5xx codes. In 7.x.x, a capture request could block for up to three times the `timeout` per attempt.
 
 In 8.x.x the wait doubles each attempt, up to 30 seconds. Each wait varies randomly by up to 25%, so many clients don't retry at the same moment.
 
@@ -315,14 +331,18 @@ Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only t
 
 | Event | 8.x.x | 7.x.x |
 | --- | --- | --- |
-| The name is missing, `None`, empty, or not a string | The SDK drops it and logs one warning per reason per process. | Sent it |
-| A `before_send` hook sets `distinct_id` to `None` or a non-string | The SDK drops it, with one warning per reason per process. It doesn't convert the hook's value or make up an ID. | Sent it, and capture would reject the whole batch |
-| The name is over 200 UTF-8 bytes | PostHog drops it (`event_name_too_long`), and `on_error` reports it. | Sent it to legacy capture, which had no event name limit |
-| It has a `NaN` or infinite `float` value | The SDK sends the value as `null`, as in 7.75.0 and later, and keeps the event. A `NaN` value in `$set` sets that person property to `null`. | Earlier 7.x.x versions sent invalid JSON, which made capture reject the whole batch |
-| It can't be serialized to JSON, for example with a circular reference | The SDK drops it and logs it. A circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback. | Logged the same line for a circular reference |
-| A property or option key is one JSON can't represent, such as a tuple | The SDK drops the key without a log and sends the rest of the event. | Dropped the event |
-| A key is an `int`, finite `float`, `bool`, or `None` | The SDK still converts the key to a string. | Converted the key to a string |
-| A key is a `NaN` or infinite `float` | The SDK still drops the event. | Dropped the event |
+| The name is missing, `None`, empty, or not a string | Dropped, with a warning | Sent |
+| A `before_send` hook sets `distinct_id` to `None` or a non-string | Dropped, with a warning | Sent, and capture rejected the whole batch |
+| The name is over 200 UTF-8 bytes | Dropped by PostHog as `event_name_too_long` | Sent, with no name limit |
+| A `NaN` or infinite `float` value | Sent as `null` | Invalid JSON before 7.75.0, so capture rejected the whole batch |
+| It can't be serialized to JSON, for example with a circular reference | Dropped and logged | Logged the same line |
+| A property or option key JSON can't represent, such as a tuple | Key dropped without a log | Event dropped |
+| A key is an `int`, finite `float`, `bool`, or `None` | Key converted to a string | Key converted to a string |
+| A key is a `NaN` or infinite `float` | Event dropped | Event dropped |
+
+The SDK logs one warning per reason per process for a dropped name or `distinct_id`. It doesn't convert the hook's `distinct_id` or make up an ID.
+
+`on_error` reports an event that PostHog drops for its name. A `NaN` value in `$set` sets that person property to `null`. A circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback.
 
 Capture v1 sends `$session_id` and `$window_id` as top-level event fields, not as properties. The SDK moves them out of `properties` for you, by the value's type:
 
@@ -466,7 +486,11 @@ These old names still work or have no effect in 8.x.x:
 
 | Old | New |
 | --- | --- |
-| `trust_tracing_headers`, `POSTHOG_MW_TRUST_TRACING_HEADERS` | `capture_tracing_headers`, `POSTHOG_MW_CAPTURE_TRACING_HEADERS`. The 7.68.x names still work, but are deprecated. |
-| `_use_ai_lane`, `_enable_multimodal_capture` | `enable_full_ai_capture`. The old names still work as aliases. |
-| `posthog.capture_mode` | Nothing. Setting it on the module has no effect. |
-| A `gzip=` keyword on `request.post` or `request.flags` | Nothing. It raises no error, and it's sent as a field in the request body. |
+| `trust_tracing_headers`, `POSTHOG_MW_TRUST_TRACING_HEADERS` | `capture_tracing_headers`, `POSTHOG_MW_CAPTURE_TRACING_HEADERS` |
+| `_use_ai_lane`, `_enable_multimodal_capture` | `enable_full_ai_capture` |
+| `posthog.capture_mode` | Nothing |
+| A `gzip=` keyword on `request.post` or `request.flags` | Nothing |
+
+The 7.68.x tracing header names still work, but are deprecated. `_use_ai_lane` and `_enable_multimodal_capture` still work as aliases.
+
+Setting `posthog.capture_mode` on the module has no effect. A `gzip=` keyword raises no error, and it's sent as a field in the request body.
