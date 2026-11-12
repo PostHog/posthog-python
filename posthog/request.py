@@ -178,6 +178,8 @@ def enable_keep_alive() -> None:
 
     This helps prevent idle pooled connections from being dropped by network
     infrastructure. Call during initialization, before making API requests.
+    It uses a 60 second idle time, a 60 second probe interval and 3 probes
+    before timeout.
     """
     set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
 

@@ -135,6 +135,7 @@ class AsyncClient:
     ``capture_ai()`` and ``await capture_ai_immediate()`` do the same for AI
     events, on a separate queue that posts to the AI capture endpoint.
     ``flush()``, ``join()``, and ``shutdown()`` are awaitable lifecycle methods.
+    Leaving an ``async with`` block on the client calls ``shutdown()``.
 
     The ``capture_ai_*``, ``privacy_mode`` and ``enable_full_ai_capture``
     options work the same way as on :class:`posthog.Client`.
