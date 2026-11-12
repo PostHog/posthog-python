@@ -348,9 +348,9 @@ span for the block and end it on exit (recording a raised exception on
 the way out); or call `end()` yourself for a span that cannot wrap a
 block. Spans started inside the block nest under it automatically.
 Always returns a usable handle, even when tracing is off, so calling
-code never branches. Once `max_live_spans` spans are open, the
-returned span isn't recorded. Spans open longer than `max_span_age`
-seconds are then treated as leaked and never exported.
+code never branches. At `max_live_spans` open spans, the SDK first
+evicts spans open longer than `max_span_age` seconds, which are never
+exported. If it is still at the limit, the returned span isn't recorded.
 
 **Parameters:**
 
@@ -3831,8 +3831,8 @@ this is for exceptions that are caught and handled.
 The stack trace contains file paths from your server. Remove
 `exception.stacktrace` in `before_span_send` to keep them in your
 process. The `exception` event uses one of the span's event slots. A
-span that fills its events and then raises keeps its `error` status
-and loses the exception detail.
+span whose event slots are full keeps its `error` status and the
+exception message, but loses the exception type and stack trace.
 
 **Examples:**
 
