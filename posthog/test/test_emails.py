@@ -1264,7 +1264,22 @@ def test_manage_calls_need_the_secret_key_and_an_enabled_client(_name, call, cod
 
 @parameterized.expand(
     [
-        ("row_without_fields", {"results": [{"id": MESSAGE_ID}], "next": None}),
+        *[
+            (
+                f"row_without_{field}",
+                {
+                    "results": [
+                        {
+                            key: value
+                            for key, value in list_reply()[1]["results"][0].items()
+                            if key != field
+                        }
+                    ],
+                    "next": None,
+                },
+            )
+            for field in ("id", "to", "scheduled_at", "created_at")
+        ],
         ("next_not_a_string", {**list_reply()[1], "next": 123}),
         ("next_empty", {**list_reply()[1], "next": ""}),
         ("next_left_out", {"results": list_reply()[1]["results"]}),
