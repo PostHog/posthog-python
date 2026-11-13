@@ -178,6 +178,7 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
 # its text, so reporting it loses nothing.
 _DISPATCH_WRAPPERS = (
     (("ToolError", "UnexpectedToolError"), "Error executing tool"),
+    (("ToolError",), "Error calling tool '"),
     (("MCPError", "UnexpectedResourceError"), "Error reading resource"),
 )
 

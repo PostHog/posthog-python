@@ -54,6 +54,7 @@ from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._raised_tool_error import raised_tool_error
 from .logger import log, warn
 from .tools import get_more_tools_result_text
 
@@ -282,7 +283,8 @@ def _wrap_call_tool(
 
         start = time.monotonic()
         try:
-            result = await original(req)
+            with raised_tool_error(high_level) as raised:
+                result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
                 await registered_tool_exists(high_level, name)
@@ -349,6 +351,7 @@ def _wrap_call_tool(
             call_result,
             duration_ms,
             conversation_id_delivered=delivered,
+            error=raised.error,
         )
         return result
 
