@@ -26,6 +26,11 @@ The ``exact`` and text operators and regular expressions use the helpers of the 
 dates are matched here, because version 1 reads them differently. Where Python cannot
 reproduce the flags service, such as a date in a form only the service reads, the
 result is inconclusive.
+
+One difference is known and not detected. The regular expression engine of the flags
+service refuses a pattern above its size limits, for example ``\\w{210}``, and the
+service then reports an invalid pattern. Python has no such limits and evaluates the
+pattern.
 """
 
 from __future__ import annotations
