@@ -35,6 +35,10 @@ _TOKEN_PROPERTY_KEYS = frozenset(
 )
 
 
+def _is_token_count(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _extract_cache_creation_ttl_breakdown(
     token_details: Any,
 ) -> Optional[Tuple[int, int]]:
@@ -46,11 +50,7 @@ def _extract_cache_creation_ttl_breakdown(
         token_details.get("ephemeral_5m_input_tokens"),
         token_details.get("ephemeral_1h_input_tokens"),
     )
-    if not any(value is not None for value in values) or not all(
-        isinstance(value, int) and not isinstance(value, bool) and value >= 0
-        for value in values
-        if value is not None
-    ):
+    if not all(_is_token_count(value) for value in values if value is not None):
         return None
 
     breakdown = (values[0] or 0, values[1] or 0)
@@ -131,19 +131,15 @@ def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
     if isinstance(raw_usage, dict):
         return raw_usage
 
-    # Try Pydantic model_dump() (OpenAI/Anthropic)
-    if hasattr(raw_usage, "model_dump") and callable(raw_usage.model_dump):
-        try:
-            return raw_usage.model_dump()
-        except Exception:
-            pass
-
-    # Try to_dict() (some protobuf objects)
-    if hasattr(raw_usage, "to_dict") and callable(raw_usage.to_dict):
-        try:
-            return raw_usage.to_dict()
-        except Exception:
-            pass
+    # Try Pydantic model_dump() first, then protobuf-style to_dict().
+    for method_name in ("model_dump", "to_dict"):
+        if hasattr(raw_usage, method_name) and callable(
+            getattr(raw_usage, method_name)
+        ):
+            try:
+                return getattr(raw_usage, method_name)()
+            except Exception:
+                pass
 
     # Try __dict__ / vars() for simple objects
     try:
@@ -151,6 +147,10 @@ def serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]:
     except Exception:
         pass
 
+    return _raw_usage_string(raw_usage)
+
+
+def _raw_usage_string(raw_usage: Any) -> Optional[Dict[str, Any]]:
     # Last resort: convert to string representation
     # This ensures we always return something rather than failing
     try:
@@ -174,79 +174,53 @@ def merge_usage_stats(
         source: TokenUsage that may contain None values
         mode: Either "incremental" or "cumulative"
     """
+    fields = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "reasoning_tokens",
+    )
+    target_fields = cast(Dict[str, Any], target)
+    source_fields = cast(Dict[str, Any], source)
     if mode == "incremental":
-        # Add new values to existing totals
-        source_input = source.get("input_tokens")
-        if source_input is not None:
-            current = target.get("input_tokens") or 0
-            target["input_tokens"] = current + source_input
-
-        source_output = source.get("output_tokens")
-        if source_output is not None:
-            current = target.get("output_tokens") or 0
-            target["output_tokens"] = current + source_output
-
-        source_cache_read = source.get("cache_read_input_tokens")
-        if source_cache_read is not None:
-            current = target.get("cache_read_input_tokens") or 0
-            target["cache_read_input_tokens"] = current + source_cache_read
-
-        source_cache_creation = source.get("cache_creation_input_tokens")
-        if source_cache_creation is not None:
-            current = target.get("cache_creation_input_tokens") or 0
-            target["cache_creation_input_tokens"] = current + source_cache_creation
-
-        source_reasoning = source.get("reasoning_tokens")
-        if source_reasoning is not None:
-            current = target.get("reasoning_tokens") or 0
-            target["reasoning_tokens"] = current + source_reasoning
-
-        source_web_search = source.get("web_search_count")
-        if source_web_search is not None:
-            current = target.get("web_search_count") or 0
-            target["web_search_count"] = max(current, source_web_search)
-
-        # Carried across, never accumulated: this describes the provider's accounting
-        # model, so it is the same on every chunk.
-        source_exclusive = source.get("cache_reporting_exclusive")
-        if source_exclusive is not None:
-            target["cache_reporting_exclusive"] = source_exclusive
-
-        # Merge raw_usage to avoid losing data from earlier events
-        # For Anthropic streaming: message_start has input tokens, message_delta has output
-        # Note: raw_usage is already serialized by converters, so it's a dict
-        source_raw_usage = source.get("raw_usage")
-        if source_raw_usage is not None and isinstance(source_raw_usage, dict):
-            current_raw_value = target.get("raw_usage")
-            current_raw: Dict[str, Any] = (
-                current_raw_value if isinstance(current_raw_value, dict) else {}
-            )
-            target["raw_usage"] = {**current_raw, **source_raw_usage}
-
+        for field in fields:
+            value = source_fields.get(field)
+            if value is not None:
+                target_fields[field] = (target_fields.get(field) or 0) + value
+        _merge_incremental_usage_metadata(target, source)
     elif mode == "cumulative":
-        # Replace with latest values (already cumulative)
-        if source.get("input_tokens") is not None:
-            target["input_tokens"] = source["input_tokens"]
-        if source.get("output_tokens") is not None:
-            target["output_tokens"] = source["output_tokens"]
-        if source.get("cache_read_input_tokens") is not None:
-            target["cache_read_input_tokens"] = source["cache_read_input_tokens"]
-        if source.get("cache_creation_input_tokens") is not None:
-            target["cache_creation_input_tokens"] = source[
-                "cache_creation_input_tokens"
-            ]
-        if source.get("reasoning_tokens") is not None:
-            target["reasoning_tokens"] = source["reasoning_tokens"]
-        if source.get("web_search_count") is not None:
-            target["web_search_count"] = source["web_search_count"]
-        if source.get("cache_reporting_exclusive") is not None:
-            target["cache_reporting_exclusive"] = source["cache_reporting_exclusive"]
-        # Note: raw_usage is already serialized by converters, so it's a dict
-        if source.get("raw_usage") is not None:
-            target["raw_usage"] = source["raw_usage"]
-
+        for field in (
+            *fields,
+            "web_search_count",
+            "cache_reporting_exclusive",
+            "raw_usage",
+        ):
+            if source_fields.get(field) is not None:
+                target_fields[field] = source_fields[field]
     else:
         raise ValueError(f"Invalid mode: {mode}. Must be 'incremental' or 'cumulative'")
+
+
+def _merge_incremental_usage_metadata(target: TokenUsage, source: TokenUsage) -> None:
+    source_web_search = source.get("web_search_count")
+    if source_web_search is not None:
+        target["web_search_count"] = max(
+            target.get("web_search_count") or 0, source_web_search
+        )
+    # Carried across, never accumulated: this describes the provider's accounting
+    # model, so it is the same on every chunk.
+    source_exclusive = source.get("cache_reporting_exclusive")
+    if source_exclusive is not None:
+        target["cache_reporting_exclusive"] = source_exclusive
+    # Anthropic message_start and message_delta report different parts of usage.
+    # Converters have already serialized raw_usage, so merge dicts without losing
+    # fields from earlier chunks.
+    source_raw_usage = source.get("raw_usage")
+    if source_raw_usage is not None and isinstance(source_raw_usage, dict):
+        current_raw_value = target.get("raw_usage")
+        current_raw = current_raw_value if isinstance(current_raw_value, dict) else {}
+        target["raw_usage"] = {**current_raw, **source_raw_usage}
 
 
 def get_model_params(
@@ -410,49 +384,56 @@ def merge_system_prompt(
     elif provider == "openai":
         from posthog.ai.openai.openai_converter import format_openai_input
 
-        # For OpenAI, handle both Chat Completions and Responses API
-        messages_param = kwargs.get("messages")
-        input_param = kwargs.get("input")
-
-        # Get base formatted messages
-        messages = format_openai_input(messages_param, input_param)
-
-        # Check if system prompt is provided as a separate parameter
-        if kwargs.get("system") is not None:
-            has_system = any(msg.get("role") == "system" for msg in messages)
-            if not has_system:
-                system_msg = cast(
-                    FormattedMessage,
-                    {"role": "system", "content": kwargs.get("system")},
-                )
-                messages = [system_msg] + messages
-
-        # For Responses API, add instructions to the system prompt if provided
-        if kwargs.get("instructions") is not None:
-            # Find the system message if it exists
-            system_idx = next(
-                (i for i, msg in enumerate(messages) if msg.get("role") == "system"),
-                None,
-            )
-
-            if system_idx is not None:
-                # Append instructions to existing system message
-                system_content = messages[system_idx].get("content", "")
-                messages[system_idx]["content"] = (
-                    f"{system_content}\n\n{kwargs.get('instructions')}"
-                )
-            else:
-                # Create a new system message with instructions
-                instruction_msg = cast(
-                    FormattedMessage,
-                    {"role": "system", "content": kwargs.get("instructions")},
-                )
-                messages = [instruction_msg] + messages
-
-        return messages
+        return _merge_openai_system_prompt(kwargs, format_openai_input)
 
     # Default case - return empty list
     return []
+
+
+def _merge_openai_system_prompt(
+    kwargs: Dict[str, Any],
+    format_openai_input: Callable[..., List[FormattedMessage]],
+) -> List[FormattedMessage]:
+    # For OpenAI, handle both Chat Completions and Responses API
+    messages_param = kwargs.get("messages")
+    input_param = kwargs.get("input")
+
+    # Get base formatted messages
+    messages = format_openai_input(messages_param, input_param)
+
+    # Check if system prompt is provided as a separate parameter
+    if kwargs.get("system") is not None:
+        has_system = any(msg.get("role") == "system" for msg in messages)
+        if not has_system:
+            system_msg = cast(
+                FormattedMessage,
+                {"role": "system", "content": kwargs.get("system")},
+            )
+            messages = [system_msg] + messages
+
+    # For Responses API, add instructions to the system prompt if provided
+    if kwargs.get("instructions") is not None:
+        # Find the system message if it exists
+        system_idx = next(
+            (i for i, msg in enumerate(messages) if msg.get("role") == "system"),
+            None,
+        )
+
+        if system_idx is not None:
+            # Append instructions to existing system message
+            system_content = messages[system_idx].get("content", "")
+            messages[system_idx]["content"] = (
+                f"{system_content}\n\n{kwargs.get('instructions')}"
+            )
+        else:
+            # Create a new system message with instructions
+            instruction_msg = cast(
+                FormattedMessage,
+                {"role": "system", "content": kwargs.get("instructions")},
+            )
+            messages = [instruction_msg] + messages
+
+    return messages
 
 
 def _get_http_status(exc: BaseException) -> int:
@@ -490,7 +471,6 @@ def call_llm_and_track_usage(
     response = None
     error = None
     http_status = 200
-    usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
     with new_context(client=ph_client, capture_exceptions=False):
@@ -510,128 +490,21 @@ def call_llm_and_track_usage(
             # enable_exception_autocapture is True, similar to LangChain callbacks.
             # See _capture_exception_and_update_properties in langchain/callbacks.py
         finally:
-            end_time = time.time()
-            latency = end_time - start_time
-
-            if posthog_trace_id is None:
-                posthog_trace_id = str(uuid.uuid4())
-
-            # Check if we have a real user distinct_id (from param or outer context)
-            has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+            _capture_llm_call(
+                start_time,
+                response,
+                posthog_trace_id,
+                posthog_distinct_id,
+                ph_client,
+                provider,
+                kwargs,
+                posthog_privacy_mode,
+                http_status,
+                base_url,
+                posthog_properties,
+                error_params,
+                posthog_groups,
             )
-
-            if not has_person_distinct_id:
-                # Fall back to trace_id as distinct_id when no real user id is available.
-                identify_context(posthog_trace_id)
-
-            if response and (
-                hasattr(response, "usage")
-                or (provider == "gemini" and hasattr(response, "usage_metadata"))
-            ):
-                usage = get_usage(response, provider)
-
-            messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = finalize_ai_content(messages, ph_client)
-
-            tag("$ai_provider", provider)
-            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            served_service_tier = getattr(response, "service_tier", None)
-            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
-            if served_service_tier is not None:
-                # The explicit served-tier signal cost processing prices from.
-                tag("$ai_service_tier", served_service_tier)
-            tag(
-                "$ai_input",
-                with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
-            )
-            tag(
-                "$ai_output_choices",
-                with_privacy_mode(
-                    ph_client,
-                    posthog_privacy_mode,
-                    finalize_ai_content(format_response(response, provider), ph_client),
-                ),
-            )
-            tag("$ai_http_status", http_status)
-            # Omitted when the provider never reported a count: absent means
-            # unknown, 0 is a report of nothing.
-            input_tokens = usage.get("input_tokens")
-            if input_tokens is not None:
-                tag("$ai_input_tokens", input_tokens)
-            output_tokens = usage.get("output_tokens")
-            if output_tokens is not None:
-                tag("$ai_output_tokens", output_tokens)
-            tag("$ai_latency", latency)
-            tag("$ai_trace_id", posthog_trace_id)
-            tag("$ai_base_url", str(base_url))
-            warn_if_posthog_ai_gateway(base_url)
-
-            available_tool_calls = extract_available_tool_calls(provider, kwargs)
-
-            if available_tool_calls:
-                tag("$ai_tools", available_tool_calls)
-
-            cache_read = usage.get("cache_read_input_tokens")
-            if cache_read is not None and cache_read > 0:
-                tag("$ai_cache_read_input_tokens", cache_read)
-
-            cache_creation = usage.get("cache_creation_input_tokens")
-            if cache_creation is not None and cache_creation > 0:
-                tag("$ai_cache_creation_input_tokens", cache_creation)
-
-            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
-            if cache_reporting_exclusive is not None:
-                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
-
-            reasoning = usage.get("reasoning_tokens")
-            if reasoning is not None and reasoning > 0:
-                tag("$ai_reasoning_tokens", reasoning)
-
-            web_search_count = usage.get("web_search_count")
-            if web_search_count is not None and web_search_count > 0:
-                tag("$ai_web_search_count", web_search_count)
-
-            raw_usage = usage.get("raw_usage")
-            if raw_usage is not None:
-                # Already serialized by converters
-                tag("$ai_usage", raw_usage)
-
-            stop_reason = extract_stop_reason(response, provider)
-            if stop_reason is not None:
-                tag("$ai_stop_reason", stop_reason)
-
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
-            # Process instructions for Responses API
-            if provider == "openai" and kwargs.get("instructions") is not None:
-                tag(
-                    "$ai_instructions",
-                    with_privacy_mode(
-                        ph_client, posthog_privacy_mode, kwargs.get("instructions")
-                    ),
-                )
-
-            # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
-                sdk_tags = get_tags()
-                merged_properties = {
-                    **sdk_tags,
-                    **(posthog_properties or {}),
-                    **(error_params or {}),
-                }
-                merged_properties["$ai_tokens_source"] = _get_tokens_source(
-                    sdk_tags, posthog_properties
-                )
-                _capture_ai_event(
-                    ph_client,
-                    "$ai_generation",
-                    distinct_id=contexts.get_context_distinct_id(),
-                    properties=merged_properties,
-                    groups=posthog_groups,
-                )
 
         if error:
             raise error
@@ -655,7 +528,6 @@ async def call_llm_and_track_usage_async(
     response = None
     error = None
     http_status = 200
-    usage: TokenUsage = TokenUsage()
     error_params: Dict[str, Any] = {}
 
     with new_context(client=ph_client, capture_exceptions=False):
@@ -682,133 +554,198 @@ async def call_llm_and_track_usage_async(
             # enable_exception_autocapture is True, similar to LangChain callbacks.
             # See _capture_exception_and_update_properties in langchain/callbacks.py
         finally:
-            end_time = time.time()
-            latency = end_time - start_time
-
-            if posthog_trace_id is None:
-                posthog_trace_id = str(uuid.uuid4())
-
-            # Check if we have a real user distinct_id (from param or outer context)
-            has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+            _capture_llm_call(
+                start_time,
+                response,
+                posthog_trace_id,
+                posthog_distinct_id,
+                ph_client,
+                provider,
+                kwargs,
+                posthog_privacy_mode,
+                http_status,
+                base_url,
+                posthog_properties,
+                error_params,
+                posthog_groups,
             )
-
-            if not has_person_distinct_id:
-                # Fall back to trace_id as distinct_id when no real user id is available.
-                identify_context(posthog_trace_id)
-
-            if response and (
-                hasattr(response, "usage")
-                or (provider == "gemini" and hasattr(response, "usage_metadata"))
-            ):
-                usage = get_usage(response, provider)
-
-            messages = merge_system_prompt(kwargs, provider)
-            sanitized_messages = finalize_ai_content(messages, ph_client)
-
-            tag("$ai_provider", provider)
-            tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
-            served_service_tier = getattr(response, "service_tier", None)
-            tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
-            if served_service_tier is not None:
-                # The explicit served-tier signal cost processing prices from.
-                tag("$ai_service_tier", served_service_tier)
-            tag(
-                "$ai_input",
-                with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
-            )
-            tag(
-                "$ai_output_choices",
-                with_privacy_mode(
-                    ph_client,
-                    posthog_privacy_mode,
-                    finalize_ai_content(format_response(response, provider), ph_client),
-                ),
-            )
-            tag("$ai_http_status", http_status)
-            # Omitted when the provider never reported a count: absent means
-            # unknown, 0 is a report of nothing.
-            input_tokens = usage.get("input_tokens")
-            if input_tokens is not None:
-                tag("$ai_input_tokens", input_tokens)
-            output_tokens = usage.get("output_tokens")
-            if output_tokens is not None:
-                tag("$ai_output_tokens", output_tokens)
-            tag("$ai_latency", latency)
-            tag("$ai_trace_id", posthog_trace_id)
-            tag("$ai_base_url", str(base_url))
-            warn_if_posthog_ai_gateway(base_url)
-
-            available_tool_calls = extract_available_tool_calls(provider, kwargs)
-
-            if available_tool_calls:
-                tag("$ai_tools", available_tool_calls)
-
-            cache_read = usage.get("cache_read_input_tokens")
-            if cache_read is not None and cache_read > 0:
-                tag("$ai_cache_read_input_tokens", cache_read)
-
-            cache_creation = usage.get("cache_creation_input_tokens")
-            if cache_creation is not None and cache_creation > 0:
-                tag("$ai_cache_creation_input_tokens", cache_creation)
-
-            cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
-            if cache_reporting_exclusive is not None:
-                tag("$ai_cache_reporting_exclusive", cache_reporting_exclusive)
-
-            reasoning = usage.get("reasoning_tokens")
-            if reasoning is not None and reasoning > 0:
-                tag("$ai_reasoning_tokens", reasoning)
-
-            web_search_count = usage.get("web_search_count")
-            if web_search_count is not None and web_search_count > 0:
-                tag("$ai_web_search_count", web_search_count)
-
-            raw_usage = usage.get("raw_usage")
-            if raw_usage is not None:
-                # Already serialized by converters
-                tag("$ai_usage", raw_usage)
-
-            stop_reason = extract_stop_reason(response, provider)
-            if stop_reason is not None:
-                tag("$ai_stop_reason", stop_reason)
-
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
-            # Process instructions for Responses API
-            if provider == "openai" and kwargs.get("instructions") is not None:
-                tag(
-                    "$ai_instructions",
-                    with_privacy_mode(
-                        ph_client, posthog_privacy_mode, kwargs.get("instructions")
-                    ),
-                )
-
-            # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
-                sdk_tags = get_tags()
-                merged_properties = {
-                    **sdk_tags,
-                    **(posthog_properties or {}),
-                    **(error_params or {}),
-                }
-                merged_properties["$ai_tokens_source"] = _get_tokens_source(
-                    sdk_tags, posthog_properties
-                )
-                _capture_ai_event(
-                    ph_client,
-                    "$ai_generation",
-                    distinct_id=contexts.get_context_distinct_id(),
-                    properties=merged_properties,
-                    groups=posthog_groups,
-                )
 
         if error:
             raise error
 
     return response
+
+
+def _capture_llm_call(
+    start_time: float,
+    response: Any,
+    posthog_trace_id: Optional[str],
+    posthog_distinct_id: Optional[str],
+    ph_client: PostHogClient,
+    provider: str,
+    kwargs: Dict[str, Any],
+    posthog_privacy_mode: bool,
+    http_status: int,
+    base_url: str,
+    posthog_properties: Optional[Dict[str, Any]],
+    error_params: Dict[str, Any],
+    posthog_groups: Optional[Dict[str, Any]],
+) -> None:
+    usage: TokenUsage = TokenUsage()
+    end_time = time.time()
+    latency = end_time - start_time
+
+    if posthog_trace_id is None:
+        posthog_trace_id = str(uuid.uuid4())
+
+    # Check if we have a real user distinct_id (from param or outer context)
+    has_person_distinct_id = (
+        posthog_distinct_id is not None
+        or contexts.get_context_distinct_id() is not None
+    )
+
+    if not has_person_distinct_id:
+        # Fall back to trace_id as distinct_id when no real user id is available.
+        identify_context(posthog_trace_id)
+
+    if response and (
+        hasattr(response, "usage")
+        or (provider == "gemini" and hasattr(response, "usage_metadata"))
+    ):
+        usage = get_usage(response, provider)
+
+    _tag_llm_content(response, provider, kwargs, ph_client, posthog_privacy_mode)
+    tag("$ai_http_status", http_status)
+    _tag_reported_token_counts(usage)
+    tag("$ai_latency", latency)
+    tag("$ai_trace_id", posthog_trace_id)
+    tag("$ai_base_url", str(base_url))
+    warn_if_posthog_ai_gateway(base_url)
+
+    available_tool_calls = extract_available_tool_calls(provider, kwargs)
+
+    if available_tool_calls:
+        tag("$ai_tools", available_tool_calls)
+
+    _tag_optional_usage(usage)
+    _capture_tagged_llm_event(
+        response,
+        provider,
+        kwargs,
+        ph_client,
+        posthog_privacy_mode,
+        has_person_distinct_id,
+        posthog_properties,
+        error_params,
+        posthog_groups,
+    )
+
+
+def _tag_llm_content(
+    response: Any,
+    provider: str,
+    kwargs: Dict[str, Any],
+    ph_client: PostHogClient,
+    posthog_privacy_mode: bool,
+) -> None:
+    messages = merge_system_prompt(kwargs, provider)
+    sanitized_messages = finalize_ai_content(messages, ph_client)
+
+    tag("$ai_provider", provider)
+    tag("$ai_model", kwargs.get("model") or getattr(response, "model", None))
+    served_service_tier = getattr(response, "service_tier", None)
+    tag("$ai_model_parameters", get_model_params(kwargs, served_service_tier))
+    if served_service_tier is not None:
+        # The explicit served-tier signal cost processing prices from.
+        tag("$ai_service_tier", served_service_tier)
+    tag(
+        "$ai_input",
+        with_privacy_mode(ph_client, posthog_privacy_mode, sanitized_messages),
+    )
+    tag(
+        "$ai_output_choices",
+        with_privacy_mode(
+            ph_client,
+            posthog_privacy_mode,
+            finalize_ai_content(format_response(response, provider), ph_client),
+        ),
+    )
+
+
+def _tag_reported_token_counts(usage: TokenUsage) -> None:
+    # Omitted when the provider never reported a count: absent means
+    # unknown, 0 is a report of nothing.
+    input_tokens = usage.get("input_tokens")
+    if input_tokens is not None:
+        tag("$ai_input_tokens", input_tokens)
+    output_tokens = usage.get("output_tokens")
+    if output_tokens is not None:
+        tag("$ai_output_tokens", output_tokens)
+
+
+def _tag_optional_usage(usage: TokenUsage) -> None:
+    for field in ("cache_read_input_tokens", "cache_creation_input_tokens"):
+        value = cast(Optional[int], usage.get(field))
+        if value is not None and value > 0:
+            tag(f"$ai_{field}", value)
+    exclusive = usage.get("cache_reporting_exclusive")
+    if exclusive is not None:
+        tag("$ai_cache_reporting_exclusive", exclusive)
+    for field in ("reasoning_tokens", "web_search_count"):
+        value = cast(Optional[int], usage.get(field))
+        if value is not None and value > 0:
+            tag(f"$ai_{field}", value)
+    raw_usage = usage.get("raw_usage")
+    if raw_usage is not None:
+        # Already serialized by converters
+        tag("$ai_usage", raw_usage)
+
+
+def _capture_tagged_llm_event(
+    response: Any,
+    provider: str,
+    kwargs: Dict[str, Any],
+    ph_client: PostHogClient,
+    posthog_privacy_mode: bool,
+    has_person_distinct_id: bool,
+    posthog_properties: Optional[Dict[str, Any]],
+    error_params: Dict[str, Any],
+    posthog_groups: Optional[Dict[str, Any]],
+) -> None:
+    stop_reason = extract_stop_reason(response, provider)
+    if stop_reason is not None:
+        tag("$ai_stop_reason", stop_reason)
+
+    if not has_person_distinct_id:
+        tag("$process_person_profile", False)
+
+    # Process instructions for Responses API
+    if provider == "openai" and kwargs.get("instructions") is not None:
+        tag(
+            "$ai_instructions",
+            with_privacy_mode(
+                ph_client, posthog_privacy_mode, kwargs.get("instructions")
+            ),
+        )
+
+    # send the event to posthog
+    if hasattr(ph_client, "capture") and callable(ph_client.capture):
+        sdk_tags = get_tags()
+        merged_properties = {
+            **sdk_tags,
+            **(posthog_properties or {}),
+            **(error_params or {}),
+        }
+        merged_properties["$ai_tokens_source"] = _get_tokens_source(
+            sdk_tags, posthog_properties
+        )
+        _capture_ai_event(
+            ph_client,
+            "$ai_generation",
+            distinct_id=contexts.get_context_distinct_id(),
+            properties=merged_properties,
+            groups=posthog_groups,
+        )
 
 
 def finalize_ai_content(value: Any, ph_client: Any = None) -> Any:
@@ -1074,8 +1011,156 @@ def capture_streaming_event(
     input_tokens = event_data["usage_stats"].get("input_tokens")
     output_tokens = event_data["usage_stats"].get("output_tokens")
 
+    event_properties = _streaming_base_properties(
+        ph_client, event_data, trace_id, error, input_tokens, output_tokens
+    )
+
+    warn_if_posthog_ai_gateway(event_data["base_url"])
+
+    # Determine token source: SDK-computed vs externally overridden
+    sdk_token_tags = {
+        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
+        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
+    }
+    event_properties["$ai_tokens_source"] = _get_tokens_source(
+        sdk_token_tags, event_data.get("properties")
+    )
+
+    # Extract and add tools based on provider
+    available_tools = extract_available_tool_calls(
+        event_data["provider"],
+        event_data["kwargs"],
+    )
+    if available_tools:
+        event_properties["$ai_tools"] = available_tools
+
+    _add_streaming_usage(event_properties, event_data, input_tokens, output_tokens)
+
+    # Add stop reason if present
+    stop_reason = event_data.get("stop_reason")
+    if stop_reason is not None:
+        event_properties["$ai_stop_reason"] = stop_reason
+
+    # Handle provider-specific fields
+    if (
+        event_data["provider"] == "openai"
+        and event_data["kwargs"].get("instructions") is not None
+    ):
+        event_properties["$ai_instructions"] = with_privacy_mode(
+            ph_client,
+            event_data["privacy_mode"],
+            event_data["kwargs"]["instructions"],
+        )
+
+    if event_data.get("distinct_id") is None:
+        event_properties["$process_person_profile"] = False
+
+    # Send event to PostHog
+    if hasattr(ph_client, "capture"):
+        _capture_ai_event(
+            ph_client,
+            "$ai_generation",
+            distinct_id=event_data.get("distinct_id") or trace_id,
+            properties=event_properties,
+            groups=event_data.get("groups"),
+        )
+
+
+def _add_streaming_usage(
+    event_properties: Dict[str, Any],
+    event_data: StreamingEventData,
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+) -> None:
+    # Add optional token fields. The zero-defaults below only apply when the
+    # provider reported usage at all: a stream interrupted before any report
+    # has nothing to default, and a fabricated 0 would read as a report of
+    # nothing where absence means unknown.
+    usage_was_reported = input_tokens is not None or output_tokens is not None
+
+    # For Anthropic, always include cache fields even if 0 (backward compatibility)
+    if event_data["provider"] == "anthropic" and usage_was_reported:
+        # Anthropic always includes cache fields
+        cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
+        cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
+        event_properties["$ai_cache_read_input_tokens"] = cache_read
+        event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+        reasoning = event_data["usage_stats"].get("reasoning_tokens")
+        if isinstance(reasoning, int) and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
+    else:
+        _add_optional_streaming_tokens(event_properties, event_data, usage_was_reported)
+
+    _add_streaming_usage_metadata(event_properties, event_data["usage_stats"])
+
+
+def _add_optional_streaming_tokens(
+    event_properties: Dict[str, Any],
+    event_data: StreamingEventData,
+    usage_was_reported: bool,
+) -> None:
+    optional_token_fields = [
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "reasoning_tokens",
+    ]
+
+    for field in optional_token_fields:
+        value = event_data["usage_stats"].get(field)
+        property_name = f"$ai_{field}"
+
+        # OpenAI async streams historically included these fields even when 0.
+        # Keep those defaults in the shared path so they are not mistaken for
+        # caller-supplied token passthrough properties.
+        if (
+            event_data["provider"] == "openai"
+            and usage_was_reported
+            and field
+            in {
+                "cache_read_input_tokens",
+                "reasoning_tokens",
+            }
+        ):
+            event_properties.setdefault(
+                property_name, event_data["usage_stats"].get(field, 0)
+            )
+        elif value is not None and isinstance(value, int) and value > 0:
+            event_properties[property_name] = value
+
+
+def _add_streaming_usage_metadata(
+    event_properties: Dict[str, Any], usage: TokenUsage
+) -> None:
+    cache_reporting_exclusive = usage.get("cache_reporting_exclusive")
+    if cache_reporting_exclusive is not None:
+        event_properties["$ai_cache_reporting_exclusive"] = cache_reporting_exclusive
+
+    # Add web search count if present (all providers)
+    web_search_count = usage.get("web_search_count")
+    if (
+        web_search_count is not None
+        and isinstance(web_search_count, int)
+        and web_search_count > 0
+    ):
+        event_properties["$ai_web_search_count"] = web_search_count
+
+    # Add raw usage metadata if present (all providers)
+    raw_usage = usage.get("raw_usage")
+    if raw_usage is not None:
+        # Already serialized by converters
+        event_properties["$ai_usage"] = raw_usage
+
+
+def _streaming_base_properties(
+    ph_client: PostHogClient,
+    event_data: StreamingEventData,
+    trace_id: str,
+    error: Optional[BaseException],
+    input_tokens: Optional[int],
+    output_tokens: Optional[int],
+) -> Dict[str, Any]:
     # Build base event properties
-    event_properties = {
+    return {
         "$ai_provider": event_data["provider"],
         "$ai_model": event_data["model"],
         "$ai_model_parameters": get_model_params(
@@ -1114,117 +1199,3 @@ def capture_streaming_event(
             else {}
         ),
     }
-
-    warn_if_posthog_ai_gateway(event_data["base_url"])
-
-    # Determine token source: SDK-computed vs externally overridden
-    sdk_token_tags = {
-        "$ai_input_tokens": event_data["usage_stats"].get("input_tokens", 0),
-        "$ai_output_tokens": event_data["usage_stats"].get("output_tokens", 0),
-    }
-    event_properties["$ai_tokens_source"] = _get_tokens_source(
-        sdk_token_tags, event_data.get("properties")
-    )
-
-    # Extract and add tools based on provider
-    available_tools = extract_available_tool_calls(
-        event_data["provider"],
-        event_data["kwargs"],
-    )
-    if available_tools:
-        event_properties["$ai_tools"] = available_tools
-
-    # Add optional token fields. The zero-defaults below only apply when the
-    # provider reported usage at all: a stream interrupted before any report
-    # has nothing to default, and a fabricated 0 would read as a report of
-    # nothing where absence means unknown.
-    usage_was_reported = input_tokens is not None or output_tokens is not None
-
-    # For Anthropic, always include cache fields even if 0 (backward compatibility)
-    if event_data["provider"] == "anthropic" and usage_was_reported:
-        # Anthropic always includes cache fields
-        cache_read = event_data["usage_stats"].get("cache_read_input_tokens", 0)
-        cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
-        event_properties["$ai_cache_read_input_tokens"] = cache_read
-        event_properties["$ai_cache_creation_input_tokens"] = cache_creation
-        reasoning = event_data["usage_stats"].get("reasoning_tokens")
-        if isinstance(reasoning, int) and reasoning > 0:
-            event_properties["$ai_reasoning_tokens"] = reasoning
-    else:
-        optional_token_fields = [
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-            "reasoning_tokens",
-        ]
-
-        for field in optional_token_fields:
-            value = event_data["usage_stats"].get(field)
-            property_name = f"$ai_{field}"
-
-            # OpenAI async streams historically included these fields even when 0.
-            # Keep those defaults in the shared path so they are not mistaken for
-            # caller-supplied token passthrough properties.
-            if (
-                event_data["provider"] == "openai"
-                and usage_was_reported
-                and field
-                in {
-                    "cache_read_input_tokens",
-                    "reasoning_tokens",
-                }
-            ):
-                event_properties.setdefault(
-                    property_name, event_data["usage_stats"].get(field, 0)
-                )
-            elif value is not None and isinstance(value, int) and value > 0:
-                event_properties[property_name] = value
-
-    cache_reporting_exclusive = event_data["usage_stats"].get(
-        "cache_reporting_exclusive"
-    )
-    if cache_reporting_exclusive is not None:
-        event_properties["$ai_cache_reporting_exclusive"] = cache_reporting_exclusive
-
-    # Add web search count if present (all providers)
-    web_search_count = event_data["usage_stats"].get("web_search_count")
-    if (
-        web_search_count is not None
-        and isinstance(web_search_count, int)
-        and web_search_count > 0
-    ):
-        event_properties["$ai_web_search_count"] = web_search_count
-
-    # Add raw usage metadata if present (all providers)
-    raw_usage = event_data["usage_stats"].get("raw_usage")
-    if raw_usage is not None:
-        # Already serialized by converters
-        event_properties["$ai_usage"] = raw_usage
-
-    # Add stop reason if present
-    stop_reason = event_data.get("stop_reason")
-    if stop_reason is not None:
-        event_properties["$ai_stop_reason"] = stop_reason
-
-    # Handle provider-specific fields
-    if (
-        event_data["provider"] == "openai"
-        and event_data["kwargs"].get("instructions") is not None
-    ):
-        event_properties["$ai_instructions"] = with_privacy_mode(
-            ph_client,
-            event_data["privacy_mode"],
-            event_data["kwargs"]["instructions"],
-        )
-
-    if event_data.get("distinct_id") is None:
-        event_properties["$process_person_profile"] = False
-
-    # Send event to PostHog
-    if hasattr(ph_client, "capture"):
-        _capture_ai_event(
-            ph_client,
-            "$ai_generation",
-            distinct_id=event_data.get("distinct_id") or trace_id,
-            properties=event_properties,
-            groups=event_data.get("groups"),
-        )

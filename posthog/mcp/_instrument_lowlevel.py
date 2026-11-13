@@ -54,6 +54,7 @@ from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._raised_tool_error import raised_tool_error, wrap_error_result
 from .logger import log, warn
 from .tools import get_more_tools_result_text
 
@@ -68,6 +69,7 @@ def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
     """
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
+    wrap_error_result(server)
     _wrap_call_tool(server, data, strip_injected=False)
     _wrap_list_tools(server, data, context_required=False)
     _wrap_resource_requests(server, data)
@@ -282,7 +284,10 @@ def _wrap_call_tool(
 
         start = time.monotonic()
         try:
-            result = await original(req)
+            with raised_tool_error(
+                server if high_level is None else high_level
+            ) as raised:
+                result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
                 await registered_tool_exists(high_level, name)
@@ -349,6 +354,7 @@ def _wrap_call_tool(
             call_result,
             duration_ms,
             conversation_id_delivered=delivered,
+            error=raised.error,
         )
         return result
 
@@ -724,14 +730,7 @@ async def _listed_input_schema(
             # spend rate limits, and its registry can disagree with what that
             # middleware advertises, so the advertised schema is unknown.
             return None
-        candidates = [tool for tool in await list_tools() if tool.name == name]
-        if version is not None:
-            candidates = [
-                tool
-                for tool in candidates
-                if str(getattr(tool, "version", "")) == version
-            ]
-        tool = candidates[-1] if candidates else None
+        tool = _last_listed_tool(await list_tools(), name, version)
         schema = getattr(tool, "parameters", None)
     except Exception as error:  # noqa: BLE001 - analytics must not break dispatch
         log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
@@ -765,13 +764,7 @@ def _schema_view(schema: Dict[str, Any], *, dereferenced: bool) -> Tuple[set, bo
         node.get(key) for node in nodes for key in ("oneOf", "allOf", "anyOf")
     ):
         return set(_INJECTED_KEYS), False
-    declared = {
-        key
-        for node in nodes
-        if isinstance(node.get("properties"), dict)
-        for key in node["properties"]
-        if key in _INJECTED_KEYS
-    }
+    declared = _declared_injected_keys(nodes)
     injectable = can_inject_model_parameter(nodes[-1]) and "llm_model" not in declared
     return declared, injectable
 
@@ -897,10 +890,7 @@ def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
             return nodes
         if not isinstance(ref, str) or not ref.startswith("#/"):
             return None
-        target: Any = schema
-        for part in ref[2:].split("/"):
-            key = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escapes
-            target = target.get(key) if isinstance(target, dict) else None
+        target = _resolve_local_pointer(schema, ref)
         if not isinstance(target, dict) or any(target is node for node in nodes):
             return None
         nodes.append(target)
@@ -946,3 +936,31 @@ def _mcp_session_id(server: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _resolve_local_pointer(schema: Dict[str, Any], ref: str) -> Any:
+    target: Any = schema
+    for part in ref[2:].split("/"):
+        key = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escapes
+        target = target.get(key) if isinstance(target, dict) else None
+    return target
+
+
+def _declared_injected_keys(nodes: List[Dict[str, Any]]) -> set:
+    declared = {
+        key
+        for node in nodes
+        if isinstance(node.get("properties"), dict)
+        for key in node["properties"]
+        if key in _INJECTED_KEYS
+    }
+    return declared
+
+
+def _last_listed_tool(tools: list, name: str, version: Optional[str]) -> Any:
+    candidates = [tool for tool in tools if tool.name == name]
+    if version is not None:
+        candidates = [
+            tool for tool in candidates if str(getattr(tool, "version", "")) == version
+        ]
+    return candidates[-1] if candidates else None

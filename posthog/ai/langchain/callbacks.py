@@ -39,6 +39,7 @@ from langchain_core.messages import (
     ToolMessage,
 )
 from langchain_core.outputs import ChatGeneration, LLMResult
+from langchain_core.outputs import Generation as _Generation
 from pydantic import BaseModel
 
 from posthog import setup
@@ -641,33 +642,7 @@ class CallbackHandler(BaseCallbackHandler):
         parent_run_id: Optional[UUID] = None,
         include_parent_id: bool = True,
     ):
-        # The served tier comes from the response, because a requested tier can be refused.
-        model_params = run.model_params
-        served_tier = None
-        if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
-            served_tier = output.llm_output.get("service_tier")
-            if served_tier is not None:
-                model_params = {**(model_params or {}), "service_tier": served_tier}
-
-        event_properties = {
-            "$ai_trace_id": trace_id,
-            "$ai_span_id": run_id,
-            "$ai_span_name": run.name,
-            "$ai_provider": run.provider,
-            "$ai_model": run.model,
-            "$ai_model_parameters": model_params,
-            # The explicit served-tier signal cost processing prices from.
-            **({"$ai_service_tier": served_tier} if served_tier is not None else {}),
-            "$ai_input": with_privacy_mode(
-                self._ph_client,
-                self._privacy_mode,
-                finalize_ai_content(run.input, self._ph_client),
-            ),
-            "$ai_http_status": 200,
-            "$ai_latency": run.latency,
-            "$ai_base_url": run.base_url,
-            "$ai_framework": "langchain",
-        }
+        event_properties = self._generation_properties(trace_id, run_id, run, output)
         if include_parent_id:
             event_properties["$ai_parent_id"] = parent_run_id
 
@@ -696,60 +671,11 @@ class CallbackHandler(BaseCallbackHandler):
                 output, event_properties
             )
         else:
-            # Add usage
-            usage = _parse_usage(output, run.provider, run.model)
-            # Omitted when the provider never reported a count: absent means
-            # unknown, 0 is a report of nothing.
-            if usage.input_tokens is not None:
-                event_properties["$ai_input_tokens"] = usage.input_tokens
-            if usage.output_tokens is not None:
-                event_properties["$ai_output_tokens"] = usage.output_tokens
-            if usage.cache_write_tokens is not None:
-                event_properties["$ai_cache_creation_input_tokens"] = (
-                    usage.cache_write_tokens
-                )
-            if (
-                usage.cache_write_5m_tokens is not None
-                and usage.cache_write_1h_tokens is not None
-            ):
-                event_properties["$ai_cache_creation_5m_input_tokens"] = (
-                    usage.cache_write_5m_tokens
-                )
-                event_properties["$ai_cache_creation_1h_input_tokens"] = (
-                    usage.cache_write_1h_tokens
-                )
-            if usage.cache_read_tokens is not None:
-                event_properties["$ai_cache_read_input_tokens"] = (
-                    usage.cache_read_tokens
-                )
-            if usage.reasoning_tokens is not None:
-                event_properties["$ai_reasoning_tokens"] = usage.reasoning_tokens
-            if usage.web_search_count is not None and usage.web_search_count > 0:
-                event_properties["$ai_web_search_count"] = usage.web_search_count
-
-            # Generation results
-            generation_result = output.generations[-1]
-            if isinstance(generation_result[-1], ChatGeneration):
-                completions = [
-                    _convert_message_to_dict(cast(ChatGeneration, generation).message)
-                    for generation in generation_result
-                ]
-            else:
-                completions = [
-                    _extract_raw_response(generation)
-                    for generation in generation_result
-                ]
-            event_properties["$ai_output_choices"] = with_privacy_mode(
-                self._ph_client,
-                self._privacy_mode,
-                finalize_ai_content(completions, self._ph_client),
+            _add_generation_usage(
+                event_properties, _parse_usage(output, run.provider, run.model)
             )
 
-            # Extract the stop reason from the generation and its metadata
-            if output.generations and output.generations[-1]:
-                stop_reason = _extract_stop_reason(output.generations[-1][-1])
-                if stop_reason is not None:
-                    event_properties["$ai_stop_reason"] = stop_reason
+            self._add_generation_output(event_properties, output)
 
         _capture_ai_event(
             self._ph_client,
@@ -758,6 +684,68 @@ class CallbackHandler(BaseCallbackHandler):
             properties=event_properties,
             groups=self._groups,
         )
+
+    def _generation_properties(
+        self,
+        trace_id: Any,
+        run_id: UUID,
+        run: GenerationMetadata,
+        output: Union[LLMResult, BaseException],
+    ) -> dict[str, Any]:
+        # The served tier comes from the response, because a requested tier can be refused.
+        model_params = run.model_params
+        served_tier = None
+        if isinstance(output, LLMResult) and isinstance(output.llm_output, dict):
+            served_tier = output.llm_output.get("service_tier")
+            if served_tier is not None:
+                model_params = {**(model_params or {}), "service_tier": served_tier}
+
+        event_properties = {
+            "$ai_trace_id": trace_id,
+            "$ai_span_id": run_id,
+            "$ai_span_name": run.name,
+            "$ai_provider": run.provider,
+            "$ai_model": run.model,
+            "$ai_model_parameters": model_params,
+            # The explicit served-tier signal cost processing prices from.
+            **({"$ai_service_tier": served_tier} if served_tier is not None else {}),
+            "$ai_input": with_privacy_mode(
+                self._ph_client,
+                self._privacy_mode,
+                finalize_ai_content(run.input, self._ph_client),
+            ),
+            "$ai_http_status": 200,
+            "$ai_latency": run.latency,
+            "$ai_base_url": run.base_url,
+            "$ai_framework": "langchain",
+        }
+        return event_properties
+
+    def _add_generation_output(
+        self, event_properties: dict[str, Any], output: LLMResult
+    ) -> None:
+        # Generation results
+        generation_result = output.generations[-1]
+        if isinstance(generation_result[-1], ChatGeneration):
+            completions = [
+                _convert_message_to_dict(cast(ChatGeneration, generation).message)
+                for generation in generation_result
+            ]
+        else:
+            completions = [
+                _extract_raw_response(generation) for generation in generation_result
+            ]
+        event_properties["$ai_output_choices"] = with_privacy_mode(
+            self._ph_client,
+            self._privacy_mode,
+            finalize_ai_content(completions, self._ph_client),
+        )
+
+        # Extract the stop reason from the generation and its metadata
+        if output.generations and output.generations[-1]:
+            stop_reason = _extract_stop_reason(output.generations[-1][-1])
+            if stop_reason is not None:
+                event_properties["$ai_stop_reason"] = stop_reason
 
     def _log_debug_event(
         self,
@@ -822,6 +810,18 @@ def _convert_lc_tool_calls_to_oai(
 
 
 def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
+    message_dict = _message_role_and_content(message)
+
+    if message.additional_kwargs:
+        message_dict.update(message.additional_kwargs)
+
+    if "content" in message_dict and not message_dict["content"]:
+        message_dict["content"] = ""
+
+    return message_dict
+
+
+def _message_role_and_content(message: BaseMessage) -> dict[str, Any]:
     # assistant message
     if isinstance(message, HumanMessage):
         message_dict = {"role": "user", "content": message.content}
@@ -839,12 +839,6 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
         message_dict = {"role": "function", "content": message.content}
     else:
         message_dict = {"role": message.type, "content": str(message.content)}
-
-    if message.additional_kwargs:
-        message_dict.update(message.additional_kwargs)
-
-    if "content" in message_dict and not message_dict["content"]:
-        message_dict["content"] = ""
 
     return message_dict
 
@@ -885,6 +879,80 @@ def _parse_usage_model(
     if isinstance(usage, BaseModel):
         usage = usage.__dict__
 
+    parsed_usage = _flat_usage_counts(usage)
+
+    _add_usage_details(parsed_usage, usage)
+
+    # Anthropic reports the exact number of web searches of a response
+    web_search_requests = _extract_web_search_requests(usage)
+    if web_search_requests is not None:
+        parsed_usage["web_search"] = web_search_requests
+
+    field_mapping = {
+        "input": "input_tokens",
+        "output": "output_tokens",
+        "cache_write": "cache_write_tokens",
+        "cache_read": "cache_read_tokens",
+        "reasoning": "reasoning_tokens",
+    }
+    normalized_usage = ModelUsage(
+        **{
+            dataclass_key: parsed_usage.get(mapped_key)
+            for mapped_key, dataclass_key in field_mapping.items()
+        },
+        cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),
+        cache_write_1h_tokens=parsed_usage.get("cache_write_1h"),
+        web_search_count=parsed_usage.get("web_search"),
+    )
+    _subtract_anthropic_cache(normalized_usage, provider, model)
+    return normalized_usage
+
+
+def _subtract_anthropic_cache(
+    normalized_usage: ModelUsage, provider: Optional[str], model: Optional[str]
+) -> None:
+    # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
+    # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
+    # Both cache_read and cache_write tokens should be subtracted since Anthropic's raw API
+    # reports input_tokens as tokens NOT read from or used to create a cache.
+    # For other providers (OpenAI, etc.), input_tokens already excludes cache tokens as expected.
+    # Match logic consistent with plugin-server: exact match on provider, substring
+    # match on model, or a Claude model under another provider (e.g. Vertex AI)
+    is_anthropic = _is_anthropic_model(provider, model)
+
+    if is_anthropic and normalized_usage.input_tokens:
+        cache_tokens = (normalized_usage.cache_read_tokens or 0) + (
+            normalized_usage.cache_write_tokens or 0
+        )
+        if cache_tokens > 0:
+            normalized_usage.input_tokens = max(
+                normalized_usage.input_tokens - cache_tokens, 0
+            )
+
+
+def _add_usage_details(parsed_usage: dict, usage: dict) -> None:
+    # Caching (OpenAI & langchain 0.3.9+)
+    if "input_token_details" in usage and isinstance(
+        usage["input_token_details"], dict
+    ):
+        input_token_details = usage["input_token_details"]
+        parsed_usage["cache_write"] = input_token_details.get("cache_creation")
+        cache_write_ttl = _extract_cache_creation_ttl_breakdown(input_token_details)
+        if cache_write_ttl is not None:
+            cache_write_5m, cache_write_1h = cache_write_ttl
+            parsed_usage["cache_write_5m"] = cache_write_5m
+            parsed_usage["cache_write_1h"] = cache_write_1h
+            parsed_usage["cache_write"] = cache_write_5m + cache_write_1h
+        parsed_usage["cache_read"] = input_token_details.get("cache_read")
+
+    # Reasoning (OpenAI & langchain 0.3.9+)
+    if "output_token_details" in usage and isinstance(
+        usage["output_token_details"], dict
+    ):
+        parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
+
+
+def _flat_usage_counts(usage: dict) -> dict:
     conversion_list = [
         # https://pypi.org/project/langchain-anthropic/ (works also for Bedrock-Anthropic)
         ("input_tokens", "input"),
@@ -923,69 +991,7 @@ def _parse_usage_model(
 
             parsed_usage[type_key] = final_count
 
-    # Caching (OpenAI & langchain 0.3.9+)
-    if "input_token_details" in usage and isinstance(
-        usage["input_token_details"], dict
-    ):
-        input_token_details = usage["input_token_details"]
-        parsed_usage["cache_write"] = input_token_details.get("cache_creation")
-        cache_write_ttl = _extract_cache_creation_ttl_breakdown(input_token_details)
-        if cache_write_ttl is not None:
-            cache_write_5m, cache_write_1h = cache_write_ttl
-            parsed_usage["cache_write_5m"] = cache_write_5m
-            parsed_usage["cache_write_1h"] = cache_write_1h
-            parsed_usage["cache_write"] = cache_write_5m + cache_write_1h
-        parsed_usage["cache_read"] = input_token_details.get("cache_read")
-
-    # Reasoning (OpenAI & langchain 0.3.9+)
-    if "output_token_details" in usage and isinstance(
-        usage["output_token_details"], dict
-    ):
-        parsed_usage["reasoning"] = usage["output_token_details"].get("reasoning")
-
-    # Anthropic reports the exact number of web searches of a response
-    web_search_requests = _extract_web_search_requests(usage)
-    if web_search_requests is not None:
-        parsed_usage["web_search"] = web_search_requests
-
-    field_mapping = {
-        "input": "input_tokens",
-        "output": "output_tokens",
-        "cache_write": "cache_write_tokens",
-        "cache_read": "cache_read_tokens",
-        "reasoning": "reasoning_tokens",
-    }
-    normalized_usage = ModelUsage(
-        **{
-            dataclass_key: parsed_usage.get(mapped_key)
-            for mapped_key, dataclass_key in field_mapping.items()
-        },
-        cache_write_5m_tokens=parsed_usage.get("cache_write_5m"),
-        cache_write_1h_tokens=parsed_usage.get("cache_write_1h"),
-        web_search_count=parsed_usage.get("web_search"),
-    )
-    # For Anthropic providers, LangChain reports input_tokens as the sum of all input tokens.
-    # Our cost calculation expects them to be separate for Anthropic, so we subtract cache tokens.
-    # Both cache_read and cache_write tokens should be subtracted since Anthropic's raw API
-    # reports input_tokens as tokens NOT read from or used to create a cache.
-    # For other providers (OpenAI, etc.), input_tokens already excludes cache tokens as expected.
-    # Match logic consistent with plugin-server: exact match on provider, substring
-    # match on model, or a Claude model under another provider (e.g. Vertex AI)
-    is_anthropic = False
-    if provider and provider.lower() == "anthropic":
-        is_anthropic = True
-    elif model and ("anthropic" in model.lower() or model.lower().startswith("claude")):
-        is_anthropic = True
-
-    if is_anthropic and normalized_usage.input_tokens:
-        cache_tokens = (normalized_usage.cache_read_tokens or 0) + (
-            normalized_usage.cache_write_tokens or 0
-        )
-        if cache_tokens > 0:
-            normalized_usage.input_tokens = max(
-                normalized_usage.input_tokens - cache_tokens, 0
-            )
-    return normalized_usage
+    return parsed_usage
 
 
 def _parse_usage(
@@ -1022,45 +1028,9 @@ def _parse_usage(
                 llm_usage = _parse_usage_model(generation["usage"], provider, model)
                 break
 
-            for generation_chunk in generation:
-                if generation_chunk.generation_info and (
-                    "usage_metadata" in generation_chunk.generation_info
-                ):
-                    llm_usage = _parse_usage_model(
-                        generation_chunk.generation_info["usage_metadata"],
-                        provider,
-                        model,
-                    )
-                    break
-
-                message_chunk = getattr(generation_chunk, "message", {})
-                response_metadata = getattr(message_chunk, "response_metadata", {})
-
-                bedrock_anthropic_usage = (
-                    response_metadata.get("usage", None)  # for Bedrock-Anthropic
-                    if isinstance(response_metadata, dict)
-                    else None
-                )
-                bedrock_titan_usage = (
-                    response_metadata.get(
-                        "amazon-bedrock-invocationMetrics", None
-                    )  # for Bedrock-Titan
-                    if isinstance(response_metadata, dict)
-                    else None
-                )
-                # LangChain's standard usage, which also covers Ollama
-                usage_metadata = getattr(message_chunk, "usage_metadata", None)
-
-                # Prefer the standard usage: its input_tokens include cache reads
-                # and writes, as the Anthropic subtraction in _parse_usage_model
-                # expects. ChatAnthropic also copies the raw API usage, whose
-                # input_tokens already exclude the cache, into response_metadata.
-                chunk_usage = (
-                    usage_metadata or bedrock_anthropic_usage or bedrock_titan_usage
-                )
-                if chunk_usage:
-                    llm_usage = _parse_usage_model(chunk_usage, provider, model)
-                    break
+            parsed = _generation_usage(generation, provider, model)
+            if parsed is not None:
+                llm_usage = parsed
 
     if llm_usage.web_search_count is None:
         llm_usage.web_search_count = web_search_count
@@ -1118,3 +1088,88 @@ def _stringify_exception(exception: BaseException) -> str:
     if description:
         return f"{exception.__class__.__name__}: {description}"
     return exception.__class__.__name__
+
+
+def _add_generation_usage(
+    event_properties: dict[str, Any], usage: "ModelUsage"
+) -> None:
+    # Omitted when the provider never reported a count: absent means unknown,
+    # 0 is a report of nothing.
+    for field, property_name in (
+        ("input_tokens", "$ai_input_tokens"),
+        ("output_tokens", "$ai_output_tokens"),
+        ("cache_write_tokens", "$ai_cache_creation_input_tokens"),
+    ):
+        value = getattr(usage, field)
+        if value is not None:
+            event_properties[property_name] = value
+    if (
+        usage.cache_write_5m_tokens is not None
+        and usage.cache_write_1h_tokens is not None
+    ):
+        event_properties["$ai_cache_creation_5m_input_tokens"] = (
+            usage.cache_write_5m_tokens
+        )
+        event_properties["$ai_cache_creation_1h_input_tokens"] = (
+            usage.cache_write_1h_tokens
+        )
+    for field, property_name in (
+        ("cache_read_tokens", "$ai_cache_read_input_tokens"),
+        ("reasoning_tokens", "$ai_reasoning_tokens"),
+    ):
+        value = getattr(usage, field)
+        if value is not None:
+            event_properties[property_name] = value
+    if usage.web_search_count is not None and usage.web_search_count > 0:
+        event_properties["$ai_web_search_count"] = usage.web_search_count
+
+
+def _generation_usage(
+    generation: list[_Generation], provider: Optional[str], model: Optional[str]
+) -> Optional[ModelUsage]:
+    for generation_chunk in generation:
+        if generation_chunk.generation_info and (
+            "usage_metadata" in generation_chunk.generation_info
+        ):
+            return _parse_usage_model(
+                generation_chunk.generation_info["usage_metadata"],
+                provider,
+                model,
+            )
+
+        message_chunk = getattr(generation_chunk, "message", {})
+        response_metadata = getattr(message_chunk, "response_metadata", {})
+
+        bedrock_anthropic_usage = (
+            response_metadata.get("usage", None)  # for Bedrock-Anthropic
+            if isinstance(response_metadata, dict)
+            else None
+        )
+        bedrock_titan_usage = (
+            response_metadata.get(
+                "amazon-bedrock-invocationMetrics", None
+            )  # for Bedrock-Titan
+            if isinstance(response_metadata, dict)
+            else None
+        )
+        # LangChain's standard usage, which also covers Ollama
+        usage_metadata = getattr(message_chunk, "usage_metadata", None)
+
+        # Prefer the standard usage: its input_tokens include cache reads
+        # and writes, as the Anthropic subtraction in _parse_usage_model
+        # expects. ChatAnthropic also copies the raw API usage, whose
+        # input_tokens already exclude the cache, into response_metadata.
+        chunk_usage = usage_metadata or bedrock_anthropic_usage or bedrock_titan_usage
+        if chunk_usage:
+            return _parse_usage_model(chunk_usage, provider, model)
+    return None
+
+
+def _is_anthropic_model(provider: Optional[str], model: Optional[str]) -> bool:
+    is_anthropic = False
+    if provider and provider.lower() == "anthropic":
+        is_anthropic = True
+    elif model and ("anthropic" in model.lower() or model.lower().startswith("claude")):
+        is_anthropic = True
+
+    return is_anthropic

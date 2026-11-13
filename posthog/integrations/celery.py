@@ -392,24 +392,29 @@ class PosthogCeleryIntegration:
                 task_properties["error_type"] = type(exception).__name__
                 task_properties["error_message"] = str(exception)
 
-            task_name = task_properties.get("celery_task_name")
-            should_track = False
-            if self.capture_task_lifecycle_events or (
-                exception and self.capture_exceptions
-            ):
-                should_track = self._should_track(task_name, task_properties)
-
-            if exception and self.capture_exceptions and should_track:
-                self._capture_exception(exception)
-
-            if self.capture_task_lifecycle_events and should_track:
-                self._capture_event(f"celery task {state}", properties=task_properties)
+            self._capture_task_end(state, task_properties, exception)
         except Exception:
             logger.exception("Failed to process Celery %s state", state)
         finally:
             ctx = getattr(request, "_posthog_ctx", None)
             if ctx is not None:
                 ctx.__exit__(None, None, None)
+
+    def _capture_task_end(
+        self, state: str, task_properties: dict, exception: Any
+    ) -> None:
+        task_name = task_properties.get("celery_task_name")
+        should_track = False
+        if self.capture_task_lifecycle_events or (
+            exception and self.capture_exceptions
+        ):
+            should_track = self._should_track(task_name, task_properties)
+
+        if exception and self.capture_exceptions and should_track:
+            self._capture_exception(exception)
+
+        if self.capture_task_lifecycle_events and should_track:
+            self._capture_event(f"celery task {state}", properties=task_properties)
 
     def _apply_propagated_identity(self, request: Any) -> None:
         headers = self._extract_headers(request)

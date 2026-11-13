@@ -1400,3 +1400,74 @@ class TestSecretDetection:
         )
         assert "code_variables" in output
         assert "n8fK2pQ9vX7mL4wR8tY3uZ6bC1dE5gH" in output  # detection off -> retained
+
+
+@pytest.mark.parametrize(
+    "base, value, expected",
+    [
+        (str, "contains_password_here", REDACTED),
+        (int, 42, 42),
+        (float, 1.5, 1.5),
+        (float, float("inf"), "inf"),
+    ],
+)
+def test_scalar_subclasses_are_masked_before_object_attribute_traversal(
+    base, value, expected
+):
+    class Scalar(base):
+        pass
+
+    scalar = Scalar(value)
+    scalar.extra = {"password": "not part of the scalar wire representation"}
+    assert mask(scalar) == expected
+    assert encode(scalar) == expected
+
+
+def test_oversized_namedtuple_is_replaced_without_reading_items():
+    class Wide(collections.namedtuple("Wide", [f"field{n}" for n in range(51)])):
+        def __iter__(self):
+            raise AssertionError("oversized values must not be read")
+
+    assert mask(Wide(*range(51))) == TOO_LONG
+
+
+@pytest.mark.parametrize(
+    "value, expected", [(float("nan"), "nan"), (float("inf"), "inf")]
+)
+def test_disabled_masking_still_encodes_non_finite_numbers_as_strings(value, expected):
+    config = _MaskingConfig.build(
+        [], [], mask_url_credentials=False, detect_secrets=False
+    )
+    assert _encode_variable(value, config, VariableSizeLimiter()) == expected
+
+
+def test_numeric_variables_charge_the_shared_budget_without_string_truncation():
+    limiter = VariableSizeLimiter(max_size=3)
+    assert encode(123, limiter=limiter) == 123
+    assert limiter.get_remaining_space() == 0
+    assert encode(1, limiter=limiter) is None
+
+
+def test_encoding_failure_uses_masked_repr_and_charges_the_budget():
+    # Reading this dict fails before it can be serialized structurally. Its repr holds
+    # a named secret, so the fallback must redact rather than expose that repr.
+    broken = _BrokenDict(password="hunter2")
+    limiter = VariableSizeLimiter(max_size=len(REDACTED))
+    assert encode(broken, limiter=limiter) == REDACTED
+    assert limiter.get_remaining_space() == 0
+    assert encode(broken, limiter=limiter) is None
+
+
+def test_disabling_name_patterns_does_not_read_property_getters():
+    class Opaque:
+        __slots__ = ()
+
+        @property
+        def password(self):
+            raise AssertionError("masking must not read getters")
+
+        def __repr__(self):
+            return "<opaque>"
+
+    assert mask(Opaque(), patterns=[]) == "<opaque>"
+    assert mask(Opaque())["password"] == REDACTED
