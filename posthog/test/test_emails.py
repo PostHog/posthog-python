@@ -1283,6 +1283,8 @@ def test_manage_calls_need_the_secret_key_and_an_enabled_client(_name, call, cod
         ("next_not_a_string", {**list_reply()[1], "next": 123}),
         ("next_empty", {**list_reply()[1], "next": ""}),
         ("next_left_out", {"results": list_reply()[1]["results"]}),
+        ("results_left_out", {"next": None}),
+        ("results_not_a_list", {"results": {}, "next": None}),
     ]
 )
 def test_a_malformed_list_page_raises_instead_of_dropping_emails(_name, body):
@@ -1299,6 +1301,7 @@ def test_a_malformed_list_page_raises_instead_of_dropping_emails(_name, body):
     [
         ("no_status", {"id": MESSAGE_ID}),
         ("still_scheduled", {"id": MESSAGE_ID, "status": "scheduled"}),
+        ("no_id", {"status": "canceled"}),
     ]
 )
 def test_a_cancel_reply_without_a_canceled_email_raises(_name, body):
