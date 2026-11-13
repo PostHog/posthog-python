@@ -415,20 +415,7 @@ def get_lines_from_file(
 ):
     # type: (...) -> Tuple[List[Annotated[str]], Optional[Annotated[str]], List[Annotated[str]]]
     context_lines = 5
-    source = None
-    if loader is not None and hasattr(loader, "get_source"):
-        try:
-            source_str = loader.get_source(module)  # type: Optional[str]
-        except (ImportError, IOError):
-            source_str = None
-        if source_str is not None:
-            source = source_str.splitlines()
-
-    if source is None:
-        try:
-            source = linecache.getlines(filename)
-        except (OSError, IOError):
-            return [], None, []
+    source = _get_source_lines(filename, loader, module)
 
     if not source:
         return [], None, []
@@ -450,6 +437,26 @@ def get_lines_from_file(
     except IndexError:
         # the file may have changed since it was loaded into memory
         return [], None, []
+
+
+def _get_source_lines(filename, loader, module):
+    # type: (str, Optional[Any], Optional[str]) -> Optional[List[str]]
+    source = None
+    if loader is not None and hasattr(loader, "get_source"):
+        try:
+            source_str = loader.get_source(module)  # type: Optional[str]
+        except (ImportError, IOError):
+            source_str = None
+        if source_str is not None:
+            source = source_str.splitlines()
+
+    if source is None:
+        try:
+            source = linecache.getlines(filename)
+        except (OSError, IOError):
+            return None
+
+    return source
 
 
 def get_source_context(
@@ -583,14 +590,16 @@ def _valid_mechanism(mechanism):
         if key
         not in {"type", "handled", "source", "synthetic", "exception_id", "parent_id"}
     }
-    if isinstance(mechanism.get("type"), str) and mechanism["type"]:
-        result["type"] = mechanism["type"]
-    if isinstance(mechanism.get("handled"), bool):
-        result["handled"] = mechanism["handled"]
-    if isinstance(mechanism.get("source"), str) and mechanism["source"]:
-        result["source"] = mechanism["source"]
-    if isinstance(mechanism.get("synthetic"), bool):
-        result["synthetic"] = mechanism["synthetic"]
+    for field, field_type in (
+        ("type", str),
+        ("handled", bool),
+        ("source", str),
+        ("synthetic", bool),
+    ):
+        if isinstance(mechanism.get(field), field_type) and (
+            field_type is bool or mechanism[field]
+        ):
+            result[field] = mechanism[field]
     return result
 
 
@@ -653,46 +662,9 @@ def single_exception_from_error_tuple(
     Creates a dict that goes into the events `exception.values` list
     """
     exception_value = {}  # type: Dict[str, Any]
-    exception_value["mechanism"] = _valid_mechanism(mechanism)
-    if exception_id is not None:
-        exception_value["mechanism"]["exception_id"] = exception_id
-
-    if exc_value is not None:
-        errno = get_errno(exc_value)
-    else:
-        errno = None
-
-    if errno is not None:
-        exception_value["mechanism"].setdefault("meta", {}).setdefault(
-            "errno", {}
-        ).setdefault("number", errno)
-
-    if isinstance(source, str) and source:
-        exception_value["mechanism"]["source"] = source
-
-    is_root_exception = exception_id == 0
-    if not is_root_exception and parent_id is not None:
-        exception_value["mechanism"]["parent_id"] = parent_id
-        exception_value["mechanism"]["type"] = "chained"
-        exception_value["mechanism"].pop("handled", None)
-
-    if is_root_exception:
-        exception_value["mechanism"].setdefault("type", "generic")
-        exception_value["mechanism"].setdefault("handled", True)
-        exception_value["mechanism"].pop("source", None)
-
-    # The stack is synthetic only when the SDK built it, which happens for an
-    # exception that was passed to capture without ever being raised.
-    exception_value["mechanism"].setdefault(
-        "synthetic",
-        tb is not None and _is_synthesized_traceback(exc_value, tb),
+    exception_value["mechanism"] = _exception_mechanism(
+        exc_value, tb, mechanism, exception_id, parent_id, source
     )
-
-    is_exception_group = BaseExceptionGroup is not None and isinstance(
-        exc_value, BaseExceptionGroup
-    )
-    if is_exception_group:
-        exception_value["mechanism"]["is_exception_group"] = True
 
     exception_value["module"] = get_type_module(exc_type)
     exception_value["type"] = get_type_name(exc_type)
@@ -713,6 +685,57 @@ def single_exception_from_error_tuple(
         exception_value["stacktrace"] = {"frames": frames, "type": "raw"}
 
     return exception_value
+
+
+def _exception_mechanism(exc_value, tb, mechanism, exception_id, parent_id, source):
+    # type: (Optional[BaseException], Optional[TracebackType], Optional[Dict[str, Any]], Optional[int], Optional[int], Optional[str]) -> Dict[str, Any]
+    result = _valid_mechanism(mechanism)
+    if exception_id is not None:
+        result["exception_id"] = exception_id
+
+    if exc_value is not None:
+        errno = get_errno(exc_value)
+    else:
+        errno = None
+
+    if errno is not None:
+        result.setdefault("meta", {}).setdefault("errno", {}).setdefault(
+            "number", errno
+        )
+
+    _set_exception_linkage(result, exception_id, parent_id, source)
+
+    # The stack is synthetic only when the SDK built it, which happens for an
+    # exception that was passed to capture without ever being raised.
+    result.setdefault(
+        "synthetic",
+        tb is not None and _is_synthesized_traceback(exc_value, tb),
+    )
+
+    is_exception_group = BaseExceptionGroup is not None and isinstance(
+        exc_value, BaseExceptionGroup
+    )
+    if is_exception_group:
+        result["is_exception_group"] = True
+
+    return result
+
+
+def _set_exception_linkage(result, exception_id, parent_id, source):
+    # type: (Dict[str, Any], Optional[int], Optional[int], Optional[str]) -> None
+    if isinstance(source, str) and source:
+        result["source"] = source
+
+    is_root_exception = exception_id == 0
+    if not is_root_exception and parent_id is not None:
+        result["parent_id"] = parent_id
+        result["type"] = "chained"
+        result.pop("handled", None)
+
+    if is_root_exception:
+        result.setdefault("type", "generic")
+        result.setdefault("handled", True)
+        result.pop("source", None)
 
 
 HAS_CHAINED_EXCEPTIONS = hasattr(Exception, "__suppress_context__")
@@ -803,17 +826,7 @@ def _exceptions_from_error(
     parent_id = exception_id
     exception_id += 1
 
-    causing_exception = None  # type: Optional[BaseException]
-    relationship = None  # type: Optional[str]
-    should_suppress_context = (
-        hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
-    )
-    if should_suppress_context and exc_value is not None:
-        causing_exception = getattr(exc_value, "__cause__", None)
-        relationship = "cause"
-    else:
-        causing_exception = getattr(exc_value, "__context__", None)
-        relationship = "context"
+    causing_exception, relationship = _exception_cause(exc_value)
 
     if causing_exception is not None and exception_id < _MAX_EXCEPTION_ENTRIES:
         (exception_id, child_exceptions) = _exceptions_from_error(
@@ -828,6 +841,32 @@ def _exceptions_from_error(
         )
         exceptions.extend(child_exceptions)
 
+    return _append_exception_group_members(
+        exc_value, exception_id, parent_id, traversal_state, exceptions
+    )
+
+
+def _exception_cause(exc_value):
+    # type: (Optional[BaseException]) -> Tuple[Optional[BaseException], str]
+    causing_exception = None  # type: Optional[BaseException]
+    relationship = None  # type: Optional[str]
+    should_suppress_context = (
+        hasattr(exc_value, "__suppress_context__") and exc_value.__suppress_context__  # type: ignore
+    )
+    if should_suppress_context and exc_value is not None:
+        causing_exception = getattr(exc_value, "__cause__", None)
+        relationship = "cause"
+    else:
+        causing_exception = getattr(exc_value, "__context__", None)
+        relationship = "context"
+
+    return causing_exception, relationship
+
+
+def _append_exception_group_members(
+    exc_value, exception_id, parent_id, traversal_state, exceptions
+):
+    # type: (Optional[BaseException], int, int, _ExceptionTraversalState, List[Dict[str, Any]]) -> Tuple[int, List[Dict[str, Any]]]
     # Aggregate-member inspection has its own shared budget. Duplicate and cyclic
     # references still consume it even though they do not produce output entries.
     # Cause/context traversal does not consume this budget, so the final inspected
@@ -923,13 +962,16 @@ def iter_event_stacktraces(event):
     if "stacktrace" in event:
         yield event["stacktrace"]
     if "threads" in event:
-        for thread in event["threads"].get("values") or ():
-            if "stacktrace" in thread:
-                yield thread["stacktrace"]
+        yield from _iter_nested_stacktraces(event["threads"].get("values") or ())
     if "exception" in event:
-        for exception in event["exception"].get("values") or ():
-            if "stacktrace" in exception:
-                yield exception["stacktrace"]
+        yield from _iter_nested_stacktraces(event["exception"].get("values") or ())
+
+
+def _iter_nested_stacktraces(entries):
+    # type: (Any) -> Iterator[Dict[str, Any]]
+    for entry in entries:
+        if "stacktrace" in entry:
+            yield entry["stacktrace"]
 
 
 def iter_event_frames(event):
@@ -1429,11 +1471,24 @@ def _is_high_entropy_secret(value):
     if not _SECRET_REJECT_CHARS.isdisjoint(distinct):
         return False
 
+    if _secret_character_class_count(distinct) < _SECRET_MIN_CHAR_CLASSES:
+        return False  # identifiers, enums, slugs, numbers
+
+    n = len(value)
+    entropy = 0.0
+    for occurrences in counts.values():
+        p = occurrences / n
+        entropy -= p * math.log2(p)
+    return entropy >= _SECRET_MIN_ENTROPY_BITS
+
+
+def _secret_character_class_count(distinct):
+    """Count token character classes, rejecting whitespace and pure-hex ids."""
     has_lower = has_upper = has_digit = has_symbol = False
     hex_only = True
     for ch in distinct:
         if ch.isspace():
-            return False
+            return 0
         if ch.islower():
             has_lower = True
             if ch not in _HEX_DIGITS:
@@ -1449,16 +1504,8 @@ def _is_high_entropy_secret(value):
             hex_only = False
 
     if hex_only:  # ObjectId / SHA / md5 digest
-        return False
-    if (has_lower + has_upper + has_digit + has_symbol) < _SECRET_MIN_CHAR_CLASSES:
-        return False  # identifiers, enums, slugs, numbers
-
-    n = len(value)
-    entropy = 0.0
-    for occurrences in counts.values():
-        p = occurrences / n
-        entropy -= p * math.log2(p)
-    return entropy >= _SECRET_MIN_ENTROPY_BITS
+        return 0
+    return has_lower + has_upper + has_digit + has_symbol
 
 
 def _looks_like_secret(value):
@@ -1661,41 +1708,30 @@ def _mask_mapping(items, config, seen, depth):
     placeholder, because the key text reaches the output as-is."""
     result: Dict[Any, Any] = {}
     for key, value in items:
-        if type(key) is str:
-            out_key = key_str = key
-            key_is_json_safe = True
-        else:
-            try:
-                key_str = key if isinstance(key, str) else str(key)
-            except Exception:
-                # Without the key text, nothing shows whether the key names a secret, so
-                # the value is redacted too.
-                result[_redacted_key(result)] = CODE_VARIABLES_REDACTED_VALUE
-                continue
-            # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
-            # its string form so one exotic key can't make json.dumps fail. That string form
-            # is a repr, which can embed field values, not only a name.
-            key_is_json_safe = (
-                key is None
-                or isinstance(key, (str, int))  # bool is an int subclass
-                or (isinstance(key, float) and math.isfinite(key))
-            )
-            out_key = key if key_is_json_safe else key_str
+        try:
+            key_str = key if isinstance(key, str) else str(key)
+        except Exception:
+            # Without the key text, nothing shows whether the key names a secret, so
+            # the value is redacted too.
+            result[_redacted_key(result)] = CODE_VARIABLES_REDACTED_VALUE
+            continue
+        out_key, key_is_json_safe = _mapping_key(key, key_str)
         if len(key_str) > _MAX_VALUE_LENGTH_FOR_PATTERN_MATCH:
             # Too long to scan, so the key text can't be vouched for either.
             result[_redacted_key(result)] = CODE_VARIABLES_TOO_LONG_VALUE
             continue
         key_matches_mask = _matcher_matches(key_str, config.mask)
-        if key_matches_mask and not _is_field_name(key, key_is_json_safe):
-            # A name such as `password` is safe to keep, but other text that matches can
-            # hold the value itself, e.g. `BasicAuth(login='u', password='...')`.
-            out_key = _redacted_key(result)
-        elif config.detect_secrets and _looks_like_secret(key_str):
-            out_key = _redacted_key(result)
-        elif not key_is_json_safe and _key_parts_fail_masking(key, config, seen, depth):
-            out_key = _redacted_key(result)
-        elif isinstance(out_key, str):
-            out_key = _redact_embedded_credentials(out_key, config)
+        out_key = _mask_mapping_key(
+            key,
+            key_str,
+            key_is_json_safe,
+            out_key,
+            key_matches_mask,
+            result,
+            config,
+            seen,
+            depth,
+        )
         if out_key in result:
             # Two keys can end up with the same text, for example URLs that differ only in
             # their credentials. A placeholder keeps the later entry from overwriting.
@@ -1705,6 +1741,45 @@ def _mask_mapping(items, config, seen, depth):
         else:
             result[out_key] = _mask_value(value, config, seen, depth + 1)
     return result
+
+
+def _mapping_key(key, key_str):
+    if type(key) is str:
+        return key, True
+    # json.dumps only accepts str/int/float/bool/None keys; coerce anything else to
+    # its string form so one exotic key can't make json.dumps fail. That string form
+    # is a repr, which can embed field values, not only a name.
+    key_is_json_safe = (
+        key is None
+        or isinstance(key, (str, int))  # bool is an int subclass
+        or (isinstance(key, float) and math.isfinite(key))
+    )
+    out_key = key if key_is_json_safe else key_str
+    return out_key, key_is_json_safe
+
+
+def _mask_mapping_key(
+    key,
+    key_str,
+    key_is_json_safe,
+    out_key,
+    key_matches_mask,
+    result,
+    config,
+    seen,
+    depth,
+):
+    if key_matches_mask and not _is_field_name(key, key_is_json_safe):
+        # A name such as `password` is safe to keep, but other text that matches can
+        # hold the value itself, e.g. `BasicAuth(login='u', password='...')`.
+        out_key = _redacted_key(result)
+    elif config.detect_secrets and _looks_like_secret(key_str):
+        out_key = _redacted_key(result)
+    elif not key_is_json_safe and _key_parts_fail_masking(key, config, seen, depth):
+        out_key = _redacted_key(result)
+    elif isinstance(out_key, str):
+        out_key = _redact_embedded_credentials(out_key, config)
+    return out_key
 
 
 def _mask_value(value, config, seen=None, depth=0):
@@ -1728,10 +1803,18 @@ def _mask_value(value, config, seen=None, depth=0):
         return value
     if t is float:
         # Non-finite floats (NaN/Infinity) are invalid JSON, so render them as strings.
-        return value if math.isfinite(value) else str(value)
+        return _mask_float(value)
     if value is None:
         return value
+    return _mask_non_plain_value(value, config, seen, depth)
 
+
+def _mask_float(value):
+    return value if math.isfinite(value) else str(value)
+
+
+def _mask_non_plain_value(value, config, seen, depth):
+    t = type(value)
     if t is not dict and t is not list and t is not tuple:
         # A scalar subclass (e.g. IntEnum, str subclass) - handle before traversing.
         if isinstance(value, str):
@@ -1740,7 +1823,10 @@ def _mask_value(value, config, seen=None, depth=0):
             return str(value)
         if isinstance(value, (bool, int, float)):
             return value
+    return _mask_traversable_value(value, config, seen, depth)
 
+
+def _mask_traversable_value(value, config, seen, depth):
     if depth >= _MAX_MASK_DEPTH:
         # Too deep to keep traversing; fail closed rather than repr (which could leak).
         return CODE_VARIABLES_TOO_LONG_VALUE
@@ -1755,7 +1841,11 @@ def _mask_value(value, config, seen=None, depth=0):
     if len(seen) > _MAX_TOTAL_NODES_TO_MASK:
         return CODE_VARIABLES_TOO_LONG_VALUE
 
-    if t is dict or isinstance(value, dict):
+    return _mask_collection_or_object(value, config, seen, depth)
+
+
+def _mask_collection_or_object(value, config, seen, depth):
+    if type(value) is dict or isinstance(value, dict):
         if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
             return CODE_VARIABLES_TOO_LONG_VALUE
         return _mask_mapping(value.items(), config, seen, depth)
@@ -1763,24 +1853,35 @@ def _mask_value(value, config, seen=None, depth=0):
     # namedtuples are tuples but their fields have names: traverse like an object (so a
     # field named `password` is caught) and emit a dict the encoder can serialize directly.
     if isinstance(value, tuple) and hasattr(value, "_fields"):
-        fields = value._fields
-        if len(fields) > _MAX_COLLECTION_ITEMS_TO_SCAN:
-            return CODE_VARIABLES_TOO_LONG_VALUE
-        masked = _mask_mapping(zip(fields, value), config, seen, depth)
-        masked["__class__"] = _safe_type_name(value)
-        return masked
+        return _mask_namedtuple(value, config, seen, depth)
 
     if isinstance(value, (list, tuple)):
-        if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
-            return CODE_VARIABLES_TOO_LONG_VALUE
-        masked_items = [_mask_value(item, config, seen, depth + 1) for item in value]
-        try:
-            return type(value)(masked_items)
-        except Exception:
-            # A list/tuple subclass whose constructor rejects a single iterable; the items
-            # are already masked, so fall back to a plain list.
-            return masked_items
+        return _mask_sequence(value, config, seen, depth)
+    return _mask_object(value, config, seen, depth)
 
+
+def _mask_sequence(value, config, seen, depth):
+    if len(value) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+        return CODE_VARIABLES_TOO_LONG_VALUE
+    masked_items = [_mask_value(item, config, seen, depth + 1) for item in value]
+    try:
+        return type(value)(masked_items)
+    except Exception:
+        # A list/tuple subclass whose constructor rejects a single iterable; the items
+        # are already masked, so fall back to a plain list.
+        return masked_items
+
+
+def _mask_namedtuple(value, config, seen, depth):
+    fields = value._fields
+    if len(fields) > _MAX_COLLECTION_ITEMS_TO_SCAN:
+        return CODE_VARIABLES_TOO_LONG_VALUE
+    masked = _mask_mapping(zip(fields, value), config, seen, depth)
+    masked["__class__"] = _safe_type_name(value)
+    return masked
+
+
+def _mask_object(value, config, seen, depth):
     # Custom objects: traverse their real attributes so a field named e.g. `password` is
     # caught by name, rather than repr-scanning (which a custom __repr__ could relabel).
     attrs = _extract_object_attrs(value)
@@ -1818,31 +1919,7 @@ def _encode_variable(value, config, limiter):
     try:
         safe = _mask_value(value, config)
 
-        if safe is None:
-            result = "None"
-        elif isinstance(safe, bool):
-            result = str(safe)
-        elif isinstance(safe, float) and not math.isfinite(safe):
-            # Only reachable when masking is disabled; keep NaN/Infinity out of the JSON.
-            result = str(safe)
-        elif isinstance(safe, (int, float)):
-            # Numbers are emitted as raw JSON numbers, so they skip string truncation.
-            result_size = len(str(safe))
-            if not limiter.can_add(result_size):
-                return None
-            limiter.add(result_size)
-            return safe
-        elif isinstance(safe, str):
-            result = safe
-        else:
-            # `default` is a safety net for anything _mask_value left non-serializable.
-            result = json.dumps(
-                safe,
-                default=lambda o: _safe_repr(o, config),
-                allow_nan=False,
-            )
-
-        return _finalize(result, limiter, config.max_length)
+        return _encode_masked_variable(safe, config, limiter)
     except Exception:
         # Fail closed: even if json.dumps chokes, re-render through the masking-aware repr.
         try:
@@ -1850,6 +1927,34 @@ def _encode_variable(value, config, limiter):
         except Exception:
             rendered = f"<{_safe_type_name(value)}>"
         return _finalize(rendered, limiter, config.max_length)
+
+
+def _encode_masked_variable(safe, config, limiter):
+    if safe is None:
+        result = "None"
+    elif isinstance(safe, bool):
+        result = str(safe)
+    elif isinstance(safe, float) and not math.isfinite(safe):
+        # Only reachable when masking is disabled; keep NaN/Infinity out of the JSON.
+        result = str(safe)
+    elif isinstance(safe, (int, float)):
+        # Numbers are emitted as raw JSON numbers, so they skip string truncation.
+        result_size = len(str(safe))
+        if not limiter.can_add(result_size):
+            return None
+        limiter.add(result_size)
+        return safe
+    elif isinstance(safe, str):
+        result = safe
+    else:
+        # `default` is a safety net for anything _mask_value left non-serializable.
+        result = json.dumps(
+            safe,
+            default=lambda o: _safe_repr(o, config),
+            allow_nan=False,
+        )
+
+    return _finalize(result, limiter, config.max_length)
 
 
 def _is_simple_type(value):

@@ -213,18 +213,22 @@ def _redact_tool_definitions(
         return None if drop_unparseable else value
     redacted: List[Any] = []
     for item in value:
-        definition = (
-            _redact_tool_definition_json(item, drop_unparseable)
-            if isinstance(item, str)
-            else None
-            if drop_unparseable
-            else item
-        )
+        definition = _redact_tool_definition_item(item, drop_unparseable)
         if definition is not None:
             redacted.append(definition)
     if len(redacted) == len(value) and all(a is b for a, b in zip(redacted, value)):
         return value
     return redacted
+
+
+def _redact_tool_definition_item(item: Any, drop_unparseable: bool) -> Any:
+    return (
+        _redact_tool_definition_json(item, drop_unparseable)
+        if isinstance(item, str)
+        else None
+        if drop_unparseable
+        else item
+    )
 
 
 def _is_tool_definition_attribute(key: str) -> bool:

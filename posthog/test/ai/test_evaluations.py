@@ -114,6 +114,283 @@ def result(item=None, **kwargs):
     )
 
 
+def composite(item):
+    return EvaluationResult(
+        item=item, scorer_version_id=OTHER_VERSION_ID, calculate=True
+    )
+
+
+def composite_response(method, path, *, body):
+    response = upload_response(body)
+    for row, declaration in zip(response["results"], json.loads(body)["results"]):
+        row.update(
+            status=declaration.get("status", "ok"),
+            error_code=declaration.get("error_code"),
+        )
+    return response
+
+
+def test_calculation_declarations_round_trip_without_metadata():
+    item = EvaluationItem(input="question", model_version="test-model")
+    declaration = composite(item)
+    expected = {
+        "item_id": item.id,
+        "scorer_version_id": OTHER_VERSION_ID,
+        "calculate": True,
+    }
+    assert declaration.to_dict() == expected
+    restored = EvaluationResult.from_dict(expected, item=item)
+    expected["calculate"] = False
+    assert restored == declaration
+    assert restored.calculate is True
+    assert (
+        EvaluationResult.from_dict(declaration.to_dict()).to_dict()
+        == declaration.to_dict()
+    )
+    assert "calculate" not in result(item, calculate=False).to_dict()
+
+
+@pytest.mark.parametrize(
+    "options",
+    [
+        {"calculate": 1},
+        {"calculate": "true"},
+        {"calculate": None},
+        {"value": False},
+        {"value": 0},
+        {"status": "error"},
+        {"status": "skipped"},
+        {"error_code": "bad"},
+        {"reasoning": None},
+        {"metadata": {}},
+        {"error_message": None},
+        {"payload": {}},
+        {"evaluator_trace_id": "trace"},
+        {"evaluated_at": ACCEPTED_AT},
+    ],
+)
+def test_invalid_calculation_fields_fail_before_upload(client, options):
+    evaluations, transport = client
+    with pytest.raises(ValueError):
+        invoke(
+            evaluations.resume_experiment(EXPERIMENT_ID).upload_result,
+            **(
+                {
+                    "item": EvaluationItem(),
+                    "scorer_version_id": OTHER_VERSION_ID,
+                    "calculate": True,
+                }
+                | options
+            ),
+        )
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "status,error_code",
+    [
+        ("ok", None),
+        ("error", "composite_input_error"),
+        ("error", "composite_formula_error"),
+        ("skipped", None),
+        ("not_applicable", None),
+    ],
+)
+def test_calculated_outcome_is_visible_on_initial_upload_and_replay(
+    client, status, error_code
+):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    item = EvaluationItem()
+
+    def acknowledge(method, path, *, body):
+        response = composite_response(method, path, body=body)
+        response["results"][0].update(
+            status=status,
+            error_code=error_code,
+            created=transport.request.call_count == 1,
+        )
+        return response
+
+    transport.request.side_effect = acknowledge
+    for created in [True, False]:
+        receipt = invoke(
+            experiment.upload_result,
+            item=item,
+            scorer_version_id=OTHER_VERSION_ID,
+            calculate=True,
+        )
+        assert (receipt.results[0].status, receipt.results[0].error_code) == (
+            status,
+            error_code,
+        )
+        assert receipt.results[0].created is created
+        assert json.loads(transport.request.call_args.kwargs["body"])["results"] == [
+            composite(item).to_dict()
+        ]
+    assert transport.request.call_args_list[0] == transport.request.call_args_list[1]
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    [
+        {},
+        {"status": "ok"},
+        {"status": "unknown", "error_code": None},
+        {"status": None, "error_code": None},
+        {"status": "ok", "error_code": "unexpected"},
+        {"status": "error", "error_code": 42},
+    ],
+)
+def test_invalid_composite_acknowledgments_preserve_uncertain_pending_work(
+    client, outcome
+):
+    evaluations, transport = client
+    declarations = [composite(EvaluationItem())]
+
+    def acknowledge(method, path, *, body):
+        response = upload_response(body)
+        response["results"][0].update(outcome)
+        return response
+
+    transport.request.side_effect = acknowledge
+    with pytest.raises(BulkUploadError) as caught:
+        invoke(
+            evaluations.resume_experiment(EXPERIMENT_ID).upload_results, declarations
+        )
+    assert caught.value.code == "invalid_response"
+    assert caught.value.persistence == "unknown"
+    assert caught.value.pending_results == tuple(declarations)
+
+
+def test_reported_receipts_accept_legacy_and_new_outcomes(client):
+    evaluations, transport = client
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    kwargs = dict(
+        item=EvaluationItem(),
+        scorer_version_id=VERSION_ID,
+        status="error",
+        error_code="judge_failed",
+    )
+    assert invoke(experiment.upload_result, **kwargs).results[0].status is None
+    transport.request.side_effect = composite_response
+    receipt = invoke(experiment.upload_result, **kwargs).results[0]
+    assert (receipt.status, receipt.error_code) == ("error", "judge_failed")
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_real_count_boundary_keeps_inputs_with_calculation_in_original_order(
+    client, reverse
+):
+    evaluations, transport = client
+    transport.request.side_effect = composite_response
+    item = EvaluationItem()
+    group = [result(item), composite(item)]
+    if reverse:
+        group.reverse()
+    declarations = [result() for _ in range(999)] + group
+    receipt = invoke(
+        evaluations.resume_experiment(EXPERIMENT_ID).upload_results, declarations
+    )
+    assert [len(chunk.results) for chunk in receipt.chunks] == [999, 2]
+    sent = [
+        json.loads(call.kwargs["body"]) for call in transport.request.call_args_list
+    ]
+    assert sent[1] == {
+        "items": [item.to_dict()],
+        "results": [row.to_dict() for row in group],
+    }
+    assert [
+        (row.item_id, row.scorer_version_id)
+        for chunk in receipt.chunks
+        for row in chunk.results
+    ] == [(row.item_id, row.scorer_version_id) for row in declarations]
+
+
+def test_overlapping_composite_spans_preserve_order_and_item_declarations(
+    client, monkeypatch
+):
+    evaluations, transport = client
+    transport.request.side_effect = composite_response
+    monkeypatch.setattr(_client, "_MAX_RESULTS", 4)
+    a, b = EvaluationItem(), EvaluationItem()
+    declarations = [result(), result(a), composite(b.id), composite(a.id), result(b)]
+    receipt = invoke(
+        evaluations.resume_experiment(EXPERIMENT_ID).upload_results, declarations
+    )
+    assert [len(chunk.results) for chunk in receipt.chunks] == [1, 4]
+    body = json.loads(transport.request.call_args.kwargs["body"])
+    assert body["results"] == [row.to_dict() for row in declarations[1:]]
+    assert body["items"] == [a.to_dict(), b.to_dict()]
+
+
+def test_utf8_limit_accounts_for_whole_composite_group(client, monkeypatch):
+    evaluations, transport = client
+    transport.request.side_effect = composite_response
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    item = EvaluationItem(input="🙂" * 100)
+    group = [result(item), composite(item)]
+    invoke(experiment.upload_results, group)
+    exact_limit = len(transport.request.call_args.kwargs["body"])
+    monkeypatch.setattr(_client, "_MAX_REQUEST_BYTES", exact_limit)
+    transport.request.reset_mock()
+    receipt = invoke(experiment.upload_results, [result()] + group)
+    assert [len(chunk.results) for chunk in receipt.chunks] == [1, 2]
+    assert len(transport.request.call_args.kwargs["body"]) == exact_limit
+    monkeypatch.setattr(_client, "_MAX_REQUEST_BYTES", exact_limit - 1)
+    transport.request.reset_mock()
+    with pytest.raises(ValueError, match="limit"):
+        invoke(experiment.upload_results, [result()] + group)
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize("limit,value", [("_MAX_RESULTS", 3), ("_MAX_ITEMS", 1)])
+def test_unsendable_interleaved_group_rejects_entire_bulk_before_io(
+    client, monkeypatch, limit, value
+):
+    evaluations, transport = client
+    a, b = EvaluationItem(), EvaluationItem()
+    declarations = [result(), result(a), result(b), composite(a), composite(b)]
+    monkeypatch.setattr(_client, limit, value)
+    with pytest.raises(ValueError, match="limit"):
+        invoke(
+            evaluations.resume_experiment(EXPERIMENT_ID).upload_results, declarations
+        )
+    transport.request.assert_not_called()
+
+
+@pytest.mark.parametrize("persistence", ["unknown", "rejected"])
+def test_composite_partial_failure_replays_exact_group_and_original_index(
+    client, monkeypatch, persistence
+):
+    evaluations, transport = client
+    monkeypatch.setattr(_client, "_MAX_RESULTS", 2)
+    item = EvaluationItem(input="question", model_version="model-b")
+    declarations = [result(), result(), composite(item), result(item), result()]
+
+    def fail_second(method, path, *, body):
+        if transport.request.call_count == 2:
+            raise EvaluationAPIError(status=503, persistence=persistence)
+        return composite_response(method, path, body=body)
+
+    transport.request.side_effect = fail_second
+    experiment = evaluations.resume_experiment(EXPERIMENT_ID)
+    with pytest.raises(BulkUploadError) as caught:
+        invoke(experiment.upload_results, declarations)
+    error = caught.value
+    assert error.failed_index == 2
+    assert error.pending_results == tuple(declarations[2:])
+    assert len(error.completed.chunks) == 1
+    failed_body = transport.request.call_args.kwargs["body"]
+    assert error.failed_chunk["results"] == [row.to_dict() for row in declarations[2:4]]
+    transport.request.side_effect = composite_response
+    invoke(experiment.upload_results, error.pending_results)
+    assert transport.request.call_args_list[2].kwargs["body"] == failed_body
+    assert all(
+        call.args[1].endswith("/upload/") for call in transport.request.call_args_list
+    )
+
+
 def test_experiment_tags_are_separate_from_creation_and_lifecycle_receipts(client):
     evaluations, transport = client
     experiment = invoke(evaluations.create_experiment, name="Tagged run")
@@ -854,7 +1131,10 @@ def test_async_cancellation_never_completes_or_fails_experiment(monkeypatch):
     asyncio.run(run())
 
 
-def test_example_persists_before_writes_and_replays_the_same_run(monkeypatch, tmp_path):
+@pytest.mark.parametrize("with_composite", [False, True])
+def test_example_persists_before_writes_and_replays_the_same_run(
+    monkeypatch, tmp_path, with_composite
+):
     example = Path(__file__).parents[3] / "examples/example-offline-evaluations/main.py"
     spec = importlib.util.spec_from_file_location("offline_evaluation_example", example)
     module = importlib.util.module_from_spec(spec)
@@ -864,18 +1144,34 @@ def test_example_persists_before_writes_and_replays_the_same_run(monkeypatch, tm
     monkeypatch.setenv("POSTHOG_SECRET_KEY", "never-persist-this-secret")
     monkeypatch.setenv("POSTHOG_HOST", "https://us.posthog.com")
     monkeypatch.setenv("POSTHOG_SCORER_VERSION_ID", VERSION_ID)
-    monkeypatch.setattr("sys.argv", [str(example), "--state", str(state_path)])
+    monkeypatch.setattr(
+        "sys.argv",
+        [str(example), "--state", str(state_path)]
+        + (["--composite-version-id", OTHER_VERSION_ID] if with_composite else []),
+    )
     transport = Mock(spec=SyncTransport)
 
     def check_state_before_write(method, path, **kwargs):
         assert state_path.exists()
         assert "never-persist-this-secret" not in state_path.read_text()
+        if with_composite and path.endswith("/upload/"):
+            body = json.loads(kwargs["body"])
+            assert [row.get("calculate", False) for row in body["results"]] == [
+                False,
+                True,
+                False,
+                True,
+            ]
+            return composite_response(method, path, **kwargs)
         return respond(method, path, **kwargs)
 
     transport.request.side_effect = check_state_before_write
     monkeypatch.setattr(_client, "SyncTransport", lambda *args: transport)
     module.main()
     prepared_state = state_path.read_bytes()
+    assert json.loads(prepared_state)["experiment"]["expected_result_count"] == (
+        4 if with_composite else 2
+    )
     module.main()
     assert state_path.read_bytes() == prepared_state
     requests = transport.request.call_args_list

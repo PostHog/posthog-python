@@ -211,8 +211,8 @@ def test_a_failed_record_never_renders_its_value(client):
     response["flags"]["garden-layout"]["value"] = "compact"
     snapshot = _evaluate(client, response)
 
-    assert snapshot.get_flag("garden-layout") is False
-    assert snapshot.is_enabled("garden-layout", True) is False
+    assert snapshot.get_flag("garden-layout") is None
+    assert snapshot.is_enabled("garden-layout", True) is True
 
 
 @pytest.mark.parametrize(
@@ -764,7 +764,7 @@ def _failed_with_payload(shape: str) -> Dict[str, Any]:
 
 @pytest.mark.parametrize("shape", ["v4", "older"])
 def test_a_failed_record_has_no_payload_on_any_read(shape, client):
-    # A failed flag reads as disabled, so a payload on it would surprise the caller.
+    # A failed flag has no evaluated result or payload.
     response = _failed_with_payload(shape)
     [flag] = normalize_flags_response(copy.deepcopy(response))["flags"].values()
     assert flag._failed is True
@@ -772,7 +772,7 @@ def test_a_failed_record_has_no_payload_on_any_read(shape, client):
 
     with mock.patch("posthog.client.flags", return_value=copy.deepcopy(response)):
         result = client.get_feature_flag_result("garden-layout", DISTINCT_ID)
-        assert result is not None and result.payload is None
+        assert result is None
         assert client.get_feature_flag_payload("garden-layout", DISTINCT_ID) is None
         assert (
             client.get_feature_flag_payload(
@@ -951,7 +951,8 @@ def test_v1_flags_render_the_same_legacy_values_from_both_shapes(case):
         "flags": v4_flags,
     }
     expected = {
-        "featureFlags": v1_maps["featureFlags"],
+        # Flat legacy maps retain their interpretation, but detailed failures do not.
+        "featureFlags": {} if outcome["failed"] else v1_maps["featureFlags"],
         "featureFlagPayloads": {
             key: json.loads(value)
             for key, value in v1_maps["featureFlagPayloads"].items()

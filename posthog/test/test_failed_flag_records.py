@@ -1,0 +1,287 @@
+"""Spec 211: server failed records supply diagnostics, not evaluated values."""
+
+import copy
+from unittest import mock
+
+import pytest
+
+from posthog import AsyncPosthog
+from posthog.client import Client
+from posthog.types import normalize_flags_response
+
+
+@pytest.fixture
+def client():
+    client = Client("project-key", send=False)
+    yield client
+    client.shutdown()
+
+
+def response(shape, error_bit, failed_value="remote"):
+    records = {}
+    for key, value, failed in [("failed", failed_value, True), ("off", False, False)]:
+        record = {
+            "key": key,
+            "failed": failed,
+            "reason": {"code": "dependency_error" if failed else "flag_disabled"},
+            "metadata": {"id": 1, "version": 2, "payload": '{"copy":"remote"}'},
+        }
+        if shape == "v4":
+            record["value"] = value
+            record["metadata"]["config_version"] = 2
+        else:
+            record.update(
+                enabled=bool(value), variant=value if isinstance(value, str) else None
+            )
+        records[key] = record
+    result = {
+        "flags": records,
+        "featureFlags": {"failed": "mirror"},
+        "featureFlagPayloads": {"failed": '"mirror"'},
+    }
+    if error_bit is not None:
+        result["errorsWhileComputingFlags"] = error_bit
+    return result
+
+
+@pytest.mark.parametrize("shape", ["v2", "v4"])
+@pytest.mark.parametrize("error_bit", [None, False, True])
+@pytest.mark.parametrize("failed_value", [False, "remote"])
+@pytest.mark.parametrize("local_inconclusive", [False, True])
+def test_failed_direct_results_and_events(
+    client, shape, error_bit, failed_value, local_inconclusive
+):
+    if local_inconclusive:
+        client.feature_flags = [
+            {
+                "key": "failed",
+                "active": True,
+                "ensure_experience_continuity": True,
+                "filters": {"groups": []},
+            }
+        ]
+    with (
+        mock.patch(
+            "posthog.client.flags",
+            side_effect=lambda *args, **kwargs: copy.deepcopy(
+                response(shape, error_bit, failed_value)
+            ),
+        ),
+        mock.patch.object(client, "capture", return_value=(True, {})) as capture,
+    ):
+        assert (
+            client.get_feature_flag_result(
+                "failed", "user", send_feature_flag_events=False
+            )
+            is None
+        )
+        capture.assert_not_called()
+        assert client.get_feature_flag_result("failed", "user") is None
+        assert client.get_feature_flag("failed", "user") is None
+        assert client.feature_enabled("failed", "user") is None
+        assert (
+            client.get_feature_flag_payload(
+                "failed", "user", match_value=True, send_feature_flag_events=True
+            )
+            is None
+        )
+        assert capture.call_count == 1
+        props = capture.call_args.kwargs["properties"]
+        assert props["$feature_flag_response"] is None
+        assert "evaluation_failed" in props["$feature_flag_error"].split(",")
+        assert "flag_missing" not in props["$feature_flag_error"]
+        assert ("errors_while_computing_flags" in props["$feature_flag_error"]) is bool(
+            error_bit
+        )
+        if shape == "v4":
+            assert props["$feature_flag_config_version"] == 2
+            assert props["$feature_flag_reason_code"] == "dependency_error"
+        assert "$feature_flag_payload" not in props
+        assert client.get_feature_flag_result("off", "user").enabled is False
+        assert "evaluation_failed" not in capture.call_args.kwargs["properties"].get(
+            "$feature_flag_error", ""
+        )
+        combined = client.get_all_flags_and_payloads("user")
+        assert combined["featureFlags"] == {"off": False}
+        assert "failed" not in combined["featureFlagPayloads"]
+
+
+@pytest.mark.parametrize("shape", ["v2", "v4"])
+@pytest.mark.parametrize("error_bit", [None, False, True])
+def test_failed_snapshot_defaults_diagnostics_and_enrichment(client, shape, error_bit):
+    with (
+        mock.patch("posthog.client.flags", return_value=response(shape, error_bit)),
+        mock.patch.object(client, "capture", return_value=(True, {})) as capture,
+    ):
+        snapshot = client.evaluate_flags("user")
+        assert (
+            snapshot.is_enabled("failed", True, send_feature_flag_events=False) is True
+        )
+        capture.assert_not_called()
+        assert snapshot.get_flag("failed") is None
+        assert snapshot.get_flag_payload("failed") is None
+        props = capture.call_args.kwargs["properties"]
+        assert props["$feature_flag_response"] is None
+        assert "evaluation_failed" in props["$feature_flag_error"]
+        assert "flag_missing" not in props["$feature_flag_error"]
+        assert ("errors_while_computing_flags" in props["$feature_flag_error"]) is bool(
+            error_bit
+        )
+        assert snapshot.is_enabled("off", True) is False
+        assert snapshot.keys == ["off"]
+        assert snapshot._get_event_properties() == {"$feature/off": False}
+
+
+@pytest.mark.parametrize("shape", ["v2", "v4"])
+@pytest.mark.parametrize("error_bit", [None, False, True])
+@pytest.mark.parametrize("filter_method", ["only", "only_accessed"])
+def test_filtered_snapshot_preserves_selected_failure_diagnostics(
+    client, shape, error_bit, filter_method
+):
+    raw = response(shape, error_bit)
+    raw["requestId"] = "evaluation-request"
+    raw["evaluatedAt"] = 12345
+    raw["flags"]["failed"]["reason"]["description"] = "Evaluation failed"
+    raw["flags"]["failed"]["metadata"]["has_experiment"] = True
+    raw["flags"]["other-failed"] = copy.deepcopy(raw["flags"]["failed"])
+    raw["flags"]["other-failed"]["key"] = "other-failed"
+    with (
+        mock.patch("posthog.client.flags", return_value=raw) as remote,
+        mock.patch.object(client, "_enqueue", return_value=(True, {})) as enqueue,
+        mock.patch.object(client.log, "warning") as warning,
+    ):
+        snapshot = client.evaluate_flags("user", groups={"company": "acme"})
+        assert snapshot.get_flag_payload("other-failed") is None
+        if filter_method == "only":
+            filtered = snapshot.only(["failed", "off", "missing"])
+            warning.assert_called_once()
+            assert warning.call_args.args[0].endswith("failed, missing")
+        else:
+            assert snapshot.only_accessed().keys == []
+            snapshot.get_flag("failed", send_feature_flag_events=False)
+            snapshot.is_enabled("off", send_feature_flag_events=False)
+            filtered = snapshot.only_accessed()
+            warning.assert_not_called()
+        enqueue.assert_not_called()
+        assert filtered.keys == ["off"]
+        assert dict(filtered.unresolved_flags) == {}
+        assert filtered.get_flag_payload("failed") is None
+        assert (
+            filtered.is_enabled("failed", True, send_feature_flag_events=False) is True
+        )
+        enqueue.assert_not_called()
+
+        assert filtered.get_flag("failed") is None
+        assert filtered.is_enabled("failed") is False
+        assert enqueue.call_count == 1
+        called = enqueue.call_args.args[0]
+        assert called["event"] == "$feature_flag_called"
+        props = called["properties"]
+        assert props["$feature_flag_response"] is None
+        assert props["$feature_flag_error"] == (
+            "errors_while_computing_flags,evaluation_failed"
+            if error_bit
+            else "evaluation_failed"
+        )
+        assert props["$feature_flag_id"] == 1
+        assert props["$feature_flag_version"] == 2
+        assert props["$feature_flag_request_id"] == "evaluation-request"
+        assert props["$feature_flag_evaluated_at"] == 12345
+        assert props["$groups"] == {"company": "acme"}
+        assert "$feature_flag_payload" not in props
+        if shape == "v4":
+            assert props["$feature_flag_config_version"] == 2
+            assert props["$feature_flag_reason_code"] == "dependency_error"
+        else:
+            assert props["$feature_flag_reason"] == "Evaluation failed"
+
+        client.capture("filtered-snapshot", distinct_id="user", flags=filtered)
+        enriched = enqueue.call_args.args[0]
+        assert enriched["event"] == "filtered-snapshot"
+        assert enriched["properties"]["$feature/off"] is False
+        assert "$feature/failed" not in enriched["properties"]
+        assert "$feature/other-failed" not in enriched["properties"]
+        assert enqueue.call_count == 2
+
+        assert filtered.get_flag("other-failed") is None
+        missing = enqueue.call_args.args[0]["properties"]
+        assert missing["$feature_flag_error"] == (
+            "errors_while_computing_flags,flag_missing" if error_bit else "flag_missing"
+        )
+        assert "$feature_flag_id" not in missing
+        assert "$feature_flag_reason_code" not in missing
+        assert enqueue.call_count == 3
+        remote.assert_called_once()
+
+
+@pytest.mark.parametrize("shape", ["v2", "v4"])
+@pytest.mark.parametrize("error_bit", [None, False, True])
+def test_failed_fallback_preserves_only_successful_local_pairs(
+    client, shape, error_bit
+):
+    local = {
+        "featureFlags": {
+            "on": True,
+            "off": False,
+            "variant": "blue",
+            "success": True,
+            "local-only": True,
+            "malformed": True,
+        },
+        "featureFlagPayloads": {
+            k: '{"copy":"local"}'
+            for k in ["on", "off", "variant", "success", "local-only", "malformed"]
+        },
+    }
+    remote = response(shape, error_bit)
+    for key in ["on", "off", "variant"]:
+        remote["flags"][key] = copy.deepcopy(remote["flags"]["failed"])
+        remote["flags"][key]["key"] = key
+    remote["flags"]["malformed"] = copy.deepcopy(remote["flags"]["failed"])
+    remote["flags"]["malformed"]["key"] = "malformed"
+    remote["flags"]["malformed"]["metadata"]["version"] = True
+    remote["flags"]["success"] = {
+        "key": "success",
+        "enabled": True,
+        "variant": "remote",
+        "metadata": {"payload": '{"copy":"success"}'},
+    }
+    with (
+        mock.patch.object(
+            client,
+            "_get_all_flags_and_payloads_locally",
+            return_value=(local, True, {}),
+        ),
+        mock.patch.object(
+            client, "_get_flags_decision", return_value=normalize_flags_response(remote)
+        ),
+    ):
+        result = client.get_all_flags_and_payloads("user")
+    assert result["featureFlags"] == {
+        "on": True,
+        "off": False,
+        "variant": "blue",
+        "success": "remote",
+        "malformed": False,
+    }
+    assert result["featureFlagPayloads"] == {
+        k: '{"copy":"success"}' if k == "success" else '{"copy":"local"}'
+        for k in ["on", "off", "variant", "success"]
+    }
+
+
+async def test_failed_async_snapshot_honors_default():
+    client = AsyncPosthog("project-key", send=False)
+    try:
+        with mock.patch(
+            "posthog.async_client._async_flags",
+            new=mock.AsyncMock(return_value=response("v4", False)),
+        ):
+            snapshot = await client.evaluate_flags("user")
+        assert (
+            snapshot.is_enabled("failed", True, send_feature_flag_events=False) is True
+        )
+        assert snapshot.get_flag("failed", send_feature_flag_events=False) is None
+        assert snapshot.keys == ["off"]
+    finally:
+        await client.shutdown()

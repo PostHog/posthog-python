@@ -1,5 +1,5 @@
 ---
-title: "PostHog Python SDK 8.x (experimental)"
+title: "PostHog Python SDK 8.x"
 sidebar: Docs
 showTitle: true
 contentMaxWidthClass: max-w-full
@@ -89,7 +89,7 @@ To send your first event, install the package, create a client, capture an event
 ### Install
 
 ```bash
-pip install posthog
+pip install "posthog>=8,<9"
 ```
 
 ### Initialize
@@ -120,12 +120,35 @@ posthog.shutdown()
 
 In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [AsyncClient](#asyncclient).
 
+### Use AsyncPosthog in FastAPI
+
+Keep one `AsyncPosthog` client for the lifetime of your app. A FastAPI lifespan handler does this.
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from posthog import AsyncPosthog
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncPosthog("<ph_project_token>", host="<ph_client_api_host>") as posthog:
+        app.state.posthog = posthog
+        yield
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### The posthoganalytics package
+
+`posthoganalytics` is the same SDK under another module name. Use it when another module named `posthog` is on your import path.
+
 ## Setup
 
 ### `Client(...)`
 
 ```python
-Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2)
+Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 ```
 
 Initialize a new PostHog client instance.
@@ -158,8 +181,9 @@ Name | Type | Description | Default
 `app_host` | `Optional[str]` | Your PostHog app host, such as `https://posthog.example.com`. `emails` sends there. Needed only when `host` is not PostHog Cloud, for example a reverse proxy, which must not receive the secret key. | `None`
 `email_request_timeout_seconds` | `float` | Timeout in seconds for each email send request. Defaults to 15. | `15`
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
+`migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They also win over an event's legacy property for the same key, such as `$cookieless_mode`, so pass per-event overrides of that key as `options`. | `None`
+`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
@@ -171,7 +195,7 @@ Name | Type | Description | Default
 `flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]` | Optional external cache provider for sharing feature flag definitions across workers. | `None`
 `capture_exception_code_variables` |  | Capture local variable values on exception stack frames. | `False`
 `capture_trace_context` |  | When OpenTelemetry is installed and a valid span is active at capture time, add its trace and span IDs as `$trace_id` and `$span_id` properties to events captured with `capture()` and `capture_ai()`, so they can be correlated with backend traces. They fill after context tags and `super_properties`, before `before_send`. A `$trace_id` or `$span_id` from the event, a context tag or `super_properties` stops the SDK adding either ID. Exception events (`capture_exception`) always attach these IDs regardless of this setting. Defaults to False. | `False`
-`traces` | `Optional[dict]` | Config dict for distributed tracing: `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
+`traces` | `Optional[dict]` | Config dict for distributed tracing. Non-empty string values for `service.name`, `service.version` and `deployment.environment` in `resource_attributes` take precedence over `service_name`, `service_version` and `environment`, respectively. Options include `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. The span dict has `name`, `kind`, `status`, `attributes`, `events`, `start_time_ns`, `end_time_ns`, `trace_id`, `span_id` and `parent_span_id`, and its attributes are plain Python values. The hook runs after `posthogDistinctId` and `sessionId` are attached, so it can scrub them. It must be a regular function. An `async` hook drops every span. In a list of hooks, the first one to return `None` stops the chain. An entry that isn't callable turns tracing off for the client. Past a per-span cap, the earliest attributes and events are kept and the span reports how many were dropped. `posthogDistinctId` and `sessionId` don't count toward the attribute cap and are never dropped. `max_attribute_value_length` also applies to strings nested in lists and dictionaries. All caps are applied again after `before_span_send`. Spans beyond `max_queue_size` are dropped. An invalid value falls back to its default with a warning. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
 `code_variables_mask_patterns` |  | Variable-name patterns to mask when capturing code variables. | `None`
 `code_variables_ignore_patterns` |  | Variable-name patterns to omit when capturing code variables. | `None`
 `code_variables_mask_url_credentials` |  | Scrub credentials embedded in URLs/DSNs (e.g. `user:pass@host`) from captured code variables, regardless of the surrounding variable name. Defaults to True. | `None`
@@ -181,7 +205,7 @@ Name | Type | Description | Default
 `exception_autocapture_bucket_size` |  | Maximum burst of autocaptured exceptions allowed per exception type (token bucket size, clamped to 0-100). | `DEFAULT_BUCKET_SIZE`
 `exception_autocapture_refill_rate` |  | Tokens restored per refill interval for each exception type's bucket. | `DEFAULT_REFILL_RATE`
 `exception_autocapture_refill_interval_seconds` |  | Seconds between token refills for autocaptured exception rate limiting. | `DEFAULT_REFILL_INTERVAL_SECONDS`
-`capture_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture()` uploads. `CaptureCompression.GZIP` or `DEFLATE` (or the strings `"gzip"`/`"deflate"`). When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. | `None`
+`capture_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture()` uploads. `CaptureCompression.GZIP`, `DEFLATE` or `ZSTD` (or the strings `"gzip"`, `"deflate"` or `"zstd"`). `ZSTD` needs `pip install posthog[zstd]`. When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. | `None`
 `capture_ai_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture_ai()` uploads, set independently of `capture_compression`. Defaults to no compression, and the env var does not apply. `CaptureCompression.ZSTD` suits large AI payloads. | `None`
 `capture_ai_max_queue_size` | `int` | Maximum number of AI events buffered before upload. Defaults to 1000, lower than `max_queue_size` because AI events are much larger. | `1000`
 `capture_ai_timeout` | `float` | Seconds allowed for one AI upload request. Defaults to 30, longer than `timeout` because AI batches are much larger. | `30`
@@ -218,7 +242,7 @@ Name | Type | Description | Default
 `flags` |  | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request. | 
 `send_feature_flags` |  | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option set at any layer wins over its legacy `$` property, such as `$process_person_profile`, set at any layer. A `None` option counts as unset. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Examples:**
 
@@ -316,12 +340,17 @@ start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mappin
 
 Start a span for distributed tracing. Alpha.
 
+The span API is experimental and can change in a minor release. Spans
+already sent are kept; the SDK API isn't frozen yet.
+
 Returns a span handle. Use it as a context manager to make it the active
 span for the block and end it on exit (recording a raised exception on
 the way out); or call `end()` yourself for a span that cannot wrap a
 block. Spans started inside the block nest under it automatically.
 Always returns a usable handle, even when tracing is off, so calling
-code never branches.
+code never branches. At `max_live_spans` open spans, the SDK first
+evicts spans open longer than `max_span_age` seconds, which are never
+exported. If it is still at the limit, the returned span isn't recorded.
 
 **Parameters:**
 
@@ -330,9 +359,9 @@ Name | Type | Description | Default
 `name` | `str` | A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. | *required*
 `kind` | `Optional[str]` | `internal` (default), `server`, `client`, `producer` or `consumer`. | `None`
 `attributes` | `Optional[Mapping[str, Any]]` | Initial attributes. | `None`
-`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. | `None`
+`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. The active span is tracked with `contextvars`, so it carries across `await`. Threads don't reliably inherit it, so pass `parent=span` in a thread or a `ThreadPoolExecutor` task. A malformed `traceparent` starts a new trace and doesn't raise. A continued trace propagates the sampled flag it received. PostHog doesn't sample, so the span is exported whichever way the flag is set. | `None`
 `tracestate` | `Optional[str]` | The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. | `None`
-`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. | `None`
+`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. PostHog clamps a start time more than 24 hours old to the receive time. | `None`
 
 **Examples:**
 
@@ -385,7 +414,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -459,10 +488,10 @@ except Exception as e:
 emails: Emails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope. Sends go to `app_host`, or to the PostHog Cloud app host of
 `host`. `email_request_timeout_seconds` and `email_request_max_retries`
 configure each send. A disabled or shut-down client sends nothing. See
@@ -601,6 +630,9 @@ get_feature_flag_result(key: str, distinct_id: ID_TYPES, *, groups: Optional[Map
 Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
 depending on whether local evaluation is enabled and the flag can be locally evaluated.
 This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+When the flag was evaluated remotely and its config version 2 record is a complete experiment
+split (an experiment rule with a rule ID and a variant key), it also captures the
+`$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
 **Examples:**
 
@@ -809,7 +841,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[Union[str, UUID]]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
 `distinct_id` | `Optional[ID_TYPES]` | The distinct ID of the user performing the action. Falls back to the context distinct ID, then to `$<group_type>_<group_key>`. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -898,6 +930,8 @@ server receipt. Event draining has no timeout. Queued spans get one final
 flush with up to 30 seconds waiting for an in-flight flush, then a fresh
 30-second drain budget; the last HTTP request is not cut short. Any spans
 it cannot send are discarded with a warning, as are spans still open.
+A script that exits without calling `shutdown()` gets only a brief
+best-effort span flush, so don't rely on it.
 Lifecycle cleanup is attempted once, and cleanup failures
 are logged without retry. When called directly from an SDK callback such as
 `on_error`, shutdown is deferred to avoid blocking the worker that
@@ -1039,7 +1073,10 @@ Set a capture option for every event captured within the current context.
 Context options fill options an event leaves unset, before
 `before_send` runs, so the hook sees them. They override
 `super_options`. An event's own `options` override them, and
-`before_send` can change them.
+`before_send` can change them. They never set
+`process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -1615,6 +1652,12 @@ PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_ex
 
 Add PostHog context and automatic exception capture to an ASGI app.
 
+It creates a context for each HTTP or WebSocket request and captures
+exceptions that escape the app. In FastAPI or Starlette, add it with
+`app.add_middleware(PosthogASGIMiddleware, client=posthog)`. For Litestar,
+another ASGI framework or a raw ASGI app, wrap the app with
+`app = PosthogASGIMiddleware(app, client=posthog)`.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -1698,7 +1741,7 @@ Name | Type | Description | Default
 `client` | `Optional[Client]` | Optional `Client` instance. When provided, all events and exceptions are captured through this client rather than the global `posthog` module. Don't skip this if using a custom flag definition cache provider, and pass the custom `Client` instance here initialized with the custom provider so fork safety for that provider is handled correctly. | `None`
 `capture_exceptions` | `bool` | Whether to capture task exceptions via `capture_exception` (default `True`). | `True`
 `capture_task_lifecycle_events` | `bool` | Whether to emit lifecycle events of the task such as "started", "success", "failure" etc. (default `True`). | `True`
-`propagate_context` | `bool` | Whether to propagate PostHog context (distinct ID, session ID, tags) from the producer to the worker via task headers (default `True`). | `True`
+`propagate_context` | `bool` | Whether to propagate PostHog context (distinct ID, session ID, tags, context options) from the producer to the worker via task headers (default `True`). | `True`
 `task_filter` | `Optional[Callable[[Optional[str], dict[str, Any]], bool]]` | Optional callback `(task_name, task_properties) -> bool` expected to return `False` if a given task should not be tracked. | `None`
 
 **Functions:**
@@ -1823,6 +1866,9 @@ Enable TCP keepalive for SDK HTTP connections.
 
 This helps prevent idle pooled connections from being dropped by network
 infrastructure. Call during initialization, before making API requests.
+Where the platform supports the corresponding socket options, it uses
+a 60 second idle time, a 60 second probe interval and 3 probes before
+timeout. Unsupported settings keep their system defaults.
 
 ### `posthog.request.disable_connection_reuse`
 
@@ -1843,7 +1889,7 @@ Needs the `async` extra, `posthog[async]`.
 ### `AsyncClient(...)`
 
 ```python
-AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2) -> None
+AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None) -> None
 ```
 
 ### `AsyncClient.capture`
@@ -1902,10 +1948,10 @@ unless the event, a context tag or `super_properties` sets either one.
 emails: AsyncEmails
 ```
 
-Send transactional email from PostHog email templates, and read the
-status of each email sent with `get`.
+Send transactional email from PostHog email templates or from content
+in your code, and read the status of each email sent with `get`.
 
-Needs `secret_key`, a project secret API key with the `hog_flow:write`
+Needs `secret_key`, a project secret API key with the `transactional_email:write`
 scope, and `posthog[async]`. Sends go to `app_host`, or to the PostHog
 Cloud app host of `host`. `email_request_timeout_seconds` and
 `email_request_max_retries` configure each send. A disabled or shut-down
@@ -2211,7 +2257,10 @@ Set a capture option for every event captured within the current context.
 
 Context options fill options an event leaves unset, before `before_send`
 runs, so the hook sees them. They override `super_options`. An event's
-own `options` override them, and `before_send` can change them.
+own `options` override them, and `before_send` can change them. They
+never set `process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -2421,7 +2470,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
 `distinct_id` | `Optional[ID_TYPES]` | Optional distinct ID of the user performing the action | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -2451,7 +2500,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -3048,7 +3097,7 @@ Name | Type | Description | Default
 `flags` |  | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. The exact flag values from the snapshot are attached to the event with no additional network call — prefer this over `send_feature_flags`. | 
 `send_feature_flags` |  | Deprecated — prefer `flags` with a `FeatureFlagEvaluations` snapshot. Whether to include currently active feature flags in the event properties. Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a hidden `/flags` request on capture and may return different values than the ones the code branched on. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this event. Defaults to False. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Attributes:**
 
@@ -3141,6 +3190,13 @@ posthog.capture("page_viewed", distinct_id=distinct_id, flags=flags)
 To narrow the set of flags that get attached to a captured event, use the in-memory
 helpers `only` and `only_accessed`. To narrow the set of flags requested
 from the server in the first place, pass `flag_keys` to `Client.evaluate_flags`.
+
+Reading a flag sends `$feature_flag_called`, deduplicated as `is_enabled`
+describes. When the flag was evaluated remotely and its config version 2 record is
+a complete experiment split (an experiment rule with a rule ID and a variant key),
+the read also sends `$experiment_exposure`. The SDK sends one exposure per
+distinct ID, groups, flag, rule and variant. `send_feature_flag_events=False`
+suppresses both events.
 
 **Functions:**
 
@@ -3590,7 +3646,7 @@ reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 ### `CaptureError`
 
 ```python
-CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
+CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[Sequence[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
 ```
 
 Bases: `APIError`
@@ -3605,6 +3661,9 @@ events were dropped or ran out of retries.
 `event_results` maps each event uuid to its last verdict from a 2xx
 response. Events missing from it never got a verdict, because every
 attempt that reached them failed as a whole request.
+
+`drops` lists each event the server dropped on a 2xx response as a
+`CaptureDroppedEvent`.
 
 **Functions:**
 
@@ -3635,7 +3694,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = drops or []
+drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`
@@ -3778,6 +3837,12 @@ may lose its cause). Returns the span, so calls chain. Inside
 `with span:` a raised `Exception` is recorded automatically, so
 this is for exceptions that are caught and handled.
 
+The stack trace contains file paths from your server. Remove
+`exception.stacktrace` in `before_span_send` to keep them in your
+process. The `exception` event uses one of the span's event slots. A
+span whose event slots are full keeps its `error` status and the
+exception message, but loses the exception type and stack trace.
+
 **Examples:**
 
 ```python
@@ -3876,12 +3941,12 @@ span.update_name(f"{request.method} {route.pattern}")
 ### `Emails`
 
 ```python
-Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None) -> None
+Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None) -> None
 ```
 
 Bases: `_EmailsBase`
 
-Sends transactional email from PostHog email templates.
+Sends transactional email from PostHog email templates or from content in your code.
 
 `host` is your PostHog app host. PostHog Cloud ingestion hosts map to the
 app host, so `us.i.posthog.com` sends to `us.posthog.com`. Any other
@@ -3891,7 +3956,8 @@ Each send retries network errors, rate limits and an unavailable service up
 to `max_retries` times, with the same idempotency key. Set
 `max_retries=0` when a job runner already retries the send. `timeout`
 is in seconds, per request. Pass `session` to send through your own
-`requests.Session`, for example a test double.
+`requests.Session`, for example a test double. `migrated_from`, such
+as `"resend"`, tells PostHog which provider your sends came from.
 
 **Functions:**
 
@@ -3899,7 +3965,7 @@ Name | Description
 ---- | -----------
 `close` | Close the HTTP connections this client opened. A `session` you passed in stays open.
 `get` | Read what happened to an email that `send` queued.
-`send` | Queue one email from a transactional email template.
+`send` | Queue one email, from a template in PostHog or from content in your code.
 
 **Attributes:**
 
@@ -3908,6 +3974,7 @@ Name | Type | Description
 `disabled` |  | 
 `host` |  | 
 `max_retries` |  | 
+`migrated_from` |  | 
 `secret_key` |  | 
 `timeout` |  | 
 
@@ -3973,6 +4040,12 @@ host = determine_app_host(host)
 max_retries = max_retries
 ```
 
+#### `posthog.emails.Emails.migrated_from`
+
+```python
+migrated_from = migrated_from
+```
+
 #### `posthog.emails.Emails.secret_key`
 
 ```python
@@ -3982,21 +4055,26 @@ secret_key = secret_key.strip() if isinstance(secret_key, str) else None
 #### `posthog.emails.Emails.send`
 
 ```python
-send(*, to: str, template_id: Union[str, UUID], template_data: Optional[Mapping[str, Any]] = None, distinct_id: Optional[str] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendEmailResult
+send(**kwargs: Any) -> SendEmailResult
 ```
 
-Queue one email from a transactional email template.
+Queue one email, from a template in PostHog or from content in your code.
+
+Pass exactly one form. The template form names a template made in
+PostHog with `template_id`. The code form names the email with
+`template_key` and passes `subject` and `html`, `text` or both:
+see `CodeEmailArgs`.
 
 **Parameters:**
 
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
-`to` | `str` | One recipient email address. | *required*
-`template_id` | `Union[str, UUID]` | The UUID of a template made transactional in PostHog. | *required*
-`template_data` | `Optional[Mapping[str, Any]]` | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | `None`
-`distinct_id` | `Optional[str]` | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | `None`
-`idempotency_key` | `Optional[str]` | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | `None`
-`max_retries` | `Optional[int]` | Overrides the client's maximum number of retries for this send. `0` turns retries off. | `None`
+`to` |  | One recipient email address. | 
+`template_id` |  | The UUID of a template made transactional in PostHog. | 
+`template_data` |  | Values for the template's `{{ variables.* }}` placeholders. Values are encoded the way capture encodes properties. | 
+`distinct_id` |  | The recipient's distinct ID in your product. The email's events go to this person. Without it, they go to a person whose distinct ID is the email address. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. A send with a key that PostHog has already accepted queues nothing and returns the first send's result. Without it, the client makes a key that covers its own retries. Pass a key derived from what the email is for, such as `welcome:user_123`, to cover retries outside this call, too. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
 
 **Returns:**
 
@@ -4020,6 +4098,13 @@ emails.send(
     template_data={"name": "Ada"},
     distinct_id="user_123",
     idempotency_key="welcome:user_123",
+)
+emails.send(
+    to="user@example.com",
+    template_key="password-reset",
+    subject="Reset your password",
+    html=rendered_html,
+    distinct_id="user_123",
 )
 ```
 
@@ -4160,7 +4245,7 @@ Name | Type | Description | Default
 `timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
 `uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
-`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. | 
+`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. `process_person_profile` is `True` unless this call sets it. | 
 
 **Attributes:**
 
@@ -4207,4 +4292,113 @@ timestamp: NotRequired[Optional[Union[datetime, str]]]
 
 ```python
 uuid: NotRequired[Optional[Union[str, UUID]]]
+```
+
+### `CodeEmailArgs`
+
+Bases: `_RecipientArgs`
+
+A send of email content that your code rendered for one recipient, named by a key.
+
+The content goes out as is. To send a React email, render it to HTML in
+your app first.
+
+An optional field passed as `None` counts as left out.
+
+**Parameters:**
+
+Name | Type | Description | Default
+---- | ---- | ----------- | -------
+`to` |  | One recipient email address. | 
+`template_key` |  | Names the email, so its metrics, logs and status group under it. Letters, digits, `-` and `_`, at most 400. | 
+`subject` |  | The subject line. | 
+`html` |  | The HTML body. Give `html`, `text` or both. | 
+`text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
+`from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
+`reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
+`capture_engagement` |  | Capture the email's opens and clicks as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`distinct_id` |  | The recipient's distinct ID in your product. | 
+`idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
+`max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
+
+**Attributes:**
+
+Name | Type | Description
+---- | ---- | -----------
+`capture_engagement` | `NotRequired[Optional[bool]]` | 
+`distinct_id` | `NotRequired[Optional[str]]` | 
+`from_` | `NotRequired[Optional[str]]` | 
+`html` | `NotRequired[Optional[str]]` | 
+`idempotency_key` | `NotRequired[Optional[str]]` | 
+`max_retries` | `NotRequired[Optional[int]]` | 
+`reply_to` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
+`subject` | `str` | 
+`template_key` | `str` | 
+`text` | `NotRequired[Optional[str]]` | 
+`to` | `str` | 
+
+#### `posthog.emails.CodeEmailArgs.capture_engagement`
+
+```python
+capture_engagement: NotRequired[Optional[bool]]
+```
+
+#### `posthog.emails.CodeEmailArgs.distinct_id`
+
+```python
+distinct_id: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.from_`
+
+```python
+from_: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.html`
+
+```python
+html: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.idempotency_key`
+
+```python
+idempotency_key: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.max_retries`
+
+```python
+max_retries: NotRequired[Optional[int]]
+```
+
+#### `posthog.emails.CodeEmailArgs.reply_to`
+
+```python
+reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+```
+
+#### `posthog.emails.CodeEmailArgs.subject`
+
+```python
+subject: str
+```
+
+#### `posthog.emails.CodeEmailArgs.template_key`
+
+```python
+template_key: str
+```
+
+#### `posthog.emails.CodeEmailArgs.text`
+
+```python
+text: NotRequired[Optional[str]]
+```
+
+#### `posthog.emails.CodeEmailArgs.to`
+
+```python
+to: str
 ```

@@ -143,17 +143,7 @@ def get_feedback_tool_descriptor(
     extra_properties = options.extra_properties or {}
     extra_required = options.extra_required or []
 
-    for key in extra_properties:
-        if key in _RESERVED_EXTRA_PROPERTY_KEYS:
-            raise ValueError(
-                f'collect_feedback extra_properties key "{key}" collides with a core or '
-                "SDK-reserved send_feedback field. Rename it."
-            )
-    for key in extra_required:
-        if key not in extra_properties:
-            raise ValueError(
-                f'collect_feedback extra_required key "{key}" is not declared in extra_properties.'
-            )
+    _validate_feedback_extras(extra_properties, extra_required)
 
     # Deep copies: the host may reuse or mutate the fragments it handed us, and
     # schema injection mutates the advertised descriptor.
@@ -182,18 +172,7 @@ def _matches_extra_schema(value: Any, schema: Dict[str, Any]) -> bool:
     ``enum`` — the same advisory-schema enforcement the core fields get, so
     ``extras`` only ever holds schema-conforming values and a misbehaving agent
     shows up as absence rather than as an unexpected shape in the host's handler."""
-    if isinstance(value, list):
-        actual = "array"
-    elif value is None:
-        actual = "null"
-    elif isinstance(value, bool):
-        actual = "boolean"
-    elif isinstance(value, (int, float)):
-        actual = "number"
-    elif isinstance(value, str):
-        actual = "string"
-    else:
-        actual = "object"
+    actual = _json_type(value)
     declared = schema.get("type")
     if declared == "integer" and actual == "number":
         # A JSON Schema `integer` also accepts a whole-valued float (`3.0`), but
@@ -219,12 +198,7 @@ def parse_feedback_report(
     ``type``/``enum`` are lifted into ``extras`` — mismatches and anything the
     agent invented reach the handler via ``raw`` only and are never captured."""
     raw = args or {}
-    declared = (options.extra_properties if options is not None else None) or {}
-    extras = {
-        key: raw[key]
-        for key, schema in declared.items()
-        if raw.get(key) is not None and _matches_extra_schema(raw[key], schema)
-    }
+    extras = _parse_feedback_extras(raw, options)
     feedback_type = raw.get("feedback_type")
     sentiment = raw.get("sentiment")
     task_completed = raw.get("task_completed")
@@ -311,10 +285,7 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
         properties[PostHogMCPAnalyticsProperty.FEEDBACK_TASK_COMPLETED] = (
             report.task_completed
         )
-    for key, value in report.extras.items():
-        captured = _capture_extra_value(value)
-        if captured is not None:
-            properties[f"$mcp_feedback_{key}"] = captured
+    _add_feedback_extras(report, properties)
     return properties
 
 
@@ -356,3 +327,54 @@ async def handle_feedback(
                 f"({type(error).__name__}); returning the default acknowledgement"
             )
     return _SEND_FEEDBACK_RESULT_TEXT
+
+
+def _validate_feedback_extras(
+    extra_properties: Dict[str, Any], extra_required: list[str]
+) -> None:
+    for key in extra_properties:
+        if key in _RESERVED_EXTRA_PROPERTY_KEYS:
+            raise ValueError(
+                f'collect_feedback extra_properties key "{key}" collides with a core or '
+                "SDK-reserved send_feedback field. Rename it."
+            )
+    for key in extra_required:
+        if key not in extra_properties:
+            raise ValueError(
+                f'collect_feedback extra_required key "{key}" is not declared in extra_properties.'
+            )
+
+
+def _json_type(value: Any) -> str:
+    if isinstance(value, list):
+        actual = "array"
+    elif value is None:
+        actual = "null"
+    elif isinstance(value, bool):
+        actual = "boolean"
+    elif isinstance(value, (int, float)):
+        actual = "number"
+    elif isinstance(value, str):
+        actual = "string"
+    else:
+        actual = "object"
+    return actual
+
+
+def _parse_feedback_extras(
+    raw: JsonRecord, options: Optional[CollectFeedbackOptions]
+) -> JsonRecord:
+    declared = (options.extra_properties if options is not None else None) or {}
+    extras = {
+        key: raw[key]
+        for key, schema in declared.items()
+        if raw.get(key) is not None and _matches_extra_schema(raw[key], schema)
+    }
+    return extras
+
+
+def _add_feedback_extras(report: FeedbackReport, properties: JsonRecord) -> None:
+    for key, value in report.extras.items():
+        captured = _capture_extra_value(value)
+        if captured is not None:
+            properties[f"$mcp_feedback_{key}"] = captured

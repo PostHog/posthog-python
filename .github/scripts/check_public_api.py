@@ -233,11 +233,14 @@ def _load_griffe():
 
 def generate_snapshot() -> str:
     griffe = _load_griffe()
+    from constructor_helper_attributes import ConstructorHelperAttributes
+
     package = griffe.load(
         "posthog",
         allow_inspection=False,
         search_paths=[ROOT],
         submodules=True,
+        extensions=griffe.load_extensions(ConstructorHelperAttributes()),
     )
     records = sorted(_record(obj) for obj in _iter_module_members(package))
     return HEADER + "\n".join(records) + "\n"

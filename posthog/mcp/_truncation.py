@@ -93,12 +93,7 @@ def _visit(
     if isinstance(value, bool):  # before int — bool is an int subclass
         return value
     if isinstance(value, (int, float)):
-        if isinstance(value, float):
-            if math.isnan(value):
-                return "[NaN]"
-            if math.isinf(value):
-                return "[Infinity]" if value > 0 else "[-Infinity]"
-        return value
+        return _normalize_number(value)
     if isinstance(value, str):
         return truncate_text(value, max_string_length)
     if isinstance(value, datetime):
@@ -106,33 +101,9 @@ def _visit(
     if callable(value):
         return f"[Function: {getattr(value, '__name__', '') or '<anonymous>'}]"
 
-    if isinstance(value, (list, tuple)):
-        oid = id(value)
-        if oid in walk.memo:
-            return "[Circular ~]"
-        if remaining_depth <= 0:
-            return "[Array]"
-        walk.memo.add(oid)
-        result: Any = _visit_array(
-            list(value), remaining_depth - 1, max_breadth, max_string_length, walk
-        )
-        walk.memo.discard(oid)
-        return result
-
-    if isinstance(value, dict):
-        oid = id(value)
-        if oid in walk.memo:
-            return "[Circular ~]"
-        if remaining_depth <= 0:
-            return "[Object]"
-        walk.memo.add(oid)
-        result = _visit_object(
-            value, remaining_depth - 1, max_breadth, max_string_length, walk
-        )
-        walk.memo.discard(oid)
-        return result
-
-    return str(value)
+    return _visit_container(
+        value, remaining_depth, max_breadth, max_string_length, walk
+    )
 
 
 def _visit_array(
@@ -273,12 +244,7 @@ def _collect_string_paths(
         return
     if isinstance(obj, dict):
         for key, value in obj.items():
-            if (
-                not current_path
-                and key == "server_build"
-                and isinstance(value, str)
-                and len(value) <= MAX_SERVER_BUILD_LENGTH
-            ):
+            if _is_preserved_build(current_path, key, value):
                 continue
             _collect_string_paths(value, current_path + [str(key)], results)
 
@@ -391,3 +357,57 @@ def truncate_event(event: Dict[str, Any]) -> Dict[str, Any]:
 
     # Layer 3: size-targeted normalization
     return _truncate_to_size(result)
+
+
+def _visit_container(
+    value: Any,
+    remaining_depth: int,
+    max_breadth: int,
+    max_string_length: int,
+    walk: _Walk,
+) -> Any:
+    if isinstance(value, (list, tuple)):
+        oid = id(value)
+        if oid in walk.memo:
+            return "[Circular ~]"
+        if remaining_depth <= 0:
+            return "[Array]"
+        walk.memo.add(oid)
+        result: Any = _visit_array(
+            list(value), remaining_depth - 1, max_breadth, max_string_length, walk
+        )
+        walk.memo.discard(oid)
+        return result
+
+    if isinstance(value, dict):
+        oid = id(value)
+        if oid in walk.memo:
+            return "[Circular ~]"
+        if remaining_depth <= 0:
+            return "[Object]"
+        walk.memo.add(oid)
+        result = _visit_object(
+            value, remaining_depth - 1, max_breadth, max_string_length, walk
+        )
+        walk.memo.discard(oid)
+        return result
+
+    return str(value)
+
+
+def _normalize_number(value: Any) -> Any:
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "[NaN]"
+        if math.isinf(value):
+            return "[Infinity]" if value > 0 else "[-Infinity]"
+    return value
+
+
+def _is_preserved_build(current_path: List[str], key: Any, value: Any) -> bool:
+    return (
+        not current_path
+        and key == "server_build"
+        and isinstance(value, str)
+        and len(value) <= MAX_SERVER_BUILD_LENGTH
+    )

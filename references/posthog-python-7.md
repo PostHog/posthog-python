@@ -627,7 +627,7 @@ Name | Type | Description | Default
 
 Type | Description
 ---- | -----------
-`Optional[FeatureFlagResult]` | Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
+`Optional[FeatureFlagResult]` | Optional[FeatureFlagResult]: The evaluated result, including a healthy     disabled flag, or None when no result is available (for example,     a missing flag or a server-marked failure without a successful fallback).
 
 ## Get feature flags
 
@@ -1310,11 +1310,8 @@ Name | Type | Description
 `capture_exceptions` | `Optional[bool]` | 
 `capture_tracing_headers` |  | 
 `client` |  | 
-`extra_properties` |  | 
 `extra_tags` |  | Compatibility alias for `extra_properties`.
 `get_response` |  | 
-`properties_map` |  | 
-`request_filter` |  | 
 `sync_capable` |  | 
 `tag_map` |  | Compatibility alias for `properties_map`.
 `trust_tracing_headers` | `bool` | Deprecated alias for `capture_tracing_headers`.
@@ -1385,12 +1382,6 @@ capture_tracing_headers = _resolve_capture_tracing_headers(capture_tracing_heade
 client = cast('Optional[Client]', settings.POSTHOG_MW_CLIENT)
 ```
 
-#### `posthog.integrations.django.PosthogContextMiddleware.extra_properties`
-
-```python
-extra_properties = cast('Callable[[HttpRequest], Dict[str, Any]]', extra_properties) if callable(extra_properties) else None
-```
-
 #### `posthog.integrations.django.PosthogContextMiddleware.extra_tags`
 
 ```python
@@ -1445,18 +1436,6 @@ Django converts view exceptions into responses before they propagate through
 the middleware stack, so the context manager in __call__/__acall__ never sees them.
 
 Note: Django's process_exception is always synchronous, even for async views.
-
-#### `posthog.integrations.django.PosthogContextMiddleware.properties_map`
-
-```python
-properties_map = cast('Callable[[Dict[str, Any]], Dict[str, Any]]', properties_map) if callable(properties_map) else None
-```
-
-#### `posthog.integrations.django.PosthogContextMiddleware.request_filter`
-
-```python
-request_filter = cast('Optional[Callable[[HttpRequest], bool]]', settings.POSTHOG_MW_REQUEST_FILTER)
-```
 
 #### `posthog.integrations.django.PosthogContextMiddleware.sync_capable`
 
@@ -3036,7 +3015,7 @@ Name | Description
 `get_flag` | Return the flag value. Fires `$feature_flag_called` on first access.
 `get_flag_payload` | Return the payload associated with a flag.
 `is_enabled` | Return whether the flag is enabled. Fires `$feature_flag_called` on the first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
-`only` | Return a filtered copy containing only flags with the given keys. Keys that are not present in the evaluation are dropped and logged as a warning.
+`only` | Return a filtered copy containing only flags with the given keys. Keys that are not present in the evaluation are dropped and logged as a warning. Selected failures retain private diagnostics but remain absent from values, keys and enrichment; their existing missing-value warning is unchanged.
 `only_accessed` | Return a filtered copy containing only flags accessed via `is_enabled` or `get_flag` before this call.
 
 **Attributes:**
@@ -3058,7 +3037,8 @@ Return the flag value. Fires `$feature_flag_called` on first access.
 
 Returns the variant string for multivariate flags, `True` for enabled flags
 without a variant, `False` for disabled flags, and `None` for flags that
-were not returned by the evaluation.
+were not returned or whose remote record was marked failed by the server.
+An unreadable remote record retains its disabled (`False`) result.
 
 Pass `send_feature_flag_events=False` to skip the event for this read, as
 with `is_enabled`.
@@ -3087,7 +3067,7 @@ first access per (distinct_id, flag, value) tuple, deduped via the SDK's cache.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `key` | `str` | The feature flag key. | *required*
-`default_value` | `bool` | Returned when the flag has no value in this evaluation — the key was not part of the evaluated set, or the evaluation itself came back empty (failed `/flags` request, quota limit, or no resolvable `distinct_id`). Defaults to `False`. | `False`
+`default_value` | `bool` | Returned when the flag has no value in this evaluation — the key was not part of the evaluated set, the server marked its record failed, or the evaluation itself came back empty (failed `/flags` request, quota limit, or no resolvable `distinct_id`). Defaults to `False`. | `False`
 `send_feature_flag_events` | `bool` | Whether this read sends `$feature_flag_called`. When `False`, no event is sent and the dedupe cache is left alone, but the key still counts as accessed for `only_accessed`. | `True`
 
 A flag that has a value always wins over `default_value`, including a
@@ -3109,6 +3089,8 @@ only(keys: List[str]) -> FeatureFlagEvaluations
 
 Return a filtered copy containing only flags with the given keys. Keys that
 are not present in the evaluation are dropped and logged as a warning.
+Selected failures retain private diagnostics but remain absent from values,
+keys and enrichment; their existing missing-value warning is unchanged.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.only_accessed`
 
@@ -3121,6 +3103,7 @@ or `get_flag` before this call.
 
 Order-dependent: if nothing has been accessed yet, the returned snapshot is
 empty. The method honors its name — pre-access if you want a populated result.
+Accessed failures retain private diagnostics, not values or enrichment.
 
 #### `posthog.feature_flag_evaluations.FeatureFlagEvaluations.unresolved_flags`
 
@@ -3134,8 +3117,9 @@ left it without a value.
 A flag is listed when it has a loaded local definition, was in the requested
 scope, was inconclusive locally, and no remote value filled the gap. Listed
 flags are not part of `keys`, and reading one reports the
-`local_evaluation_inconclusive` error instead of `flag_missing`. Reading
-this mapping does not count as an access and does not fire any event.
+`local_evaluation_inconclusive` error instead of `flag_missing`.
+A server-marked failed fallback additionally reports `evaluation_failed`.
+Reading this mapping does not count as an access and does not fire any event.
 Snapshots returned by `only` and `only_accessed`, and by
 `AsyncClient.evaluate_flags()`, which evaluates only remotely, carry no
 entries.
@@ -3185,13 +3169,13 @@ Create a FeatureFlagResult from a FeatureFlag object.
 Name | Type | Description | Default
 ---- | ---- | ----------- | -------
 `details` | `Union[FeatureFlag, None]` | The FeatureFlag object to convert. | *required*
-`override_match_value` | `Optional[FlagValue]` | If provided, this value will be used to populate the enabled and variant fields instead of the values from the FeatureFlag. | `None`
+`override_match_value` | `Optional[FlagValue]` | If provided, this value will be used to populate the enabled and variant fields instead of the values from the FeatureFlag. A server-marked failure returns None even when this override is provided. | `None`
 
 **Returns:**
 
 Type | Description
 ---- | -----------
-`FeatureFlagResult \| None` | FeatureFlagResult | None: A new FeatureFlagResult instance, or None if details is None.
+`FeatureFlagResult \| None` | FeatureFlagResult | None: A new result, or None when details is absent or     the server marked the record failed. Unreadable records are not     treated as server-marked failures.
 
 #### `posthog.types.FeatureFlagResult.from_value_and_payload`
 
@@ -3800,7 +3784,7 @@ Type | Description
 
 Type | Description
 ---- | -----------
-`EmailError` | PostHog did not queue the email, or the client could not tell whether it did.
+`EmailError` | PostHog did not queue the email, or the client could not tell whether it did. With attachments, `code` is `too_many_attachments`, `message_too_large` or `invalid_attachment` before any request, `attachment_upload_failed` when the storage refused an upload, and `network_error` with `field` naming the attachment when the storage didn't answer.
 `(TypeError, ValueError)` | An argument has the wrong type or format.
 
 **Examples:**
@@ -4011,6 +3995,10 @@ your app first.
 
 An optional field passed as `None` counts as left out.
 
+A PostHog version that doesn't take a field yet, such as `cc`, refuses
+the send with an error that names the field in `EmailError.field`. It
+never drops the field and sends the rest.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -4022,7 +4010,12 @@ Name | Type | Description | Default
 `text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
 `from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
 `reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
-`capture_engagement` |  | Capture the email's opens and clicks as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`cc` |  | One address or a list of addresses that get a visible copy, at most 10. | 
+`bcc` |  | One address or a list of addresses that get a hidden copy, at most 10. | 
+`attachments` |  | Files sent with the email: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files. The client checks both before any request. It uploads each file that PostHog doesn't hold yet, then sends the email. A file the client can't send raises `EmailError` with `code` `invalid_attachment`. | 
+`capture_engagement` |  | Deprecated, use `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both `capture_engagement` and `tracking`. Captures the email's engagement events as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
+`sensitive` |  | Marks the email as sensitive, such as one that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. The template form doesn't take it. | 
+`tracking` |  | What PostHog tracks for this email. Without it, PostHog counts opens with its open pixel, captures engagement events, and counts clicks only when the email isn't sensitive. `True` turns on opens, clicks and engagement events. `False` turns off all tracking, including kinds PostHog adds later: PostHog can't count the email's opens or clicks, and captures no engagement events. An `EmailTracking` dict turns each kind on or off, and a key you leave out keeps its default. Turn clicks on for a sensitive email only when its links are safe to send through PostHog's click tracking. The template form doesn't take it. | 
 `distinct_id` |  | The recipient's distinct ID in your product. | 
 `idempotency_key` |  | 1 to 255 visible ASCII characters. Template sends and code sends share one set of keys: a key already used for another email, or for a `template_id` send, raises `idempotency_key_reused`. A retry with the same key returns the first send's result, also when its workflow was paused since. | 
 `max_retries` |  | Overrides the client's maximum number of retries for this send. `0` turns retries off. | 
@@ -4031,22 +4024,45 @@ Name | Type | Description | Default
 
 Name | Type | Description
 ---- | ---- | -----------
+`attachments` | `NotRequired[Optional[Sequence[EmailAttachment]]]` | 
+`bcc` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
 `capture_engagement` | `NotRequired[Optional[bool]]` | 
+`cc` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
 `distinct_id` | `NotRequired[Optional[str]]` | 
 `from_` | `NotRequired[Optional[str]]` | 
 `html` | `NotRequired[Optional[str]]` | 
 `idempotency_key` | `NotRequired[Optional[str]]` | 
 `max_retries` | `NotRequired[Optional[int]]` | 
 `reply_to` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
+`sensitive` | `NotRequired[Optional[bool]]` | 
 `subject` | `str` | 
 `template_key` | `str` | 
 `text` | `NotRequired[Optional[str]]` | 
 `to` | `str` | 
+`tracking` | `NotRequired[Optional[Union[bool, EmailTracking]]]` | 
+
+#### `posthog.emails.CodeEmailArgs.attachments`
+
+```python
+attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
+```
+
+#### `posthog.emails.CodeEmailArgs.bcc`
+
+```python
+bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
+```
 
 #### `posthog.emails.CodeEmailArgs.capture_engagement`
 
 ```python
 capture_engagement: NotRequired[Optional[bool]]
+```
+
+#### `posthog.emails.CodeEmailArgs.cc`
+
+```python
+cc: NotRequired[Optional[Union[str, Sequence[str]]]]
 ```
 
 #### `posthog.emails.CodeEmailArgs.distinct_id`
@@ -4085,6 +4101,12 @@ max_retries: NotRequired[Optional[int]]
 reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
 ```
 
+#### `posthog.emails.CodeEmailArgs.sensitive`
+
+```python
+sensitive: NotRequired[Optional[bool]]
+```
+
 #### `posthog.emails.CodeEmailArgs.subject`
 
 ```python
@@ -4107,4 +4129,10 @@ text: NotRequired[Optional[str]]
 
 ```python
 to: str
+```
+
+#### `posthog.emails.CodeEmailArgs.tracking`
+
+```python
+tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
 ```

@@ -97,14 +97,9 @@ def _item(
     identity, owner = _uuid(data["id"]), _uuid(data["dataset"])
     introduced = _integer(data["dataset_revision"])
     is_archived = _boolean(data["archived"])
-    if (id is not None and identity != id) or (
-        dataset_id is not None and owner != dataset_id
-    ):
-        raise ValueError("Mismatched dataset item identity.")
-    if revision is not None and introduced > revision:
-        raise ValueError("The item version is newer than the requested revision.")
-    if archived is not None and is_archived != archived:
-        raise ValueError("The item does not match the requested archive filter.")
+    _validate_item_filters(
+        identity, owner, introduced, is_archived, id, dataset_id, revision, archived
+    )
     if data["input"] is None:
         raise ValueError("Dataset inputs cannot be null.")
     return DatasetItem(
@@ -132,6 +127,26 @@ def _item(
         version_created_by=_user(data["version_created_by"]),
         team_id=_owner(data, project_id),
     )
+
+
+def _validate_item_filters(
+    identity: str,
+    owner: str,
+    introduced: int,
+    is_archived: bool,
+    id: str | None,
+    dataset_id: str | None,
+    revision: int | None,
+    archived: bool | None,
+) -> None:
+    if (id is not None and identity != id) or (
+        dataset_id is not None and owner != dataset_id
+    ):
+        raise ValueError("Mismatched dataset item identity.")
+    if revision is not None and introduced > revision:
+        raise ValueError("The item version is newer than the requested revision.")
+    if archived is not None and is_archived != archived:
+        raise ValueError("The item does not match the requested archive filter.")
 
 
 def _parse(parser: Callable[[dict[str, Any]], _T], data: dict[str, Any]) -> _T:
@@ -197,12 +212,7 @@ def _body(fields: dict[str, Any]) -> bytes:
     data = {
         key: value for key, value in fields.items() if not isinstance(value, _Unset)
     }
-    for key in ("name", "description"):
-        if key in data:
-            value = _text(data[key])
-            maximum = 400 if key == "name" else 10_000
-            if len(value) > maximum or (key == "name" and not value.strip()):
-                raise ValueError(f"Invalid dataset {key}.")
+    _validate_dataset_text(data)
     if "input" in data and data["input"] is None:
         raise ValueError("Dataset inputs cannot be null.")
     if "metadata" in data:
@@ -211,6 +221,15 @@ def _body(fields: dict[str, Any]) -> bytes:
         data["tags"] = _tag_names(data["tags"])
     _validate_json(data)
     return _encode(data)
+
+
+def _validate_dataset_text(data: dict[str, Any]) -> None:
+    for key in ("name", "description"):
+        if key in data:
+            value = _text(data[key])
+            maximum = 400 if key == "name" else 10_000
+            if len(value) > maximum or (key == "name" and not value.strip()):
+                raise ValueError(f"Invalid dataset {key}.")
 
 
 def _create_item_body(
