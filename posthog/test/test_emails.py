@@ -1274,6 +1274,11 @@ OTHER_MESSAGE_ID = "01a18356-c56c-0001-e494-7666bc915199"
 NO_ANSWERS = [
     ("connection_error", requests.exceptions.ConnectionError("down")),
     ("timeout", requests.exceptions.ReadTimeout("slow")),
+    # A gateway or server error confirms nothing: the move may still be running upstream.
+    ("gateway_timeout", (504, None, {})),
+    ("bad_gateway", (502, None, {})),
+    ("unavailable", rejected(503, "delivery_unavailable")),
+    ("server_error", rejected(500, "server_error")),
 ]
 
 
@@ -1283,7 +1288,9 @@ def assert_move_unconfirmed(error: EmailError) -> None:
         "move_unconfirmed",
         None,
     )
-    assert "Nothing was changed" in error.message
+    assert (
+        "wasn't confirmed" in error.message and "Nothing was changed" in error.message
+    )
     assert error.fix is not None and "cancel it" in error.fix
 
 
@@ -1314,12 +1321,39 @@ def test_a_move_is_refused_even_when_a_retry_of_the_unanswered_one_got_an_answer
     assert len(adapter.requests) == 2
 
 
-def test_a_move_to_the_same_time_as_the_unanswered_one_still_goes_out():
+@parameterized.expand(
+    [
+        ("same_datetime", LATER, LATER),
+        ("string_then_datetime", "2026-12-01T09:00:00+02:00", LATER),
+        ("datetime_then_string", LATER, "2026-12-01T07:00:00.000+00:00"),
+        ("utc_datetime", LATER, datetime(2026, 12, 1, 7, tzinfo=timezone.utc)),
+    ]
+)
+def test_a_move_to_the_same_time_as_the_unanswered_one_still_goes_out(
+    _name, unanswered_time, same_time
+):
     emails, adapter = emails_with(
         [requests.exceptions.ReadTimeout("slow"), MOVED_LATER], max_retries=0
     )
     with pytest.raises(EmailError):
-        emails.update(MESSAGE_ID, scheduled_at=LATER)
+        emails.update(MESSAGE_ID, scheduled_at=unanswered_time)
+
+    assert emails.update(MESSAGE_ID, scheduled_at=same_time).id == MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+@parameterized.expand(
+    [
+        ("too_far", rejected(400, "invalid_scheduled_at")),
+        ("rate_limited", rejected(429, "throttled")),
+        ("not_found", rejected(404, "not_found")),
+    ]
+)
+def test_a_move_after_one_that_was_refused_still_goes_out(_name, refusal):
+    # PostHog answered, so the earlier move can't land later.
+    emails, adapter = emails_with([refusal, MOVED_LATER], max_retries=0)
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
 
     assert emails.update(MESSAGE_ID, scheduled_at=LATER).id == MESSAGE_ID
     assert len(adapter.requests) == 2
@@ -1423,6 +1457,20 @@ async def test_async_a_move_after_one_that_got_no_answer_is_refused():
     assert len(seen) == 1
     assert (await emails.update(MESSAGE_ID, scheduled_at=LATER)).id == MESSAGE_ID
     assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_a_gateway_timeout_is_refused():
+    emails, seen = async_emails_with([httpx.Response(504)])
+    emails.max_retries = 0
+    with pytest.raises(EmailError):
+        await emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(seen) == 1
 
 
 @pytest.mark.asyncio
