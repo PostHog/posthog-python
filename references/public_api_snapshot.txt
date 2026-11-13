@@ -1216,6 +1216,7 @@ attribute posthog.types.FeatureFlag.reason: Optional[FlagReason]
 attribute posthog.types.FeatureFlag.variant: Optional[str]
 attribute posthog.types.FeatureFlagError.CONNECTION_ERROR = 'connection_error'
 attribute posthog.types.FeatureFlagError.ERRORS_WHILE_COMPUTING = 'errors_while_computing_flags'
+attribute posthog.types.FeatureFlagError.EVALUATION_FAILED = 'evaluation_failed'
 attribute posthog.types.FeatureFlagError.FLAG_MISSING = 'flag_missing'
 attribute posthog.types.FeatureFlagError.LOCAL_EVALUATION_INCONCLUSIVE = 'local_evaluation_inconclusive'
 attribute posthog.types.FeatureFlagError.QUOTA_LIMITED = 'quota_limited'

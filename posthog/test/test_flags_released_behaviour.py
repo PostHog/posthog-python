@@ -38,9 +38,8 @@ def test_every_legacy_getter_and_event_matches_7_82_1(request, results):
     assert (sparse["id"], sparse["version"]) == (0, 0)
     sparse["id"] = sparse["version"] = None
 
-    # A failed record reads as disabled, so it has no payload, even when the record
-    # carries one. 7.82.1 returned that payload from the payload reads and sent it on
-    # the flag's $feature_flag_called events.
+    # An explicit failed record has no evaluated value or payload. 7.82.1 treated
+    # it as disabled, included it in bulk results, and returned its payload.
     failed = expected["get_flags_decision"]["flags"]["server-failed"]["metadata"]
     assert failed["payload"] == '{"columns": 2}'
     failed["payload"] = None
@@ -48,7 +47,15 @@ def test_every_legacy_getter_and_event_matches_7_82_1(request, results):
         assert expected[f"{read}:server-failed"] == {"columns": 2}
         expected[f"{read}:server-failed"] = None
     assert expected["get_feature_flag_result:server-failed"][2] == {"columns": 2}
-    expected["get_feature_flag_result:server-failed"][2] = None
+    expected["get_feature_flag_result:server-failed"] = None
+    for read in ["get_feature_flag", "feature_enabled", "snapshot.get_flag"]:
+        assert expected[f"{read}:server-failed"] is False
+        expected[f"{read}:server-failed"] = None
+    for read in ["get_feature_variants", "get_all_flags"]:
+        assert expected[read].pop("server-failed") is False
+    for read in ["get_feature_flags_and_payloads", "get_all_flags_and_payloads"]:
+        assert expected[read]["featureFlags"].pop("server-failed") is False
+    expected["snapshot.keys"].remove("server-failed")
     failed_events = [
         properties
         for _, properties in expected["events"]
@@ -57,6 +64,13 @@ def test_every_legacy_getter_and_event_matches_7_82_1(request, results):
     assert failed_events
     for properties in failed_events:
         assert properties.pop("$feature_flag_payload") == {"columns": 2}
+        assert properties["$feature_flag_response"] is False
+        properties["$feature_flag_response"] = None
+        properties["$feature/server-failed"] = None
+        properties["$feature_flag_error"] = "evaluation_failed"
+    for name, properties in expected["events"]:
+        if name in ["snapshot-event", "fetched-event"]:
+            assert properties.pop("$feature/server-failed") is False
 
     if request.node.callspec.params["results"] == "v4":
         # A $feature_flag_called for a config version 2 record carries its config
@@ -108,12 +122,16 @@ def test_fallback_cache_histories_match_7_82_1(results, name):
     # unknown_error, no request details, and the cached value.
     expected = copy.deepcopy(RELEASED["cache histories"][name])
     if name == "good, server failed, timeout":
-        # A failed record has no payload, even when the record carries one, so
-        # neither its read nor the cached result read after the timeout returns
-        # one, and their events leave it out. 7.82.1 returned it from both.
-        for result in expected["results"][1:]:
-            assert result[2] == {"theme": "dark"}
-            result[2] = None
-        for _, properties in expected["events"][1:]:
-            assert properties.pop("$feature_flag_payload") == {"theme": "dark"}
+        # Explicit failure supplies no result and cannot poison the last good
+        # cache entry. The later timeout still returns that successful pair.
+        expected["results"][1] = None
+        expected["results"][2] = copy.deepcopy(expected["results"][0])
+        failed = expected["events"][1][1]
+        assert failed.pop("$feature_flag_payload") == {"theme": "dark"}
+        failed["$feature_flag_response"] = None
+        failed["$feature/cached"] = None
+        failed["$feature_flag_error"] = "evaluation_failed"
+        timeout = expected["events"][2][1]
+        timeout["$feature_flag_response"] = "blue"
+        timeout["$feature/cached"] = "blue"
     assert results["cache histories"][name] == expected
