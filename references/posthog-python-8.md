@@ -183,7 +183,7 @@ Name | Type | Description | Default
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
 `migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. | `None`
+`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
@@ -242,7 +242,7 @@ Name | Type | Description | Default
 `flags` |  | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request. | 
 `send_feature_flags` |  | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Examples:**
 
@@ -414,7 +414,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -841,7 +841,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[Union[str, UUID]]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
 `distinct_id` | `Optional[ID_TYPES]` | The distinct ID of the user performing the action. Falls back to the context distinct ID, then to `$<group_type>_<group_key>`. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -1073,7 +1073,10 @@ Set a capture option for every event captured within the current context.
 Context options fill options an event leaves unset, before
 `before_send` runs, so the hook sees them. They override
 `super_options`. An event's own `options` override them, and
-`before_send` can change them.
+`before_send` can change them. They never set
+`process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -2254,7 +2257,10 @@ Set a capture option for every event captured within the current context.
 
 Context options fill options an event leaves unset, before `before_send`
 runs, so the hook sees them. They override `super_options`. An event's
-own `options` override them, and `before_send` can change them.
+own `options` override them, and `before_send` can change them. They
+never set `process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -2464,7 +2470,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
 `distinct_id` | `Optional[ID_TYPES]` | Optional distinct ID of the user performing the action | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -2494,7 +2500,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -3091,7 +3097,7 @@ Name | Type | Description | Default
 `flags` |  | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. The exact flag values from the snapshot are attached to the event with no additional network call — prefer this over `send_feature_flags`. | 
 `send_feature_flags` |  | Deprecated — prefer `flags` with a `FeatureFlagEvaluations` snapshot. Whether to include currently active feature flags in the event properties. Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a hidden `/flags` request on capture and may return different values than the ones the code branched on. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this event. Defaults to False. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Attributes:**
 
@@ -3640,7 +3646,7 @@ reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 ### `CaptureError`
 
 ```python
-CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
+CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[Sequence[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
 ```
 
 Bases: `APIError`
@@ -3655,6 +3661,9 @@ events were dropped or ran out of retries.
 `event_results` maps each event uuid to its last verdict from a 2xx
 response. Events missing from it never got a verdict, because every
 attempt that reached them failed as a whole request.
+
+`drops` lists each event the server dropped on a 2xx response as a
+`CaptureDroppedEvent`.
 
 **Functions:**
 
@@ -3685,7 +3694,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = drops or []
+drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`
@@ -4236,7 +4245,7 @@ Name | Type | Description | Default
 `timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
 `uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
-`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. | 
+`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. `process_person_profile` is `True` unless this call sets it. | 
 
 **Attributes:**
 

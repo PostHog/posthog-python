@@ -17,6 +17,8 @@ from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.version import VERSION
 
 OPTIONS = {"cookieless_mode": True, "future_option": "kept"}
+PP = "process_person_profile"
+LEGACY_PP = "$process_person_profile"
 
 CAPTURE_CALLS = {
     "capture": lambda c, o: c.capture("e", distinct_id="u", options=o),
@@ -37,6 +39,12 @@ CAPTURE_CALLS = {
 }
 ASYNC_CAPTURE_CALLS = {k: v for k, v in CAPTURE_CALLS.items() if k != "capture_ai"}
 ASYNC_LIBRARY_CALLS = {**ASYNC_CAPTURE_CALLS, "capture_ai": CAPTURE_CALLS["capture_ai"]}
+# These methods send identify-style events, which default person processing on.
+IDENTIFY_STYLE_METHODS = {"set", "set_once", "group_identify", "alias"}
+
+
+def _expected_options(method, options):
+    return {**options, PP: True} if method in IDENTIFY_STYLE_METHODS else options
 
 
 def _sync_wire_events(call, before_send=None, **config) -> list[dict]:
@@ -69,14 +77,14 @@ async def _async_wire_events(call, before_send=None, **config) -> list[dict]:
 @pytest.mark.parametrize("method", list(CAPTURE_CALLS))
 def test_sync_options_reach_the_wire(method):
     events = _sync_wire_events(lambda c: CAPTURE_CALLS[method](c, OPTIONS))
-    assert [e["options"] for e in events] == [OPTIONS]
+    assert [e["options"] for e in events] == [_expected_options(method, OPTIONS)]
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", list(ASYNC_CAPTURE_CALLS))
 async def test_async_options_reach_the_wire(method):
     events = await _async_wire_events(lambda c: ASYNC_CAPTURE_CALLS[method](c, OPTIONS))
-    assert [e["options"] for e in events] == [OPTIONS]
+    assert [e["options"] for e in events] == [_expected_options(method, OPTIONS)]
 
 
 def _hook(msg):
@@ -122,8 +130,6 @@ async def test_async_non_dict_options_are_logged_and_event_is_sent(caplog):
     assert events[0]["options"] == {}
     assert "options must be a dict" in caplog.text
 
-
-PP = "process_person_profile"
 
 # Layers, lowest first: personless (no distinct_id), super, context, event.
 LAYER_CASES = {
@@ -180,7 +186,7 @@ def test_sync_super_options_reach_every_path(method):
     events = _sync_wire_events(
         lambda c: CAPTURE_CALLS[method](c, None), super_options=OPTIONS
     )
-    assert [e["options"] for e in events] == [OPTIONS]
+    assert [e["options"] for e in events] == [_expected_options(method, OPTIONS)]
 
 
 @pytest.mark.parametrize("method", ["capture", "set", "set_once"])
@@ -191,23 +197,31 @@ def test_sync_context_options_reach_user_paths(method):
             return CAPTURE_CALLS[method](client, None)
 
     events = _sync_wire_events(call)
-    assert [e["options"] for e in events] == [{"cookieless_mode": True}]
+    assert [e["options"] for e in events] == [
+        _expected_options(method, {"cookieless_mode": True})
+    ]
 
 
-def test_personless_option_beats_legacy_property():
+@pytest.mark.parametrize(
+    "event, expected", [("e", False), ("$identify", True)], ids=["other", "identify"]
+)
+def test_personless_option_against_legacy_property(event, expected):
+    # An identify-style event takes the call's legacy property before the
+    # personless default fills.
+    events = _sync_wire_events(lambda c: c.capture(event, properties={LEGACY_PP: True}))
+    assert events[0]["options"] == {PP: expected}
+    assert LEGACY_PP not in events[0]["properties"]
+
+
+@pytest.mark.parametrize(
+    "event, expected", [("e", False), ("$identify", True)], ids=["other", "identify"]
+)
+def test_legacy_super_property_fills_option_when_unset(event, expected):
     events = _sync_wire_events(
-        lambda c: c.capture("e", properties={"$process_person_profile": True})
+        lambda c: c.capture(event, distinct_id="u"),
+        super_properties={LEGACY_PP: False},
     )
-    assert events[0]["options"] == {PP: False}
-    assert "$process_person_profile" not in events[0]["properties"]
-
-
-def test_legacy_super_property_fills_option_when_unset():
-    events = _sync_wire_events(
-        lambda c: c.capture("e", distinct_id="u"),
-        super_properties={"$process_person_profile": False},
-    )
-    assert events[0]["options"] == {PP: False}
+    assert events[0]["options"] == {PP: expected}
 
 
 def _layered_properties(client):
@@ -874,12 +888,15 @@ def test_set_call_wins_over_super_person_properties(method):
     assert events[0]["properties"][key] == {"plan": "pro", "source": "super"}
 
 
-def test_late_options_replace_and_remove_legacy_properties():
+@pytest.mark.parametrize(
+    "event, extra", [("e", {}), ("$identify", {PP: True})], ids=["other", "identify"]
+)
+def test_late_options_replace_and_remove_legacy_properties(event, extra):
     def call(client):
         with new_context(fresh=True):
             set_context_option("product_tour_id", "context-tour")
             return client.capture(
-                "e", distinct_id="u", properties={"$product_tour_id": "event-tour"}
+                event, distinct_id="u", properties={"$product_tour_id": "event-tour"}
             )
 
     events = _sync_wire_events(
@@ -890,6 +907,7 @@ def test_late_options_replace_and_remove_legacy_properties():
     assert events[0]["options"] == {
         "cookieless_mode": True,
         "product_tour_id": "context-tour",
+        **extra,
     }
     assert not {"$cookieless_mode", "$product_tour_id"} & events[0]["properties"].keys()
 
@@ -920,3 +938,322 @@ def test_personless_ai_event_overrides_every_user_layer(before_send, expected):
         _personless_ai_capture, before_send=before_send, super_options={PP: True}
     )
     assert events[0]["options"] == expected
+
+
+MODES = ["sync", "async"]
+
+# Listed here rather than imported, so the test pins the exact names.
+IDENTIFY_STYLE_EVENTS = [
+    "$identify",
+    "$create_alias",
+    "$merge_dangerously",
+    "$groupidentify",
+    "$set",
+    "$set_once",
+]
+
+
+async def _wire_events(mode, call, before_send=None, **config) -> list[dict]:
+    if mode == "sync":
+        return _sync_wire_events(call, before_send=before_send, **config)
+    return await _async_wire_events(call, before_send=before_send, **config)
+
+
+def _capture_as(name, method="capture"):
+    return lambda c, o, p: getattr(c, method)(
+        name, distinct_id="u", properties=p, options=o
+    )
+
+
+IDENTIFY_STYLE_EMITTERS = {
+    "set": lambda c, o, p: c.set(distinct_id="u", properties={"a": 1}, options=o),
+    "set_once": lambda c, o, p: c.set_once(
+        distinct_id="u", properties={"a": 1}, options=o
+    ),
+    "group_identify": lambda c, o, p: c.group_identify(
+        "company", "acme", distinct_id="u", options=o
+    ),
+    "alias": lambda c, o, p: c.alias("previous", "u", options=o),
+    **{f"capture:{name}": _capture_as(name) for name in IDENTIFY_STYLE_EVENTS},
+    "capture_ai:$identify": _capture_as("$identify", "capture_ai"),
+}
+# Only the capture methods take event properties, so only they can set the
+# legacy property on the call.
+PROPERTY_EMITTERS = [k for k in IDENTIFY_STYLE_EMITTERS if k.startswith("capture")]
+
+
+def _layers(value):
+    """Each layer kind that can set person processing, keyed by kind."""
+    return {
+        "super_options": {"super_options": {PP: value}},
+        "super_properties": {"super_properties": {LEGACY_PP: value}},
+        "context_option": {"context_options": {PP: value}},
+        "context_tag": {"tags": {LEGACY_PP: value}},
+    }
+
+
+def _all_layers(value):
+    if value is None:
+        return {}
+    return {k: v for layer in _layers(value).values() for k, v in layer.items()}
+
+
+def _layered(emit, layers, options=None, properties=None):
+    def call(client):
+        with new_context(fresh=True):
+            for key, value in layers.get("context_options", {}).items():
+                set_context_option(key, value)
+            for key, value in layers.get("tags", {}).items():
+                tag(key, value)
+            return emit(client, options, properties)
+
+    return call
+
+
+def _client_config(layers):
+    return {k: layers[k] for k in ("super_options", "super_properties") if k in layers}
+
+
+def _assert_person_processing(events, expected):
+    assert events[0]["options"][PP] is expected
+    assert LEGACY_PP not in events[0]["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", ["no_layer", *_layers(False)])
+@pytest.mark.parametrize("emitter", list(IDENTIFY_STYLE_EMITTERS))
+async def test_identify_style_event_defaults_person_processing_on(mode, layer, emitter):
+    layers = _layers(False).get(layer, {})
+    events = await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS[emitter], layers),
+        **_client_config(layers),
+    )
+    _assert_person_processing(events, True)
+
+
+# (layer value, call options, expected)
+CALL_OPTION_CASES = {
+    "option_false_beats_true_layers": (True, {PP: False}, False),
+    "option_true_beats_false_layers": (False, {PP: True}, True),
+    "null_option_is_unset": (False, {PP: None}, True),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("case", list(CALL_OPTION_CASES))
+@pytest.mark.parametrize("emitter", list(IDENTIFY_STYLE_EMITTERS))
+async def test_identify_style_event_keeps_the_call_option(mode, case, emitter):
+    layer_value, options, expected = CALL_OPTION_CASES[case]
+    layers = _all_layers(layer_value)
+    events = await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS[emitter], layers, options=options),
+        **_client_config(layers),
+    )
+    _assert_person_processing(events, expected)
+
+
+# (layer value, call options, call properties, expected)
+CALL_PROPERTY_CASES = {
+    "legacy_false_moves_to_option": (None, None, {LEGACY_PP: False}, False),
+    "legacy_false_beats_true_layers": (True, None, {LEGACY_PP: False}, False),
+    "legacy_true_beats_false_layers": (False, None, {LEGACY_PP: True}, True),
+    "option_beats_legacy": (None, {PP: False}, {LEGACY_PP: True}, False),
+    "null_legacy_is_unset": (False, None, {LEGACY_PP: None}, True),
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("case", list(CALL_PROPERTY_CASES))
+@pytest.mark.parametrize("emitter", PROPERTY_EMITTERS)
+async def test_identify_style_event_takes_the_call_legacy_property(mode, case, emitter):
+    layer_value, options, properties, expected = CALL_PROPERTY_CASES[case]
+    layers = _all_layers(layer_value)
+    events = await _wire_events(
+        mode,
+        _layered(
+            IDENTIFY_STYLE_EMITTERS[emitter],
+            layers,
+            options=options,
+            properties=properties,
+        ),
+        **_client_config(layers),
+    )
+    _assert_person_processing(events, expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize(
+    "properties, expected",
+    [(None, False), ({LEGACY_PP: True}, True)],
+    ids=["personless_default_stays", "call_legacy_wins"],
+)
+@pytest.mark.parametrize("name", IDENTIFY_STYLE_EVENTS)
+async def test_identify_style_event_with_a_generated_distinct_id(
+    mode, properties, expected, name
+):
+    events = await _wire_events(mode, lambda c: c.capture(name, properties=properties))
+    _assert_person_processing(events, expected)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+async def test_group_identify_fallback_distinct_id_processes_the_person(mode):
+    events = await _wire_events(mode, lambda c: c.group_identify("company", "acme"))
+    assert events[0]["distinct_id"] == "$company_acme"
+    _assert_person_processing(events, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize(
+    "emitter, properties, resolved",
+    [("alias", None, True), ("capture:$identify", {LEGACY_PP: False}, False)],
+    ids=["default", "hoisted_legacy"],
+)
+async def test_before_send_sees_the_resolved_option_and_has_final_say(
+    mode, emitter, properties, resolved
+):
+    seen: list = []
+
+    def hook(msg):
+        seen.append((msg["options"].get(PP), LEGACY_PP in msg["properties"]))
+        return {**msg, "options": {**msg["options"], PP: not resolved}}
+
+    events = await _wire_events(
+        mode,
+        lambda c: IDENTIFY_STYLE_EMITTERS[emitter](c, None, properties),
+        before_send=hook,
+    )
+    assert seen == [(resolved, False)]
+    _assert_person_processing(events, not resolved)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("name", ["e", "identify", "$IDENTIFY", "$set_once_extra"])
+async def test_other_events_keep_layered_person_processing(mode, name):
+    layers = _all_layers(False)
+    events = await _wire_events(
+        mode, _layered(_capture_as(name), layers), **_client_config(layers)
+    )
+    _assert_person_processing(events, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+async def test_before_send_rename_to_identify_style_gets_no_default(mode):
+    events = await _wire_events(
+        mode,
+        lambda c: c.capture("e", distinct_id="u"),
+        before_send=lambda msg: {**msg, "event": "$identify"},
+        super_options={PP: False},
+    )
+    assert events[0]["event"] == "$identify"
+    _assert_person_processing(events, False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize(
+    "emitter, properties, expected",
+    [("alias", None, True), ("capture:$identify", {LEGACY_PP: False}, False)],
+    ids=["default", "hoisted_legacy"],
+)
+async def test_identify_style_default_leaves_the_call_dicts_unchanged(
+    mode, emitter, properties, expected
+):
+    options = {"cookieless_mode": True}
+    caller_properties = None if properties is None else dict(properties)
+    events = await _wire_events(
+        mode,
+        lambda c: IDENTIFY_STYLE_EMITTERS[emitter](c, options, caller_properties),
+    )
+    assert options == {"cookieless_mode": True}
+    assert caller_properties == properties
+    assert events[0]["options"] == {"cookieless_mode": True, PP: expected}
+
+
+LEGACY_FALSE_LAYERS = ["super_properties", "context_tag"]
+
+
+def _record_person_processing(seen, drop_options=False):
+    def hook(msg):
+        seen.append((msg["options"].get(PP), msg["properties"].get(LEGACY_PP, "unset")))
+        if drop_options:
+            return {k: v for k, v in msg.items() if k != "options"}
+        return msg
+
+    return hook
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+@pytest.mark.parametrize("emitter", list(IDENTIFY_STYLE_EMITTERS))
+async def test_before_send_sees_no_layered_legacy_property_on_identify_style_events(
+    mode, layer, emitter
+):
+    layers = _layers(False)[layer]
+    seen: list = []
+    await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS[emitter], layers),
+        before_send=_record_person_processing(seen),
+        **_client_config(layers),
+    )
+    assert seen == [(True, "unset")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+async def test_hook_that_drops_options_sends_no_layered_legacy_false(mode, layer):
+    layers = _layers(False)[layer]
+    events = await _wire_events(
+        mode,
+        _layered(IDENTIFY_STYLE_EMITTERS["alias"], layers),
+        before_send=_record_person_processing([], drop_options=True),
+        **_client_config(layers),
+    )
+    assert PP not in events[0]["options"]
+    assert LEGACY_PP not in events[0]["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", LEGACY_FALSE_LAYERS)
+async def test_before_send_still_sees_the_layered_legacy_property_on_other_events(
+    mode, layer
+):
+    layers = {**_layers(False)[layer], "super_options": {PP: True}}
+    seen: list = []
+    events = await _wire_events(
+        mode,
+        _layered(_capture_as("e"), layers),
+        before_send=_record_person_processing(seen),
+        **_client_config(layers),
+    )
+    assert seen == [(True, False)]
+    _assert_person_processing(events, True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("layer", ["super_options", "context_option"])
+@pytest.mark.parametrize("name", IDENTIFY_STYLE_EVENTS)
+async def test_option_layers_still_fill_identify_style_events_with_a_generated_id(
+    mode, layer, name
+):
+    layers = _layers(True)[layer]
+    events = await _wire_events(
+        mode,
+        _layered(lambda c, o, p: c.capture(name), layers),
+        **_client_config(layers),
+    )
+    _assert_person_processing(events, True)
