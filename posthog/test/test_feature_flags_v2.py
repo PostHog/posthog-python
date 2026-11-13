@@ -894,12 +894,13 @@ def test_a_relative_date_counts_back_from_the_current_time_by_default():
     config = v2._parse_config(
         _filters(_targeted(_person("seen", "is_date_after", "-1h")))
     )
-    now = datetime.datetime.now(datetime.timezone.utc).timestamp()
+    # UTC has no skipped hour, so the hour before now always exists.
+    utc = datetime.timezone.utc
+    now = int(datetime.datetime.now(utc).timestamp())
 
-    def evaluate(seen: float) -> v2._Outcome:
-        return v2._evaluate(
-            config, v2._Context("visitor-42", {"seen": seen}, True, True, OSLO)
-        )
+    def evaluate(seen: int) -> v2._Outcome:
+        context = v2._Context("visitor-42", {"seen": seen}, True, True, utc)
+        return v2._evaluate(config, context)
 
     assert evaluate(now) == v2._Evaluated(
         True, "targeting_match", RULE_ID, "targeted_release", 0
