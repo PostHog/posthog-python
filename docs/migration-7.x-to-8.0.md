@@ -324,8 +324,6 @@ A `Retry-After` header sets a minimum wait, up to 30 seconds.
 
 Capture itself doesn't return `429`, but a proxy in front of it can.
 
-A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route.
-
 ### Check dropped events
 
 Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only the invalid event, so the rest of the batch is delivered.
