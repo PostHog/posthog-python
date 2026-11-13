@@ -1605,6 +1605,9 @@ class _EmailsBase:
         self._moves_lock = threading.Lock()
         self._unconfirmed_moves: dict[str, datetime] = {}
         self._move_turns: dict[str, tuple[Any, int]] = {}
+        # Emails whose cancel was confirmed while a move of them was out: the record that move may
+        # still leave is dropped once the email's last move turn ends.
+        self._canceled_during_moves: set[str] = set()
 
     def _take_move_turn(self, path: str, new_lock: Callable[[], Any]) -> Any:
         with self._moves_lock:
@@ -1617,6 +1620,9 @@ class _EmailsBase:
             lock, waiting = self._move_turns[path]
             if waiting == 1:
                 del self._move_turns[path]
+                if path in self._canceled_during_moves:
+                    self._canceled_during_moves.discard(path)
+                    self._unconfirmed_moves.pop(path, None)
             else:
                 self._move_turns[path] = (lock, waiting - 1)
 
@@ -1635,6 +1641,8 @@ class _EmailsBase:
         # A late move can't undo a confirmed cancel: PostHog answers it 409 canceled.
         with self._moves_lock:
             self._unconfirmed_moves.pop(path, None)
+            if path in self._move_turns:
+                self._canceled_during_moves.add(path)
 
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()

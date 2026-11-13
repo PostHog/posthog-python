@@ -1480,6 +1480,97 @@ def test_a_canceled_email_forgets_its_unconfirmed_move():
     assert len(adapter.requests) == 3
 
 
+def test_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
+    first_sent, cancel_sent, release = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+
+    class SlowAdapter(FakeAdapter):
+        calls = 0
+
+        def send(self, request: requests.PreparedRequest, **kwargs: Any):
+            self.calls += 1
+            if self.calls == 1:
+                first_sent.set()
+                release.wait(5)
+            elif request.method == "POST":
+                cancel_sent.set()
+            return super().send(request, **kwargs)
+
+    # Replies go in the order requests reach the adapter: the cancel answers before the move times out.
+    adapter = SlowAdapter(
+        [
+            (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
+            requests.exceptions.ReadTimeout("slow"),
+            rejected(409, "canceled"),
+        ]
+    )
+    session = requests.Session()
+    session.mount("https://", adapter)
+    emails = Emails(SECRET_KEY, session=session, max_retries=0)
+    moved: list[Any] = []
+
+    def move() -> None:
+        try:
+            moved.append(emails.update(MESSAGE_ID, scheduled_at=LATER))
+        except EmailError as exc:
+            moved.append(exc)
+
+    mover = threading.Thread(target=move)
+    mover.start()
+    assert first_sent.wait(5)
+    canceler = threading.Thread(target=emails.cancel, args=(MESSAGE_ID,))
+    canceler.start()
+    assert cancel_sent.wait(5)
+    canceler.join(5)
+    assert not canceler.is_alive()  # The cancel doesn't wait for the move.
+    release.set()
+    mover.join(5)
+    assert isinstance(moved[0], EmailError) and moved[0].code == "network_error"
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert adapter.calls == 3
+
+
+@pytest.mark.asyncio
+async def test_async_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
+    first_sent, release = asyncio.Event(), asyncio.Event()
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            first_sent.set()
+            await release.wait()
+            return httpx.Response(504)
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"})
+        return httpx.Response(409, json={"code": "canceled"})
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    mover = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=LATER))
+    await first_sent.wait()
+    assert (await emails.cancel(MESSAGE_ID)).status == "canceled"
+    release.set()
+    with pytest.raises(EmailError):
+        await mover
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(seen) == 3
+
+
 def test_a_failed_cancel_keeps_the_unconfirmed_move():
     emails, adapter = emails_with(
         [requests.exceptions.ReadTimeout("slow"), rejected(409, "already_sending")],
