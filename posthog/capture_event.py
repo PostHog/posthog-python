@@ -60,6 +60,18 @@ _LEGACY_OPTION_PROPERTIES: tuple[tuple[str, str], ...] = (
     ("$process_person_profile", "process_person_profile"),
 )
 
+# Events that change a person or group. PostHog drops or ignores them when
+# person processing is off, so they default it on (see
+# _default_identify_style_person_processing).
+_IDENTIFY_STYLE_EVENTS = (
+    "$identify",
+    "$create_alias",
+    "$merge_dangerously",
+    "$groupidentify",
+    "$set",
+    "$set_once",
+)
+
 # The uuid forms Go's uuid.Validate accepts. Python's UUID() also accepts
 # misplaced hyphens and a bare "uuid:" prefix, which other SDKs reject.
 _EVENT_UUID_PATTERN = re.compile(
@@ -141,6 +153,7 @@ class _EventDefaults:
     trace_properties: Optional[Mapping[str, Any]] = None
     library: Optional[tuple[str, str]] = None
     pinned_properties: Optional["_PinnedProperties"] = None
+    personless: bool = False
 
 
 def _is_library_value(value: Any) -> bool:
@@ -155,7 +168,7 @@ def _build_event_defaults(
     release_id: Optional[str],
     context_properties: Optional[Mapping[str, Any]] = None,
     context_options: Optional[Mapping[str, Any]] = None,
-    derived_options: Optional[Mapping[str, Any]] = None,
+    personless: bool = False,
     property_allowlist: Optional[Collection[str]] = None,
     is_server: bool = False,
     disable_geoip: bool = False,
@@ -180,6 +193,8 @@ def _build_event_defaults(
     ``$lib_version``. They fill as a pair below every other layer.
     ``pinned_properties`` is config version 2 flag attribution that no layer
     may change or add to; it applies after every layer.
+    ``personless`` means the SDK generated the event's distinct ID. It adds
+    ``process_person_profile: False`` as the lowest option layer.
     """
     call_properties = (
         {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
@@ -203,12 +218,13 @@ def _build_event_defaults(
         option_layers=(
             context_options or {},
             _event_options(super_options),
-            derived_options or {},
+            {"process_person_profile": False} if personless else {},
         ),
         property_allowlist=property_allowlist,
         trace_properties=trace_properties,
         library=(library_id, library_version),
         pinned_properties=pinned_properties,
+        personless=personless,
     )
 
 
@@ -224,7 +240,13 @@ def _fill_event_defaults(
     level deep when the event's value and the default are both dicts.
     ``trace_properties`` fill last, and only when the event and every layer
     leave all their keys unset. The SDK's ``library`` fills after every layer.
+    An identify-style event first resolves ``process_person_profile`` from the
+    call alone, so no layer can turn person processing off for it. Once its
+    option is set, its ``$process_person_profile`` property is removed.
     """
+    _default_identify_style_person_processing(
+        msg, defaults is not None and defaults.personless
+    )
     if defaults is None:
         return
     allowlist = defaults.property_allowlist
@@ -271,6 +293,42 @@ def _fill_event_defaults(
         for key, value in option_layer.items():
             if options.get(key) is None:
                 options[key] = _clean(value)
+    msg["options"] = options
+    # The option beats this property at serialization anyway. Dropping it now
+    # shows before_send one value, and a hook that drops options cannot send a
+    # layered legacy False.
+    if (
+        msg.get("event") in _IDENTIFY_STYLE_EVENTS
+        and options.get("process_person_profile") is not None
+    ):
+        msg["properties"].pop("$process_person_profile", None)
+
+
+def _default_identify_style_person_processing(
+    msg: dict[str, Any], personless: bool
+) -> None:
+    """Resolve ``process_person_profile`` for an identify-style event from the call.
+
+    Only the call's own values count, so it runs before any layer fills. A
+    non-null option is kept. Else a non-null ``$process_person_profile``
+    property moves into the option. Else the option is ``True``, unless the
+    SDK generated the distinct ID, which keeps the personless ``False``.
+    """
+    if msg.get("event") not in _IDENTIFY_STYLE_EVENTS:
+        return
+    options = _event_options(msg.get("options"))
+    if options.get("process_person_profile") is not None:
+        return
+    properties = msg.get("properties")
+    if (
+        isinstance(properties, dict)
+        and properties.get("$process_person_profile") is not None
+    ):
+        options["process_person_profile"] = properties.pop("$process_person_profile")
+    elif personless:
+        return
+    else:
+        options["process_person_profile"] = True
     msg["options"] = options
 
 

@@ -36,7 +36,9 @@
       {
         "distinct_id": "user-123",
         "event": "$set",
-        "options": {},
+        "options": {
+          "process_person_profile": true
+        },
         "properties": {
           "$geoip_disable": true,
           "$is_server": true,
@@ -53,7 +55,9 @@
       {
         "distinct_id": "anonymous-789",
         "event": "$create_alias",
-        "options": {},
+        "options": {
+          "process_person_profile": true
+        },
         "properties": {
           "$geoip_disable": true,
           "$is_server": true,
@@ -68,7 +72,9 @@
       {
         "distinct_id": "user-123",
         "event": "$groupidentify",
-        "options": {},
+        "options": {
+          "process_person_profile": true
+        },
         "properties": {
           "$geoip_disable": true,
           "$group_key": "company-456",

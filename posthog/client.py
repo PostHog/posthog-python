@@ -333,11 +333,6 @@ def _group_identify_distinct_id(passed, group_type, group_key) -> str:
     return distinct_id
 
 
-def _personless_options(personless: bool) -> dict[str, Any]:
-    """The lowest option layer: no person profile for a generated distinct ID."""
-    return {"process_person_profile": False} if personless else {}
-
-
 def add_context_tags(properties):
     properties = properties or {}
     current_context = _get_current_context()
@@ -1307,7 +1302,10 @@ class Client(object):
                 ``{"cookieless_mode": True}``. They fill only options the event
                 leaves unset, before ``before_send`` runs. An event's own
                 ``options`` and context options override them, and
-                ``before_send`` can change them.
+                ``before_send`` can change them. They never set
+                ``process_person_profile`` on identify-style events, such as
+                ``$identify`` or ``$set``, whose distinct ID the SDK did not
+                generate: those default it to ``True``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1973,7 +1971,10 @@ class Client(object):
         Context options fill options an event leaves unset, before
         ``before_send`` runs, so the hook sees them. They override
         ``super_options``. An event's own ``options`` override them, and
-        ``before_send`` can change them.
+        ``before_send`` can change them. They never set
+        ``process_person_profile`` on identify-style events, such as
+        ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+        those default it to ``True``.
 
         Args:
             key: The option name, such as ``"process_person_profile"``.
@@ -2327,6 +2328,9 @@ class Client(object):
                 ``super_options``, which fill in before ``before_send`` runs.
                 An option overrides its legacy ``$`` property, such as
                 ``$process_person_profile``. A ``None`` option counts as unset.
+                An identify-style event, such as ``$identify`` or ``$set``,
+                gets ``process_person_profile: True`` when this call leaves it
+                unset, unless the SDK generated its distinct ID.
 
         Examples:
             ```python
@@ -2526,7 +2530,7 @@ class Client(object):
             property_allowlist=property_allowlist,
             context_properties=_context_tag_defaults(),
             context_options=_context_get_context_options(),
-            derived_options=_personless_options(personless),
+            personless=personless,
             system_properties=system_context(),
             flag_properties=extra_properties,
             trace_properties=trace_properties,
@@ -2709,6 +2713,7 @@ class Client(object):
                 Falls back to the context distinct ID, then to
                 ``$<group_type>_<group_key>``.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -2787,6 +2792,7 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -3151,7 +3157,7 @@ class Client(object):
         property_allowlist=None,
         context_properties=None,
         context_options=None,
-        derived_options=None,
+        personless=False,
         system_properties=None,
         flag_properties=None,
         trace_properties=None,
@@ -3196,7 +3202,7 @@ class Client(object):
                 release_id=self._release_id,
                 context_properties=context_properties,
                 context_options=context_options,
-                derived_options=derived_options,
+                personless=personless,
                 property_allowlist=property_allowlist,
                 is_server=self.is_server,
                 disable_geoip=self.disable_geoip,
