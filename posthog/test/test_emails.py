@@ -1310,6 +1310,35 @@ def test_a_cancel_reply_without_a_canceled_email_raises(_name, body):
     assert raised.value.code == "api_error"
 
 
+MOVED = {
+    "id": MESSAGE_ID,
+    "status": "scheduled",
+    "scheduled_at": "2026-12-01T07:00:00Z",
+}
+
+
+@parameterized.expand(
+    [
+        *[
+            (
+                f"no_{field}",
+                {key: value for key, value in MOVED.items() if key != field},
+            )
+            for field in MOVED
+        ],
+        ("scheduled_at_not_a_time", {**MOVED, "scheduled_at": "tomorrow"}),
+    ]
+)
+def test_an_update_reply_without_the_moved_email_raises(_name, body):
+    # Returning a result without its send time would tell the caller the move landed when nobody knows when it goes out.
+    emails, _ = emails_with([(200, body, {})])
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert raised.value.code == "api_error"
+
+
 def async_emails_with(replies: list[httpx.Response]):
     seen: list[httpx.Request] = []
 
