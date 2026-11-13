@@ -1400,8 +1400,9 @@ class Client(object):
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
             capture_compression: Request-body compression for ``capture()``
-                uploads. ``CaptureCompression.GZIP`` or ``DEFLATE`` (or the
-                strings ``"gzip"``/``"deflate"``). When omitted, the
+                uploads. ``CaptureCompression.GZIP``, ``DEFLATE`` or ``ZSTD``
+                (or the strings ``"gzip"``, ``"deflate"`` or ``"zstd"``).
+                ``ZSTD`` needs ``pip install posthog[zstd]``. When omitted, the
                 ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
                 compression.
             capture_ai_compression: Request-body compression for

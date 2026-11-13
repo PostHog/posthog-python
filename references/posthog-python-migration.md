@@ -71,6 +71,7 @@ If you send events through your own reverse proxy, update it before you upgrade:
 - **Forward both routes.** Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.
 - **Pass the headers through unchanged.** Pass `Authorization`, every `PostHog-*` header, `Content-Type`, `Content-Encoding`, and `User-Agent`. `Authorization` holds the project token, sent as `Bearer <token>`. PostHog answers `401` without `Authorization` and `400` without the others, and the batch fails.
 - **Accept request bodies up to 20 MB.** AI requests are often larger than 1 MB, the default limit in nginx and ingress-nginx. A `413` from the proxy fails the batch.
+- **Pass the capture response through.** Return PostHog's status code and response body unchanged. A proxy that answers the capture path with its own `200` fails the batch.
 
 PostHog's managed reverse proxy already does this. See the [proxy guides](https://posthog.com/docs/advanced/proxy).
 
@@ -107,6 +108,8 @@ A personal API key (`phx_...`) passed as the project token disables the client a
 Capture v1 is the only path. Setting `posthog.capture_mode` on the module has no effect.
 
 For gzip, set `capture_compression=CaptureCompression.GZIP`. `capture_compression` defaults to no compression. `POSTHOG_CAPTURE_COMPRESSION` still works.
+
+`capture_compression` and `capture_ai_compression` take `CaptureCompression.GZIP`, `DEFLATE`, or `ZSTD`. `ZSTD` needs the `zstandard` package, so install `posthog[zstd]`. Without it, the client raises `ValueError`.
 
 Replace `from posthog.capture_v1 import CaptureV1Error` with `from posthog import CaptureError`. There is no alias.
 
@@ -233,7 +236,7 @@ A property set to `None` counts as set, so no later step fills it. A `None` opti
 
 `$set`, `$set_once`, `$groups`, and `$group_set` fill one level deep. When the call and a later step both set one of them to a dict, the later step adds only the keys the call left out.
 
-For example, `super_properties={"$set": {"plan": "free", "source": "web"}}` and a call with `properties={"$set": {"plan": "pro"}}` send `{"plan": "pro", "source": "web"}`.
+For example, `super_properties={"$set": {"plan": "free", "source": "web"}}` and a call with `properties={"$set": {"plan": "pro"}}` send `{"plan": "pro", "source": "web"}`. A `$set` in `super_properties` or a context tag sets those person properties on every event it reaches.
 
 These changes follow from this order:
 
