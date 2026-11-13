@@ -63,8 +63,6 @@ Read the checklist first, then the sections that apply to you.
 | `capture_ai`, `capture_ai_immediate`, and the AI wrapper integrations | `/i/v1/ai/events` |
 | OpenTelemetry (`posthog.ai.otel`) | `/i/v0/ai/otel`, unchanged |
 
-If you self-host PostHog, see the [self-hosting docs](https://posthog.com/docs/self-host) before you upgrade. An endpoint that isn't served drops every event sent to it.
-
 If you send events through your own reverse proxy, update it before you upgrade:
 
 - **Forward both routes.** Forward `/i/v1/analytics/events` and `/i/v1/ai/events` to PostHog.

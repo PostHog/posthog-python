@@ -1,5 +1,5 @@
 ---
-title: "PostHog Python SDK 8.x (experimental)"
+title: "PostHog Python SDK 8.x"
 sidebar: Docs
 showTitle: true
 contentMaxWidthClass: max-w-full

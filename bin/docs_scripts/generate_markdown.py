@@ -265,9 +265,7 @@ def main() -> None:
         started,
         *reference(pkg, capabilities(opts.sdk_specs), declared >= major),
     ]
-    title = f"PostHog Python SDK {major}.x" + (
-        "" if declared >= major else " (experimental)"
-    )
+    title = f"PostHog Python SDK {major}.x"
     write(f"posthog-python-{major}.md", [front_matter(title, body), *body])
     if declared >= major:
         write(
