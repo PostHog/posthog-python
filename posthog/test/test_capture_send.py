@@ -509,6 +509,9 @@ class TestSendV1Batch(unittest.TestCase):
         self.assertEqual(len(stub.calls), 1)  # terminal, not retried
         self.assertEqual(exc.status, 200)
         self.assertEqual(exc.drops, [("u-drop", "invalid")])
+        self.assertEqual(
+            (exc.drops[0].uuid, exc.drops[0].details), ("u-drop", "invalid")
+        )
         self.assertEqual(exc.retry_exhausted, [])
 
     def test_all_ok_no_drops_does_not_raise(self) -> None:
@@ -862,6 +865,14 @@ class TestCaptureLossMessage(unittest.TestCase):
     def test_message(self, _name, error, batch_size, expected) -> None:
         self.assertEqual(
             _capture_loss_message(error, batch_size, _CAPTURE_V1_PATH), expected
+        )
+
+    def test_hand_built_drops_get_named_fields(self) -> None:
+        error = CaptureError(
+            200, "dropped", endpoint=_CAPTURE_V1_PATH, drops=[("u-drop", "invalid")]
+        )
+        self.assertEqual(
+            (error.drops[0].uuid, error.drops[0].details), ("u-drop", "invalid")
         )
 
 

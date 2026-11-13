@@ -3607,7 +3607,7 @@ reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 ### `CaptureError`
 
 ```python
-CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
+CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[Sequence[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
 ```
 
 Bases: `APIError`
@@ -3622,6 +3622,9 @@ events were dropped or ran out of retries.
 `event_results` maps each event uuid to its last verdict from a 2xx
 response. Events missing from it never got a verdict, because every
 attempt that reached them failed as a whole request.
+
+`drops` lists each event the server dropped on a 2xx response as a
+`CaptureDroppedEvent`.
 
 **Functions:**
 
@@ -3652,7 +3655,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = drops or []
+drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`

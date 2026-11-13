@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from gzip import GzipFile
 from io import BytesIO
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, NamedTuple, Optional, Sequence
 from urllib.parse import urljoin, urlsplit
 from uuid import UUID
 
@@ -57,7 +57,7 @@ log = logging.getLogger("posthog")
 # Only the error types are public API: they reach user code through `on_error`
 # callbacks, so callers may want to catch/inspect them. Everything else is
 # submitter plumbing.
-__all__ = ["CaptureError", "CaptureEventResult"]
+__all__ = ["CaptureDroppedEvent", "CaptureError", "CaptureEventResult"]
 
 _CAPTURE_V1_PATH = "/i/v1/analytics/events"
 _CAPTURE_AI_V1_PATH = "/i/v1/ai/events"
@@ -114,6 +114,17 @@ class CaptureEventResult:
     details: Optional[str] = None
 
 
+class CaptureDroppedEvent(NamedTuple):
+    """One event capture dropped in a 2xx response.
+
+    A ``(uuid, details)`` tuple with named fields. ``details`` is the server's
+    reason tag, such as ``llm_events_over_quota``.
+    """
+
+    uuid: str
+    details: Optional[str] = None
+
+
 @dataclass
 class _V1ParsedResponse:
     """Classified outcome of one v1 HTTP attempt.
@@ -146,6 +157,9 @@ class CaptureError(APIError):
     ``event_results`` maps each event uuid to its last verdict from a 2xx
     response. Events missing from it never got a verdict, because every
     attempt that reached them failed as a whole request.
+
+    ``drops`` lists each event the server dropped on a 2xx response as a
+    :class:`CaptureDroppedEvent`.
     """
 
     def __init__(
@@ -158,7 +172,7 @@ class CaptureError(APIError):
         request_id: Optional[str] = None,
         attempts: Optional[int] = None,
         retry_exhausted: Optional[list[str]] = None,
-        drops: Optional[list[tuple[str, Optional[str]]]] = None,
+        drops: Optional[Sequence[tuple[str, Optional[str]]]] = None,
         event_results: Optional[dict[str, CaptureEventResult]] = None,
     ):
         super().__init__(status, message, retry_after=retry_after)
@@ -169,8 +183,8 @@ class CaptureError(APIError):
         self.attempts = attempts
         # uuids the server told us to retry but we never delivered (exhausted).
         self.retry_exhausted = retry_exhausted or []
-        # (uuid, details) pairs the server told us to drop on a 2xx response.
-        self.drops = drops or []
+        # Plain (uuid, details) tuples are accepted, so callers can build one by hand.
+        self.drops = [CaptureDroppedEvent(*drop) for drop in drops or []]
         self.event_results = event_results or {}
 
     def verdict_summary(self) -> str:
@@ -539,7 +553,7 @@ def _send_v1_batch(
     # (uuid, details) for every event the server dropped, across all attempts.
     # Accumulated (not per-attempt) so a drop seen early is not lost when a
     # later attempt succeeds or clears the outstanding retries.
-    all_drops: list[tuple[str, Optional[str]]] = []
+    all_drops: list[CaptureDroppedEvent] = []
     # Latest 2xx verdict per uuid, across all attempts.
     event_results: dict[str, CaptureEventResult] = {}
 
@@ -618,7 +632,9 @@ def _send_v1_batch(
                 if uid in duplicates_left:
                     if uid in seen_duplicated and duplicates_left[uid] > 0:
                         duplicates_left[uid] -= 1
-                        all_drops.append((uid, _DUPLICATE_EVENT_UUID))
+                        all_drops.append(
+                            CaptureDroppedEvent(uid, _DUPLICATE_EVENT_UUID)
+                        )
                         continue
                     seen_duplicated.add(uid)
                 event_results[uid] = directive
@@ -628,7 +644,7 @@ def _send_v1_batch(
                 elif directive.result == _RESULT_DROP:
                     # Terminal per-event rejection; keep it so it is surfaced
                     # even when the rest of the batch succeeds (see below).
-                    all_drops.append((uid, directive.details))
+                    all_drops.append(CaptureDroppedEvent(uid, directive.details))
                 # ok / warning / unrecognized -> terminal success.
 
             if not retry_uuids:
