@@ -80,6 +80,7 @@ from posthog.contexts import (
     tag as _context_tag,
 )
 from posthog.emails import Emails, _client_emails, _no_op, _validate_options
+from posthog.push import Push
 from posthog.exception_capture import ExceptionCapture
 from posthog._logging import _configure_posthog_logging
 from posthog.exception_utils import (
@@ -1861,6 +1862,27 @@ class Client(object):
                 migrated_from=self.migrated_from,
             )
         return self._emails
+
+    @property
+    def push(self) -> Push:
+        """
+        Send transactional push notifications from PostHog push templates.
+
+        Needs ``secret_key``, a project secret API key with the ``transactional_push:write``
+        scope. Sends go where ``emails`` sends go and use the same timeout and
+        retries. A disabled or shut-down client sends nothing. See ``posthog.push``
+        for setup.
+
+        Examples:
+            ```python
+            client.push.send(
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                distinct_id="user_123",
+                template_data={"order_id": "1042"},
+            )
+            ```
+        """
+        return Push._over(self.emails)
 
     @property
     def queue(self) -> Queue:
