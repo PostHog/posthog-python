@@ -33,7 +33,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -242,6 +242,7 @@ class PostHogMCP(Client):
             event["error"] = capture_exception(
                 error if error is not None else f"Tool {tool_name} returned an error"
             )
+            event["error_status"] = http_status(error)
         self._emit(event)
 
     def capture_initialize(

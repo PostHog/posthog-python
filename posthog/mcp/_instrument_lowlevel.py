@@ -54,6 +54,7 @@ from ._internal import MCPAnalyticsData
 from ._model_parameters import request_meta_from_context
 from ._model_parameters import can_inject_model_parameter, is_capture_model_enabled
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._raised_tool_error import raised_tool_error, wrap_error_result
 from .logger import log, warn
 from .tools import get_more_tools_result_text
 
@@ -68,6 +69,7 @@ def instrument_low_level(server: Any, data: MCPAnalyticsData) -> None:
     """
     data.server_name = getattr(server, "name", None)
     data.server_version = getattr(server, "version", None)
+    wrap_error_result(server)
     _wrap_call_tool(server, data, strip_injected=False)
     _wrap_list_tools(server, data, context_required=False)
     _wrap_resource_requests(server, data)
@@ -282,7 +284,10 @@ def _wrap_call_tool(
 
         start = time.monotonic()
         try:
-            result = await original(req)
+            with raised_tool_error(
+                server if high_level is None else high_level
+            ) as raised:
+                result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
                 await registered_tool_exists(high_level, name)
@@ -349,6 +354,7 @@ def _wrap_call_tool(
             call_result,
             duration_ms,
             conversation_id_delivered=delivered,
+            error=raised.error,
         )
         return result
 

@@ -75,6 +75,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._raised_tool_error import raised_tool_error
 from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
@@ -656,7 +657,8 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
         start = time.monotonic()
         try:
-            result = await original(ctx, params)
+            with raised_tool_error(standalone) as raised:
+                result = await original(ctx, params)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
                 await registered_tool_exists(standalone, name)
@@ -685,7 +687,10 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
             return result
 
         await lifecycle.record_result(
-            result, duration_ms, conversation_id_delivered=delivered
+            result,
+            duration_ms,
+            conversation_id_delivered=delivered,
+            error=raised.error,
         )
         return result
 

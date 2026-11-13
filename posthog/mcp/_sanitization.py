@@ -10,6 +10,7 @@ runs later in the pipeline) but before truncation.
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
@@ -31,6 +32,10 @@ _SENSITIVE_KEY_PATTERN = re.compile(
     r"private[-_]?key)$",
     re.IGNORECASE,
 )
+
+_JSON_STRING_STOP = re.compile(r'["\\\n]')
+_JSON_NUMBER = re.compile(r"-?\d[\d.eE+-]*")
+_NON_SPACE = re.compile(r"\S")
 
 # No leading `\b`: a word boundary needs a non-word character before the scheme,
 # so `resource_https://user:pw@host` (an `_` before the scheme) would match
@@ -430,7 +435,153 @@ def _redact_credentials(value: str) -> str:
     entropy detector scans. Running the URL pass last loses nothing — it only
     redacts or percent-encodes, so it never exposes a credential the detectors
     could have matched."""
+    value = _redact_json_members(value)
     return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+
+
+def _redact_json_members(value: str) -> str:
+    if '"' not in value:
+        return value
+    return _JsonMemberScan(value).redacted()
+
+
+class _JsonMemberScan:
+    """Redacts the members posthog-go's jsonMemberPattern and posthog-rs's
+    JSON_MEMBER match: `"key": value`, where the value is a string, number,
+    boolean, or flat array of those (with every item after the first needing its
+    comma). A tool that returns structuredContent also returns it as JSON text,
+    where a credential is a member inside a string rather than a dict key.
+
+    Like those patterns, any quote may open a key, and the scan resumes after
+    each member. They run on linear-time engines; Python's `re` backtracks and
+    would rescan the rest of the text from every quote, so this caches where a
+    string body ends and what follows each closing quote.
+
+    A JSON string never holds a raw newline, so one cut off by truncation ends
+    at the line or the text instead of swallowing prose up to the next quote.
+    Values that nest objects, and JSON inside a JSON string, are out of scope.
+    """
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self.body_ends: Dict[int, int] = {}
+        self.members: Dict[int, Optional[Tuple[int, int]]] = {}
+
+    def redacted(self) -> str:
+        text = self.text
+        parts: List[str] = []
+        last = 0
+        quote = text.find('"')
+        while quote != -1:
+            key_end = self.body_end(quote + 1)
+            member = (
+                self.member_after(key_end + 1)
+                if key_end < len(text) and text[key_end] == '"'
+                else None
+            )
+            if member is None:
+                quote = text.find('"', quote + 1)
+                continue
+            value_start, value_end = member
+            if _should_redact_key(_decoded_json_key(text[quote + 1 : key_end])):
+                parts.append(text[last:value_start])
+                parts.append(f'"{_REDACTED_VALUE}"')
+                last = value_end
+            quote = text.find('"', value_end)
+        parts.append(text[last:])
+        return "".join(parts)
+
+    def body_end(self, start: int) -> int:
+        """Where a string body starting at `start` stops: its closing quote, a
+        newline, a backslash with nothing left to escape, or the end."""
+        text = self.text
+        escapes = []
+        pos = start
+        while True:
+            stop = _JSON_STRING_STOP.search(text, pos)
+            end = stop.start() if stop else len(text)
+            if end in self.body_ends:
+                end = self.body_ends[end]
+                break
+            if text[end : end + 1] != "\\" or text[end + 1 : end + 2] in ("", "\n"):
+                break
+            escapes.append(end)
+            pos = end + 2
+        for escape in escapes:
+            self.body_ends[escape] = end
+        return end
+
+    def member_after(self, pos: int) -> Optional[Tuple[int, int]]:
+        """Where the value after a key that closed just before `pos` starts and
+        ends, or None when no `: value` follows. Every quote inside a run of
+        escaped quotes closes on the same key, so this is computed once."""
+        if pos not in self.members:
+            colon = self.skip_space(pos)
+            member = None
+            if self.text[colon : colon + 1] == ":":
+                value_start = self.skip_space(colon + 1)
+                value_end = self.value_end(value_start)
+                if value_end is not None:
+                    member = (value_start, value_end)
+            self.members[pos] = member
+        return self.members[pos]
+
+    def value_end(self, pos: int) -> Optional[int]:
+        if self.text[pos : pos + 1] == "[":
+            return self.array_end(pos + 1)
+        return self.scalar_end(pos)
+
+    def scalar_end(self, pos: int) -> Optional[int]:
+        text = self.text
+        if text[pos : pos + 1] == '"':
+            end = self.body_end(pos + 1)
+            return end + 1 if text[end : end + 1] in ('"', "\\") else end
+        number = _JSON_NUMBER.match(text, pos)
+        if number:
+            return number.end()
+        for literal in ("true", "false"):
+            if text.startswith(literal, pos):
+                return pos + len(literal)
+        return None
+
+    def item_end(self, pos: int) -> Optional[int]:
+        end = self.scalar_end(pos)
+        if end is None and self.text.startswith("null", pos):
+            end = pos + 4
+        return None if end is None else self.skip_space(end)
+
+    def array_end(self, pos: int) -> Optional[int]:
+        text = self.text
+        pos = self.skip_space(pos)
+        item = self.item_end(pos)
+        if item is not None:
+            pos = item
+            while text[pos : pos + 1] == ",":
+                after_comma = self.skip_space(pos + 1)
+                item = self.item_end(after_comma)
+                if item is None:
+                    pos = after_comma
+                    break
+                pos = item
+        if text[pos : pos + 1] == "]":
+            return pos + 1
+        if pos == len(text) or (pos == len(text) - 1 and text[pos] == "\n"):
+            return pos
+        return None
+
+    def skip_space(self, pos: int) -> int:
+        non_space = _NON_SPACE.search(self.text, pos)
+        return non_space.start() if non_space else len(self.text)
+
+
+def _decoded_json_key(raw: str) -> str:
+    if "\\" not in raw:
+        return raw
+    try:
+        decoded = json.loads(f'"{raw}"')
+    except ValueError:
+        return raw
+    return decoded if isinstance(decoded, str) else raw
 
 
 def sanitize_free_text(value: Any) -> Any:
@@ -668,11 +819,36 @@ def _sanitize_exception_values(error: Any) -> Any:
     return {
         **error,
         "$exception_list": [
-            {**exception, "value": sanitize_captured_value(exception.get("value"))}
-            if isinstance(exception, dict)
-            else exception
+            _sanitize_exception(exception) if isinstance(exception, dict) else exception
             for exception in exception_list
         ],
+    }
+
+
+_FRAME_SOURCE_KEYS = ("pre_context", "context_line", "post_context")
+
+
+def _sanitize_exception(exception: Dict[str, Any]) -> Dict[str, Any]:
+    sanitized = {**exception, "value": sanitize_captured_value(exception.get("value"))}
+    stacktrace = exception.get("stacktrace")
+    if isinstance(stacktrace, dict) and isinstance(stacktrace.get("frames"), list):
+        sanitized["stacktrace"] = {
+            **stacktrace,
+            "frames": [_sanitize_frame(frame) for frame in stacktrace["frames"]],
+        }
+    return sanitized
+
+
+def _sanitize_frame(frame: Any) -> Any:
+    if not isinstance(frame, dict):
+        return frame
+    return {
+        **frame,
+        **{
+            key: sanitize_captured_value(frame[key])
+            for key in _FRAME_SOURCE_KEYS
+            if key in frame
+        },
     }
 
 

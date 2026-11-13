@@ -30,7 +30,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from .feedback import (
     build_feedback_event_properties,
     build_feedback_intent,
@@ -670,7 +670,12 @@ class ToolCallLifecycle:
         )
 
     async def record_result(
-        self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
+        self,
+        result: Any,
+        duration_ms: float,
+        *,
+        conversation_id_delivered: bool,
+        error: Optional[BaseException] = None,
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
@@ -683,6 +688,7 @@ class ToolCallLifecycle:
             allow_self_reported_model=self.allow_self_reported_model,
             analytics_owned_parameters=self.analytics_owned_parameters,
             result=result,
+            error=error,
             duration_ms=duration_ms,
             client_name=self.client_name,
             client_version=self.client_version,
@@ -1559,14 +1565,14 @@ async def record_resource_request(
 
 
 def _set_tool_outcome(event: Dict[str, Any], result: Any, error: Any) -> None:
+    if result is not None:
+        event["response"] = _wrap_response(result)
+    if error is None and is_tool_result_error(result):
+        error = result
     if error is not None:
         event["is_error"] = True
         event["error"] = capture_exception(error)
-    elif result is not None:
-        event["response"] = _wrap_response(result)
-        if is_tool_result_error(result):
-            event["is_error"] = True
-            event["error"] = capture_exception(result)
+        event["error_status"] = http_status(error)
 
 
 def _resolve_input_aliases(
