@@ -1103,7 +1103,7 @@ class TestClient(unittest.TestCase):
         patch_get.side_effect = APIError(401, "Unauthorized")
 
         client = Client(FAKE_TEST_API_KEY, secret_key="test")
-        with self.assertLogs("posthog", level="ERROR") as logs:
+        with self.assertLogs("posthog", level="WARNING") as logs:
             client._load_feature_flags()
 
             self.assertEqual(client.feature_flags, [])
@@ -1111,8 +1111,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.group_type_mapping, {})
             self.assertEqual(client.cohorts, {})
             self.assertIn("Unauthorized", logs.output[0])
-            self.assertIn("project_api_key", logs.output[0])
-            self.assertIn("secret_key", logs.output[0])
+            self.assertIn("Feature flags: Read", logs.output[0])
 
     @mock.patch("posthog.client.flags")
     def test_dont_override_capture_with_local_flags(self, patch_flags):
