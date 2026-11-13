@@ -1504,6 +1504,7 @@ def test_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
             (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
             requests.exceptions.ReadTimeout("slow"),
             rejected(409, "canceled"),
+            rejected(409, "canceled"),
         ]
     )
     session = requests.Session()
@@ -1517,6 +1518,14 @@ def test_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
         except EmailError as exc:
             moved.append(exc)
 
+    queued: list[Any] = []
+
+    def queue_move() -> None:
+        try:
+            queued.append(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+        except EmailError as exc:
+            queued.append(exc)
+
     mover = threading.Thread(target=move)
     mover.start()
     assert first_sent.wait(5)
@@ -1525,15 +1534,21 @@ def test_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
     assert cancel_sent.wait(5)
     canceler.join(5)
     assert not canceler.is_alive()  # The cancel doesn't wait for the move.
+    queuer = threading.Thread(target=queue_move)
+    queuer.start()
+    queuer.join(0.2)  # It waits its turn behind the first move.
     release.set()
     mover.join(5)
+    queuer.join(5)
     assert isinstance(moved[0], EmailError) and moved[0].code == "network_error"
+    # The move queued after the cancel reaches PostHog, which answers it canceled.
+    assert (queued[0].code, queued[0].status_code) == ("canceled", 409)
 
     with pytest.raises(EmailError) as raised:
         emails.update(MESSAGE_ID, scheduled_at=SOONER)
 
     assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
-    assert adapter.calls == 3
+    assert adapter.calls == 4
 
 
 @pytest.mark.asyncio
@@ -1559,15 +1574,24 @@ async def test_async_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too
     mover = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=LATER))
     await first_sent.wait()
     assert (await emails.cancel(MESSAGE_ID)).status == "canceled"
+    queued = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+    for _ in range(5):  # It waits its turn behind the first move.
+        await asyncio.sleep(0)
     release.set()
     with pytest.raises(EmailError):
         await mover
+    with pytest.raises(EmailError) as queued_error:
+        await queued
 
+    assert (queued_error.value.code, queued_error.value.status_code) == (
+        "canceled",
+        409,
+    )
     with pytest.raises(EmailError) as raised:
         await emails.update(MESSAGE_ID, scheduled_at=SOONER)
 
     assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
-    assert len(seen) == 3
+    assert len(seen) == 4
 
 
 def test_a_failed_cancel_keeps_the_unconfirmed_move():
