@@ -106,6 +106,7 @@ from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
     _get_definition_unresolved_reason,
+    _match_feature_enrollment,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -4368,6 +4369,9 @@ class Client(object):
             )
 
         flag_filters = feature_flag.get("filters") or {}
+        if flag_filters.get("feature_enrollment") is True:
+            return _match_feature_enrollment(feature_flag, person_properties)
+
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
         group_type_mapping = snapshot["group_type_mapping"]
 
