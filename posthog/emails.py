@@ -116,6 +116,12 @@ string with an offset, to send up to 30 days later. The result's ``status`` is
 ``scheduled``. Until the email goes out, ``emails.list()`` finds it,
 ``emails.update(id, scheduled_at=...)`` moves it, and ``emails.cancel(id)``
 stops it. A naive ``datetime`` raises ``ValueError`` before any request.
+A move that got no answer, such as on a timeout, may still reach PostHog
+later. So from then on, the client refuses to move that email to another
+time, with the code ``move_unconfirmed`` and without a request; a move to the
+same time still goes out. To move it, cancel the email, which a late move
+can't undo, and send it again. A client sends the moves of one email one at a
+time, but moves from another client aren't ordered with its moves.
 
 ```python
 from datetime import datetime, timedelta, timezone
@@ -151,13 +157,16 @@ import random
 import re
 import threading
 import time
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import TracebackType
 from typing import (
     Any,
+    AsyncIterator,
     Awaitable,
     Callable,
+    Iterator,
     Literal,
     Mapping,
     Optional,
@@ -1537,6 +1546,17 @@ def _storage_unreachable(index: int, exc: Exception) -> EmailError:
     )
 
 
+def _move_unconfirmed() -> EmailError:
+    return EmailError(
+        name="application_error",
+        code="move_unconfirmed",
+        message="An earlier move of this email to another time got no answer, so PostHog may "
+        "still apply it after this one. Nothing was changed.",
+        fix="To move the email, cancel it, which a late move can't undo, and send it again "
+        "at the new time.",
+    )
+
+
 def _files_body(files: Sequence[_File]) -> bytes:
     return _encode(
         {"files": [{"sha256": file.sha256, "size": file.size} for file in files]}
@@ -1564,6 +1584,36 @@ class _EmailsBase:
         self._parent_disabled: Callable[[], bool] = lambda: False
         self._admit: Callable[[], Optional[Callable[[], None]]] = lambda: _no_op
         self._host_error: Optional[str] = None
+        # Moves of one email go out one at a time, in turn. A move that got no answer may still reach
+        # PostHog at any later time, so its body stays here, by email, for the client's lifetime.
+        self._moves_lock = threading.Lock()
+        self._unanswered_moves: dict[str, bytes] = {}
+        self._move_turns: dict[str, tuple[Any, int]] = {}
+
+    def _take_move_turn(self, path: str, new_lock: Callable[[], Any]) -> Any:
+        with self._moves_lock:
+            lock, waiting = self._move_turns.get(path) or (new_lock(), 0)
+            self._move_turns[path] = (lock, waiting + 1)
+            return lock
+
+    def _end_move_turn(self, path: str) -> None:
+        with self._moves_lock:
+            lock, waiting = self._move_turns[path]
+            if waiting == 1:
+                del self._move_turns[path]
+            else:
+                self._move_turns[path] = (lock, waiting - 1)
+
+    def _check_move(self, path: str, body: bytes) -> None:
+        with self._moves_lock:
+            unanswered = self._unanswered_moves.get(path)
+        if unanswered is not None and unanswered != body:
+            # The late move would undo this one, and only PostHog could order the two.
+            raise _move_unconfirmed()
+
+    def _note_unanswered_move(self, path: str, body: bytes) -> None:
+        with self._moves_lock:
+            self._unanswered_moves[path] = body
 
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()
@@ -1798,6 +1848,14 @@ class Emails(_EmailsBase):
         ``already_sending`` for an email that was moved: read it with
         :meth:`get`.
 
+        This client sends the moves of one email one at a time, in turn. A
+        move that got no answer, such as on a timeout, may still reach PostHog
+        later, even after a retry got one. So from then on, this client
+        refuses to move that email to another time, without a request; a move
+        to the same time still goes out. To move it, :meth:`cancel` the email,
+        which a late move can't undo, and send it again. Moves from another
+        client aren't ordered with this client's.
+
         Args:
             message_id: The ``id`` that :meth:`send` returned.
             scheduled_at: The new send time, as :meth:`send` takes it. It must
@@ -1813,7 +1871,10 @@ class Emails(_EmailsBase):
                 ``canceled`` after a cancel, ``invalid_scheduled_at`` for a time
                 too far ahead, and ``not_found`` for an unknown ID or an email
                 that went out. ``name`` is ``validation_error`` for the first
-                three: a retry can't change them.
+                three: a retry can't change them. ``code`` is
+                ``move_unconfirmed``, named ``application_error``, when an
+                earlier move of this email to another time got no answer, and
+                nothing was sent.
             TypeError, ValueError: An argument has the wrong type or format.
 
         Examples:
@@ -1828,10 +1889,18 @@ class Emails(_EmailsBase):
             headers = _headers(
                 self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from, has_body=True
             )
-            return self._call(
-                self._posthog_request("PATCH", path, body, headers),
-                _parse_update_response,
-            )
+            send = self._posthog_request("PATCH", path, body, headers)
+
+            def move() -> requests.Response:
+                try:
+                    return send()
+                except requests.exceptions.RequestException:
+                    self._note_unanswered_move(path, body)
+                    raise
+
+            with self._move_turn(path):
+                self._check_move(path, body)
+                return self._call(move, _parse_update_response)
         finally:
             finish()
 
@@ -1912,6 +1981,15 @@ class Emails(_EmailsBase):
             )
         finally:
             finish()
+
+    @contextmanager
+    def _move_turn(self, path: str) -> Iterator[None]:
+        lock = self._take_move_turn(path, threading.Lock)
+        try:
+            with lock:
+                yield
+        finally:
+            self._end_move_turn(path)
 
     def _posthog_request(
         self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
@@ -2133,10 +2211,20 @@ class AsyncEmails(_EmailsBase):
             headers = _headers(
                 self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from, has_body=True
             )
-            return await self._call(
-                self._posthog_request("PATCH", path, body, headers),
-                _parse_update_response,
-            )
+            httpx, _ = self._get_client()
+            send = self._posthog_request("PATCH", path, body, headers)
+
+            async def move() -> Any:
+                try:
+                    return await send()
+                except (httpx.RequestError, asyncio.CancelledError):
+                    # A move canceled while it waited, such as by asyncio.wait_for, got no answer either.
+                    self._note_unanswered_move(path, body)
+                    raise
+
+            async with self._move_turn(path):
+                self._check_move(path, body)
+                return await self._call(move, _parse_update_response)
         finally:
             finish()
 
@@ -2180,6 +2268,15 @@ class AsyncEmails(_EmailsBase):
             )
         finally:
             finish()
+
+    @asynccontextmanager
+    async def _move_turn(self, path: str) -> AsyncIterator[None]:
+        lock = self._take_move_turn(path, asyncio.Lock)
+        try:
+            async with lock:
+                yield
+        finally:
+            self._end_move_turn(path)
 
     def _posthog_request(
         self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]

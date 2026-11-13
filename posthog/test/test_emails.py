@@ -1268,6 +1268,188 @@ def test_a_cancel_or_move_too_late_is_a_validation_error(_name, call, code):
     assert len(adapter.requests) == 1
 
 
+SOONER = datetime(2026, 11, 30, 9, 0, tzinfo=timezone.utc)
+MOVED_LATER = MANAGE_CALLS[0][2]
+OTHER_MESSAGE_ID = "01a18356-c56c-0001-e494-7666bc915199"
+NO_ANSWERS = [
+    ("connection_error", requests.exceptions.ConnectionError("down")),
+    ("timeout", requests.exceptions.ReadTimeout("slow")),
+]
+
+
+def assert_move_unconfirmed(error: EmailError) -> None:
+    assert (error.name, error.code, error.status_code) == (
+        "application_error",
+        "move_unconfirmed",
+        None,
+    )
+    assert "Nothing was changed" in error.message
+    assert error.fix is not None and "cancel it" in error.fix
+
+
+@parameterized.expand(NO_ANSWERS)
+def test_a_move_after_one_that_got_no_answer_is_refused(_name, no_answer):
+    # PostHog may still apply the unanswered move after a newer one, which would undo the newer one.
+    emails, adapter = emails_with([no_answer], max_retries=0)
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID.upper(), scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 1
+
+
+def test_a_move_is_refused_even_when_a_retry_of_the_unanswered_one_got_an_answer():
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), MOVED_LATER], max_retries=1
+    )
+    emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 2
+
+
+def test_a_move_to_the_same_time_as_the_unanswered_one_still_goes_out():
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), MOVED_LATER], max_retries=0
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert emails.update(MESSAGE_ID, scheduled_at=LATER).id == MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+def test_a_move_of_another_email_still_goes_out():
+    emails, adapter = emails_with(
+        [
+            requests.exceptions.ReadTimeout("slow"),
+            (
+                200,
+                {
+                    "id": OTHER_MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-11-30T09:00:00Z",
+                },
+                {},
+            ),
+        ],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert emails.update(OTHER_MESSAGE_ID, scheduled_at=SOONER).id == OTHER_MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+def test_a_move_called_while_an_earlier_one_waits_is_sent_after_it():
+    first_sent, release = threading.Event(), threading.Event()
+
+    class SlowAdapter(FakeAdapter):
+        def send(self, request: requests.PreparedRequest, **kwargs: Any):
+            if not self.requests:
+                first_sent.set()
+                release.wait(5)
+            return super().send(request, **kwargs)
+
+    adapter = SlowAdapter([requests.exceptions.ReadTimeout("slow"), MOVED_LATER])
+    session = requests.Session()
+    session.mount("https://", adapter)
+    emails = Emails(SECRET_KEY, session=session, max_retries=0)
+    outcomes: dict[str, Any] = {}
+
+    def move(name: str, scheduled_at: datetime) -> None:
+        try:
+            outcomes[name] = emails.update(MESSAGE_ID, scheduled_at=scheduled_at)
+        except EmailError as exc:
+            outcomes[name] = exc
+
+    first = threading.Thread(target=move, args=("first", LATER))
+    first.start()
+    assert first_sent.wait(5)
+    second = threading.Thread(target=move, args=("second", SOONER))
+    second.start()
+    second.join(
+        0.2
+    )  # Without ordering, the second move goes out now, alongside the first.
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert isinstance(outcomes["first"], EmailError)
+    assert_move_unconfirmed(outcomes["second"])
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_one_that_got_no_answer_is_refused():
+    first_sent, release = asyncio.Event(), asyncio.Event()
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            first_sent.set()
+            await release.wait()
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json=MOVED_LATER[1])
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    first = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=LATER))
+    await first_sent.wait()
+    queued = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+    for _ in range(5):  # Without ordering, the queued move goes out now.
+        await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(EmailError):
+        await first
+    with pytest.raises(EmailError) as queued_error:
+        await queued
+    with pytest.raises(EmailError) as later_error:
+        await emails.update(MESSAGE_ID.upper(), scheduled_at=SOONER)
+
+    assert_move_unconfirmed(queued_error.value)
+    assert_move_unconfirmed(later_error.value)
+    assert len(seen) == 1
+    assert (await emails.update(MESSAGE_ID, scheduled_at=LATER)).id == MESSAGE_ID
+    assert len(seen) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_one_canceled_while_it_waited_is_refused():
+    # Such as under asyncio.wait_for: the canceled move may still reach PostHog.
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            await asyncio.Event().wait()
+        return httpx.Response(200, json=MOVED_LATER[1])
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(emails.update(MESSAGE_ID, scheduled_at=LATER), 0.05)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(seen) == 1
+
+
 @parameterized.expand(
     [
         ("service_unavailable", rejected(503, "delivery_unavailable")),
