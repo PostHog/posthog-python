@@ -18,19 +18,21 @@ SDK usage examples and code snippets live in the official documentation so they 
 
 | SDK Version   | Python Versions Supported    | Notes                      |
 | ------------- | ---------------------------- | -------------------------- |
-| 8.0.0+        | 3.10, 3.11, 3.12, 3.13, 3.14 | Capture v1 only, see the [migration guide](docs/migration-7.x-to-8.0.md) |
-| 7.3.1 - 7.x   | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support  |
+| 8.0.0+        | 3.10, 3.11, 3.12, 3.13, 3.14 | Capture v1 only            |
+| 7.3.1 - 7.x.x | 3.10, 3.11, 3.12, 3.13, 3.14 | Added Python 3.14 support  |
 | 7.0.0 - 7.0.1 | 3.10, 3.11, 3.12, 3.13       | Dropped Python 3.9 support |
-| 4.0.1 - 6.x   | 3.9, 3.10, 3.11, 3.12, 3.13  | Python 3.9+ required       |
+| 4.0.1 - 6.x.x | 3.9, 3.10, 3.11, 3.12, 3.13  | Python 3.9+ required       |
+
+To upgrade from posthog-python 7.x.x to 8.0.0, see the [migration guide](docs/migration-7.x-to-8.0.md).
 
 ## Documentation
 
 - [Python library docs](https://posthog.com/docs/libraries/python)
-- [Migrating from 7.x to 8.0](docs/migration-7.x-to-8.0.md)
+- [Migrating from posthog-python 7.x.x to 8.0.0](docs/migration-7.x-to-8.0.md)
 - [Django framework docs](https://posthog.com/docs/libraries/django)
 - [Flask framework docs](https://posthog.com/docs/libraries/flask)
-- [Request integration configuration](references/middleware_configuration.md) — shared middleware options and compatibility notes
-- [OpenFeature provider docs](https://posthog.com/docs/feature-flags/installation/openfeature) — use PostHog flags through the [OpenFeature](https://openfeature.dev) Python SDK
+- [Request integration configuration](references/middleware_configuration.md), with shared middleware options and compatibility notes
+- [OpenFeature provider docs](https://posthog.com/docs/feature-flags/installation/openfeature), to use PostHog flags through the [OpenFeature](https://openfeature.dev) Python SDK
 
 ## Contributing
 

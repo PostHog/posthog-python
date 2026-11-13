@@ -2,4 +2,4 @@
 pypi/openfeature-provider-posthog: minor
 ---
 
-Supports posthog 8.x as well as 7.x.
+Supports posthog-python 8.x.x as well as 7.x.x.

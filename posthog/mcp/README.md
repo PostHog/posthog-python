@@ -79,15 +79,15 @@ report none.
 
 The MCP SDK answers `initialize` itself, so the SDK observes it from outside:
 
-- **MCP SDK 2.x**: through `Server.middleware`, on every transport.
-- **MCP SDK 1.x over HTTP**: through `PostHogMcpStatelessSessionMiddleware`, which
+- **MCP SDK 2.x.x**: through `Server.middleware`, on every transport.
+- **MCP SDK 1.x.x over HTTP**: through `PostHogMcpStatelessSessionMiddleware`, which
   `instrument()` adds to the apps it autowires. If you mount the middleware
   yourself, pass the server: `app.add_middleware(PostHogMcpStatelessSessionMiddleware, server=mcp)`.
   Without it, each pod reports the session's first request as its initialize.
   The deprecated SSE transport also uses the session's first request.
   The middleware reads only requests that carry no `Mcp-Session-Id`, so an
   `initialize` that reuses an existing session id reports none.
-- **MCP SDK 1.x over stdio**: from the session's first request. A stdio server
+- **MCP SDK 1.x.x over stdio**: from the session's first request. A stdio server
   serves one client, so this misses only a client that never sends a request.
 
 Set `send_initialize_event=False` to stop sending `$mcp_initialize`. Many clients reconnect before
@@ -103,7 +103,7 @@ instrument(server, posthog, MCPAnalyticsOptions(send_initialize_event=False))
 Set `send_tools_list_event=False` to stop sending `$mcp_tools_list`. Nothing else changes: tools
 keep their injected arguments, and the virtual tools stay listed.
 
-`identify` and `event_properties` run for the handshake too. On MCP SDK 1.x the
+`identify` and `event_properties` run for the handshake too. On MCP SDK 1.x.x the
 SDK has no request context for it, so `extra["ctx"]` carries only `.request`.
 `get_request_headers(extra)` works the same as for any other request.
 
@@ -195,17 +195,17 @@ Custom dispatchers can call `get_tool_input_properties()` and add its result to
 the `properties` argument of `capture_tool_call()`.
 
 Model capture adds an optional `llm_model` argument to compatible tool schemas. Dispatch never
-enforces it, so servers keep working; strict-schema clients see the new field. Set
+enforces it, so servers keep working. Strict-schema clients see the new field. Set
 `capture_model=False` to leave schemas untouched.
 Conversation correlation adds an optional `conversation_id` argument and returns a handle in
-eligible tool results. Clients must echo it to group later calls; calls without it mint new handles.
+eligible tool results. Clients must echo it to group later calls. Calls without it mint new handles.
 Set `enable_conversation_id=False` to retain transport-based session grouping and unchanged
 response content. Custom `PostHogMCP` dispatchers also enable model capture and conversation
 correlation by default. The reasoning is recorded in posthog-js `docs/adr/0013`.
 
 ## Capture the calling model
 
-Model capture is on by default for instrumented MCP Python SDK 1.x and 2.x servers.
+Model capture is on by default for instrumented MCP Python SDK 1.x.x and 2.x.x servers.
 The SDK records the best model identifier visible to the server as
 `$mcp_llm_model`. Recognized client metadata wins and sets
 `$mcp_llm_model_source` to `client_metadata`. The SDK also adds an `llm_model`
@@ -232,18 +232,18 @@ A raw low-level server learns ownership while serving `tools/list`. A fresh inst
 served one has no answer, so it records `llm_model` as the self-reported model and strips
 nothing (posthog-js ADR-0011: reads fail open, strips fail closed). A tool that declares its own
 `llm_model` on such an instance is therefore recorded under `$mcp_llm_model` until a listing says
-otherwise; `capture_model=False` or `before_send` are the escapes. High-level adapters and
+otherwise. `capture_model=False` or `before_send` are the escapes. High-level adapters and
 standalone `fastmcp.FastMCP` read ownership from the registered tool schema, so they are
 unaffected and need no prior listing when dispatch uses that registry.
 
-On MCP SDK 1.x, standalone FastMCP application middleware can replace or reroute a tool.
+On MCP SDK 1.x.x, standalone FastMCP application middleware can replace or reroute a tool.
 When it overrides a listing or dispatch hook, PostHog does not inject `llm_model`: a fresh
 replica cannot safely distinguish that field from a replacement tool's own argument.
 Client metadata capture remains enabled. This also applies to pass-through logging or
-authorization middleware of your own with those hooks; argument-based model capture is skipped
+authorization middleware of your own with those hooks. Argument-based model capture is skipped
 so an application-owned value cannot be mistaken for analytics. FastMCP's stock middleware,
 such as `LoggingMiddleware`, `TimingMiddleware`, and `ErrorHandlingMiddleware`, never reroutes a
-tool and does not count; its tool-injection middleware does. No additional catalog lookup runs
+tool and does not count. Its tool-injection middleware does. No additional catalog lookup runs
 during a tool call.
 
 For a custom dispatcher, `PostHogMCP` enables model capture and conversation correlation
@@ -311,8 +311,8 @@ Each call emits one `$mcp_feedback` event (never a `$mcp_tool_call`) with
 `$mcp_feedback_friction_points`, `$mcp_feedback_suggested_improvement`,
 `$mcp_feedback_tool`, `$mcp_feedback_sentiment`, and
 `$mcp_feedback_task_completed`. The summary and details also map to
-`$mcp_intent`. Free-text fields are sanitized, PII-redacted, and length-bounded;
-the raw arguments are never captured. An invalid `feedback_type` falls back to
+`$mcp_intent`. Free-text fields are sanitized, PII-redacted, and length-bounded.
+The raw arguments are never captured. An invalid `feedback_type` falls back to
 `other`. The agent receives an honest acknowledgement: the call records feedback
 and adds no tools.
 
@@ -343,9 +343,9 @@ options = MCPAnalyticsOptions(
 ```
 
 Declared extras merge into the advertised schema and are captured as
-`$mcp_feedback_<key>`. Arguments the agent invents are never captured; the
+`$mcp_feedback_<key>`. Arguments the agent invents are never captured. The
 handler reads them from `report.raw`. A key that collides with a core field
-raises at configuration time. `on_feedback` may be sync or async; a returned
+raises at configuration time. `on_feedback` may be sync or async. A returned
 non-blank string replaces the default reply, and a raised handler is logged and
 falls back to it. The event is captured either way.
 
@@ -372,7 +372,7 @@ if call.is_feedback:
     return prepared.result
 ```
 
-`on_feedback` is ignored on this path — the dispatcher routes reports itself via
+`on_feedback` is ignored on this path. The dispatcher routes reports itself via
 `call.feedback_report`.
 
 On this path you own the page rule, because you pass the switches per call. Pass
@@ -404,7 +404,7 @@ tool call whenever the registry can't rule the tool out:
 - A raw low-level server has no registry the SDK can read.
 - On standalone `fastmcp.FastMCP`, middleware of your own that overrides a
   listing or dispatch hook can serve tools the registry lacks.
-- On standalone `fastmcp.FastMCP` 3 and later, a mounted server, proxy, or
+- On standalone `fastmcp.FastMCP` 3.0.0 and later, a mounted server, proxy, or
   other provider hides its disabled tools.
 
 ## Virtual tools on a paginated `tools/list`
@@ -413,9 +413,9 @@ tool call whenever the registry can't rule the tool out:
 (`report_missing=True`) and `send_feedback` (`collect_feedback=True`).
 
 A client concatenates every `tools/list` page into one list, so each virtual tool
-is appended to the **first page only** — the page every client reads, including
+is appended to the **first page only**, the page every client reads, including
 clients that never follow `nextCursor`. "First page" means a request with no
-cursor; an empty string is a valid opaque cursor, so `cursor: ""` is a
+cursor. An empty string is a valid opaque cursor, so `cursor: ""` is a
 continuation page.
 
 ### Tool name collisions
@@ -432,7 +432,7 @@ MCPAnalyticsOptions(
 
 - A real tool using the name **on the first page** wins: the SDK warns, injects
   nothing, and never intercepts yours.
-- A real tool that appears **only on a later page** is shadowed — page one cannot
+- A real tool that appears **only on a later page** is shadowed. Page one cannot
   see page two, so the SDK's tool is already advertised and calls to the name
   reach it. The SDK warns when that page is served. `@posthog/mcp` is the same.
 - Configuring **both** virtual tools with one name advertises only
@@ -442,12 +442,12 @@ Warnings go to the `logger` option *and* the `posthog.mcp` standard-library
 logger, so a default-configured host sees them on stderr.
 
 At call time the SDK checks ownership again, covering the process that serves a
-call without having served a listing — the ordinary multi-pod case. FastMCP and
-v2 `MCPServer` are asked via their tool registry; a raw low-level server has
+call without having served a listing, the ordinary multi-pod case. FastMCP and
+the MCP SDK 2.x.x `MCPServer` are asked via their tool registry. A raw low-level server has
 none, so the SDK calls your own `tools/list` handler, once per call to a virtual
-tool's name and never for ordinary traffic. If that check cannot answer — a
+tool's name and never for ordinary traffic. If that check cannot answer (a
 registry lookup or a listing handler raised, or you registered `tools/list`
-after `instrument()` — the call is delegated to your server rather than
+after `instrument()`), the call is delegated to your server rather than
 intercepted, and the reason is logged: guessing the other way would swallow a
 real tool of yours silently.
 
@@ -460,8 +460,8 @@ happened to be served last.
 
 A stateless MCP server issues no session id, so `$session_id` fragments across pods
 and the client identity (sent only at `initialize`) is lost. PostHog fixes this with
-a small ASGI middleware — `PostHogMcpStatelessSessionMiddleware` — that mints a
-self-encoded token onto the `Mcp-Session-Id` response header at `initialize`; the
+a small ASGI middleware, `PostHogMcpStatelessSessionMiddleware`, that mints a
+self-encoded token onto the `Mcp-Session-Id` response header at `initialize`. The
 client replays it on every request, so any pod recovers the session and harness from
 the header alone.
 
@@ -469,7 +469,7 @@ the header alone.
 
 `instrument()` wraps the FastMCP server's app factories (`streamable_http_app()` /
 `sse_app()`), so an app you build **after** calling `instrument()` already carries the
-middleware — including `mcp.run(transport="streamable-http")`, which calls those
+middleware, including `mcp.run(transport="streamable-http")`, which calls those
 factories internally. Nothing extra to add, as long as `instrument()` runs first:
 
 ```python
@@ -478,11 +478,11 @@ instrument(server, posthog)
 server.run(transport="streamable-http")   # already wired
 ```
 
-### Manual path — required when you build the app yourself
+### Manual path, required when you build the app yourself
 
 Autowiring only affects an app built **after** `instrument()` runs. If you build or
-mount the ASGI app before `instrument()`, or in a different module — the common
-FastAPI case — the running app gets **no** middleware and every session falls back to
+mount the ASGI app before `instrument()`, or in a different module (the common
+FastAPI case), the running app gets **no** middleware and every session falls back to
 a fragmented per-process id. Add the middleware to your app explicitly:
 
 ```python
@@ -517,9 +517,9 @@ handle when this option is enabled.
 
 The failure used to be silent. It now surfaces two ways:
 
-- **At `instrument()`** — if `streamable_http_app()` was already called before
+- **At `instrument()`**: if `streamable_http_app()` was already called before
   `instrument()` ran, so the live app has no middleware.
-- **At runtime, once** — the first time a tool call arrives over streamable HTTP and the
+- **At runtime, once**: the first time a tool call arrives over streamable HTTP and the
   session still has to come from this process's memory.
 
 Both go to the logger you pass via `MCPAnalyticsOptions(logger=...)` **and** to the
@@ -534,18 +534,18 @@ Neither fires for stdio, for a correctly-wired server, or for a conversation-anc
 session. The instrument-time check can't see whether you added the middleware yourself
 (the app is already built by then), so ignore it if you did.
 
-Standalone `fastmcp` 4 uses the MCP SDK v2 handler registry. `instrument()` detects
+Standalone `fastmcp` 4.x.x uses the MCP SDK 2.x.x handler registry. `instrument()` detects
 that registry automatically and captures tool calls over stdio and streamable HTTP,
-including the stateless protocol. Mounted tools retain their own arguments; analytics
+including the stateless protocol. Mounted tools retain their own arguments. Analytics
 parameters are removed before dispatch only when the tool does not declare them.
 Instrumenting both the wrapper and its underlying server works in either order.
 For versioned tools, argument ownership follows the version requested by the client.
 Each tool call resolves the schema through FastMCP's tool listing in the current request context, including middleware and session transforms.
 This adds a schema lookup per call so clients with different tool schemas cannot change how another client's arguments are handled.
-The same installation code continues to support standalone FastMCP 2.x/3.x on MCP SDK v1.
+The same installation code continues to support standalone FastMCP 2.x.x and 3.x.x on MCP SDK 1.x.x.
 
-Two gaps worth knowing: jlowin's `fastmcp` 2.x/3.x doesn't expose the attribute the
+Two gaps worth knowing: jlowin's `fastmcp` 2.x.x and 3.x.x don't expose the attribute the
 instrument-time check reads, so those servers get the runtime warning only. And the
-deprecated SSE transport is excluded — it keys sessions off a query parameter, and the
+deprecated SSE transport is excluded. It keys sessions off a query parameter, and the
 mint sets a response header an SSE client never replays, so the middleware wouldn't
 help it.

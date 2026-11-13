@@ -1342,8 +1342,11 @@ class Client(object):
                 ``super_properties`` stops the SDK adding either ID. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
-            traces: Config dict for distributed tracing: ``service_name``,
-                ``service_version``, ``environment``, ``resource_attributes``,
+            traces: Config dict for distributed tracing. Non-empty string values for
+                ``service.name``, ``service.version`` and ``deployment.environment``
+                in ``resource_attributes`` take precedence over ``service_name``,
+                ``service_version`` and ``environment``, respectively. Options include
+                ``service_name``, ``service_version``, ``environment``, ``resource_attributes``,
                 ``flush_interval`` (5 s), ``max_queue_size`` (2048),
                 ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
                 ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
@@ -1352,10 +1355,26 @@ class Client(object):
                 list run in order, that receives each finished span as a dict
                 (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)
                 and returns it, edited, or ``None`` to drop it; a hook that
-                raises drops the span. Tracing is off until this is provided.
-                Spans export on a background timer even with ``sync_mode``;
-                serverless handlers should call ``flush()`` before returning.
-                Defaults to None.
+                raises drops the span. The span dict has ``name``, ``kind``,
+                ``status``, ``attributes``, ``events``, ``start_time_ns``,
+                ``end_time_ns``, ``trace_id``, ``span_id`` and
+                ``parent_span_id``, and its attributes are plain Python values.
+                The hook runs after ``posthogDistinctId`` and ``sessionId`` are
+                attached, so it can scrub them. It must be a regular function.
+                An ``async`` hook drops every span. In a list of hooks, the
+                first one to return ``None`` stops the chain. An entry that
+                isn't callable turns tracing off for the client. Past a
+                per-span cap, the earliest attributes and events are kept and
+                the span reports how many were dropped. ``posthogDistinctId``
+                and ``sessionId`` don't count toward the attribute cap and are
+                never dropped. ``max_attribute_value_length`` also applies to
+                strings nested in lists and dictionaries. All caps are applied
+                again after ``before_span_send``. Spans beyond
+                ``max_queue_size`` are dropped. An invalid value falls back to
+                its default with a warning. Tracing is off until this is
+                provided. Spans export on a background timer even with
+                ``sync_mode``; serverless handlers should call ``flush()``
+                before returning. Defaults to None.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -1381,8 +1400,9 @@ class Client(object):
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
             capture_compression: Request-body compression for ``capture()``
-                uploads. ``CaptureCompression.GZIP`` or ``DEFLATE`` (or the
-                strings ``"gzip"``/``"deflate"``). When omitted, the
+                uploads. ``CaptureCompression.GZIP``, ``DEFLATE`` or ``ZSTD``
+                (or the strings ``"gzip"``, ``"deflate"`` or ``"zstd"``).
+                ``ZSTD`` needs ``pip install posthog[zstd]``. When omitted, the
                 ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
                 compression.
             capture_ai_compression: Request-body compression for
@@ -3438,12 +3458,17 @@ class Client(object):
         """
         Start a span for distributed tracing. Alpha.
 
+        The span API is experimental and can change in a minor release. Spans
+        already sent are kept; the SDK API isn't frozen yet.
+
         Returns a span handle. Use it as a context manager to make it the active
         span for the block and end it on exit (recording a raised exception on
         the way out); or call ``end()`` yourself for a span that cannot wrap a
         block. Spans started inside the block nest under it automatically.
         Always returns a usable handle, even when tracing is off, so calling
-        code never branches.
+        code never branches. At ``max_live_spans`` open spans, the SDK first
+        evicts spans open longer than ``max_span_age`` seconds, which are never
+        exported. If it is still at the limit, the returned span isn't recorded.
 
         Args:
             name: A low-cardinality operation name, e.g. ``GET /users/:id``.
@@ -3454,10 +3479,19 @@ class Client(object):
             parent: A span handle, or an inbound W3C ``traceparent`` header
                 value to continue a remote trace. Defaults to the active span.
                 A forked child starts with no active span; pass the parent
-                span to continue a trace across a fork.
+                span to continue a trace across a fork. The active span is
+                tracked with ``contextvars``, so it carries across ``await``.
+                Threads don't reliably inherit it, so pass ``parent=span`` in
+                a thread or a ``ThreadPoolExecutor`` task. A malformed
+                ``traceparent`` starts a new trace and doesn't raise. A
+                continued trace propagates the sampled flag it received.
+                PostHog doesn't sample, so the span is exported whichever way
+                the flag is set.
             tracestate: The inbound ``tracestate`` header accompanying a
                 ``traceparent`` string ``parent``; preserved and propagated.
             start_time: A ``datetime`` or epoch seconds, to backdate the span.
+                PostHog clamps a start time more than 24 hours old to the
+                receive time.
 
         Examples:
             ```python
@@ -4047,6 +4081,8 @@ class Client(object):
         flush with up to 30 seconds waiting for an in-flight flush, then a fresh
         30-second drain budget; the last HTTP request is not cut short. Any spans
         it cannot send are discarded with a warning, as are spans still open.
+        A script that exits without calling ``shutdown()`` gets only a brief
+        best-effort span flush, so don't rely on it.
         Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
