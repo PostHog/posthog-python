@@ -289,14 +289,14 @@ Every capture failure is a `CaptureError`, a subclass of `APIError`. It has `end
 | Field | Holds |
 | --- | --- |
 | `status` | The HTTP status, or `0` when the request never got a response |
-| `drops` | `(uuid, details)` pairs for the events capture dropped in a 2xx response |
+| `drops` | A `CaptureDroppedEvent(uuid, details)` for each event capture dropped in a 2xx response |
 | `retry_exhausted` | The UUIDs still waiting for a retry after the last attempt |
 | `event_results` | A `CaptureEventResult(result, details)` for each UUID that got a result in a 2xx response |
 | `verdict_summary()` | Counts such as `drop/llm_events_over_quota=1, retry/not_persisted=1` |
 
 When `status` is `0`, `__cause__` holds the network error. In 7.x.x, `on_error` received the raw `requests` exception.
 
-`CaptureEventResult` comes from `posthog.capture_send`. An event missing from `event_results` never got a result.
+`CaptureDroppedEvent` and `CaptureEventResult` come from `posthog.capture_send`. A `CaptureDroppedEvent` is a tuple, so `for uuid, details in error.drops` also works. An event missing from `event_results` never got a result.
 
 `on_error` and the SDK's log lines change with it:
 
