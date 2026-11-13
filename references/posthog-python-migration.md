@@ -20,7 +20,6 @@ Read the checklist first, then the sections that apply to you.
 
 **Before you upgrade**
 
-- [ ] You send events to a self-hosted PostHog that doesn't serve the capture v1 endpoints → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You send events through your own proxy → [Prepare your proxy](#prepare-your-proxy)
 - [ ] A proxy redirects capture requests to another host → [Prepare your proxy](#prepare-your-proxy)
 - [ ] You pass a personal API key (`phx_...`) as the project token → [Use a project token](#use-a-project-token)
@@ -64,7 +63,7 @@ Read the checklist first, then the sections that apply to you.
 | `capture_ai`, `capture_ai_immediate`, and the AI wrapper integrations | `/i/v1/ai/events` |
 | OpenTelemetry (`posthog.ai.otel`) | `/i/v0/ai/otel`, unchanged |
 
-If you send events to a self-hosted PostHog, check that it serves both `/i/v1/analytics/events` and `/i/v1/ai/events` before you upgrade. Self-hosted PostHog serves the AI endpoint from a separate capture service, so check each route. An endpoint that isn't served drops every event sent to it.
+If you self-host PostHog, see the [self-hosting docs](https://posthog.com/docs/self-host) before you upgrade. An endpoint that isn't served drops every event sent to it.
 
 If you send events through your own reverse proxy, update it before you upgrade:
 
@@ -162,7 +161,7 @@ An MCP hook that returns a new dict must copy them, or the event is sent without
 - **Content capture.** `enable_full_ai_capture` now controls only content: string truncation and media redaction. It no longer chooses the endpoint.
 - **Fallback IDs.** When an AI integration or MCP falls back to a trace, run, or session ID, it turns person processing off with a per-event option. This is the only option the integrations set on their own. It wins over your `posthog_options`, `options`, `super_options`, and context options. `before_send` can still change it.
 - **Empty distinct IDs.** An empty or whitespace-only distinct ID passed to an AI integration, such as `posthog_distinct_id=""`, counts as missing. The integration falls back the same way and turns person processing off.
-- **Empty distinct IDs in 7.x.** An empty ID gave non-streaming wrapper calls a random personless ID. Streaming calls, embeddings, and LangChain used the trace or run ID with person processing on. OpenAI Agents already treated an empty ID as missing. Every integration sent a whitespace-only ID as given, with person processing on.
+- **Empty distinct IDs in 7.x.x.** An empty ID gave non-streaming wrapper calls a random personless ID. Streaming calls, embeddings, and LangChain used the trace or run ID with person processing on. OpenAI Agents already treated an empty ID as missing. Every integration sent a whitespace-only ID as given, with person processing on.
 - **Async capture.** `AsyncPosthog` has `capture_ai` and `capture_ai_immediate`. It sends events with `requests` in a worker thread, and uses `httpx` only for feature flags and remote config.
 - **Async content settings.** `AsyncPosthog` accepts `privacy_mode` and `enable_full_ai_capture`, with the same meaning as on `Client`. An AI integration given an `AsyncPosthog` client used to always truncate and redact media.
 
@@ -243,7 +242,7 @@ These changes follow from this order:
 - **Call properties.** Properties passed to a call now override `super_properties`.
 - **SDK values.** A `$is_server`, `$geoip_disable`, `$lib`, `$lib_version`, or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x.x the SDK overwrote it.
 - **SDK values and `super_properties`.** `super_properties` win over the SDK's value too. So `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
-- **Feature flag properties.** Feature flag properties from `flags` or `send_feature_flags` still lose to the same key in the call's `properties`, a context tag, or `super_properties`, as in 7.x.
+- **Feature flag properties.** Feature flag properties from `flags` or `send_feature_flags` still lose to the same key in the call's `properties`, a context tag, or `super_properties`, as in 7.x.x.
 - **Trace IDs.** A `$trace_id` or `$span_id` in a context tag or `super_properties` now replaces the active OpenTelemetry span's IDs. In 7.x.x the span's IDs beat context tags.
 - **Trace ID pairs.** Setting either key in the call's `properties`, a context tag, or `super_properties` stops the SDK adding both. In 7.x.x the SDK still added the other key.
 - **The `disable_geoip` argument.** A `disable_geoip` argument to a call belongs to that event, so it wins over context tags and `super_properties`. A `$geoip_disable` in the call's own `properties` still wins over it.
@@ -331,7 +330,7 @@ A `Retry-After` header sets a minimum wait, up to 30 seconds.
 
 Capture itself doesn't return `429`, but a proxy in front of it can.
 
-A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route, for example an older self-hosted install.
+A `404` that lasts through every attempt can mean the PostHog deployment has no capture v1 route.
 
 ### Check dropped events
 
@@ -342,7 +341,7 @@ Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only t
 | The name is missing, `None`, empty, or not a string | Dropped, with a warning | Sent |
 | A `before_send` hook sets `distinct_id` to `None` or a non-string | Dropped, with a warning | Sent, and capture rejected the whole batch |
 | The name is over 200 UTF-8 bytes | Dropped by PostHog as `event_name_too_long` | Sent, with no name limit |
-| A `NaN` or infinite `float` value | Sent as `null`, as in 7.75.0 and later | Invalid JSON before 7.75.0, so capture rejected the whole batch |
+| A `NaN` or infinite `float` value | Sent as `null` | Sent as `null` from 7.75.0 |
 | It can't be serialized to JSON, for example with a circular reference | Dropped and logged | Logged the same line |
 | A property or option key JSON can't represent, such as a tuple | Key dropped without a log | Event dropped |
 | A key is an `int`, finite `float`, `bool`, or `None` | Key converted to a string | Key converted to a string |
@@ -350,7 +349,7 @@ Capture rejects a whole batch when one event can't be parsed. 8.x.x drops only t
 
 The SDK logs one warning per reason per process for a dropped name or `distinct_id`. It doesn't convert the hook's `distinct_id` or make up an ID.
 
-`on_error` reports an event that PostHog drops for its name. A `NaN` value in `$set` sets that person property to `null`. A circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback.
+`on_error` reports an event that PostHog drops for its name. Before 7.75.0, a `NaN` or infinite `float` value made the JSON invalid, so capture rejected the whole batch. A `NaN` value in `$set` sets that person property to `null`. A circular reference logs `Error in capture: maximum recursion depth exceeded` with a long traceback.
 
 Capture v1 sends `$session_id` and `$window_id` as top-level event fields, not as properties. The SDK moves them out of `properties` for you, by the value's type:
 
