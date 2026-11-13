@@ -633,18 +633,19 @@ def _capture_flag_events(
 
     Every read that sends flag events comes here, on both clients: the single-flag
     getters and the reads of an ``evaluate_flags()`` snapshot. Both events are built
-    from ``details``, the parsed ``/flags`` record that supplied the value, and the
-    call's ``properties``; the flag is never evaluated again.
+    from ``details``, the parsed ``/flags`` record supplying the value or failure
+    diagnostics, and the call's ``properties``; the flag is never evaluated again.
 
     ``$feature_flag_called`` is sent if the (distinct_id, flag, response, groups)
     tuple hasn't already been reported on this client. Group context is included so
     that group-scoped flags fire a separate event for each group a user is evaluated
-    under. A config version 2 record that supplied the reported value
+    under. A config version 2 record supplying the value or failed-record diagnostics
     (``value_from_details``) adds its attribution to the event and to that tuple, so
     equal-valued A/A arms, successive experiments of one flag, and holdouts are each
     reported. Its reason code replaces the human-readable ``$feature_flag_reason``.
-    A config version 1 event and tuple are unchanged, and so are those of a read
-    whose value the record did not supply.
+    A failed record keeps its config version and reason code, but no rule tuple or
+    experiment exposure. Config version 1 events and reads reporting a successful
+    caller override or stale cached value keep their existing attribution.
 
     ``has_experiment`` is the server-reported signal for whether the flag is linked
     to an experiment (``None`` when the server did not report it). When the
@@ -677,9 +678,8 @@ def _capture_flag_events(
     groups_key = (
         tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
     )
-    # Only a record that supplied the reported value attributes it. A caller's
-    # match_value and a stale cached value are reported as before, with no config
-    # version 2 properties, even when a config version 2 record came with them.
+    # A failed record still reports its config version and reason code. A successful
+    # caller override or stale cached value has no config version 2 attribution.
     attribution = _rule_attribution(details) if value_from_details else None
     # What both config version 2 events report about the read itself. Each event
     # pins it, so a super property cannot make the pair disagree.
@@ -4561,8 +4561,8 @@ class Client(object):
 
         flag_result = None
         flag_details = None
-        # Whether flag_details supplied the value this read reports. Only then may the
-        # read report config version 2 attribution or send $experiment_exposure.
+        # Whether flag_details supplies the reported value or failed-record diagnostics.
+        # A failed record keeps its config version and reason code, but sends no exposure.
         value_from_details = False
         request_id = None
         evaluated_at = None
@@ -4646,8 +4646,8 @@ class Client(object):
                     errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
                 if flag_details is None:
                     errors.append(FeatureFlagError.FLAG_MISSING)
-                elif flag_details._failed:
-                    errors.append("evaluation_failed")
+                elif flag_details._server_marked_failed:
+                    errors.append(FeatureFlagError.EVALUATION_FAILED)
                 if errors:
                     feature_flag_error = ",".join(errors)
 
@@ -4679,11 +4679,10 @@ class Client(object):
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
                 )
-                # A successful payload override reports the caller's value. A
-                # failed record still supplies diagnostics, never the override.
+                # A successful payload override reports the caller's value. A failed
+                # record keeps its config version and reason code, never the override.
                 value_from_details = flag_details is not None and (
-                    override_match_value is None
-                    or (flag_details._failed and flag_details._malformed_field is None)
+                    override_match_value is None or flag_details._server_marked_failed
                 )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
@@ -4793,7 +4792,9 @@ class Client(object):
             device_id: The device ID for this request.
 
         Returns:
-            Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
+            Optional[FeatureFlagResult]: The evaluated result, including a healthy
+                disabled flag, or None when no result is available (for example,
+                a missing flag or a server-marked failure without a successful fallback).
         """
         return self._get_feature_flag_result(
             key,
@@ -5042,9 +5043,8 @@ class Client(object):
         local_flag_id: Optional[int] = None,
         local_flag_version: Optional[int] = None,
         *,
-        # Keyword-only, and false by default: a caller that does not say the record
-        # supplied the value reports no config version 2 attribution and sends no
-        # $experiment_exposure.
+        # Opt in when the record supplies the value or failed-record diagnostics.
+        # Failed records keep config version and reason code, but send no exposure.
         value_from_details: bool = False,
     ):
         properties: dict[str, Any] = {
@@ -5110,9 +5110,9 @@ class Client(object):
         Shared by the single-flag evaluation path and the reads of a
         ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
         identically. ``details`` is the parsed ``/flags`` record of the read, or
-        ``None`` for a locally evaluated flag. ``value_from_details`` says whether that
-        record supplied the reported value; only then does the read report config
-        version 2 attribution or send an exposure.
+        ``None`` for a locally evaluated flag. ``value_from_details`` includes a
+        failed record supplying config-version and reason-code diagnostics despite
+        having no value. Only a successful experiment split sends an exposure.
         """
         _capture_flag_events(
             self.capture,
@@ -5325,12 +5325,12 @@ class Client(object):
                     device_id=device_id,
                 )
                 remote_response = to_flags_and_payloads(decide_response)
-                # Only explicit failed records preserve same-context local pairs;
-                # successful remote records retain the existing precedence.
+                # A key the server marked failed keeps its locally computed value
+                # and payload. Successful remote records replace local results.
                 failed_keys = {
                     key
                     for key, detail in decide_response.get("flags", {}).items()
-                    if detail._failed and detail._malformed_field is None
+                    if detail._server_marked_failed
                 }
                 response = {
                     "featureFlags": {
@@ -5568,8 +5568,7 @@ class Client(object):
                 if key not in records
                 or (
                     isinstance(record := records[key], _RemoteFlagRecord)
-                    and record.details._failed
-                    and record.details._malformed_field is None
+                    and record.details._server_marked_failed
                 )
             },
         )

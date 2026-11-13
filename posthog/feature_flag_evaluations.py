@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
 from .types import FeatureFlag as _FeatureFlag
+from .types import FeatureFlagError as _FeatureFlagError
 from .types import FlagMetadata as _FlagMetadata
 from .types import FlagValue, UnresolvedFlagReason, _parse_flag_payload
 
@@ -156,8 +157,7 @@ class FeatureFlagEvaluations:
             key: flag
             for key, flag in flags.items()
             if isinstance(flag, _RemoteFlagRecord)
-            and flag.details._failed
-            and flag.details._malformed_field is None
+            and flag.details._server_marked_failed
         }
         self._flags = {k: v for k, v in flags.items() if k not in self._failed_flags}
         self._groups: Dict[str, Union[str, int]] = dict(groups or {})
@@ -188,9 +188,10 @@ class FeatureFlagEvaluations:
         Args:
             key: The feature flag key.
             default_value: Returned when the flag has no value in this evaluation —
-                the key was not part of the evaluated set, or the evaluation itself
-                came back empty (failed ``/flags`` request, quota limit, or no
-                resolvable ``distinct_id``). Defaults to ``False``.
+                the key was not part of the evaluated set, the server marked its
+                record failed, or the evaluation itself came back empty (failed
+                ``/flags`` request, quota limit, or no resolvable ``distinct_id``).
+                Defaults to ``False``.
             send_feature_flag_events: Whether this read sends ``$feature_flag_called``.
                 When ``False``, no event is sent and the dedupe cache is left alone,
                 but the key still counts as accessed for :meth:`only_accessed`.
@@ -209,7 +210,8 @@ class FeatureFlagEvaluations:
 
         Returns the variant string for multivariate flags, ``True`` for enabled flags
         without a variant, ``False`` for disabled flags, and ``None`` for flags that
-        were not returned by the evaluation.
+        were not returned or whose remote record was marked failed by the server.
+        An unreadable remote record retains its disabled (``False``) result.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`.
@@ -272,8 +274,10 @@ class FeatureFlagEvaluations:
         A flag is listed when it has a loaded local definition, was in the requested
         scope, was inconclusive locally, and no remote value filled the gap. Listed
         flags are not part of :attr:`keys`, and reading one reports the
-        ``local_evaluation_inconclusive`` error instead of ``flag_missing``. Reading
-        this mapping does not count as an access and does not fire any event.
+        ``local_evaluation_inconclusive`` error instead of ``flag_missing``.
+        Currently, a server-marked failed fallback instead reports ``evaluation_failed``;
+        this is an implementation exception to the snapshot inconclusive-error contract.
+        Reading this mapping does not count as an access and does not fire any event.
         Snapshots returned by :meth:`only` and :meth:`only_accessed`, and by
         ``AsyncClient.evaluate_flags()``, which evaluates only remotely, carry no
         entries.
@@ -385,7 +389,7 @@ class FeatureFlagEvaluations:
         if self._quota_limited:
             errors.append("quota_limited")
         if failed:
-            errors.append("evaluation_failed")
+            errors.append(_FeatureFlagError.EVALUATION_FAILED)
         elif flag is None:
             errors.append(
                 "local_evaluation_inconclusive"
@@ -404,8 +408,8 @@ class FeatureFlagEvaluations:
             properties=properties,
             has_experiment=flag.has_experiment if flag else None,
             minimal_flag_called_events=self._minimal_flag_called_events,
-            # The record that supplied the value. A remotely evaluated experiment
-            # split also sends $experiment_exposure, whatever this read returned.
+            # A failed record still supplies config-version and reason-code diagnostics.
+            # Only a successful experiment split also sends $experiment_exposure.
             details=flag.details if isinstance(flag, _RemoteFlagRecord) else None,
             value_from_details=True,
         )

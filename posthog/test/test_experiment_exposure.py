@@ -524,7 +524,7 @@ def test_flag_called_attribution_follows_the_record(source, expected, path):
     [called] = _named(events, FLAG_CALLED, "garden-layout")
     assert _attribution(called.properties) == expected
     if failed:
-        # The vendored schema predates the no-result sentinel for failed records.
+        # The vendored schema rejects the null $feature_flag_response a failed record reports.
         assert called.properties["$feature_flag_response"] is None
         assert set(called.properties["$feature_flag_error"].split(",")) == {
             "evaluation_failed",

@@ -138,15 +138,26 @@ def test_failed_fallback_preserves_only_successful_local_pairs(
     client, shape, error_bit
 ):
     local = {
-        "featureFlags": {"on": True, "off": False, "variant": "blue", "success": True},
+        "featureFlags": {
+            "on": True,
+            "off": False,
+            "variant": "blue",
+            "success": True,
+            "local-only": True,
+            "malformed": True,
+        },
         "featureFlagPayloads": {
-            k: '{"copy":"local"}' for k in ["on", "off", "variant", "success"]
+            k: '{"copy":"local"}'
+            for k in ["on", "off", "variant", "success", "local-only", "malformed"]
         },
     }
     remote = response(shape, error_bit)
     for key in ["on", "off", "variant"]:
         remote["flags"][key] = copy.deepcopy(remote["flags"]["failed"])
         remote["flags"][key]["key"] = key
+    remote["flags"]["malformed"] = copy.deepcopy(remote["flags"]["failed"])
+    remote["flags"]["malformed"]["key"] = "malformed"
+    remote["flags"]["malformed"]["metadata"]["version"] = True
     remote["flags"]["success"] = {
         "key": "success",
         "enabled": True,
@@ -169,6 +180,7 @@ def test_failed_fallback_preserves_only_successful_local_pairs(
         "off": False,
         "variant": "blue",
         "success": "remote",
+        "malformed": False,
     }
     assert result["featureFlagPayloads"] == {
         k: '{"copy":"success"}' if k == "success" else '{"copy":"local"}'

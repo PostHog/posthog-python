@@ -901,6 +901,24 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
         self.assertEqual(dict(flags.unresolved_flags), {})
         patch_flags.assert_called_once()
 
+    @mock.patch("posthog.client.flags")
+    def test_malformed_remote_fallback_is_not_unresolved(self, patch_flags):
+        patch_flags.return_value = {
+            "flags": {
+                "checkout": {
+                    "enabled": True,
+                    "metadata": {"version": True},
+                }
+            }
+        }
+
+        flags = self.client.evaluate_flags("user-123")
+
+        self.assertIs(flags.get_flag("checkout", send_feature_flag_events=False), False)
+        self.assertEqual(sorted(flags.keys), ["beta-ui", "checkout"])
+        self.assertEqual(dict(flags.unresolved_flags), {})
+        patch_flags.assert_called_once()
+
     @parameterized.expand([(None,), (False,), (True,)])
     @mock.patch("posthog.client.flags")
     @mock.patch.object(Client, "capture")

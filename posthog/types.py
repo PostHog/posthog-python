@@ -275,6 +275,11 @@ class FeatureFlag:
     # server marks failed has ``_failed`` set and this ``None``.
     _malformed_field: ClassVar[Optional[str]] = None
 
+    @property
+    def _server_marked_failed(self) -> bool:
+        """Whether a readable record reports a server evaluation failure."""
+        return self._failed and self._malformed_field is None
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
@@ -634,12 +639,15 @@ class FeatureFlagResult:
             details (Union[FeatureFlag, None]): The FeatureFlag object to convert.
             override_match_value (Optional[FlagValue]): If provided, this value will be used to populate
                 the enabled and variant fields instead of the values from the FeatureFlag.
+                A server-marked failure returns None even when this override is provided.
 
         Returns:
-            FeatureFlagResult | None: A new FeatureFlagResult instance, or None if details is None.
+            FeatureFlagResult | None: A new result, or None when details is absent or
+                the server marked the record failed. Unreadable records are not
+                treated as server-marked failures.
         """
 
-        if details is None or (details._failed and details._malformed_field is None):
+        if details is None or details._server_marked_failed:
             return None
 
         if override_match_value is not None:
@@ -719,8 +727,7 @@ def to_values(response: FlagsResponse) -> Optional[dict[str, FlagValue]]:
     return {
         key: value.get_value()
         for key, value in flags.items()
-        if isinstance(value, FeatureFlag)
-        and not (value._failed and value._malformed_field is None)
+        if isinstance(value, FeatureFlag) and not value._server_marked_failed
     }
 
 
@@ -732,7 +739,7 @@ def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:
         key: value.metadata.payload
         for key, value in response.get("flags", {}).items()
         if isinstance(value, FeatureFlag)
-        and not value._failed
+        and not value._server_marked_failed
         and value.enabled
         and value.metadata.payload is not None
     }
@@ -747,6 +754,7 @@ class FeatureFlagError:
 
     Error values:
         ERRORS_WHILE_COMPUTING: Server returned errorsWhileComputingFlags=true
+        EVALUATION_FAILED: Server marked the requested flag failed, with no evaluated value
         FLAG_MISSING: Requested flag not in API response
         LOCAL_EVALUATION_INCONCLUSIVE: Requested flag has a loaded definition but
             local evaluation was inconclusive and no remote value filled the gap
@@ -760,6 +768,7 @@ class FeatureFlagError:
     """
 
     ERRORS_WHILE_COMPUTING = "errors_while_computing_flags"
+    EVALUATION_FAILED = "evaluation_failed"
     FLAG_MISSING = "flag_missing"
     LOCAL_EVALUATION_INCONCLUSIVE = "local_evaluation_inconclusive"
     QUOTA_LIMITED = "quota_limited"
