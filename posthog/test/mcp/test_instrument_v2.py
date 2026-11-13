@@ -1,6 +1,7 @@
 """The v2 ownership lookup must not consume host request cancellation."""
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -10,8 +11,13 @@ from posthog.mcp._internal import MCPAnalyticsData
 from posthog.mcp.types import MCPAnalyticsOptions
 
 
-async def test_cancellation_during_standalone_schema_lookup_propagates():
-    pytest.importorskip("fastmcp")
+async def test_cancellation_during_standalone_schema_lookup_propagates(monkeypatch):
+    # Isolate cancellation from the optional, version-specific FastMCP import.
+    monkeypatch.setitem(
+        sys.modules,
+        "fastmcp.utilities.versions",
+        SimpleNamespace(VersionSpec=pytest.fail, version_sort_key=pytest.fail),
+    )
     calls = []
 
     async def list_tools():
