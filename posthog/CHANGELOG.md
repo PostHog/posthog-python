@@ -1,5 +1,16 @@
 # posthog
 
+## 7.90.0 — 2026-11-13
+
+### Minor changes
+
+- [dd7577bc](https://github.com/posthog/posthog-python/commit/dd7577bccbe22cf4b2da970b1373d6f16bafeb20) `posthog.mcp`: a failed tool call now sets `$mcp_error_status` to the HTTP status behind it, read from the raised exception or its cause chain (`status_code`, `statusCode` or `status`, on the exception or its `response`, as `httpx.HTTPStatusError` and `requests.HTTPError` carry it). Failures from an upstream API now group by status in MCP Analytics instead of landing in "unknown". — Thanks @lucasheriques!
+
+### Patch changes
+
+- [9e4935f7](https://github.com/posthog/posthog-python/commit/9e4935f7036f03905f6e0475d7d3ab3b4cc9dbff) `posthog.mcp`: on mcp 1.x (1.10 and later), a tool registered with the low-level `Server`'s `@server.call_tool()` decorator that raises now reports the exception it raised, with its cause chain, stack frames and `$mcp_error_status`, and `$mcp_error_type` names its class. Before, the decorator converted the exception into an error result first, so the failure was a generic `Error` with no frames and no status. — Thanks @lucasheriques!
+- [01398616](https://github.com/posthog/posthog-python/commit/013986168a131efed4a86d75a222e554f2f542d8) `posthog.mcp`: a failed tool call on a standalone FastMCP server now reports the exception the tool raised, with its cause chain and stack frames, and `$mcp_error_type` names its class. Before, FastMCP converted the exception into an error result first, so the failure was a generic `Error` with no frames. — Thanks @lucasheriques!
+
 ## 7.89.0 — 2026-11-12
 
 ### Minor changes

@@ -914,7 +914,10 @@ attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
 attribute posthog.emails.CancelEmailResult.id: str
 attribute posthog.emails.CancelEmailResult.status: str
+attribute posthog.emails.CodeEmailArgs.attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
+attribute posthog.emails.CodeEmailArgs.bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeEmailArgs.cc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
@@ -923,6 +926,10 @@ attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
+attribute posthog.emails.EmailAttachment.content: Union[bytes, bytearray, memoryview, str]
+attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
+attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
+attribute posthog.emails.EmailAttachment.filename: str
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -1071,6 +1078,7 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CLIENT_VERSION = '$m
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CONVERSATION_ID = '$mcp_conversation_id'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.DURATION_MS = '$mcp_duration_ms'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_MESSAGE = '$mcp_error_message'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_STATUS = '$mcp_error_status'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_TYPE = '$mcp_error_type'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_DETAILS = '$mcp_feedback_details'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_FRICTION_POINTS = '$mcp_feedback_friction_points'
@@ -1390,6 +1398,7 @@ class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_ex
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
 class posthog.emails.CancelEmailResult(id: str, status: str)
 class posthog.emails.CodeEmailArgs 
+class posthog.emails.EmailAttachment 
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
 class posthog.emails.EmailList(results: tuple[ScheduledEmail, ...], next: Optional[str] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
