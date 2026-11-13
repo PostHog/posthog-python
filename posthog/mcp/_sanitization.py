@@ -198,21 +198,9 @@ def _sanitize_single_url(value: str, *, nested: bool, in_prose: bool) -> str:
     try:
         url = urlsplit(url_text)
         query, sanitized_query = _sanitize_url_fields(url.query, nested=nested)
-        # A `?` inside a fragment splits it in two, and each half stands on its
-        # own: `#/callback?token=x` is text then fields, `#a=1?b=2` is fields
-        # twice. Shape cannot tell them apart — `#/token=x` looks like a route and
-        # is a field list — so each half is judged only on whether it holds a `=`.
-        head, separator, fragment_tail = url.fragment.partition("?")
-        sanitized_head, head_rewrote_last = _sanitize_fragment_part(head, nested=nested)
-        # A `?` can fall inside a credential (`#password=pre?fix`), and nothing
-        # here can tell that from a real boundary. When the head ends in a value
-        # just redacted, the tail may be the rest of it, so it goes too.
-        sanitized_tail, tail_rewrote_last = (
-            (_REDACTED_VALUE, True)
-            if head_rewrote_last and fragment_tail
-            else _sanitize_fragment_part(fragment_tail, nested=nested)
+        fragment, head_rewrote_last, tail_rewrote_last = _sanitize_url_fragment(
+            url.fragment, nested=nested
         )
-        fragment = sanitized_head + separator + sanitized_tail
         netloc = _redact_userinfo(url.netloc)
         if (netloc, sanitized_query, fragment) == (
             url.netloc,
@@ -982,3 +970,24 @@ def _build_captured_mcp_arguments(
             continue
         captured[key] = sanitize_captured_value(value)
     return captured
+
+
+def _sanitize_url_fragment(
+    fragment_value: str, *, nested: bool
+) -> tuple[str, bool, bool]:
+    # A `?` inside a fragment splits it in two, and each half stands on its
+    # own: `#/callback?token=x` is text then fields, `#a=1?b=2` is fields
+    # twice. Shape cannot tell them apart — `#/token=x` looks like a route and
+    # is a field list — so each half is judged only on whether it holds a `=`.
+    head, separator, fragment_tail = fragment_value.partition("?")
+    sanitized_head, head_rewrote_last = _sanitize_fragment_part(head, nested=nested)
+    # A `?` can fall inside a credential (`#password=pre?fix`), and nothing
+    # here can tell that from a real boundary. When the head ends in a value
+    # just redacted, the tail may be the rest of it, so it goes too.
+    sanitized_tail, tail_rewrote_last = (
+        (_REDACTED_VALUE, True)
+        if head_rewrote_last and fragment_tail
+        else _sanitize_fragment_part(fragment_tail, nested=nested)
+    )
+    fragment = sanitized_head + separator + sanitized_tail
+    return fragment, head_rewrote_last, tail_rewrote_last

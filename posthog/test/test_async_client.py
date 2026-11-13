@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 import contextvars
 import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from uuid import UUID
 import subprocess
 import sys
 import threading
@@ -13,7 +16,9 @@ import pytest
 from posthog import AsyncClient, AsyncPosthog, CaptureCompression, CaptureMode
 from posthog.consumer import MAX_MSG_SIZE
 from posthog.contexts import (
+    identify_context,
     new_context,
+    set_context_session,
     set_capture_exception_code_variables_context,
     set_code_variables_detect_secrets_context,
     set_code_variables_ignore_patterns_context,
@@ -771,3 +776,245 @@ async def test_flush_timeout_reports_unfinished_items(caplog):
         assert "items pending" in caplog.text
         allow_upload.set()
         await client.shutdown()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method_name,method_kwargs,expected_id,expected_properties",
+    [
+        (
+            "group_identify",
+            {
+                "group_type": "company",
+                "group_key": "company-1",
+                "properties": {"plan": "pro", "nested": {"drop": None, "count": 0}},
+                "distinct_id": "group-user",
+            },
+            "group-user",
+            {
+                "$group_type": "company",
+                "$group_key": "company-1",
+                "$group_set": {"plan": "pro", "nested": {"drop": None, "count": 0}},
+            },
+        ),
+        (
+            "alias",
+            {"previous_id": 123, "distinct_id": "alias-user"},
+            "123",
+            {"distinct_id": "123", "alias": "alias-user"},
+        ),
+    ],
+)
+async def test_identity_events_preserve_payload_session_and_normalized_envelope(
+    method_name, method_kwargs, expected_id, expected_properties
+):
+    delivered = []
+
+    async def batch_post(*args, **kwargs):
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        async with AsyncPosthog("test-key", flush_interval=30) as client:
+            with new_context(fresh=True):
+                set_context_session("request-session")
+                event_uuid = getattr(client, method_name)(
+                    **method_kwargs,
+                    uuid="{4BF92F35-77B3-4DA6-A3CE-929D0E0E4736}",
+                    timestamp="2025-01-02T03:04:05.123456+02:30",
+                    disable_geoip=False,
+                )
+            await client.flush(timeout_seconds=1)
+
+    assert len(delivered) == 1
+    event = delivered[0]
+    assert event_uuid == event["uuid"] == "4bf92f35-77b3-4da6-a3ce-929d0e0e4736"
+    assert event["timestamp"] == "2025-01-02T00:34:05.123456+00:00"
+    assert event["distinct_id"] == expected_id
+    assert {
+        key: event["properties"][key] for key in expected_properties
+    } == expected_properties
+    assert event["properties"]["$session_id"] == "request-session"
+    assert "$geoip_disable" not in event["properties"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method_name,method_kwargs",
+    [
+        ("group_identify", {"group_type": "", "group_key": "company-1"}),
+        ("group_identify", {"group_type": "company", "group_key": ""}),
+        ("alias", {"previous_id": "", "distinct_id": "user-1"}),
+        ("alias", {"previous_id": "anon-1", "distinct_id": None}),
+    ],
+)
+async def test_identity_events_reject_missing_required_ids(method_name, method_kwargs):
+    with (
+        new_context(fresh=True),
+        mock.patch(
+            "posthog._async_consumer.async_batch_post", new=mock.AsyncMock()
+        ) as send,
+    ):
+        async with AsyncPosthog("test-key") as client:
+            assert getattr(client, method_name)(**method_kwargs) is None
+            await client.flush()
+    send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_alias_uses_request_identity_when_no_explicit_distinct_id_is_supplied():
+    delivered = []
+
+    async def batch_post(*args, **kwargs):
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        async with AsyncPosthog("test-key") as client:
+            with new_context(fresh=True):
+                identify_context("request-user")
+                assert client.alias("anon-1", None) is not None
+            await client.flush()
+
+    assert delivered[0]["distinct_id"] == "anon-1"
+    assert delivered[0]["properties"]["alias"] == "request-user"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_immediate", [False, True])
+async def test_concurrent_shutdown_closes_once_after_immediate_operation_finishes(
+    cancel_immediate,
+):
+    started, release = asyncio.Event(), asyncio.Event()
+    http_client = mock.Mock(aclose=mock.AsyncMock())
+    on_error = mock.AsyncMock()
+
+    async def batch_post(*args, **kwargs):
+        started.set()
+        await release.wait()
+
+    with (
+        mock.patch("posthog.async_client._build_client", return_value=http_client),
+        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+    ):
+        client = AsyncPosthog("test-key", on_error=on_error)
+        capture = asyncio.create_task(client.capture_immediate("in flight"))
+        await started.wait()
+        shutdowns = [asyncio.create_task(client.shutdown()) for _ in range(2)]
+        await asyncio.sleep(0)
+        assert client.capture("too late") is None
+        assert not any(task.done() for task in shutdowns)
+        http_client.aclose.assert_not_awaited()
+        if cancel_immediate:
+            capture.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await capture
+        else:
+            release.set()
+            assert await capture is not None
+        await asyncio.wait_for(asyncio.gather(*shutdowns), timeout=1)
+
+    http_client.aclose.assert_awaited_once_with()
+    on_error.assert_not_awaited()
+    assert client._immediate_callers == {}
+    assert client._inflight_operations == set()
+    assert await client.capture_immediate("after shutdown") is None
+
+
+@pytest.mark.asyncio
+async def test_cancelled_shutdown_can_be_retried_without_cancelling_buffered_delivery():
+    started, release = asyncio.Event(), asyncio.Event()
+    delivered = []
+
+    async def batch_post(*args, **kwargs):
+        started.set()
+        await release.wait()
+        delivered.extend(kwargs["batch"])
+
+    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+        client = AsyncPosthog("test-key", flush_at=1)
+        event_uuid = client.capture("buffered")
+        await started.wait()
+        shutdown = asyncio.create_task(client.shutdown())
+        await asyncio.sleep(0)
+        shutdown.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await shutdown
+        assert client.capture("after cancelled shutdown") is None
+        release.set()
+        await asyncio.wait_for(client.shutdown(), timeout=1)
+
+    assert [event["uuid"] for event in delivered] == [event_uuid]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("debug", [False, True])
+async def test_shutdown_attempts_remaining_cleanup_before_reporting_first_error(debug):
+    first_error = RuntimeError("flush failed")
+    http_client = mock.Mock(
+        aclose=mock.AsyncMock(side_effect=ValueError("close failed"))
+    )
+    with (
+        mock.patch("posthog.async_client._build_client", return_value=http_client),
+        mock.patch(
+            "posthog.async_client._async_flags", new=mock.AsyncMock(return_value={})
+        ),
+    ):
+        client = AsyncPosthog("test-key", debug=debug, secret_key="secret-key")
+        await client.evaluate_flags("user-1")
+        emails = client.emails
+        with (
+            mock.patch.object(
+                client, "flush", new=mock.AsyncMock(side_effect=first_error)
+            ),
+            mock.patch.object(
+                emails,
+                "aclose",
+                new=mock.AsyncMock(side_effect=OSError("email close failed")),
+            ) as close_email,
+        ):
+            if debug:
+                with pytest.raises(RuntimeError) as raised:
+                    await client.shutdown()
+                assert raised.value is first_error
+            else:
+                await client.shutdown()
+            await client.shutdown()
+
+    http_client.aclose.assert_awaited_once_with()
+    close_email.assert_awaited_once_with()
+    assert client._duplicate_client_registry_key is None
+    assert client._closed
+    assert client.capture("after shutdown") is None
+
+
+@pytest.mark.asyncio
+async def test_immediate_capture_replaces_invalid_uuid_and_timestamp_before_hook():
+    observed = []
+
+    async def before_send(event):
+        observed.append(event.copy())
+        return {**event, "uuid": "hook-cannot-replace-event-identity"}
+
+    with mock.patch(
+        "posthog._async_consumer.async_batch_post", new=mock.AsyncMock()
+    ) as send:
+        client = AsyncPosthog("test-key", before_send=before_send)
+        before = datetime.now(timezone.utc)
+        event_uuid = await client.capture_immediate(
+            "event", uuid="invalid", timestamp="not-a-date"
+        )
+        after = datetime.now(timezone.utc)
+        await client.shutdown()
+
+    assert str(UUID(event_uuid)) == event_uuid
+    assert observed[0]["uuid"] == event_uuid
+    assert before <= datetime.fromisoformat(observed[0]["timestamp"]) <= after
+    assert send.await_args.kwargs["batch"][0]["uuid"] == event_uuid
+
+
+@pytest.mark.asyncio
+async def test_deprecated_secret_key_warning_points_to_constructor_caller():
+    with pytest.warns(DeprecationWarning, match="personal_api_key") as warnings_seen:
+        client = AsyncPosthog("test-key", personal_api_key=" legacy-key ", send=False)
+    assert Path(warnings_seen[0].filename) == Path(__file__)
+    assert client.secret_key == client.personal_api_key == "legacy-key"
+    await client.shutdown()

@@ -730,14 +730,7 @@ async def _listed_input_schema(
             # spend rate limits, and its registry can disagree with what that
             # middleware advertises, so the advertised schema is unknown.
             return None
-        candidates = [tool for tool in await list_tools() if tool.name == name]
-        if version is not None:
-            candidates = [
-                tool
-                for tool in candidates
-                if str(getattr(tool, "version", "")) == version
-            ]
-        tool = candidates[-1] if candidates else None
+        tool = _last_listed_tool(await list_tools(), name, version)
         schema = getattr(tool, "parameters", None)
     except Exception as error:  # noqa: BLE001 - analytics must not break dispatch
         log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
@@ -771,13 +764,7 @@ def _schema_view(schema: Dict[str, Any], *, dereferenced: bool) -> Tuple[set, bo
         node.get(key) for node in nodes for key in ("oneOf", "allOf", "anyOf")
     ):
         return set(_INJECTED_KEYS), False
-    declared = {
-        key
-        for node in nodes
-        if isinstance(node.get("properties"), dict)
-        for key in node["properties"]
-        if key in _INJECTED_KEYS
-    }
+    declared = _declared_injected_keys(nodes)
     injectable = can_inject_model_parameter(nodes[-1]) and "llm_model" not in declared
     return declared, injectable
 
@@ -903,10 +890,7 @@ def _reference_chain(schema: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
             return nodes
         if not isinstance(ref, str) or not ref.startswith("#/"):
             return None
-        target: Any = schema
-        for part in ref[2:].split("/"):
-            key = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escapes
-            target = target.get(key) if isinstance(target, dict) else None
+        target = _resolve_local_pointer(schema, ref)
         if not isinstance(target, dict) or any(target is node for node in nodes):
             return None
         nodes.append(target)
@@ -952,3 +936,31 @@ def _mcp_session_id(server: Any) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+def _resolve_local_pointer(schema: Dict[str, Any], ref: str) -> Any:
+    target: Any = schema
+    for part in ref[2:].split("/"):
+        key = part.replace("~1", "/").replace("~0", "~")  # JSON Pointer escapes
+        target = target.get(key) if isinstance(target, dict) else None
+    return target
+
+
+def _declared_injected_keys(nodes: List[Dict[str, Any]]) -> set:
+    declared = {
+        key
+        for node in nodes
+        if isinstance(node.get("properties"), dict)
+        for key in node["properties"]
+        if key in _INJECTED_KEYS
+    }
+    return declared
+
+
+def _last_listed_tool(tools: list, name: str, version: Optional[str]) -> Any:
+    candidates = [tool for tool in tools if tool.name == name]
+    if version is not None:
+        candidates = [
+            tool for tool in candidates if str(getattr(tool, "version", "")) == version
+        ]
+    return candidates[-1] if candidates else None

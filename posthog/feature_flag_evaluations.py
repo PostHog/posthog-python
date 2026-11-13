@@ -338,52 +338,8 @@ class FeatureFlagEvaluations:
             return
 
         flag = self._flags.get(key)
-        if flag is None:
-            response: Optional[FlagValue] = None
-        elif not flag.enabled:
-            response = False
-        else:
-            response = flag.variant if flag.variant is not None else True
-
-        properties: Dict[str, Any] = {
-            "$feature_flag": key,
-            "$feature_flag_response": response,
-            "locally_evaluated": flag.locally_evaluated if flag else False,
-            f"$feature/{key}": response,
-        }
-
-        if flag is not None:
-            if flag.payload is not None:
-                properties["$feature_flag_payload"] = flag.payload
-            if flag.id:
-                properties["$feature_flag_id"] = flag.id
-            if flag.version:
-                properties["$feature_flag_version"] = flag.version
-            if flag.reason:
-                properties["$feature_flag_reason"] = flag.reason
-
-        if self._request_id:
-            properties["$feature_flag_request_id"] = self._request_id
-        if self._evaluated_at and not (flag and flag.locally_evaluated):
-            properties["$feature_flag_evaluated_at"] = self._evaluated_at
-
-        # Build the comma-joined `$feature_flag_error` matching the single-flag path's
-        # granularity: response-level errors (errors-while-computing, quota-limited) are
-        # combined with per-flag errors (flag-missing or local-evaluation-inconclusive)
-        # so consumers can filter by type.
-        errors: List[str] = []
-        if self._errors_while_computing:
-            errors.append("errors_while_computing_flags")
-        if self._quota_limited:
-            errors.append("quota_limited")
-        if flag is None:
-            errors.append(
-                "local_evaluation_inconclusive"
-                if key in self._unresolved_flags
-                else "flag_missing"
-            )
-        if errors:
-            properties["$feature_flag_error"] = ",".join(errors)
+        response = _flag_response(flag)
+        properties = self._get_flag_called_properties(key, flag, response)
 
         self._host.capture_flag_called_event_if_needed(
             distinct_id=self._distinct_id,
@@ -399,3 +355,65 @@ class FeatureFlagEvaluations:
             details=flag.details if isinstance(flag, _RemoteFlagRecord) else None,
             value_from_details=True,
         )
+
+    def _get_flag_called_properties(self, key, flag, response) -> Dict[str, Any]:
+        properties: Dict[str, Any] = {
+            "$feature_flag": key,
+            "$feature_flag_response": response,
+            "locally_evaluated": flag.locally_evaluated if flag else False,
+            f"$feature/{key}": response,
+        }
+
+        if flag is not None:
+            _add_flag_metadata_properties(properties, flag)
+
+        if self._request_id:
+            properties["$feature_flag_request_id"] = self._request_id
+        if self._evaluated_at and not (flag and flag.locally_evaluated):
+            properties["$feature_flag_evaluated_at"] = self._evaluated_at
+
+        errors = self._get_access_errors(key, flag)
+        if errors:
+            properties["$feature_flag_error"] = ",".join(errors)
+
+        return properties
+
+    def _get_access_errors(self, key, flag) -> List[str]:
+        # Build the comma-joined `$feature_flag_error` matching the single-flag path's
+        # granularity: response-level errors (errors-while-computing, quota-limited) are
+        # combined with per-flag errors (flag-missing or local-evaluation-inconclusive)
+        # so consumers can filter by type.
+        errors: List[str] = []
+        if self._errors_while_computing:
+            errors.append("errors_while_computing_flags")
+        if self._quota_limited:
+            errors.append("quota_limited")
+        if flag is None:
+            errors.append(
+                "local_evaluation_inconclusive"
+                if key in self._unresolved_flags
+                else "flag_missing"
+            )
+        return errors
+
+
+def _flag_response(flag: Optional[_EvaluatedFlagRecord]) -> Optional[FlagValue]:
+    if flag is None:
+        return None
+    elif not flag.enabled:
+        return False
+    else:
+        return flag.variant if flag.variant is not None else True
+
+
+def _add_flag_metadata_properties(
+    properties: Dict[str, Any], flag: _EvaluatedFlagRecord
+) -> None:
+    if flag.payload is not None:
+        properties["$feature_flag_payload"] = flag.payload
+    if flag.id:
+        properties["$feature_flag_id"] = flag.id
+    if flag.version:
+        properties["$feature_flag_version"] = flag.version
+    if flag.reason:
+        properties["$feature_flag_reason"] = flag.reason

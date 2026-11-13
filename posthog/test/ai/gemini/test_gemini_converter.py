@@ -361,3 +361,64 @@ class TestGeminiUsage:
         )
         usage = extract_gemini_usage_from_response(resp)
         assert usage["input_tokens"] == 20
+
+
+@pytest.mark.parametrize(
+    "message, expected",
+    [
+        ({"role": "model", "content": 42}, {"role": "model", "content": "42"}),
+        ({"content": None}, {"role": "user", "content": "None"}),
+        ({"content": ""}, {"role": "user", "content": ""}),
+        (
+            {"role": "model", "content": [{"text": "answer"}]},
+            {"role": "model", "content": [{"type": "text", "text": "answer"}]},
+        ),
+        (
+            {"role": "model", "parts": [], "content": "ignored"},
+            {"role": "model", "content": []},
+        ),
+        (
+            {"text": "bare part"},
+            {"role": "user", "content": [{"type": "text", "text": "bare part"}]},
+        ),
+        ({"role": "model", "text": "answer"}, {"role": "model", "content": "answer"}),
+        ({"unknown": 1}, {"role": "user", "content": "{'unknown': 1}"}),
+        (
+            {"parts": "not a list"},
+            {"role": "user", "content": "{'parts': 'not a list'}"},
+        ),
+    ],
+)
+def test_input_dictionary_field_precedence_and_content_coercion(message, expected):
+    assert format_gemini_input(message) == [expected]
+
+
+@pytest.mark.parametrize(
+    "attributes, expected",
+    [
+        (
+            {"role": 7, "parts": ("first", {"text": "second"})},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "first"},
+                    {"type": "text", "text": "second"},
+                ],
+            },
+        ),
+        (
+            {"role": None, "text": 0, "content": "ignored"},
+            {"role": "user", "content": 0},
+        ),
+        (
+            {"role": "model", "content": [{"text": "answer"}]},
+            {"role": "model", "content": [{"type": "text", "text": "answer"}]},
+        ),
+        ({"role": "model", "content": 42}, {"role": "model", "content": "42"}),
+        ({"role": "model", "content": ""}, {"role": "model", "content": ""}),
+    ],
+)
+def test_input_object_field_precedence_and_role_validation(attributes, expected):
+    from types import SimpleNamespace
+
+    assert format_gemini_input(SimpleNamespace(**attributes)) == [expected]

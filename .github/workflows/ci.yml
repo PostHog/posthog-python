@@ -74,7 +74,7 @@ jobs:
 
             - name: Check public API snapshot
               run: |
-                  python .github/scripts/test_check_public_api.py
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra dev --with pytest --with pytest-timeout python .github/scripts/test_check_public_api.py
                   make public_api_check
 
     strict-type-smoke:
@@ -235,7 +235,12 @@ jobs:
                   changed_files="$(git diff --name-only "$base" "$head" -- \
                       posthog/utils.py \
                       posthog/test/test_utils.py \
-                      posthog/test/test_size_limited_dict.py)"
+                      posthog/test/test_size_limited_dict.py \
+                      .github/scripts/check_crap_threshold.py \
+                      .github/scripts/test_check_crap_threshold.py \
+                      .github/workflows/ci.yml \
+                      pyproject.toml \
+                      uv.lock)"
 
                   if [[ -n "$changed_files" ]]; then
                       echo "changed=true" >> "$GITHUB_OUTPUT"
@@ -264,7 +269,8 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest posthog/test/test_utils.py posthog/test/test_size_limited_dict.py --timeout=30 --cov=posthog.utils --crap --crap-threshold=10 --crap-top-n=40 -q
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest .github/scripts/test_check_crap_threshold.py --timeout=30 -q
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest posthog/test/test_utils.py posthog/test/test_size_limited_dict.py --timeout=30 --cov=posthog.utils -q
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov python .github/scripts/check_crap_threshold.py posthog/utils.py --max-crap 10
 
     import-check:

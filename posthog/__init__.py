@@ -1476,11 +1476,7 @@ def setup() -> Client:
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)
-    default_client.enable_full_ai_capture = (
-        bool(enable_full_ai_capture)
-        or bool(_use_ai_lane)
-        or bool(_enable_multimodal_capture)
-    )
+    default_client.enable_full_ai_capture = _full_ai_capture_enabled()
     # Metrics config is consumed lazily on first `.metrics` access, so late
     # module-attr assignment (e.g. a Django ready() hook running after something
     # already forced setup()) still applies until the metrics API is first used.
@@ -1494,6 +1490,14 @@ def setup() -> Client:
         default_client._traces_config = traces
 
     return default_client
+
+
+def _full_ai_capture_enabled() -> bool:
+    return (
+        bool(enable_full_ai_capture)
+        or bool(_use_ai_lane)
+        or bool(_enable_multimodal_capture)
+    )
 
 
 def _proxy(method, *args, **kwargs):

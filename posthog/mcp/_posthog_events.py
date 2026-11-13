@@ -112,18 +112,7 @@ def _is_tool_call(event: Event) -> bool:
 
 
 def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
-    if event.get("resource_name"):
-        is_unknown_tool = (
-            event.get("event_type") == MCPAnalyticsEventType.MCP_UNKNOWN_TOOL
-        )
-        if not is_unknown_tool:
-            properties[_P.RESOURCE_NAME] = event["resource_name"]
-        if is_unknown_tool or _is_tool_call(event):
-            properties[_P.TOOL_NAME] = event["resource_name"]
-    if event.get("tool_description") and _is_tool_call(event):
-        properties[_P.TOOL_DESCRIPTION] = event["tool_description"]
-    if event.get("tool_category") and _is_tool_call(event):
-        properties[_P.TOOL_CATEGORY] = event["tool_category"]
+    _add_resource_properties(event, properties)
     if (
         event.get("listed_tool_names")
         and len(event["listed_tool_names"]) > 0
@@ -132,42 +121,29 @@ def _add_common_properties(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.LISTED_TOOL_NAMES] = event["listed_tool_names"]
     if event.get("duration") is not None:
         properties[_P.DURATION_MS] = event["duration"]
-    if event.get("server_name"):
-        properties[_P.SERVER_NAME] = event["server_name"]
-    if event.get("server_version"):
-        properties[_P.SERVER_VERSION] = event["server_version"]
-    if event.get("client_name"):
-        properties[_P.CLIENT_NAME] = event["client_name"]
-    if event.get("client_version"):
-        properties[_P.CLIENT_VERSION] = event["client_version"]
-    # HTTP transports only, and only for the request that carried the header —
-    # stdio and in-memory servers simply never set these.
-    if event.get("client_user_agent"):
-        properties[_P.CLIENT_USER_AGENT] = event["client_user_agent"]
-    if event.get("vendor_client"):
-        properties[_P.VENDOR_CLIENT] = event["vendor_client"]
-    if event.get("protocol_version"):
-        properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
-    if event.get("user_intent"):
-        properties[_P.INTENT] = event["user_intent"]
-    if event.get("user_intent_source"):
-        properties[_P.INTENT_SOURCE] = event["user_intent_source"]
-    if event.get("llm_model"):
-        properties[_P.LLM_MODEL] = event["llm_model"]
-    if event.get("llm_model_source"):
-        properties[_P.LLM_MODEL_SOURCE] = event["llm_model_source"]
+    # HTTP header fields are set only by the request that carried them.
+    _add_truthy_properties(
+        event,
+        properties,
+        (
+            ("server_name", _P.SERVER_NAME),
+            ("server_version", _P.SERVER_VERSION),
+            ("client_name", _P.CLIENT_NAME),
+            ("client_version", _P.CLIENT_VERSION),
+            ("client_user_agent", _P.CLIENT_USER_AGENT),
+            ("vendor_client", _P.VENDOR_CLIENT),
+            ("protocol_version", _P.PROTOCOL_VERSION),
+            ("user_intent", _P.INTENT),
+            ("user_intent_source", _P.INTENT_SOURCE),
+            ("llm_model", _P.LLM_MODEL),
+            ("llm_model_source", _P.LLM_MODEL_SOURCE),
+        ),
+    )
     if event.get("is_error") is not None:
         properties[_P.IS_ERROR] = event["is_error"]
     if event.get("is_error"):
         _add_error_details(event, properties)
-    if event.get("parameters") is not None:
-        properties[_P.PARAMETERS] = event["parameters"]
-    if event.get("response") is not None:
-        properties[_P.RESPONSE] = event["response"]
-    identify_actor_data = event.get("identify_actor_data")
-    if identify_actor_data and len(identify_actor_data) > 0:
-        # Person properties from identify().properties go straight to $set.
-        properties["$set"] = {**identify_actor_data}
+    _add_payload_properties(event, properties)
 
 
 # The dispatch wrappers that say nothing the event does not already say: the
@@ -290,16 +266,17 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         properties[_P.TOOL_DESCRIPTION] = event["tool_description"]
     if event.get("tool_category") and _is_tool_call(event):
         properties[_P.TOOL_CATEGORY] = event["tool_category"]
-    if event.get("server_name"):
-        properties[_P.SERVER_NAME] = event["server_name"]
-    if event.get("server_version"):
-        properties[_P.SERVER_VERSION] = event["server_version"]
-    if event.get("client_name"):
-        properties[_P.CLIENT_NAME] = event["client_name"]
-    if event.get("client_version"):
-        properties[_P.CLIENT_VERSION] = event["client_version"]
-    if event.get("protocol_version"):
-        properties[_P.PROTOCOL_VERSION] = event["protocol_version"]
+    _add_truthy_properties(
+        event,
+        properties,
+        (
+            ("server_name", _P.SERVER_NAME),
+            ("server_version", _P.SERVER_VERSION),
+            ("client_name", _P.CLIENT_NAME),
+            ("client_version", _P.CLIENT_VERSION),
+            ("protocol_version", _P.PROTOCOL_VERSION),
+        ),
+    )
 
     _add_custom_properties(event, properties)
     _add_server_build(event, properties)
@@ -310,3 +287,37 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
         "properties": properties,
         "timestamp": _get_timestamp(event),
     }
+
+
+def _add_truthy_properties(
+    event: Event, properties: Dict[str, Any], fields: tuple[tuple[str, str], ...]
+) -> None:
+    for field, property_name in fields:
+        if event.get(field):
+            properties[property_name] = event[field]
+
+
+def _add_resource_properties(event: Event, properties: Dict[str, Any]) -> None:
+    if event.get("resource_name"):
+        is_unknown_tool = (
+            event.get("event_type") == MCPAnalyticsEventType.MCP_UNKNOWN_TOOL
+        )
+        if not is_unknown_tool:
+            properties[_P.RESOURCE_NAME] = event["resource_name"]
+        if is_unknown_tool or _is_tool_call(event):
+            properties[_P.TOOL_NAME] = event["resource_name"]
+    if event.get("tool_description") and _is_tool_call(event):
+        properties[_P.TOOL_DESCRIPTION] = event["tool_description"]
+    if event.get("tool_category") and _is_tool_call(event):
+        properties[_P.TOOL_CATEGORY] = event["tool_category"]
+
+
+def _add_payload_properties(event: Event, properties: Dict[str, Any]) -> None:
+    if event.get("parameters") is not None:
+        properties[_P.PARAMETERS] = event["parameters"]
+    if event.get("response") is not None:
+        properties[_P.RESPONSE] = event["response"]
+    identify_actor_data = event.get("identify_actor_data")
+    if identify_actor_data and len(identify_actor_data) > 0:
+        # Person properties from identify().properties go straight to $set.
+        properties["$set"] = {**identify_actor_data}

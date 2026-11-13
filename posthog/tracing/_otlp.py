@@ -153,45 +153,57 @@ def _encode(value: Any, state: _EncodeState, depth: int) -> dict:
     if isinstance(value, bool):
         return {"boolValue": value}
     if isinstance(value, int):
-        if value > INT64_MAX or value < INT64_MIN:
-            log.debug(
-                "Attribute %s is outside the int64 range; encoding it as a string",
-                value,
-            )
-            return {"stringValue": str(value)}
-        # int(): an IntEnum stringifies as its name.
-        return {"intValue": str(int(value))}
+        return _encode_int(value)
     if isinstance(value, float):
-        if not math.isfinite(value):
-            if math.isnan(value):
-                return {"stringValue": "NaN"}
-            return {"stringValue": "Infinity" if value > 0 else "-Infinity"}
-        return {"doubleValue": value}
+        return _encode_float(value)
     if isinstance(value, str):
         return {"stringValue": sanitize_string(value)}
     if isinstance(value, (datetime, date)):
         return {"stringValue": value.isoformat()}
-    if isinstance(value, Mapping) or isinstance(value, (list, tuple, set, frozenset)):
-        marker = id(value)
-        if marker in state.ancestors:
-            return {"stringValue": CIRCULAR_VALUE}
-        if depth >= MAX_VALUE_DEPTH:
-            return {"stringValue": TRUNCATED_VALUE}
-        state.ancestors.add(marker)
-        try:
-            if isinstance(value, Mapping):
-                return {
-                    "kvlistValue": {
-                        "values": _encode_key_value_list(value, state, depth + 1)[0]
-                    }
-                }
-            return {"arrayValue": {"values": _encode_array(value, state, depth + 1)}}
-        finally:
-            # Siblings sharing one object are not a cycle.
-            state.ancestors.discard(marker)
+    if isinstance(value, (Mapping, list, tuple, set, frozenset)):
+        return _encode_container(value, state, depth)
     if callable(value):
         return {"stringValue": FUNCTION_VALUE}
     return {"stringValue": wire_string(value)}
+
+
+def _encode_int(value: int) -> dict:
+    if value > INT64_MAX or value < INT64_MIN:
+        log.debug(
+            "Attribute %s is outside the int64 range; encoding it as a string",
+            value,
+        )
+        return {"stringValue": str(value)}
+    # int(): an IntEnum stringifies as its name.
+    return {"intValue": str(int(value))}
+
+
+def _encode_float(value: float) -> dict:
+    if not math.isfinite(value):
+        if math.isnan(value):
+            return {"stringValue": "NaN"}
+        return {"stringValue": "Infinity" if value > 0 else "-Infinity"}
+    return {"doubleValue": value}
+
+
+def _encode_container(value: Any, state: _EncodeState, depth: int) -> dict:
+    marker = id(value)
+    if marker in state.ancestors:
+        return {"stringValue": CIRCULAR_VALUE}
+    if depth >= MAX_VALUE_DEPTH:
+        return {"stringValue": TRUNCATED_VALUE}
+    state.ancestors.add(marker)
+    try:
+        if isinstance(value, Mapping):
+            return {
+                "kvlistValue": {
+                    "values": _encode_key_value_list(value, state, depth + 1)[0]
+                }
+            }
+        return {"arrayValue": {"values": _encode_array(value, state, depth + 1)}}
+    finally:
+        # Siblings sharing one object are not a cycle.
+        state.ancestors.discard(marker)
 
 
 def _encode_array(values: Any, state: _EncodeState, depth: int) -> list:
@@ -328,12 +340,19 @@ def build_otlp_span(record: SpanRecord) -> dict:
     dropped_events = non_negative_count(record.dropped_events_count)
     if dropped_events:
         span["droppedEventsCount"] = dropped_events
-    if record.status is not None and record.status.code in SPAN_STATUS_TO_OTLP:
-        status: dict = {"code": SPAN_STATUS_TO_OTLP[record.status.code]}
-        if record.status.message:
-            status["message"] = wire_string(record.status.message)
+    status = _to_otlp_status(record.status)
+    if status is not None:
         span["status"] = status
     return span
+
+
+def _to_otlp_status(value: Optional[SpanStatus]) -> Optional[dict]:
+    if value is not None and value.code in SPAN_STATUS_TO_OTLP:
+        status: dict = {"code": SPAN_STATUS_TO_OTLP[value.code]}
+        if value.message:
+            status["message"] = wire_string(value.message)
+        return status
+    return None
 
 
 def build_traces_payload(spans: List[dict], resource: list) -> dict:
