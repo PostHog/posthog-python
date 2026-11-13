@@ -102,9 +102,7 @@ def with_request_context(span: ReadableSpan, context: RequestContext) -> Readabl
 
 def to_attribute_value(value: Any) -> Optional[AttributeValue]:
     """Return ``value`` as an OpenTelemetry attribute value, JSON-encoding anything OTel can't hold."""
-    if value is None or (isinstance(value, str) and not value):
-        return None
-    if isinstance(value, float) and not math.isfinite(value):
+    if _invalid_attribute_value(value):
         return None
     if _is_out_of_int64_range(value):
         return str(value)
@@ -112,6 +110,18 @@ def to_attribute_value(value: Any) -> Optional[AttributeValue]:
         return value
     if isinstance(value, (list, tuple)) and _is_homogeneous(value):
         return list(value)
+    return _json_attribute_value(value)
+
+
+def _invalid_attribute_value(value: Any) -> bool:
+    return (
+        value is None
+        or (isinstance(value, str) and not value)
+        or (isinstance(value, float) and not math.isfinite(value))
+    )
+
+
+def _json_attribute_value(value: Any) -> Optional[AttributeValue]:
     try:
         encoded = json.dumps(value, allow_nan=False, default=_encode_string_like)
     except (TypeError, ValueError):

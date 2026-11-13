@@ -555,24 +555,7 @@ async def _standalone_injected_parameters(
     Listings from other requests can have different application-owned parameters.
     Without a schema, stripping could delete application arguments.
     """
-    try:
-        from fastmcp.utilities.versions import VersionSpec, version_sort_key
-
-        version_spec = VersionSpec(eq=version) if version else None
-        # Middleware can shadow registered tools, so resolve the effective listing.
-        candidates = [
-            tool
-            for tool in await server.list_tools()
-            if tool.name == name
-            and (version_spec is None or version_spec.matches(tool.version))
-        ]
-        tool = max(candidates, key=version_sort_key, default=None)
-        if tool is None:
-            tool = await server.get_tool(name, version=version_spec)
-        schema = getattr(tool, "parameters", None)
-    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
-        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
-        return None, None
+    schema = await _standalone_input_schema(server, name, version)
     if not isinstance(schema, dict):
         return None, None
     injected = set()
@@ -879,3 +862,27 @@ def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> Optional[bool]:
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
+
+
+async def _standalone_input_schema(
+    server: Any, name: str, version: Optional[str]
+) -> Any:
+    try:
+        from fastmcp.utilities.versions import VersionSpec, version_sort_key
+
+        version_spec = VersionSpec(eq=version) if version else None
+        # Middleware can shadow registered tools, so resolve the effective listing.
+        candidates = [
+            tool
+            for tool in await server.list_tools()
+            if tool.name == name
+            and (version_spec is None or version_spec.matches(tool.version))
+        ]
+        tool = max(candidates, key=version_sort_key, default=None)
+        if tool is None:
+            tool = await server.get_tool(name, version=version_spec)
+        schema = getattr(tool, "parameters", None)
+    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
+        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
+        return None
+    return schema

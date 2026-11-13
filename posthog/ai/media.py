@@ -16,16 +16,20 @@ _CAMEL_TO_SNAKE = {
 
 def to_plain(obj: Any) -> Any:
     if isinstance(obj, dict):
-        return {k: v for k, v in obj.items() if v is not None}
+        return _without_none(obj)
     model_dump = getattr(obj, "model_dump", None)
     if callable(model_dump):
         try:
             return model_dump(exclude_none=True)
         except TypeError:
-            return {k: v for k, v in model_dump().items() if v is not None}
+            return _without_none(model_dump())
     if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-        return {k: v for k, v in dataclasses.asdict(obj).items() if v is not None}
+        return _without_none(dataclasses.asdict(obj))
     return obj
+
+
+def _without_none(value: dict) -> dict:
+    return {k: v for k, v in value.items() if v is not None}
 
 
 def ensure_serializable(obj: Any) -> Any:

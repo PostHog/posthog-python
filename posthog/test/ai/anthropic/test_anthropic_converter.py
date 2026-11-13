@@ -213,3 +213,95 @@ def test_stream_message_delta_thinking_tokens_not_double_counted():
         )
     assert acc.usage_stats["output_tokens"] == 50
     assert acc.usage_stats["reasoning_tokens"] == 30
+
+
+def test_stream_keeps_block_indexes_thinking_private_from_text_and_cumulative_usage():
+    from types import SimpleNamespace as NS
+
+    from posthog.ai.anthropic._anthropic_stream import _AnthropicStreamAccumulator
+
+    accumulator = _AnthropicStreamAccumulator()
+    events = [
+        NS(
+            type="message_start",
+            message=NS(usage=NS(input_tokens=10, cache_read_input_tokens=1)),
+        ),
+        NS(
+            type="content_block_start",
+            index=0,
+            content_block=NS(type="thinking", thinking="", signature=""),
+        ),
+        NS(
+            type="content_block_delta",
+            index=0,
+            delta=NS(type="thinking_delta", thinking="reason"),
+        ),
+        NS(
+            type="content_block_delta",
+            index=0,
+            delta=NS(type="signature_delta", signature="sig"),
+        ),
+        NS(type="content_block_stop", index=0),
+        NS(
+            type="content_block_start",
+            index=1,
+            content_block=NS(type="server_tool_use", id="server-1"),
+        ),
+        NS(type="content_block_stop", index=1),
+        NS(
+            type="content_block_start",
+            index=2,
+            content_block=NS(type="tool_use", id="call-2", name="lookup"),
+        ),
+        NS(
+            type="content_block_delta",
+            index=2,
+            delta=NS(type="input_json_delta", partial_json='{"q":'),
+        ),
+        NS(
+            type="content_block_delta",
+            index=2,
+            delta=NS(type="input_json_delta", partial_json='"term"}'),
+        ),
+        NS(type="content_block_stop", index=2),
+        NS(type="content_block_start", index=3, content_block=NS(type="text")),
+        NS(
+            type="content_block_delta",
+            index=3,
+            delta=NS(type="text_delta", text="answer"),
+        ),
+        NS(type="content_block_stop", index=3),
+        NS(
+            type="message_delta",
+            usage=NS(input_tokens=30, cache_read_input_tokens=4, output_tokens=5),
+        ),
+        NS(
+            type="message_delta",
+            usage=NS(input_tokens=28, output_tokens=8),
+            delta=NS(stop_reason="end_turn"),
+        ),
+    ]
+    for event in events:
+        accumulator.consume(event)
+
+    assert accumulator.accumulated_content == "answer"
+    assert accumulator.stop_reason == "end_turn"
+    assert accumulator.usage_stats["input_tokens"] == 30
+    assert accumulator.usage_stats["cache_read_input_tokens"] == 4
+    assert accumulator.usage_stats["output_tokens"] == 8
+    assert format_anthropic_streaming_output_complete(
+        accumulator.content_blocks, accumulator.accumulated_content
+    ) == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "thinking", "thinking": "reason", "signature": "sig"},
+                {
+                    "type": "function",
+                    "id": "call-2",
+                    "function": {"name": "lookup", "arguments": {"q": "term"}},
+                },
+                {"type": "text", "text": "answer"},
+            ],
+        }
+    ]

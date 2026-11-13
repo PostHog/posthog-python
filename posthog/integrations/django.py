@@ -96,6 +96,35 @@ class PosthogContextMiddleware:
 
         from django.conf import settings
 
+        self._configure_callbacks(settings)
+
+        capture_exceptions = getattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS", True)
+        self.capture_exceptions: Optional[bool] = (
+            capture_exceptions
+            if capture_exceptions is None or isinstance(capture_exceptions, bool)
+            else True
+        )
+        capture_tracing_headers = getattr(
+            settings, "POSTHOG_MW_CAPTURE_TRACING_HEADERS", None
+        )
+        trust_tracing_headers = getattr(
+            settings, "POSTHOG_MW_TRUST_TRACING_HEADERS", None
+        )
+        self.capture_tracing_headers = _resolve_capture_tracing_headers(
+            capture_tracing_headers,
+            trust_tracing_headers,
+            canonical_name="POSTHOG_MW_CAPTURE_TRACING_HEADERS",
+            deprecated_name="POSTHOG_MW_TRUST_TRACING_HEADERS",
+        )
+
+        if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
+            settings.POSTHOG_MW_CLIENT, Client
+        ):
+            self.client = cast("Optional[Client]", settings.POSTHOG_MW_CLIENT)
+        else:
+            self.client = None
+
+    def _configure_callbacks(self, settings) -> None:
         extra_properties = (
             settings.POSTHOG_MW_EXTRA_PROPERTIES
             if hasattr(settings, "POSTHOG_MW_EXTRA_PROPERTIES")
@@ -127,32 +156,6 @@ class PosthogContextMiddleware:
             if callable(properties_map)
             else None
         )
-
-        capture_exceptions = getattr(settings, "POSTHOG_MW_CAPTURE_EXCEPTIONS", True)
-        self.capture_exceptions: Optional[bool] = (
-            capture_exceptions
-            if capture_exceptions is None or isinstance(capture_exceptions, bool)
-            else True
-        )
-        capture_tracing_headers = getattr(
-            settings, "POSTHOG_MW_CAPTURE_TRACING_HEADERS", None
-        )
-        trust_tracing_headers = getattr(
-            settings, "POSTHOG_MW_TRUST_TRACING_HEADERS", None
-        )
-        self.capture_tracing_headers = _resolve_capture_tracing_headers(
-            capture_tracing_headers,
-            trust_tracing_headers,
-            canonical_name="POSTHOG_MW_CAPTURE_TRACING_HEADERS",
-            deprecated_name="POSTHOG_MW_TRUST_TRACING_HEADERS",
-        )
-
-        if hasattr(settings, "POSTHOG_MW_CLIENT") and isinstance(
-            settings.POSTHOG_MW_CLIENT, Client
-        ):
-            self.client = cast("Optional[Client]", settings.POSTHOG_MW_CLIENT)
-        else:
-            self.client = None
 
     @property
     def trust_tracing_headers(self) -> bool:
@@ -236,6 +239,9 @@ class PosthogContextMiddleware:
             tags["$user_agent"] = user_agent
             tags["$raw_user_agent"] = user_agent
 
+        return self._transform_properties(request, tags)
+
+    def _transform_properties(self, request, tags):
         # Apply application-specific properties, then the optional transform.
         if self.extra_properties:
             extra = self.extra_properties(request)

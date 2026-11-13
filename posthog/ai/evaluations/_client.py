@@ -69,17 +69,21 @@ def _experiment_body(name: str, options: ExperimentOptions) -> bytes:
     for key, value in options.items():
         if key in ("id", "started_at"):
             continue
-        if key == "run_source":
-            if value is not None and value not in ("ci", "local", "scheduled"):
-                raise ValueError("run_source must be ci, local, scheduled, or None.")
-            data[key] = value
-        elif key in ("expected_item_count", "expected_result_count"):
-            data[key] = _count(value, key)
-        elif key == "dataset_revision_id":
-            data[key] = None if value is None else _uuid(value)
-        else:
-            data[key] = _identifier(value, key)
+        data[key] = _experiment_option(key, value)
     return _encode(data)
+
+
+def _experiment_option(key: str, value: Any) -> Any:
+    if key == "run_source":
+        if value is not None and value not in ("ci", "local", "scheduled"):
+            raise ValueError("run_source must be ci, local, scheduled, or None.")
+        return value
+    elif key in ("expected_item_count", "expected_result_count"):
+        return _count(value, key)
+    elif key == "dataset_revision_id":
+        return None if value is None else _uuid(value)
+    else:
+        return _identifier(value, key)
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,26 @@ def _upload_body(items: list[bytes], results: list[bytes]) -> bytes:
     return (
         b'{"items":[' + b",".join(items) + b'],"results":[' + b",".join(results) + b"]}"
     )
+
+
+def _result_declarations(results: tuple[EvaluationResult, ...]) -> dict[str, bytes]:
+    identities: set[tuple[str, str]] = set()
+    declarations: dict[str, bytes] = {}
+    for result in results:
+        if not isinstance(result, EvaluationResult):
+            raise TypeError("upload_results expects EvaluationResult objects.")
+        key = (result.item_id, result.scorer_version_id)
+        if key in identities:
+            raise ValueError(
+                "Each item/scorer-version pair must occur only once in a bulk upload."
+            )
+        identities.add(key)
+        if isinstance(result.item, EvaluationItem):
+            previous = declarations.setdefault(result.item_id, result.item._json)
+            if previous != result.item._json:
+                raise ValueError("Conflicting declarations for the same item UUID.")
+
+    return declarations
 
 
 def _group_ends(results: tuple[EvaluationResult, ...]) -> list[int]:
@@ -119,25 +143,43 @@ def _group_ends(results: tuple[EvaluationResult, ...]) -> list[int]:
     return ends
 
 
+def _group_extra(
+    group_results: list[bytes],
+    new_items: list[bytes],
+    encoded_results: list[bytes],
+    items: list[bytes],
+) -> int:
+    extra = sum(map(len, group_results)) + len(group_results) - (not encoded_results)
+    if new_items:
+        extra += sum(map(len, new_items)) + len(new_items) - (not items)
+    return extra
+
+
+def _encoded_group(
+    group: tuple[EvaluationResult, ...], declarations: dict[str, bytes]
+) -> tuple[list[bytes], dict[str, bytes]]:
+    return (
+        [result._json for result in group],
+        {
+            result.item_id: declarations[result.item_id]
+            for result in group
+            if result.item_id in declarations
+        },
+    )
+
+
+def _group_fits(result_count: int, item_count: int, size: int) -> bool:
+    return (
+        result_count <= _MAX_RESULTS
+        and item_count <= _MAX_ITEMS
+        and size <= _MAX_REQUEST_BYTES
+    )
+
+
 def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
     # Validate the finite submission before sending any chunk. Receipts and
     # prepared bodies use memory proportional to this caller-sized sequence.
-    identities: set[tuple[str, str]] = set()
-    declarations: dict[str, bytes] = {}
-    for result in results:
-        if not isinstance(result, EvaluationResult):
-            raise TypeError("upload_results expects EvaluationResult objects.")
-        key = (result.item_id, result.scorer_version_id)
-        if key in identities:
-            raise ValueError(
-                "Each item/scorer-version pair must occur only once in a bulk upload."
-            )
-        identities.add(key)
-        if isinstance(result.item, EvaluationItem):
-            previous = declarations.setdefault(result.item_id, result.item._json)
-            if previous != result.item._json:
-                raise ValueError("Conflicting declarations for the same item UUID.")
-
+    declarations = _result_declarations(results)
     chunks: list[_Chunk] = []
     item_ids: set[str] = set()
     items: list[bytes] = []
@@ -147,27 +189,15 @@ def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
     group_start = 0
     for end in _group_ends(results):
         group = results[group_start:end]
-        group_results = [result._json for result in group]
-        group_items = {
-            result.item_id: declarations[result.item_id]
-            for result in group
-            if result.item_id in declarations
-        }
+        group_results, group_items = _encoded_group(group, declarations)
         while True:
             new_items = [body for id, body in group_items.items() if id not in item_ids]
-            extra = (
-                sum(map(len, group_results))
-                + len(group_results)
-                - (not encoded_results)
-            )
-            if new_items:
-                extra += sum(map(len, new_items)) + len(new_items) - (not items)
-            fits = (
-                len(encoded_results) + len(group) <= _MAX_RESULTS
-                and len(items) + len(new_items) <= _MAX_ITEMS
-                and size + extra <= _MAX_REQUEST_BYTES
-            )
-            if fits:
+            extra = _group_extra(group_results, new_items, encoded_results, items)
+            if _group_fits(
+                len(encoded_results) + len(group),
+                len(items) + len(new_items),
+                size + extra,
+            ):
                 break
             if not encoded_results:
                 raise ValueError(

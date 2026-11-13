@@ -10,7 +10,8 @@ import threading
 import warnings
 import weakref
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Mapping, Optional, Union
+from functools import partial as _partial
+from typing import AbstractSet, Any, Callable, Dict, Mapping, Optional, Union
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
@@ -165,24 +166,7 @@ class AsyncClient:
             capture_compression, gzip_fallback=gzip
         )
         self.capture_trace_context = capture_trace_context
-        if personal_api_key is not None and secret_key is None:
-            warnings.warn(
-                "`personal_api_key` is deprecated; use `secret_key` instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        elif personal_api_key is not None and secret_key is not None:
-            self.log.warning(
-                "[FEATURE FLAGS] Both secret_key and personal_api_key were provided; "
-                "using secret_key."
-            )
-        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
-        self.secret_key = (
-            resolved_secret_key.strip()
-            if isinstance(resolved_secret_key, str)
-            else resolved_secret_key
-        ) or None
-        self.personal_api_key = self.secret_key
+        self._configure_secret_key(secret_key, personal_api_key)
         _validate_options(
             email_request_timeout_seconds, email_request_max_retries, migrated_from
         )
@@ -203,35 +187,16 @@ class AsyncClient:
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
-        self.log_captured_exceptions = log_captured_exceptions
-        self.capture_exception_code_variables = capture_exception_code_variables
-        self.code_variables_mask_patterns = (
-            code_variables_mask_patterns
-            if code_variables_mask_patterns is not None
-            else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+        self._configure_exception_capture(
+            log_captured_exceptions,
+            capture_exception_code_variables,
+            code_variables_mask_patterns,
+            code_variables_ignore_patterns,
+            code_variables_mask_url_credentials,
+            code_variables_detect_secrets,
+            in_app_modules,
+            project_root,
         )
-        self.code_variables_ignore_patterns = (
-            code_variables_ignore_patterns
-            if code_variables_ignore_patterns is not None
-            else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
-        )
-        self.code_variables_mask_url_credentials = (
-            code_variables_mask_url_credentials
-            if code_variables_mask_url_credentials is not None
-            else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
-        )
-        self.code_variables_detect_secrets = (
-            code_variables_detect_secrets
-            if code_variables_detect_secrets is not None
-            else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
-        )
-        self.in_app_modules = in_app_modules
-        self.project_root = project_root
-        if self.project_root is None:
-            try:
-                self.project_root = os.getcwd()
-            except Exception:
-                self.project_root = None
 
         if before_send is not None and not callable(before_send):
             self.log.warning("before_send is not callable, it will be ignored")
@@ -268,6 +233,69 @@ class AsyncClient:
         self._deferred_lifecycle_tasks: set[asyncio.Task[Any]] = set()
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
         self._register_duplicate_client()
+
+    def _configure_secret_key(
+        self, secret_key: Optional[str], personal_api_key: Optional[str]
+    ) -> None:
+        if personal_api_key is not None and secret_key is None:
+            warnings.warn(
+                "`personal_api_key` is deprecated; use `secret_key` instead.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        elif personal_api_key is not None and secret_key is not None:
+            self.log.warning(
+                "[FEATURE FLAGS] Both secret_key and personal_api_key were provided; "
+                "using secret_key."
+            )
+        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
+        self.secret_key = (
+            resolved_secret_key.strip()
+            if isinstance(resolved_secret_key, str)
+            else resolved_secret_key
+        ) or None
+        self.personal_api_key = self.secret_key
+
+    def _configure_exception_capture(
+        self,
+        log_captured_exceptions: bool,
+        capture_exception_code_variables: bool,
+        code_variables_mask_patterns,
+        code_variables_ignore_patterns,
+        code_variables_mask_url_credentials,
+        code_variables_detect_secrets,
+        in_app_modules: Optional[list[str]],
+        project_root: Optional[str],
+    ) -> None:
+        self.log_captured_exceptions = log_captured_exceptions
+        self.capture_exception_code_variables = capture_exception_code_variables
+        self.code_variables_mask_patterns = (
+            code_variables_mask_patterns
+            if code_variables_mask_patterns is not None
+            else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+        )
+        self.code_variables_ignore_patterns = (
+            code_variables_ignore_patterns
+            if code_variables_ignore_patterns is not None
+            else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+        )
+        self.code_variables_mask_url_credentials = (
+            code_variables_mask_url_credentials
+            if code_variables_mask_url_credentials is not None
+            else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+        )
+        self.code_variables_detect_secrets = (
+            code_variables_detect_secrets
+            if code_variables_detect_secrets is not None
+            else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
+        )
+        self.in_app_modules = in_app_modules
+        self.project_root = project_root
+        if self.project_root is None:
+            try:
+                self.project_root = os.getcwd()
+            except Exception:
+                self.project_root = None
 
     _emails: Optional[AsyncEmails] = None
 
@@ -428,27 +456,39 @@ class AsyncClient:
             self._ensure_workers_started()
             self._queue.put_nowait(queued_event)
             return True
+        return self._enqueue_from_thread(self._loop, queued_event, running_loop)
+
+    def _enqueue_from_thread(
+        self,
+        loop: asyncio.AbstractEventLoop,
+        queued_event: _QueuedEvent,
+        running_loop: Optional[asyncio.AbstractEventLoop],
+    ) -> bool:
         if running_loop is not None:
             raise RuntimeError("AsyncClient cannot be shared across event loops")
-        if self._loop_thread_id == threading.get_ident() or not self._loop.is_running():
+        if self._loop_thread_id == threading.get_ident() or not loop.is_running():
             raise RuntimeError("AsyncClient event loop is not running")
 
         admitted: concurrent.futures.Future[bool] = concurrent.futures.Future()
 
-        def enqueue_on_bound_loop() -> None:
-            try:
-                if not self._accepting or self._closed:
-                    admitted.set_result(False)
-                    return
-                self._ensure_workers_started()
-                self._queue.put_nowait(queued_event)
-            except BaseException as error:
-                admitted.set_exception(error)
-            else:
-                admitted.set_result(True)
-
-        self._loop.call_soon_threadsafe(enqueue_on_bound_loop)
+        loop.call_soon_threadsafe(
+            _partial(self._enqueue_on_bound_loop, queued_event, admitted)
+        )
         return admitted.result()
+
+    def _enqueue_on_bound_loop(
+        self, queued_event: _QueuedEvent, admitted: concurrent.futures.Future[bool]
+    ) -> None:
+        try:
+            if not self._accepting or self._closed:
+                admitted.set_result(False)
+                return
+            self._ensure_workers_started()
+            self._queue.put_nowait(queued_event)
+        except BaseException as error:
+            admitted.set_exception(error)
+        else:
+            admitted.set_result(True)
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
         raw_uuid = msg.pop("uuid", None)
@@ -477,33 +517,10 @@ class AsyncClient:
         if self.disabled or not self._accepting:
             return None, None
 
-        timestamp = msg.get("timestamp")
-        if timestamp is None:
-            timestamp = datetime.now(tz=timezone.utc)
-        try:
-            msg["timestamp"] = _normalize_timestamp(timestamp)
-        except ValueError:
-            self.log.warning(
-                "Invalid timestamp %r. Falling back to the current UTC time.",
-                timestamp,
-            )
-            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+        msg["timestamp"] = self._event_timestamp(msg.get("timestamp"))
 
         sent_uuid = self._normalize_uuid(msg)
-        properties = msg.setdefault("properties", {})
-        properties["$lib"] = "posthog-python"
-        properties["$lib_version"] = VERSION
-
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-        if disable_geoip:
-            properties["$geoip_disable"] = True
-        if self.super_properties:
-            msg["properties"] = {**properties, **self.super_properties}
-        if self._release_id is not None:
-            msg["properties"].setdefault("$release_id", self._release_id)
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
+        self._add_capture_metadata(msg, disable_geoip)
         # After every enrichment step, so a super property never changes or adds
         # config version 2 flag attribution.
         if pinned_properties is not None:
@@ -518,6 +535,37 @@ class AsyncClient:
         msg["distinct_id"] = _stringify_id(msg.get("distinct_id"))
         cleaned = clean(msg)
         return cleaned, sent_uuid
+
+    def _add_capture_metadata(
+        self, msg: dict[str, Any], disable_geoip: Optional[bool]
+    ) -> None:
+        properties = msg.setdefault("properties", {})
+        properties["$lib"] = "posthog-python"
+        properties["$lib_version"] = VERSION
+
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+        if disable_geoip:
+            properties["$geoip_disable"] = True
+        if self.super_properties:
+            msg["properties"] = {**properties, **self.super_properties}
+        if self._release_id is not None:
+            msg["properties"].setdefault("$release_id", self._release_id)
+        if self.is_server:
+            msg["properties"]["$is_server"] = True
+
+    def _event_timestamp(self, value: Any) -> str:
+        timestamp = value
+        if timestamp is None:
+            timestamp = datetime.now(tz=timezone.utc)
+        try:
+            return _normalize_timestamp(timestamp)
+        except ValueError:
+            self.log.warning(
+                "Invalid timestamp %r. Falling back to the current UTC time.",
+                timestamp,
+            )
+            return datetime.now(tz=timezone.utc).isoformat()
 
     async def _process_event(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
         if self.before_send is None:
@@ -623,13 +671,10 @@ class AsyncClient:
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Capture one event and wait until its delivery attempt completes."""
-        current = asyncio.current_task()
-        if current is None:  # pragma: no cover - async functions always have a task
+        admitted = self._start_immediate_call()
+        if admitted is None:
             return None
-        if not self._accepting:
-            return None
-        completion = self._start_inflight_operation()
-        self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
+        current, completion = admitted
         error_batch: list[dict[str, Any]] = []
         try:
             msg, disable_geoip, property_allowlist, pinned_properties = (
@@ -646,33 +691,14 @@ class AsyncClient:
             error_batch = [processed]
             if not self.send:
                 return sent_uuid
-            try:
-                event_size = await _serialized_event_size(processed)
-            except Exception:
-                self.log.error(
-                    "unable to serialize immediate event for sizing, dropping"
-                )
-                return None
-            if event_size > MAX_MSG_SIZE:
-                self.log.error(
-                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
-                    processed.get("event"),
-                    event_size,
-                    MAX_MSG_SIZE // 1024,
-                )
+            if not await self._immediate_event_is_sendable(processed):
                 return None
 
             consumer = self._new_consumer()
             await consumer.request(error_batch)
             return sent_uuid
         except Exception as error:
-            if self.on_error:
-                try:
-                    await _invoke_callback(self.on_error, error, error_batch)
-                except Exception as callback_error:
-                    self.log.error(
-                        "on_error handler failed (%s)", type(callback_error).__name__
-                    )
+            await self._notify_immediate_error(error, error_batch)
             if self.debug:
                 raise
             self.log.error(
@@ -682,12 +708,56 @@ class AsyncClient:
             )
             return None
         finally:
-            remaining_calls = self._immediate_callers[current] - 1
-            if remaining_calls:
-                self._immediate_callers[current] = remaining_calls
-            else:
-                del self._immediate_callers[current]
-            self._finish_inflight_operation(completion)
+            self._finish_immediate_call(current, completion)
+
+    def _start_immediate_call(
+        self,
+    ) -> Optional[tuple[asyncio.Task[Any], asyncio.Future[None]]]:
+        current = asyncio.current_task()
+        if current is None:  # pragma: no cover - async functions always have a task
+            return None
+        if not self._accepting:
+            return None
+        completion = self._start_inflight_operation()
+        self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
+        return current, completion
+
+    def _finish_immediate_call(
+        self, current: asyncio.Task[Any], completion: asyncio.Future[None]
+    ) -> None:
+        remaining_calls = self._immediate_callers[current] - 1
+        if remaining_calls:
+            self._immediate_callers[current] = remaining_calls
+        else:
+            del self._immediate_callers[current]
+        self._finish_inflight_operation(completion)
+
+    async def _notify_immediate_error(
+        self, error: Exception, error_batch: list[dict[str, Any]]
+    ) -> None:
+        if self.on_error:
+            try:
+                await _invoke_callback(self.on_error, error, error_batch)
+            except Exception as callback_error:
+                self.log.error(
+                    "on_error handler failed (%s)", type(callback_error).__name__
+                )
+
+    async def _immediate_event_is_sendable(self, processed: dict[str, Any]) -> bool:
+        try:
+            event_size = await _serialized_event_size(processed)
+        except Exception:
+            self.log.error("unable to serialize immediate event for sizing, dropping")
+            return False
+        if event_size > MAX_MSG_SIZE:
+            self.log.error(
+                "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                processed.get("event"),
+                event_size,
+                MAX_MSG_SIZE // 1024,
+            )
+            return False
+        return True
 
     def _build_person_properties_event(
         self, event: str, property_key: str, kwargs: OptionalSetArgs
@@ -829,16 +899,8 @@ class AsyncClient:
     ) -> Optional[str]:
         """Capture an exception. This method never raises, including in debug mode."""
         try:
-            if exception is not None and exception_is_already_captured(exception):
-                self.log.debug("Exception already captured, skipping")
-                return None
-            exc_info = (
-                exc_info_from_error(exception)
-                if exception is not None
-                else sys.exc_info()
-            )
-            if exc_info is None or exc_info == (None, None, None):
-                self.log.warning("No exception information available")
+            exc_info = self._exception_info(exception)
+            if exc_info is None:
                 return None
 
             exceptions = exceptions_from_error_tuple(exc_info)
@@ -852,43 +914,7 @@ class AsyncClient:
                 "$exception_list": exceptions,
                 **(kwargs.get("properties") or {}),
             }
-            context_enabled = get_capture_exception_code_variables_context()
-            context_mask = get_code_variables_mask_patterns_context()
-            context_ignore = get_code_variables_ignore_patterns_context()
-            context_mask_url_credentials = (
-                get_code_variables_mask_url_credentials_context()
-            )
-            context_detect_secrets = get_code_variables_detect_secrets_context()
-            enabled = (
-                context_enabled
-                if context_enabled is not None
-                else self.capture_exception_code_variables
-            )
-            if enabled:
-                try_attach_code_variables_to_frames(
-                    exceptions,
-                    exc_info,
-                    mask_patterns=(
-                        context_mask
-                        if context_mask is not None
-                        else self.code_variables_mask_patterns
-                    ),
-                    ignore_patterns=(
-                        context_ignore
-                        if context_ignore is not None
-                        else self.code_variables_ignore_patterns
-                    ),
-                    mask_url_credentials=(
-                        context_mask_url_credentials
-                        if context_mask_url_credentials is not None
-                        else self.code_variables_mask_url_credentials
-                    ),
-                    detect_secrets=(
-                        context_detect_secrets
-                        if context_detect_secrets is not None
-                        else self.code_variables_detect_secrets
-                    ),
-                )
+            self._attach_exception_code_variables(exceptions, exc_info)
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
 
@@ -908,6 +934,56 @@ class AsyncClient:
         except Exception as error:
             self.log.exception("Failed to capture exception: %s", error)
             return None
+
+    def _attach_exception_code_variables(self, exceptions, exc_info) -> None:
+        context_enabled = get_capture_exception_code_variables_context()
+        context_mask = get_code_variables_mask_patterns_context()
+        context_ignore = get_code_variables_ignore_patterns_context()
+        context_mask_url_credentials = get_code_variables_mask_url_credentials_context()
+        context_detect_secrets = get_code_variables_detect_secrets_context()
+        enabled = (
+            context_enabled
+            if context_enabled is not None
+            else self.capture_exception_code_variables
+        )
+        if enabled:
+            try_attach_code_variables_to_frames(
+                exceptions,
+                exc_info,
+                mask_patterns=(
+                    context_mask
+                    if context_mask is not None
+                    else self.code_variables_mask_patterns
+                ),
+                ignore_patterns=(
+                    context_ignore
+                    if context_ignore is not None
+                    else self.code_variables_ignore_patterns
+                ),
+                mask_url_credentials=(
+                    context_mask_url_credentials
+                    if context_mask_url_credentials is not None
+                    else self.code_variables_mask_url_credentials
+                ),
+                detect_secrets=(
+                    context_detect_secrets
+                    if context_detect_secrets is not None
+                    else self.code_variables_detect_secrets
+                ),
+            )
+
+    def _exception_info(self, exception: Optional[ExceptionArg]):
+        if exception is not None and exception_is_already_captured(exception):
+            self.log.debug("Exception already captured, skipping")
+            return None
+        exc_info = (
+            exc_info_from_error(exception) if exception is not None else sys.exc_info()
+        )
+        if exc_info is None or exc_info == (None, None, None):
+            self.log.warning("No exception information available")
+            return None
+
+        return exc_info
 
     def _get_feature_flag_evaluations_host(self) -> _FeatureFlagEvaluationsHost:
         if self._feature_flag_evaluations_host_cache is None:
@@ -974,10 +1050,7 @@ class AsyncClient:
         ``unresolved_flags`` is always empty.
         """
         host = self._get_feature_flag_evaluations_host()
-        if distinct_id is None:
-            distinct_id = _get_context_distinct_id()
-        if device_id is None:
-            device_id = _get_context_device_id()
+        distinct_id, device_id = _evaluation_context_ids(distinct_id, device_id)
         if distinct_id is None or distinct_id == "" or self.disabled:
             return FeatureFlagEvaluations(host=host, distinct_id="", flags={})
 
@@ -991,12 +1064,6 @@ class AsyncClient:
                 disable_geoip=disable_geoip,
             )
 
-        records: dict[str, _EvaluatedFlagRecord] = {}
-        request_id: Optional[str] = None
-        evaluated_at: Optional[int] = None
-        errors_while_computing = False
-        quota_limited = False
-        minimal_flag_called_events = False
         requested_keys = set(flag_keys) if flag_keys else None
         if not self._accepting:
             return FeatureFlagEvaluations(
@@ -1006,12 +1073,43 @@ class AsyncClient:
                 groups=resolved_groups,
                 disable_geoip=disable_geoip,
             )
+        return await self._request_flag_snapshot(
+            host,
+            distinct_id,
+            requested_keys,
+            groups=resolved_groups,
+            person_properties=person_properties,
+            group_properties=group_properties,
+            disable_geoip=disable_geoip,
+            flag_keys=flag_keys,
+            device_id=device_id,
+        )
+
+    async def _request_flag_snapshot(
+        self,
+        host: _FeatureFlagEvaluationsHost,
+        distinct_id: ID_TYPES,
+        requested_keys: Optional[AbstractSet[str]],
+        *,
+        groups: Mapping[str, Union[str, int]],
+        person_properties: Optional[Dict[str, Any]],
+        group_properties: Optional[Dict[str, Dict[str, Any]]],
+        disable_geoip: Optional[bool],
+        flag_keys: Optional[list[str]],
+        device_id: Optional[str],
+    ) -> FeatureFlagEvaluations:
+        records: dict[str, _EvaluatedFlagRecord] = {}
+        request_id: Optional[str] = None
+        evaluated_at: Optional[int] = None
+        errors_while_computing = False
+        quota_limited = False
+        minimal_flag_called_events = False
         completion = self._start_inflight_operation()
 
         try:
             response = await self._get_flags_decision(
                 distinct_id,
-                groups=resolved_groups,
+                groups=groups,
                 person_properties=person_properties,
                 group_properties=group_properties,
                 disable_geoip=disable_geoip,
@@ -1049,7 +1147,7 @@ class AsyncClient:
             host=host,
             distinct_id=str(distinct_id),
             flags=records,
-            groups=resolved_groups,
+            groups=groups,
             disable_geoip=disable_geoip,
             request_id=request_id,
             evaluated_at=evaluated_at,
@@ -1237,13 +1335,7 @@ class AsyncClient:
             self._accepting = False
             errors: list[Exception] = []
 
-            pending_operations = [
-                completion
-                for completion in self._inflight_operations
-                if not completion.done()
-            ]
-            if pending_operations:
-                await asyncio.gather(*pending_operations, return_exceptions=True)
+            await self._wait_for_inflight_operations()
 
             try:
                 await self.flush(timeout_seconds=None)
@@ -1251,43 +1343,58 @@ class AsyncClient:
                 self.log.exception("Failed to flush async capture queue")
                 errors.append(error)
 
-            try:
-                live_workers = [task for task in self._worker_tasks if not task.done()]
-                for _ in live_workers:
-                    await self._queue.put(_STOP)
-                if self._worker_tasks:
-                    await asyncio.gather(*self._worker_tasks, return_exceptions=True)
-            except Exception as error:
-                self.log.exception("Failed to stop async capture workers")
-                errors.append(error)
-            finally:
-                self._worker_tasks.clear()
-                self._consumers.clear()
+            await self._stop_workers(errors)
 
-            try:
-                await self._close_transport()
-            except Exception as error:
-                self.log.exception("Failed to close async capture transport")
-                errors.append(error)
-
-            if self._emails is not None:
-                try:
-                    await self._emails.aclose()
-                except Exception as error:
-                    self.log.exception("Failed to close the async email transport")
-                    errors.append(error)
-
-            try:
-                self._unregister_duplicate_client()
-            except Exception as error:
-                self.log.exception("Failed to unregister async client")
-                errors.append(error)
+            await self._close_resources(errors)
 
             self.distinct_ids_feature_flags_reported.clear()
             self._experiment_exposures_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]
+
+    async def _close_resources(self, errors: list[Exception]) -> None:
+        try:
+            await self._close_transport()
+        except Exception as error:
+            self.log.exception("Failed to close async capture transport")
+            errors.append(error)
+
+        if self._emails is not None:
+            try:
+                await self._emails.aclose()
+            except Exception as error:
+                self.log.exception("Failed to close the async email transport")
+                errors.append(error)
+
+        try:
+            self._unregister_duplicate_client()
+        except Exception as error:
+            self.log.exception("Failed to unregister async client")
+            errors.append(error)
+
+    async def _stop_workers(self, errors: list[Exception]) -> None:
+        try:
+            live_workers = [task for task in self._worker_tasks if not task.done()]
+            for _ in live_workers:
+                await self._queue.put(_STOP)
+            if self._worker_tasks:
+                await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+        except Exception as error:
+            self.log.exception("Failed to stop async capture workers")
+            errors.append(error)
+        finally:
+            self._worker_tasks.clear()
+            self._consumers.clear()
+
+    async def _wait_for_inflight_operations(self) -> None:
+        pending_operations = [
+            completion
+            for completion in self._inflight_operations
+            if not completion.done()
+        ]
+        if pending_operations:
+            await asyncio.gather(*pending_operations, return_exceptions=True)
 
     async def join(self) -> None:
         await self.shutdown()
@@ -1297,3 +1404,13 @@ class AsyncPosthog(AsyncClient):
     """Customer-facing name for :class:`AsyncClient`."""
 
     pass
+
+
+def _evaluation_context_ids(
+    distinct_id: Optional[ID_TYPES], device_id: Optional[str]
+) -> tuple[Optional[ID_TYPES], Optional[str]]:
+    if distinct_id is None:
+        distinct_id = _get_context_distinct_id()
+    if device_id is None:
+        device_id = _get_context_device_id()
+    return distinct_id, device_id

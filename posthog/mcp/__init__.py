@@ -248,6 +248,105 @@ def instrument(
     :param options: Optional :class:`MCPAnalyticsOptions`.
     """
     opts = options or MCPAnalyticsOptions()
+    server_build = _prepare_instrumentation(opts)
+
+    key = tracking_key(server)
+
+    try:
+        # MCP is an optional peer: load adapters only when instrumentation is
+        # requested, inside the no-crash boundary. Class probes stay major-specific.
+        from ._compatibility import (
+            is_fastmcp_v2,
+            uses_v2_handler_registry,
+        )
+        from ._raised_tool_error import wrap_tool_dispatch
+
+        client = _resolve_client(posthog_client)
+        if client is None:
+            log("Warning: no PostHog client available; MCP events will not be sent.")
+
+        existing_data = get_server_tracking_data(key)
+        data = existing_data
+        if data is None:
+            data = _new_tracking_data(opts, client, server_build)
+
+        if is_fastmcp_v2(server):
+            wrap_tool_dispatch(server)
+            if uses_v2_handler_registry(key):
+                data.standalone_fastmcp = weakref.ref(server)
+
+        # A standalone FastMCP wrapper and its low-level server share one tracking
+        # key, so instrumenting the second of the pair must still attach what only
+        # that object provides: the wrapper's schema lookup and ASGI app factories.
+        if existing_data is not None:
+            autowire_stateless_mint(server)
+            log("instrument() - server already instrumented, skipping initialization")
+            return McpAnalytics(key)
+
+        set_server_tracking_data(key, data)
+
+        _instrument_adapter(server, data)
+
+        if client is not None:
+            from ._lib_identity import apply_mcp_lib_identity
+
+            apply_mcp_lib_identity(client)
+
+        # Zero-config stateless minting: wrap the server's ASGI-app factories so a
+        # stateless/multi-pod deployment keeps one $session_id + the client harness
+        # across pods with no extra setup. No-op for stdio / low-level servers.
+        autowire_stateless_mint(server)
+
+        return McpAnalytics(key)
+    except Exception as error:  # noqa: BLE001
+        log(f"Warning: failed to instrument server - {error}")
+        return _NoopAnalytics()
+
+
+def _instrument_adapter(server: Any, data: MCPAnalyticsData) -> None:
+    from ._compatibility import (
+        is_fastmcp,
+        is_fastmcp_v2,
+        is_low_level_server,
+        is_mcpserver,
+        uses_v2_handler_registry,
+    )
+    from ._instrument_fastmcp import instrument_fastmcp
+    from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
+    from ._instrument_v2 import instrument_lowlevel_v2, instrument_mcpserver_v2
+
+    if is_fastmcp(server):
+        instrument_fastmcp(server, data)
+    elif is_mcpserver(server):
+        instrument_mcpserver_v2(server, data)
+    elif is_fastmcp_v2(server):
+        if uses_v2_handler_registry(server._mcp_server):
+            instrument_lowlevel_v2(server._mcp_server, data)
+        else:
+            instrument_fastmcp_v2(server, data)
+    elif is_low_level_server(server):
+        if uses_v2_handler_registry(server):
+            instrument_lowlevel_v2(server, data)
+        else:
+            instrument_low_level(server, data)
+    else:
+        raise TypeError(
+            f"Unsupported server type: {type(server)!r}. Pass a high-level server "
+            "(mcp.server.fastmcp.FastMCP on SDK 1.x, mcp.server.mcpserver.MCPServer "
+            "on SDK 2.x, or jlowin's fastmcp.FastMCP) or a low-level mcp.server.Server."
+        )
+
+
+def _new_tracking_data(
+    opts: MCPAnalyticsOptions, client: Optional[Client], server_build: Optional[str]
+) -> MCPAnalyticsData:
+    sink = McpEventSink(client) if client is not None else None
+    return MCPAnalyticsData(
+        options=opts, sink=sink, session_id=new_session_id(), server_build=server_build
+    )
+
+
+def _prepare_instrumentation(opts: MCPAnalyticsOptions) -> Optional[str]:
     server_build = validate_server_build(opts.server_build)
 
     # Install the logger first so the version advisory below (and any warning) is
@@ -275,85 +374,4 @@ def instrument(
     if feedback_options is not None:
         get_feedback_tool_descriptor(feedback_options)
 
-    key = tracking_key(server)
-
-    try:
-        # MCP is an optional peer: load adapters only when instrumentation is
-        # requested, inside the no-crash boundary. Class probes stay major-specific.
-        from ._compatibility import (
-            is_fastmcp,
-            is_fastmcp_v2,
-            is_low_level_server,
-            is_mcpserver,
-            uses_v2_handler_registry,
-        )
-        from ._instrument_fastmcp import instrument_fastmcp
-        from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
-        from ._instrument_v2 import instrument_lowlevel_v2, instrument_mcpserver_v2
-        from ._raised_tool_error import wrap_tool_dispatch
-
-        client = _resolve_client(posthog_client)
-        if client is None:
-            log("Warning: no PostHog client available; MCP events will not be sent.")
-
-        existing_data = get_server_tracking_data(key)
-        data = existing_data
-        if data is None:
-            sink = McpEventSink(client) if client is not None else None
-            data = MCPAnalyticsData(
-                options=opts,
-                sink=sink,
-                session_id=new_session_id(),
-                server_build=server_build,
-            )
-
-        if is_fastmcp_v2(server):
-            wrap_tool_dispatch(server)
-            if uses_v2_handler_registry(key):
-                data.standalone_fastmcp = weakref.ref(server)
-
-        # A standalone FastMCP wrapper and its low-level server share one tracking
-        # key, so instrumenting the second of the pair must still attach what only
-        # that object provides: the wrapper's schema lookup and ASGI app factories.
-        if existing_data is not None:
-            autowire_stateless_mint(server)
-            log("instrument() - server already instrumented, skipping initialization")
-            return McpAnalytics(key)
-
-        set_server_tracking_data(key, data)
-
-        if is_fastmcp(server):
-            instrument_fastmcp(server, data)
-        elif is_mcpserver(server):
-            instrument_mcpserver_v2(server, data)
-        elif is_fastmcp_v2(server):
-            if uses_v2_handler_registry(server._mcp_server):
-                instrument_lowlevel_v2(server._mcp_server, data)
-            else:
-                instrument_fastmcp_v2(server, data)
-        elif is_low_level_server(server):
-            if uses_v2_handler_registry(server):
-                instrument_lowlevel_v2(server, data)
-            else:
-                instrument_low_level(server, data)
-        else:
-            raise TypeError(
-                f"Unsupported server type: {type(server)!r}. Pass a high-level server "
-                "(mcp.server.fastmcp.FastMCP on SDK 1.x, mcp.server.mcpserver.MCPServer "
-                "on SDK 2.x, or jlowin's fastmcp.FastMCP) or a low-level mcp.server.Server."
-            )
-
-        if client is not None:
-            from ._lib_identity import apply_mcp_lib_identity
-
-            apply_mcp_lib_identity(client)
-
-        # Zero-config stateless minting: wrap the server's ASGI-app factories so a
-        # stateless/multi-pod deployment keeps one $session_id + the client harness
-        # across pods with no extra setup. No-op for stdio / low-level servers.
-        autowire_stateless_mint(server)
-
-        return McpAnalytics(key)
-    except Exception as error:  # noqa: BLE001
-        log(f"Warning: failed to instrument server - {error}")
-        return _NoopAnalytics()
+    return server_build
