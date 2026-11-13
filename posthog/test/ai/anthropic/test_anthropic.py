@@ -2274,6 +2274,26 @@ def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
 
 
+def test_messages_stream_captures_initial_request_error(mock_client):
+    client = Anthropic(api_key="test-key", posthog_client=mock_client)
+    client.post = Mock(side_effect=RuntimeError("401 unauthorized"))
+
+    manager = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+    )
+    with pytest.raises(RuntimeError, match="401 unauthorized"):
+        with manager:
+            pass
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "401 unauthorized"
+
+
 def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):
     manager = object()
     client = Anthropic(api_key="test-key", posthog_client=mock_client)
@@ -2314,6 +2334,27 @@ async def test_async_messages_stream_preserves_provider_contract_and_manager(
     assert mock_client.capture.call_count == 1
     assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_captures_initial_request_error(mock_client):
+    client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+    client.post = AsyncMock(side_effect=RuntimeError("401 unauthorized"))
+
+    manager = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+    )
+    with pytest.raises(RuntimeError, match="401 unauthorized"):
+        async with manager:
+            pass
+
+    assert mock_client.capture.call_count == 1
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "401 unauthorized"
 
 
 def test_async_messages_stream_tolerates_provider_manager_internals_changing(
