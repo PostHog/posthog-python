@@ -3800,7 +3800,7 @@ Type | Description
 
 Type | Description
 ---- | -----------
-`EmailError` | PostHog did not queue the email, or the client could not tell whether it did.
+`EmailError` | PostHog did not queue the email, or the client could not tell whether it did. With attachments, `code` is `too_many_attachments`, `message_too_large` or `invalid_attachment` before any request, `attachment_upload_failed` when the storage refused an upload, and `network_error` with `field` naming the attachment when the storage didn't answer.
 `(TypeError, ValueError)` | An argument has the wrong type or format.
 
 **Examples:**
@@ -4011,6 +4011,10 @@ your app first.
 
 An optional field passed as `None` counts as left out.
 
+A PostHog version that doesn't take a field yet, such as `cc`, refuses
+the send with an error that names the field in `EmailError.field`. It
+never drops the field and sends the rest.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -4022,6 +4026,9 @@ Name | Type | Description | Default
 `text` |  | The plain-text body. Without it, PostHog derives it from `html`. HTML with no text in it, such as a single image, goes out without a plain-text part. | 
 `from_` |  | A verified sender, such as `"Acme <hello@example.com>"`. | 
 `reply_to` |  | One address or a list of addresses. An empty list sends no reply-to. | 
+`cc` |  | One address or a list of addresses that get a visible copy, at most 10. | 
+`bcc` |  | One address or a list of addresses that get a hidden copy, at most 10. | 
+`attachments` |  | Files sent with the email: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files. The client checks both before any request. It uploads each file that PostHog doesn't hold yet, then sends the email. A file the client can't send raises `EmailError` with `code` `invalid_attachment`. | 
 `capture_engagement` |  | Deprecated, use `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both `capture_engagement` and `tracking`. Captures the email's engagement events as events of the recipient. Defaults to `True`. A project whose admin turned engagement capture off captures nothing, whatever the send asks. A template made in PostHog follows the project's setting, so the template form doesn't take it. | 
 `sensitive` |  | Marks the email as sensitive, such as one that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. The template form doesn't take it. | 
 `tracking` |  | What PostHog tracks for this email. Without it, PostHog counts opens with its open pixel, captures engagement events, and counts clicks only when the email isn't sensitive. `True` turns on opens, clicks and engagement events. `False` turns off all tracking, including kinds PostHog adds later: PostHog can't count the email's opens or clicks, and captures no engagement events. An `EmailTracking` dict turns each kind on or off, and a key you leave out keeps its default. Turn clicks on for a sensitive email only when its links are safe to send through PostHog's click tracking. The template form doesn't take it. | 
@@ -4033,7 +4040,10 @@ Name | Type | Description | Default
 
 Name | Type | Description
 ---- | ---- | -----------
+`attachments` | `NotRequired[Optional[Sequence[EmailAttachment]]]` | 
+`bcc` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
 `capture_engagement` | `NotRequired[Optional[bool]]` | 
+`cc` | `NotRequired[Optional[Union[str, Sequence[str]]]]` | 
 `distinct_id` | `NotRequired[Optional[str]]` | 
 `from_` | `NotRequired[Optional[str]]` | 
 `html` | `NotRequired[Optional[str]]` | 
@@ -4047,10 +4057,28 @@ Name | Type | Description
 `to` | `str` | 
 `tracking` | `NotRequired[Optional[Union[bool, EmailTracking]]]` | 
 
+#### `posthog.emails.CodeEmailArgs.attachments`
+
+```python
+attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
+```
+
+#### `posthog.emails.CodeEmailArgs.bcc`
+
+```python
+bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
+```
+
 #### `posthog.emails.CodeEmailArgs.capture_engagement`
 
 ```python
 capture_engagement: NotRequired[Optional[bool]]
+```
+
+#### `posthog.emails.CodeEmailArgs.cc`
+
+```python
+cc: NotRequired[Optional[Union[str, Sequence[str]]]]
 ```
 
 #### `posthog.emails.CodeEmailArgs.distinct_id`
