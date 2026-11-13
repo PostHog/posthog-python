@@ -30,7 +30,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from .feedback import (
     build_feedback_event_properties,
     build_feedback_intent,
@@ -826,6 +826,7 @@ async def record_tool_call(
         if error is not None:
             event["is_error"] = True
             event["error"] = capture_exception(error)
+            event["error_status"] = http_status(error)
 
         props = await resolve_event_properties(data, request, extra)
         input_aliases = None

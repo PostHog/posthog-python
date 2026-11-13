@@ -1058,6 +1058,7 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CLIENT_VERSION = '$m
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CONVERSATION_ID = '$mcp_conversation_id'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.DURATION_MS = '$mcp_duration_ms'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_MESSAGE = '$mcp_error_message'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_STATUS = '$mcp_error_status'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_TYPE = '$mcp_error_type'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_DETAILS = '$mcp_feedback_details'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_FRICTION_POINTS = '$mcp_feedback_friction_points'
