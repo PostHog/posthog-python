@@ -329,7 +329,7 @@ async def test_an_unknown_tool_name_is_cut_to_256_characters(build):
     server = build()
     instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=False))
 
-    await _response(server, "x" * 5000, {})
+    await _response(server, "x" * 4000, {})
     await flush_background()
 
     [unknown] = events_named(client, "$mcp_unknown_tool")

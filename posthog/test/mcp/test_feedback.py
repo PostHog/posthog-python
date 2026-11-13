@@ -1,5 +1,7 @@
 """Tests for the ``send_feedback`` virtual tool (the ``collect_feedback`` option)."""
 
+import json
+
 import mcp.types as mcp_types
 import pytest
 from mcp.server.fastmcp import FastMCP
@@ -234,7 +236,7 @@ def test_properties_carry_all_fields_and_redact_pii():
 
 def test_properties_bound_free_text_and_tool_name():
     report = parse_feedback_report(
-        {"feedback_type": "issue", "summary": "s" * 5000, "tool_name": "t" * 500}
+        {"feedback_type": "issue", "summary": "s" * 4000, "tool_name": "t" * 500}
     )
     props = build_feedback_event_properties(report)
     assert len(props["$mcp_feedback_summary"]) == 2048
@@ -376,6 +378,47 @@ def test_nested_extras_keep_key_based_redaction():
     assert '"password": "[redacted]"' in props["$mcp_feedback_meta"]
     assert "hunter2" not in props["$mcp_feedback_meta"]
     assert '"note": "ping [redacted]"' in props["$mcp_feedback_meta"]
+
+
+@pytest.mark.parametrize(
+    ("meta", "identifier", "expected"),
+    [
+        ({"card\n4111111111111111": 1}, "4111111111111111", None),
+        ({"ada@example.com": "x"}, "ada@example.com", {"[redacted]": "x"}),
+        ({"n": 4111111111111111}, "4111111111111111", {"n": "[redacted]"}),
+        ({"n": [4111111111111111, 7]}, "4111111111111111", {"n": ["[redacted]", 7]}),
+        (
+            {"Get_Organization_Memberships": 1, "ISO_8601_timestamp_UTC": 5},
+            "[redacted]",
+            {"Get_Organization_Memberships": 1, "ISO_8601_timestamp_UTC": 5},
+        ),
+        ({"n": 10**5000}, "0000000000", {"n": "[redacted]"}),
+        ({"sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"[redacted]": 1}),
+        ({"key sk-proj-" + "Ab9z" * 8: 1}, "Ab9zAb9z", {"key [redacted]": 1}),
+    ],
+)
+def test_object_extras_redact_identifiers_in_keys_and_numbers(
+    meta, identifier, expected
+):
+    options = CollectFeedbackOptions(extra_properties={"meta": {"type": "object"}})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": meta}, options
+    )
+    captured = build_feedback_event_properties(report)["$mcp_feedback_meta"]
+    assert identifier not in captured
+    assert expected is None or json.loads(captured) == expected
+
+
+@pytest.mark.parametrize(
+    ("schema", "value"),
+    [({"type": "number"}, 4111111111111111), ({"type": "boolean"}, True)],
+)
+def test_top_level_scalar_extras_are_captured_as_sent(schema, value):
+    options = CollectFeedbackOptions(extra_properties={"meta": schema})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": value}, options
+    )
+    assert build_feedback_event_properties(report)["$mcp_feedback_meta"] == value
 
 
 def test_intent_joins_summary_and_details():
@@ -1109,3 +1152,15 @@ def test_send_feedback_result_shape():
     result = send_feedback_result()
     assert result["content"][0]["type"] == "text"
     assert result["content"][0]["text"] == send_feedback_result_text()
+
+
+def test_object_extras_are_limited_before_they_are_sanitized():
+    deep = "leaf"
+    for _ in range(5000):
+        deep = {"child": deep}
+    options = CollectFeedbackOptions(extra_properties={"meta": {"type": "object"}})
+    report = parse_feedback_report(
+        {"feedback_type": "issue", "summary": "s", "meta": deep}, options
+    )
+    captured = build_feedback_event_properties(report)["$mcp_feedback_meta"]
+    assert "[Object]" in captured
