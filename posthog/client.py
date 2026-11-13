@@ -11,6 +11,7 @@ import time
 import warnings
 import weakref
 from contextvars import ContextVar
+from dataclasses import dataclass as _dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
     Any,
@@ -176,6 +177,32 @@ _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 _TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
 _atexit_deadline_lock = threading.Lock()
+
+
+@_dataclass
+class _FlagReadResult:
+    """Per-read result and attribution, including metadata retained on remote failure."""
+
+    result: Optional[FeatureFlagResult] = None
+    details: Optional[FeatureFlag] = None
+    request_id: Optional[str] = None
+    evaluated_at: Optional[int] = None
+    error: Optional[str] = None
+    minimal_flag_called_events: bool = False
+    # Only a read whose value came from details may attribute a v2 experiment split.
+    value_from_details: bool = False
+
+
+@_dataclass
+class _FlagEvaluationResult:
+    """Mutable only during one evaluation pass, then handed to its snapshot."""
+
+    records: Dict[str, _EvaluatedFlagRecord]
+    request_id: Optional[str] = None
+    evaluated_at: Optional[int] = None
+    errors_while_computing: bool = False
+    quota_limited: bool = False
+    minimal_flag_called_events: bool = False
 
 
 class _LocalEvaluationSnapshot(FlagDefinitionCacheData):
@@ -526,6 +553,12 @@ def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttributi
     if _v4_field(metadata, "config_version") != 2:
         return None
     reason_code = (details.reason.code if details.reason else None) or None
+    return _rule_attribution_from_metadata(details, metadata, reason_code)
+
+
+def _rule_attribution_from_metadata(
+    details: FeatureFlag, metadata: FlagMetadata, reason_code: Optional[str]
+) -> _RuleAttribution:
     allowed_rule_types = _RULE_TYPES_BY_REASON_CODE.get(reason_code or "")
     if _v4_field(details, "failed") is True or allowed_rule_types is None:
         return _RuleAttribution(reason_code, None, None, None)
@@ -708,56 +741,112 @@ def _capture_flag_events(
         )
 
     if reported_flags is not None:
-        if attribution is not None:
-            properties.pop("$feature_flag_reason", None)
-            properties.update(attribution.flag_called_properties())
-        # Record the server's experiment signal when known, so minimization's impact
-        # can be measured by segmenting on it.
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
+        _capture_flag_called_event(
+            capture,
+            reported_flags,
+            feature_flag_reported_key,
+            distinct_id=distinct_id,
+            properties=properties,
+            capture_groups=capture_groups,
+            disable_geoip=disable_geoip,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            attribution=attribution,
+            flag_identity=flag_identity,
+        )
 
-        # Minimize iff the server-controlled gate is on AND the flag is known to have
-        # no linked experiment. Any missing signal (gate absent, has_experiment
-        # missing) fails safe to the full legacy shape.
-        should_minimize = minimal_flag_called_events and has_experiment is False
-        # Only thread the internal allowlist through when minimizing, so the
-        # full-property path's capture() call signature stays unchanged.
-        extra_capture_kwargs: Dict[str, Any] = {}
-        if should_minimize:
-            extra_capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-                if attribution is None
-                else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
-            )
+    _capture_experiment_exposure(
+        capture,
+        exposures_reported,
+        distinct_id=distinct_id,
+        key=key,
+        groups_key=groups_key,
+        properties=properties,
+        capture_groups=capture_groups,
+        disable_geoip=disable_geoip,
+        attribution=attribution,
+        flag_identity=flag_identity,
+    )
 
-        if attribution is None:
-            # Config version 1 events are sent and deduped as before.
-            capture(
-                "$feature_flag_called",
-                distinct_id=distinct_id,
-                properties=properties,
-                groups=capture_groups,
-                disable_geoip=disable_geoip,
-                **extra_capture_kwargs,
-            )
-            reported_flags.add(feature_flag_reported_key)
-        else:
-            _capture_once(
-                capture,
-                reported_flags,
-                feature_flag_reported_key,
-                "$feature_flag_called",
-                distinct_id=distinct_id,
-                properties=properties,
-                groups=capture_groups,
-                disable_geoip=disable_geoip,
-                _pinned_properties=_PinnedProperties(
-                    _V2_FLAG_CALLED_PINNED,
-                    {**attribution.flag_called_properties(), **flag_identity},
-                ),
-                **extra_capture_kwargs,
-            )
 
+def _capture_flag_called_event(
+    capture,
+    reported_flags,
+    feature_flag_reported_key,
+    *,
+    distinct_id,
+    properties,
+    capture_groups,
+    disable_geoip,
+    has_experiment,
+    minimal_flag_called_events,
+    attribution,
+    flag_identity,
+) -> None:
+    if attribution is not None:
+        properties.pop("$feature_flag_reason", None)
+        properties.update(attribution.flag_called_properties())
+    # Record the server's experiment signal when known, so minimization's impact
+    # can be measured by segmenting on it.
+    if has_experiment is not None:
+        properties["$feature_flag_has_experiment"] = has_experiment
+
+    # Minimize iff the server-controlled gate is on AND the flag is known to have
+    # no linked experiment. Any missing signal (gate absent, has_experiment
+    # missing) fails safe to the full legacy shape.
+    should_minimize = minimal_flag_called_events and has_experiment is False
+    # Only thread the internal allowlist through when minimizing, so the
+    # full-property path's capture() call signature stays unchanged.
+    extra_capture_kwargs: Dict[str, Any] = {}
+    if should_minimize:
+        extra_capture_kwargs["_property_allowlist"] = (
+            _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+            if attribution is None
+            else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
+        )
+
+    if attribution is None:
+        # Config version 1 events are sent and deduped as before.
+        capture(
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups=capture_groups,
+            disable_geoip=disable_geoip,
+            **extra_capture_kwargs,
+        )
+        reported_flags.add(feature_flag_reported_key)
+    else:
+        _capture_once(
+            capture,
+            reported_flags,
+            feature_flag_reported_key,
+            "$feature_flag_called",
+            distinct_id=distinct_id,
+            properties=properties,
+            groups=capture_groups,
+            disable_geoip=disable_geoip,
+            _pinned_properties=_PinnedProperties(
+                _V2_FLAG_CALLED_PINNED,
+                {**attribution.flag_called_properties(), **flag_identity},
+            ),
+            **extra_capture_kwargs,
+        )
+
+
+def _capture_experiment_exposure(
+    capture,
+    exposures_reported,
+    *,
+    distinct_id,
+    key,
+    groups_key,
+    properties,
+    capture_groups,
+    disable_geoip,
+    attribution,
+    flag_identity,
+) -> None:
     if attribution is None or attribution.variant_key is None:
         return
 
@@ -1013,6 +1102,29 @@ class _Lane:
             )
             errors.append(error)
 
+        self._stop_consumers(errors)
+        try:
+            self.discard_undrainable_queued_work()
+        except Exception as error:
+            self.log.exception(
+                "Failed to discard queued %s lane work during lifecycle cleanup",
+                self.name,
+            )
+            errors.append(error)
+        if drain_requested:
+            try:
+                self._drain_signal.complete()
+            except Exception as error:
+                self.log.exception(
+                    "Failed to complete %s lane drain during lifecycle cleanup",
+                    self.name,
+                )
+                errors.append(error)
+
+        if errors:
+            raise errors[0]
+
+    def _stop_consumers(self, errors: list[Exception]) -> None:
         for consumer in self.consumers:
             try:
                 consumer._pause(drain=True)
@@ -1034,26 +1146,6 @@ class _Lane:
                     self.name,
                 )
                 errors.append(error)
-        try:
-            self.discard_undrainable_queued_work()
-        except Exception as error:
-            self.log.exception(
-                "Failed to discard queued %s lane work during lifecycle cleanup",
-                self.name,
-            )
-            errors.append(error)
-        if drain_requested:
-            try:
-                self._drain_signal.complete()
-            except Exception as error:
-                self.log.exception(
-                    "Failed to complete %s lane drain during lifecycle cleanup",
-                    self.name,
-                )
-                errors.append(error)
-
-        if errors:
-            raise errors[0]
 
     def reset_sync_send_state_after_fork(self) -> None:
         """Replace sync-send state inherited from threads that did not survive fork."""
@@ -1458,75 +1550,25 @@ class Client(object):
         self._logged_untyped_flags_response = False
 
         self.capture_trace_context = capture_trace_context
-        self.capture_exception_code_variables = capture_exception_code_variables
-        self.code_variables_mask_patterns = (
-            code_variables_mask_patterns
-            if code_variables_mask_patterns is not None
-            else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+        self._configure_exception_properties(
+            capture_exception_code_variables,
+            code_variables_mask_patterns,
+            code_variables_ignore_patterns,
+            code_variables_mask_url_credentials,
+            code_variables_detect_secrets,
+            in_app_modules,
+            project_root,
         )
-        self.code_variables_ignore_patterns = (
-            code_variables_ignore_patterns
-            if code_variables_ignore_patterns is not None
-            else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
-        )
-        self.code_variables_mask_url_credentials = (
-            code_variables_mask_url_credentials
-            if code_variables_mask_url_credentials is not None
-            else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
-        )
-        self.code_variables_detect_secrets = (
-            code_variables_detect_secrets
-            if code_variables_detect_secrets is not None
-            else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
-        )
-        self.in_app_modules = in_app_modules
 
-        if project_root is None:
-            try:
-                project_root = os.getcwd()
-            except Exception:
-                project_root = None
-
-        self.project_root = project_root
-
-        if personal_api_key is not None and secret_key is None:
-            warnings.warn(
-                "`personal_api_key` is deprecated; use `secret_key` instead. "
-                "`secret_key` accepts a Personal API Key or a Project Secret API Key.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-        elif secret_key is not None and personal_api_key is not None:
-            self.log.warning(
-                "[FEATURE FLAGS] Both `secret_key` and `personal_api_key` were "
-                "provided; using `secret_key` and ignoring `personal_api_key`."
-            )
-        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
-        self.secret_key = (
-            resolved_secret_key.strip()
-            if isinstance(resolved_secret_key, str)
-            else resolved_secret_key
-        ) or None
-        self.personal_api_key = self.secret_key
-        _validate_options(
-            email_request_timeout_seconds, email_request_max_retries, migrated_from
+        self._configure_credentials(
+            personal_api_key,
+            secret_key,
+            app_host,
+            email_request_timeout_seconds,
+            email_request_max_retries,
+            migrated_from,
         )
-        self.app_host = app_host
-        self.email_request_timeout_seconds = email_request_timeout_seconds
-        self.email_request_max_retries = email_request_max_retries
-        self.migrated_from = migrated_from
-        if debug:
-            # Ensures that debug level messages are logged when debug mode is on.
-            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
-            logging.basicConfig()
-            self.log.setLevel(logging.DEBUG)
-        else:
-            self.log.setLevel(logging.WARNING)
-
-        if not self.api_key:
-            self.log.error(
-                "api_key is empty after trimming whitespace; check your project API key"
-            )
+        self._configure_logging(debug)
 
         self._set_before_send(before_send)
 
@@ -1592,13 +1634,107 @@ class Client(object):
         self._metrics_autocapture_tried = False
         self._start_metrics_autocapture_once(metrics)
 
+        self._register_fork_handler()
+
+        self._warn_if_duplicate_async_client()
+
+    def _register_fork_handler(self) -> None:
         if hasattr(os, "register_at_fork"):
             weak_self = weakref.ref(self)
             os.register_at_fork(
                 after_in_child=lambda: Client._reinit_after_fork_weak(weak_self)
             )
 
-        self._warn_if_duplicate_async_client()
+    def _configure_exception_properties(
+        self,
+        capture_exception_code_variables,
+        code_variables_mask_patterns,
+        code_variables_ignore_patterns,
+        code_variables_mask_url_credentials,
+        code_variables_detect_secrets,
+        in_app_modules,
+        project_root,
+    ) -> None:
+        self.capture_exception_code_variables = capture_exception_code_variables
+        self.code_variables_mask_patterns = (
+            code_variables_mask_patterns
+            if code_variables_mask_patterns is not None
+            else DEFAULT_CODE_VARIABLES_MASK_PATTERNS
+        )
+        self.code_variables_ignore_patterns = (
+            code_variables_ignore_patterns
+            if code_variables_ignore_patterns is not None
+            else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
+        )
+        self.code_variables_mask_url_credentials = (
+            code_variables_mask_url_credentials
+            if code_variables_mask_url_credentials is not None
+            else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
+        )
+        self.code_variables_detect_secrets = (
+            code_variables_detect_secrets
+            if code_variables_detect_secrets is not None
+            else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
+        )
+        self.in_app_modules = in_app_modules
+
+        if project_root is None:
+            try:
+                project_root = os.getcwd()
+            except Exception:
+                project_root = None
+
+        self.project_root = project_root
+
+    def _configure_credentials(
+        self,
+        personal_api_key,
+        secret_key,
+        app_host,
+        email_request_timeout_seconds,
+        email_request_max_retries,
+        migrated_from,
+    ) -> None:
+        if personal_api_key is not None and secret_key is None:
+            warnings.warn(
+                "`personal_api_key` is deprecated; use `secret_key` instead. "
+                "`secret_key` accepts a Personal API Key or a Project Secret API Key.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        elif secret_key is not None and personal_api_key is not None:
+            self.log.warning(
+                "[FEATURE FLAGS] Both `secret_key` and `personal_api_key` were "
+                "provided; using `secret_key` and ignoring `personal_api_key`."
+            )
+        resolved_secret_key = secret_key if secret_key is not None else personal_api_key
+        self.secret_key = (
+            resolved_secret_key.strip()
+            if isinstance(resolved_secret_key, str)
+            else resolved_secret_key
+        ) or None
+        self.personal_api_key = self.secret_key
+        _validate_options(
+            email_request_timeout_seconds, email_request_max_retries, migrated_from
+        )
+        self.app_host = app_host
+        self.email_request_timeout_seconds = email_request_timeout_seconds
+        self.email_request_max_retries = email_request_max_retries
+        self.migrated_from = migrated_from
+
+    def _configure_logging(self, debug) -> None:
+        if debug:
+            # Ensures that debug level messages are logged when debug mode is on.
+            # Otherwise, defaults to WARNING level. See https://docs.python.org/3/howto/logging.html#what-happens-if-no-configuration-is-provided
+            logging.basicConfig()
+            self.log.setLevel(logging.DEBUG)
+        else:
+            self.log.setLevel(logging.WARNING)
+
+        if not self.api_key:
+            self.log.error(
+                "api_key is empty after trimming whitespace; check your project API key"
+            )
 
     def _start_metrics_autocapture_once(self, metrics_config: Any) -> None:
         """Starts metrics autocapture when the ``metrics`` option asks for it. A
@@ -2122,30 +2258,14 @@ class Client(object):
         if self.disabled:
             return normalize_flags_response({})
 
-        groups = groups or {}
-        person_properties = person_properties or {}
-        group_properties = group_properties or {}
-
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
-        if device_id is None:
-            device_id = get_context_device_id()
-
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-
-        if not groups:
-            groups = {}
-
-        request_data: Dict[str, Any] = {
-            "distinct_id": distinct_id,
-            "groups": groups,
-            "person_properties": person_properties,
-            "group_properties": group_properties,
-            "geoip_disable": disable_geoip,
-            "device_id": device_id,
-        }
+        request_data = self._flags_request_data(
+            distinct_id,
+            groups,
+            person_properties,
+            group_properties,
+            disable_geoip,
+            device_id,
+        )
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
@@ -2173,6 +2293,42 @@ class Client(object):
             response.get("minimalFlagCalledEvents") is True
         )
         return response
+
+    def _flags_request_data(
+        self,
+        distinct_id,
+        groups,
+        person_properties,
+        group_properties,
+        disable_geoip,
+        device_id,
+    ):
+        groups = groups or {}
+        person_properties = person_properties or {}
+        group_properties = group_properties or {}
+
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
+        if device_id is None:
+            device_id = get_context_device_id()
+
+        if disable_geoip is None:
+            disable_geoip = self.disable_geoip
+
+        if not groups:
+            groups = {}
+
+        request_data: Dict[str, Any] = {
+            "distinct_id": distinct_id,
+            "groups": groups,
+            "person_properties": person_properties,
+            "group_properties": group_properties,
+            "geoip_disable": disable_geoip,
+            "device_id": device_id,
+        }
+
+        return request_data
 
     @no_throw()
     def capture(
@@ -2278,13 +2434,7 @@ class Client(object):
         pinned_properties = kwargs.get("_pinned_properties", None)
         before_send_drops = kwargs.get("_before_send_drops", None)
 
-        properties = {**(properties or {}), **system_context()}
-
-        if self.capture_trace_context:
-            properties = {**_get_current_otel_span_properties(), **properties}
-
-        properties = add_context_tags(properties)
-        assert properties is not None  # Type hint for mypy
+        properties = self._capture_properties(properties)
 
         (distinct_id, personless) = get_identity_state(distinct_id)
 
@@ -2316,78 +2466,9 @@ class Client(object):
                 )
             extra_properties = flags_snapshot._get_event_properties()
         else:
-            feature_variants: Optional[dict[str, Union[bool, str]]] = {}
-
-            # Parse and normalize send_feature_flags parameter
-            flag_options = self._parse_send_feature_flags(send_feature_flags)
-
-            if flag_options["should_send"]:
-                warnings.warn(
-                    "`send_feature_flags` is deprecated and will be removed in a future major "
-                    "version. Pass a `flags` snapshot from `posthog.evaluate_flags(...)` instead "
-                    "— it avoids a second `/flags` request per capture and guarantees the event "
-                    "carries the exact flag values your code branched on.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                try:
-                    if flag_options["only_evaluate_locally"] is True:
-                        # Local evaluation explicitly requested
-                        feature_variants = self.get_all_flags(
-                            distinct_id,
-                            groups=(groups or {}),
-                            person_properties=flag_options["person_properties"],
-                            group_properties=flag_options["group_properties"],
-                            disable_geoip=disable_geoip,
-                            only_evaluate_locally=True,
-                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                        )
-                    elif flag_options["only_evaluate_locally"] is False:
-                        # Remote evaluation explicitly requested
-                        feature_variants = self.get_feature_variants(
-                            distinct_id,
-                            groups,
-                            person_properties=flag_options["person_properties"],
-                            group_properties=flag_options["group_properties"],
-                            disable_geoip=disable_geoip,
-                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                        )
-                    elif self.feature_flags:
-                        # Local flags available, prefer local evaluation
-                        feature_variants = self.get_all_flags(
-                            distinct_id,
-                            groups=(groups or {}),
-                            person_properties=flag_options["person_properties"],
-                            group_properties=flag_options["group_properties"],
-                            disable_geoip=disable_geoip,
-                            only_evaluate_locally=True,
-                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                        )
-                    else:
-                        # Fall back to remote evaluation
-                        feature_variants = self.get_feature_variants(
-                            distinct_id,
-                            groups,
-                            person_properties=flag_options["person_properties"],
-                            group_properties=flag_options["group_properties"],
-                            disable_geoip=disable_geoip,
-                            flag_keys_to_evaluate=flag_options["flag_keys_filter"],
-                        )
-                except Exception as e:
-                    self.log.exception(
-                        f"[FEATURE FLAGS] Unable to get feature variants: {e}"
-                    )
-
-            for feature, variant in (feature_variants or {}).items():
-                extra_properties[f"$feature/{feature}"] = variant
-
-            active_feature_flags = [
-                key
-                for (key, value) in (feature_variants or {}).items()
-                if value is not False
-            ]
-            if active_feature_flags:
-                extra_properties["$active_feature_flags"] = active_feature_flags
+            extra_properties = self._capture_legacy_flag_properties(
+                distinct_id, groups, disable_geoip, send_feature_flags
+            )
 
         if extra_properties:
             properties = {**extra_properties, **properties}
@@ -2401,6 +2482,100 @@ class Client(object):
             pinned_properties=pinned_properties,
             before_send_drops=before_send_drops,
         )
+
+    def _capture_properties(self, properties):
+        properties = {**(properties or {}), **system_context()}
+
+        if self.capture_trace_context:
+            properties = {**_get_current_otel_span_properties(), **properties}
+
+        properties = add_context_tags(properties)
+        assert properties is not None  # Type hint for mypy
+        return properties
+
+    def _capture_legacy_flag_properties(
+        self, distinct_id, groups, disable_geoip, send_feature_flags
+    ):
+        extra_properties: dict[str, Any] = {}
+        feature_variants: Optional[dict[str, Union[bool, str]]] = {}
+
+        # Parse and normalize send_feature_flags parameter
+        flag_options = self._parse_send_feature_flags(send_feature_flags)
+
+        if flag_options["should_send"]:
+            warnings.warn(
+                "`send_feature_flags` is deprecated and will be removed in a future major "
+                "version. Pass a `flags` snapshot from `posthog.evaluate_flags(...)` instead "
+                "— it avoids a second `/flags` request per capture and guarantees the event "
+                "carries the exact flag values your code branched on.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+            try:
+                feature_variants = self._evaluate_capture_flags(
+                    distinct_id, groups, disable_geoip, flag_options
+                )
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Unable to get feature variants: {e}"
+                )
+
+        for feature, variant in (feature_variants or {}).items():
+            extra_properties[f"$feature/{feature}"] = variant
+
+        active_feature_flags = [
+            key
+            for (key, value) in (feature_variants or {}).items()
+            if value is not False
+        ]
+        if active_feature_flags:
+            extra_properties["$active_feature_flags"] = active_feature_flags
+
+        return extra_properties
+
+    def _evaluate_capture_flags(self, distinct_id, groups, disable_geoip, flag_options):
+        if flag_options["only_evaluate_locally"] is True:
+            # Local evaluation explicitly requested
+            return self.get_all_flags(
+                distinct_id,
+                groups=(groups or {}),
+                person_properties=flag_options["person_properties"],
+                group_properties=flag_options["group_properties"],
+                disable_geoip=disable_geoip,
+                only_evaluate_locally=True,
+                flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+            )
+        elif flag_options["only_evaluate_locally"] is False:
+            # Remote evaluation explicitly requested
+            return self.get_feature_variants(
+                distinct_id,
+                groups,
+                person_properties=flag_options["person_properties"],
+                group_properties=flag_options["group_properties"],
+                disable_geoip=disable_geoip,
+                flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+            )
+        elif self.feature_flags:
+            # Local flags available, prefer local evaluation
+            return self.get_all_flags(
+                distinct_id,
+                groups=(groups or {}),
+                person_properties=flag_options["person_properties"],
+                group_properties=flag_options["group_properties"],
+                disable_geoip=disable_geoip,
+                only_evaluate_locally=True,
+                flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+            )
+        else:
+            # Fall back to remote evaluation
+            return self.get_feature_variants(
+                distinct_id,
+                groups,
+                person_properties=flag_options["person_properties"],
+                group_properties=flag_options["group_properties"],
+                disable_geoip=disable_geoip,
+                flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+            )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
         """
@@ -2727,134 +2902,17 @@ class Client(object):
         try:
             properties = properties or {}
 
-            # Check if this exception has already been captured
-            if exception is not None and exception_is_already_captured(exception):
-                self.log.debug("Exception already captured, skipping")
+            exc_info = self._exception_info(exception)
+            if exc_info is None:
                 return None
 
-            if exception is not None:
-                exc_info = exc_info_from_error(exception)
-            else:
-                exc_info = sys.exc_info()
-
-            if exc_info is None or exc_info == (None, None, None):
-                self.log.warning("No exception information available")
-                return None
-
-            # Format stack trace for cymbal
-            capture_metadata_input = dict(kwargs).get("_capture_metadata")
-            capture_metadata = (
-                capture_metadata_input
-                if isinstance(capture_metadata_input, dict)
-                else {}
-            )
-            mechanism = capture_metadata.get("mechanism")
-            all_exceptions_with_trace = exceptions_from_error_tuple(
-                exc_info, mechanism=mechanism if isinstance(mechanism, dict) else None
+            properties, all_exceptions_with_trace_and_in_app = (
+                self._exception_properties(exc_info, properties, kwargs)
             )
 
-            # Add in-app property to frames in the exceptions
-            event = handle_in_app(
-                {
-                    "exception": {
-                        "values": all_exceptions_with_trace,
-                    },
-                },
-                in_app_include=self.in_app_modules,
-                project_root=self.project_root,
+            self._attach_exception_code_variables(
+                all_exceptions_with_trace_and_in_app, exc_info
             )
-            all_exceptions_with_trace_and_in_app = event["exception"]["values"]
-
-            reserved_properties = {
-                "$exception_list",
-                "$exception_level",
-                "$exception_source",
-                "$debug_images",
-                "$exception_handled",
-                "$exception_types",
-                "$exception_values",
-                "$exception_sources",
-                "$exception_functions",
-                "$exception_fingerprint_version",
-                "$exception_fingerprint_record",
-                "$exception_issue_id",
-                "$exception_release",
-                "$cymbal_errors",
-            }
-            reserved_property_overrides = reserved_properties.intersection(properties)
-            if reserved_property_overrides:
-                try:
-                    warnings.warn(
-                        "Reserved exception properties passed through "
-                        "`capture_exception(properties=...)` currently override "
-                        "SDK-owned metadata, but this behavior is deprecated and will "
-                        "be removed in the next major version: "
-                        + ", ".join(sorted(reserved_property_overrides)),
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                except DeprecationWarning:
-                    # capture_exception must not drop an event when applications
-                    # promote deprecation warnings to errors.
-                    pass
-
-            caller_properties = properties
-            properties = {
-                **_get_current_otel_span_properties(),
-                "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_level": _normalize_exception_level(
-                    capture_metadata.get("level")
-                )
-                or "error",
-            }
-            source = capture_metadata.get("source")
-            if isinstance(source, str) and source:
-                properties["$exception_source"] = source
-            properties.update(caller_properties)
-
-            context_enabled = get_capture_exception_code_variables_context()
-            context_mask = get_code_variables_mask_patterns_context()
-            context_ignore = get_code_variables_ignore_patterns_context()
-            context_mask_url_credentials = (
-                get_code_variables_mask_url_credentials_context()
-            )
-            context_detect_secrets = get_code_variables_detect_secrets_context()
-
-            enabled = (
-                context_enabled
-                if context_enabled is not None
-                else self.capture_exception_code_variables
-            )
-            mask_patterns = (
-                context_mask
-                if context_mask is not None
-                else self.code_variables_mask_patterns
-            )
-            ignore_patterns = (
-                context_ignore
-                if context_ignore is not None
-                else self.code_variables_ignore_patterns
-            )
-            mask_url_credentials = (
-                context_mask_url_credentials
-                if context_mask_url_credentials is not None
-                else self.code_variables_mask_url_credentials
-            )
-            detect_secrets = (
-                context_detect_secrets
-                if context_detect_secrets is not None
-                else self.code_variables_detect_secrets
-            )
-
-            if enabled:
-                try_attach_code_variables_to_frames(
-                    all_exceptions_with_trace_and_in_app,
-                    exc_info,
-                    mask_patterns=mask_patterns,
-                    ignore_patterns=ignore_patterns,
-                    mask_url_credentials=mask_url_credentials,
-                    detect_secrets=detect_secrets,
-                )
 
             if self.log_captured_exceptions:
                 self.log.exception(exception, extra=kwargs)
@@ -2882,6 +2940,140 @@ class Client(object):
         except Exception as e:
             self.log.exception(f"Failed to capture exception: {e}")
             return None
+
+    def _exception_info(self, exception):
+        # Check if this exception has already been captured
+        if exception is not None and exception_is_already_captured(exception):
+            self.log.debug("Exception already captured, skipping")
+            return None
+
+        if exception is not None:
+            exc_info = exc_info_from_error(exception)
+        else:
+            exc_info = sys.exc_info()
+
+        if exc_info is None or exc_info == (None, None, None):
+            self.log.warning("No exception information available")
+            return None
+
+        return exc_info
+
+    def _exception_properties(self, exc_info, properties, kwargs):
+        # Format stack trace for cymbal
+        capture_metadata_input = dict(kwargs).get("_capture_metadata")
+        capture_metadata = (
+            capture_metadata_input if isinstance(capture_metadata_input, dict) else {}
+        )
+        mechanism = capture_metadata.get("mechanism")
+        all_exceptions_with_trace = exceptions_from_error_tuple(
+            exc_info, mechanism=mechanism if isinstance(mechanism, dict) else None
+        )
+
+        # Add in-app property to frames in the exceptions
+        event = handle_in_app(
+            {
+                "exception": {
+                    "values": all_exceptions_with_trace,
+                },
+            },
+            in_app_include=self.in_app_modules,
+            project_root=self.project_root,
+        )
+        all_exceptions_with_trace_and_in_app = event["exception"]["values"]
+
+        reserved_properties = {
+            "$exception_list",
+            "$exception_level",
+            "$exception_source",
+            "$debug_images",
+            "$exception_handled",
+            "$exception_types",
+            "$exception_values",
+            "$exception_sources",
+            "$exception_functions",
+            "$exception_fingerprint_version",
+            "$exception_fingerprint_record",
+            "$exception_issue_id",
+            "$exception_release",
+            "$cymbal_errors",
+        }
+        reserved_property_overrides = reserved_properties.intersection(properties)
+        if reserved_property_overrides:
+            try:
+                warnings.warn(
+                    "Reserved exception properties passed through "
+                    "`capture_exception(properties=...)` currently override "
+                    "SDK-owned metadata, but this behavior is deprecated and will "
+                    "be removed in the next major version: "
+                    + ", ".join(sorted(reserved_property_overrides)),
+                    DeprecationWarning,
+                    stacklevel=3,
+                )
+            except DeprecationWarning:
+                # capture_exception must not drop an event when applications
+                # promote deprecation warnings to errors.
+                pass
+
+        caller_properties = properties
+        properties = {
+            **_get_current_otel_span_properties(),
+            "$exception_list": all_exceptions_with_trace_and_in_app,
+            "$exception_level": _normalize_exception_level(
+                capture_metadata.get("level")
+            )
+            or "error",
+        }
+        source = capture_metadata.get("source")
+        if isinstance(source, str) and source:
+            properties["$exception_source"] = source
+        properties.update(caller_properties)
+
+        return properties, all_exceptions_with_trace_and_in_app
+
+    def _attach_exception_code_variables(
+        self, all_exceptions_with_trace_and_in_app, exc_info
+    ):
+        context_enabled = get_capture_exception_code_variables_context()
+        context_mask = get_code_variables_mask_patterns_context()
+        context_ignore = get_code_variables_ignore_patterns_context()
+        context_mask_url_credentials = get_code_variables_mask_url_credentials_context()
+        context_detect_secrets = get_code_variables_detect_secrets_context()
+
+        enabled = (
+            context_enabled
+            if context_enabled is not None
+            else self.capture_exception_code_variables
+        )
+        mask_patterns = (
+            context_mask
+            if context_mask is not None
+            else self.code_variables_mask_patterns
+        )
+        ignore_patterns = (
+            context_ignore
+            if context_ignore is not None
+            else self.code_variables_ignore_patterns
+        )
+        mask_url_credentials = (
+            context_mask_url_credentials
+            if context_mask_url_credentials is not None
+            else self.code_variables_mask_url_credentials
+        )
+        detect_secrets = (
+            context_detect_secrets
+            if context_detect_secrets is not None
+            else self.code_variables_detect_secrets
+        )
+
+        if enabled:
+            try_attach_code_variables_to_frames(
+                all_exceptions_with_trace_and_in_app,
+                exc_info,
+                mask_patterns=mask_patterns,
+                ignore_patterns=ignore_patterns,
+                mask_url_credentials=mask_url_credentials,
+                detect_secrets=detect_secrets,
+            )
 
     @classmethod
     def _reinit_client_registry_after_fork(cls):
@@ -2982,6 +3174,9 @@ class Client(object):
         reset_sessions()
 
         # Start child threads only after replacing every lock they can touch.
+        self._restart_flag_poller_after_fork(terminal_requested)
+
+    def _restart_flag_poller_after_fork(self, terminal_requested):
         if terminal_requested:
             self.poller = None
         elif self.enable_local_evaluation:
@@ -3026,6 +3221,30 @@ class Client(object):
         if self.disabled:
             return None
 
+        self._normalize_event_timestamp(msg)
+
+        self._normalize_event_uuid(msg)
+
+        self._enrich_event_properties(
+            msg, disable_geoip, property_allowlist, pinned_properties
+        )
+
+        msg = clean(msg)
+
+        msg = self._run_before_send(msg, before_send_drops)
+        if msg is None:
+            return None
+
+        # Re-normalized after before_send, which may have replaced or removed
+        # msg["uuid"], so the returned uuid always matches the wire event.
+        self._normalize_event_uuid(msg)
+        sent_uuid = msg["uuid"]
+
+        self.log.debug("queueing: %s", msg)
+
+        return self._submit_event(msg, lane, sent_uuid)
+
+    def _normalize_event_timestamp(self, msg):
         timestamp = msg["timestamp"]
         if timestamp is None:
             timestamp = datetime.now(tz=timezone.utc)
@@ -3039,8 +3258,9 @@ class Client(object):
             )
             msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
 
-        self._normalize_event_uuid(msg)
-
+    def _enrich_event_properties(
+        self, msg, disable_geoip, property_allowlist, pinned_properties
+    ):
         if not msg.get("properties"):
             msg["properties"] = {}
         msg["properties"]["$lib"] = self._library_id
@@ -3065,6 +3285,11 @@ class Client(object):
         if self.is_server:
             msg["properties"]["$is_server"] = True
 
+        self._filter_event_properties(msg, property_allowlist, pinned_properties)
+
+        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
+
+    def _filter_event_properties(self, msg, property_allowlist, pinned_properties):
         # Applied after every enrichment step (system context, context tags, super
         # properties, $lib/$lib_version) so the final event shape is exactly the
         # allowlist regardless of where a property came from.
@@ -3078,10 +3303,7 @@ class Client(object):
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
             }
 
-        msg["distinct_id"] = stringify_id(msg.get("distinct_id", None))
-
-        msg = clean(msg)
-
+    def _run_before_send(self, msg, before_send_drops):
         if self.before_send:
             try:
                 modified_msg = self.before_send(msg)
@@ -3097,13 +3319,9 @@ class Client(object):
                 self.log.exception(f"Error in before_send callback: {e}")
                 return None
 
-        # Re-normalized after before_send, which may have replaced or removed
-        # msg["uuid"], so the returned uuid always matches the wire event.
-        self._normalize_event_uuid(msg)
-        sent_uuid = msg["uuid"]
+        return msg
 
-        self.log.debug("queueing: %s", msg)
-
+    def _submit_event(self, msg, lane, sent_uuid):
         # if send is False, return msg as if it was successfully queued, unless
         # shutdown has already closed this lane's admission.
         if not self.send:
@@ -3119,35 +3337,7 @@ class Client(object):
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
 
-            def send_sync() -> None:
-                # Sync mode bypasses the lane's queue but keeps its wire config:
-                # the AI lane is pinned to v0, so its events post to the AI
-                # endpoint regardless of `capture_mode`.
-                if lane.capture_mode == CaptureMode.V1:
-                    _send_v1_batch(
-                        self.api_key,
-                        self.host,
-                        [msg],
-                        compression=self.capture_compression,
-                        timeout=self.timeout,
-                        max_retries=self.max_retries,
-                        historical_migration=self.historical_migration,
-                        sdk_info=self._sdk_info,
-                    )
-                    return
-
-                batch_post(
-                    self.api_key,
-                    self.host,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    batch=[msg],
-                    historical_migration=self.historical_migration,
-                    path=lane.endpoint,
-                    **self._request_identity_kwargs(),
-                )
-
-            if lane.run_sync_if_open(send_sync):
+            if lane.run_sync_if_open(lambda: self._send_sync(msg, lane)):
                 return sent_uuid
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",
@@ -3181,6 +3371,34 @@ class Client(object):
                 msg["event"],
             )
         return None
+
+    def _send_sync(self, msg, lane) -> None:
+        # Sync mode bypasses the lane's queue but keeps its wire config:
+        # the AI lane is pinned to v0, so its events post to the AI
+        # endpoint regardless of `capture_mode`.
+        if lane.capture_mode == CaptureMode.V1:
+            _send_v1_batch(
+                self.api_key,
+                self.host,
+                [msg],
+                compression=self.capture_compression,
+                timeout=self.timeout,
+                max_retries=self.max_retries,
+                historical_migration=self.historical_migration,
+                sdk_info=self._sdk_info,
+            )
+            return
+
+        batch_post(
+            self.api_key,
+            self.host,
+            gzip=self.gzip,
+            timeout=self.timeout,
+            batch=[msg],
+            historical_migration=self.historical_migration,
+            path=lane.endpoint,
+            **self._request_identity_kwargs(),
+        )
 
     @property
     def metrics(self) -> PostHogMetrics:
@@ -3230,29 +3448,32 @@ class Client(object):
                 # Re-checked under the lock, which shutdown takes before it
                 # reads the pipeline, so neither can miss the other.
                 if self._traces is None and not self._shutdown_requested:
-                    try:
-                        config = resolve_traces_config(
-                            self._traces_config, host_resource_attributes()
-                        )
-                        drops = DropLog(config.flush_interval)
-                        self._traces = PostHogTraces(
-                            self,
-                            config,
-                            self._tracing_context,
-                            self._active_span_var,
-                            SpanExporter(self, config, drops),
-                            drops,
-                        )
-                        # Sync mode has no exit hook for events; spans still
-                        # queue for the timer, so they need their own.
-                        if self.sync_mode and self.send:
-                            atexit.register(self._atexit_spans)
-                    except Exception:
-                        # Off rather than defaults: defaults would drop a
-                        # before_span_send hook and export unscrubbed spans.
-                        self.log.exception("Error initializing traces; tracing is off")
-                        self._traces_config = False
+                    self._initialize_traces_pipeline()
         return self._traces
+
+    def _initialize_traces_pipeline(self) -> None:
+        try:
+            config = resolve_traces_config(
+                self._traces_config, host_resource_attributes()
+            )
+            drops = DropLog(config.flush_interval)
+            self._traces = PostHogTraces(
+                self,
+                config,
+                self._tracing_context,
+                self._active_span_var,
+                SpanExporter(self, config, drops),
+                drops,
+            )
+            # Sync mode has no exit hook for events; spans still
+            # queue for the timer, so they need their own.
+            if self.sync_mode and self.send:
+                atexit.register(self._atexit_spans)
+        except Exception:
+            # Off rather than defaults: defaults would drop a
+            # before_span_send hook and export unscrubbed spans.
+            self.log.exception("Error initializing traces; tracing is off")
+            self._traces_config = False
 
     def _tracing_context(self) -> Dict[str, Optional[str]]:
         # The request context's identity, which the Django middleware fills
@@ -3393,14 +3614,7 @@ class Client(object):
                 if include_metrics_autocapture
                 else None
             )
-            deadline: Optional[float] = None
-            if timeout_seconds is None:
-                for lane in self._lanes:
-                    lane.flush(None)
-            else:
-                deadline = time.monotonic() + timeout_seconds
-                for lane in self._lanes:
-                    lane.flush(max(0.0, deadline - time.monotonic()))
+            deadline = self._flush_lanes(timeout_seconds)
             if metrics_flush is not None:
                 metrics_flush(
                     None if deadline is None else max(0.0, deadline - time.monotonic())
@@ -3412,6 +3626,17 @@ class Client(object):
         except Exception as e:
             self.log.exception("error flushing queue: %s", e)
             return
+
+    def _flush_lanes(self, timeout_seconds):
+        deadline: Optional[float] = None
+        if timeout_seconds is None:
+            for lane in self._lanes:
+                lane.flush(None)
+        else:
+            deadline = time.monotonic() + timeout_seconds
+            for lane in self._lanes:
+                lane.flush(max(0.0, deadline - time.monotonic()))
+        return deadline
 
     def _start_metrics_autocapture_flush(
         self,
@@ -3607,6 +3832,9 @@ class Client(object):
             # means every worker cleanup step was attempted once.
             self._workers_joined = True
 
+        self._close_lifecycle_resources(errors)
+
+    def _close_lifecycle_resources(self, errors: list[Exception]) -> None:
         if not self._join_cleanup_complete:
             if self.poller:
                 self._run_lifecycle_cleanup(
@@ -3705,15 +3933,7 @@ class Client(object):
     def _run_lifecycle(self, require_shutdown: bool = False) -> None:
         while True:
             with self._lifecycle_condition:
-                if require_shutdown and self._shutdown_complete:
-                    if self.debug and self._lifecycle_cleanup_failed:
-                        raise RuntimeError("client lifecycle cleanup failed")
-                    return
-                if not require_shutdown and (
-                    self._join_cleanup_complete or self._shutdown_complete
-                ):
-                    if self.debug and self._lifecycle_cleanup_failed:
-                        raise RuntimeError("client lifecycle cleanup failed")
+                if self._lifecycle_has_completed(require_shutdown):
                     return
                 if self._lifecycle_owner is not None:
                     if self._is_lifecycle_callback_thread() or (
@@ -3725,34 +3945,53 @@ class Client(object):
                 self._lifecycle_owner = threading.current_thread()
 
             try:
-                errors: list[Exception] = []
-                while True:
-                    with self._lifecycle_lock:
-                        run_shutdown = self._shutdown_requested
-
-                    if run_shutdown:
-                        self._shutdown_once(errors)
-                    else:
-                        self._join_once(errors)
-
-                    with self._lifecycle_condition:
-                        if (
-                            self._shutdown_requested
-                            and not self._shutdown_complete
-                            and not run_shutdown
-                        ):
-                            continue
-                        if errors:
-                            self._lifecycle_cleanup_failed = True
-                            raise errors[0]
-                        self._lifecycle_owner = None
-                        self._lifecycle_condition.notify_all()
-                        return
+                self._finish_lifecycle()
+                return
             except BaseException:
                 with self._lifecycle_condition:
                     self._lifecycle_owner = None
                     self._lifecycle_condition.notify_all()
                 raise
+
+    def _lifecycle_has_completed(self, require_shutdown: bool) -> bool:
+        if require_shutdown and self._shutdown_complete:
+            self._raise_lifecycle_failure()
+            return True
+        if not require_shutdown and (
+            self._join_cleanup_complete or self._shutdown_complete
+        ):
+            self._raise_lifecycle_failure()
+            return True
+        return False
+
+    def _raise_lifecycle_failure(self) -> None:
+        if self.debug and self._lifecycle_cleanup_failed:
+            raise RuntimeError("client lifecycle cleanup failed")
+
+    def _finish_lifecycle(self) -> None:
+        errors: list[Exception] = []
+        while True:
+            with self._lifecycle_lock:
+                run_shutdown = self._shutdown_requested
+
+            if run_shutdown:
+                self._shutdown_once(errors)
+            else:
+                self._join_once(errors)
+
+            with self._lifecycle_condition:
+                if (
+                    self._shutdown_requested
+                    and not self._shutdown_complete
+                    and not run_shutdown
+                ):
+                    continue
+                if errors:
+                    self._lifecycle_cleanup_failed = True
+                    raise errors[0]
+                self._lifecycle_owner = None
+                self._lifecycle_condition.notify_all()
+                return
 
     @no_throw()
     def _atexit(self) -> None:
@@ -4065,18 +4304,7 @@ class Client(object):
             }
 
     def _load_feature_flags(self):
-        should_fetch = True
-        if self._flag_definition_cache_provider:
-            try:
-                should_fetch = self._resolve_flag_definition_cache_provider_result(
-                    self._flag_definition_cache_provider.should_fetch_flag_definitions()
-                )
-            except Exception as e:
-                self.log.error(
-                    f"[FEATURE FLAGS] Cache provider should_fetch error: {e}"
-                )
-                # Fail-safe: fetch from API if cache provider errors
-                should_fetch = True
+        should_fetch = self._should_fetch_flag_definitions()
 
         # If not fetching, try to get from cache
         if not should_fetch and self._flag_definition_cache_provider:
@@ -4110,6 +4338,22 @@ class Client(object):
         if should_fetch:
             self._fetch_feature_flags_from_api()
 
+    def _should_fetch_flag_definitions(self):
+        should_fetch = True
+        if self._flag_definition_cache_provider:
+            try:
+                should_fetch = self._resolve_flag_definition_cache_provider_result(
+                    self._flag_definition_cache_provider.should_fetch_flag_definitions()
+                )
+            except Exception as e:
+                self.log.error(
+                    f"[FEATURE FLAGS] Cache provider should_fetch error: {e}"
+                )
+                # Fail-safe: fetch from API if cache provider errors
+                should_fetch = True
+
+        return should_fetch
+
     def _fetch_feature_flags_from_api(self):
         """Fetch feature flags from the PostHog API."""
         personal_api_key = self.personal_api_key
@@ -4127,158 +4371,33 @@ class Client(object):
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         old_fingerprint: Optional[str] = None
         try:
-            request_get = _get_with_identity if self._request_identity_kwargs() else get
-            response = request_get(
-                personal_api_key,
-                f"/flags/definitions?token={self.api_key}&send_cohorts",
-                self.host,
-                timeout=10,
-                etag=request_etag,
-                **self._request_identity_kwargs(),
+            response, fingerprint = self._request_flag_definitions(
+                personal_api_key, request_etag
             )
-
-            # Canonical serialization can be expensive; do it before publication.
-            fingerprint = (
-                self._hash_flag_definitions(response.data)
-                if response.data is not None and not response.not_modified
-                else None
-            )
-
-            with self._flag_definition_publication_lock:
-                if fetch_generation <= self._flag_definition_published_generation:
-                    self.log.debug(
-                        "[FEATURE FLAGS] Ignoring stale flag definition response"
-                    )
-                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
-                    return
-
-                # A 304 is valid only for the ETag used by this request. Another
-                # overlapping response may already have installed newer definitions.
-                if response.not_modified:
-                    if self._flags_etag != request_etag:
-                        self.log.debug(
-                            "[FEATURE FLAGS] Ignoring stale 304 flag definition response"
-                        )
-                        self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
-                        return
-
-                    self._flags_etag = response.etag
-                    self._flag_definition_published_generation = fetch_generation
-                    self._flag_definition_cache_generation = fetch_generation
-                    self.log.debug(
-                        "[FEATURE FLAGS] Flags not modified (304), using cached data"
-                    )
-                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
-                    return
-
-                if response.data is None:
-                    self.log.error(
-                        "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
-                    )
-                    return
-
-                old_fingerprint = self._update_flag_state(
-                    response.data, _fingerprint=fingerprint
+            published, old_fingerprint, cache_data_to_store = (
+                self._publish_flag_definitions_response(
+                    response, fingerprint, fetch_generation, request_etag
                 )
-
-                if self._flag_definition_cache_provider:
-                    cache_data_to_store = {
-                        "flags": self.feature_flags or [],
-                        "group_type_mapping": self.group_type_mapping or {},
-                        "cohorts": self.cohorts or {},
-                        "minimal_flag_called_events": self._minimal_flag_called_events,
-                        "property_matching_version": self._property_matching_version,
-                    }
-
-                # Publish the ETag only after its matching flag state is installed.
-                self._flags_etag = response.etag
-                self._flag_definition_published_generation = fetch_generation
-                self._flag_definition_cache_generation = fetch_generation
-
+            )
+            if not published:
+                return
             self._warn_unresolvable_flags()
-
-            if cache_data_to_store and self._flag_definition_cache_provider:
-                # Keep provider I/O out of the publication lock. The separate lock
-                # preserves cache write order without delaying newer API fetches or
-                # in-memory publication.
-                with self._flag_definition_cache_write_lock:
-                    with self._flag_definition_publication_lock:
-                        should_store = (
-                            fetch_generation == self._flag_definition_cache_generation
-                        )
-                    if should_store:
-                        try:
-                            self._resolve_flag_definition_cache_provider_result(
-                                self._flag_definition_cache_provider.on_flag_definitions_received(
-                                    cache_data_to_store
-                                )
-                            )
-                        except Exception as e:
-                            self.log.error(
-                                f"[FEATURE FLAGS] Cache provider store error: {e}"
-                            )
-                            # Flags are already in memory, so continue normally
+            self._store_flag_definitions_if_current(
+                cache_data_to_store, fetch_generation
+            )
 
         except APIError as e:
             with self._flag_definition_publication_lock:
-                if fetch_generation <= self._flag_definition_published_generation:
-                    self.log.debug("[FEATURE FLAGS] Ignoring stale API error response")
-                elif e.status == 401:
-                    detail = (
-                        f"Error loading feature flags: {e.message}. "
-                        "Please verify both your project_api_key and secret_key. "
-                        "More information: https://posthog.com/docs/api/overview"
-                    )
-                    self.log.error("[FEATURE FLAGS] %s", detail)
-                    self.feature_flags = []
-                    self.group_type_mapping = {}
-                    self.cohorts = {}
-                    self._property_matching_version = 1
+                if (
+                    fetch_generation > self._flag_definition_published_generation
+                    and e.status in (401, 402)
+                ):
                     old_fingerprint = self._flag_definition_fingerprint
-                    self._flag_definition_fingerprint = ""
-                    self._flags_etag = None
-                    self._flag_definition_published_generation = fetch_generation
-                    self._flag_definition_cache_generation = fetch_generation
-
-                    if self.flag_cache:
-                        self.flag_definition_version += 1
-                        self.flag_cache._advance_generation(
-                            self.flag_definition_version,
-                            self._flag_definition_fingerprint,
-                        )
-
-                    if self.debug:
-                        raise APIError(status=401, message=detail)
-                elif e.status == 402:
-                    self.log.warning(
-                        "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
-                    )
-                    # Reset all feature flag data when quota limited
-                    self.feature_flags = []
-                    self.group_type_mapping = {}
-                    self.cohorts = {}
-                    self._property_matching_version = 1
-                    old_fingerprint = self._flag_definition_fingerprint
-                    self._flag_definition_fingerprint = ""
-                    self._flags_etag = None
-                    self._flag_definition_published_generation = fetch_generation
-                    self._flag_definition_cache_generation = fetch_generation
-
-                    # Invalidate results without waiting for external cache I/O.
-                    if self.flag_cache:
-                        self.flag_definition_version += 1
-                        self.flag_cache._advance_generation(
-                            self.flag_definition_version,
-                            self._flag_definition_fingerprint,
-                        )
-
-                    if self.debug:
-                        raise APIError(
-                            status=402,
-                            message="PostHog feature flags quota limited",
-                        )
-                else:
-                    self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
+                debug_error = self._handle_flag_definition_api_error(
+                    e, fetch_generation
+                )
+                if debug_error is not None:
+                    raise debug_error
         except Exception as e:
             self.log.warning(
                 "[FEATURE FLAGS] Fetching feature flags failed with following error. We will retry in %s seconds."
@@ -4292,6 +4411,154 @@ class Client(object):
                 self.flag_cache._invalidate_snapshot(old_fingerprint)
 
         self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+
+    def _request_flag_definitions(self, personal_api_key, request_etag):
+        request_get = _get_with_identity if self._request_identity_kwargs() else get
+        response = request_get(
+            personal_api_key,
+            f"/flags/definitions?token={self.api_key}&send_cohorts",
+            self.host,
+            timeout=10,
+            etag=request_etag,
+            **self._request_identity_kwargs(),
+        )
+
+        # Canonical serialization can be expensive; do it before publication.
+        fingerprint = (
+            self._hash_flag_definitions(response.data)
+            if response.data is not None and not response.not_modified
+            else None
+        )
+
+        return response, fingerprint
+
+    def _publish_flag_definitions_response(
+        self, response, fingerprint, fetch_generation, request_etag
+    ):
+        cache_data_to_store = None
+        with self._flag_definition_publication_lock:
+            if fetch_generation <= self._flag_definition_published_generation:
+                self.log.debug(
+                    "[FEATURE FLAGS] Ignoring stale flag definition response"
+                )
+                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                return False, None, None
+
+            # A 304 is valid only for the ETag used by this request. Another
+            # overlapping response may already have installed newer definitions.
+            if response.not_modified:
+                if self._flags_etag != request_etag:
+                    self.log.debug(
+                        "[FEATURE FLAGS] Ignoring stale 304 flag definition response"
+                    )
+                    self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                    return False, None, None
+
+                self._flags_etag = response.etag
+                self._flag_definition_published_generation = fetch_generation
+                self._flag_definition_cache_generation = fetch_generation
+                self.log.debug(
+                    "[FEATURE FLAGS] Flags not modified (304), using cached data"
+                )
+                self._last_feature_flag_poll = datetime.now(tz=timezone.utc)
+                return False, None, None
+
+            if response.data is None:
+                self.log.error(
+                    "[FEATURE FLAGS] Unexpected empty response data in non-304 response"
+                )
+                return False, None, None
+
+            old_fingerprint = self._update_flag_state(
+                response.data, _fingerprint=fingerprint
+            )
+
+            if self._flag_definition_cache_provider:
+                cache_data_to_store = {
+                    "flags": self.feature_flags or [],
+                    "group_type_mapping": self.group_type_mapping or {},
+                    "cohorts": self.cohorts or {},
+                    "minimal_flag_called_events": self._minimal_flag_called_events,
+                    "property_matching_version": self._property_matching_version,
+                }
+
+            # Publish the ETag only after its matching flag state is installed.
+            self._flags_etag = response.etag
+            self._flag_definition_published_generation = fetch_generation
+            self._flag_definition_cache_generation = fetch_generation
+
+        return True, old_fingerprint, cache_data_to_store
+
+    def _store_flag_definitions_if_current(self, cache_data_to_store, fetch_generation):
+        if cache_data_to_store and self._flag_definition_cache_provider:
+            # Keep provider I/O out of the publication lock. The separate lock
+            # preserves cache write order without delaying newer API fetches or
+            # in-memory publication.
+            with self._flag_definition_cache_write_lock:
+                with self._flag_definition_publication_lock:
+                    should_store = (
+                        fetch_generation == self._flag_definition_cache_generation
+                    )
+                if should_store:
+                    try:
+                        self._resolve_flag_definition_cache_provider_result(
+                            self._flag_definition_cache_provider.on_flag_definitions_received(
+                                cache_data_to_store
+                            )
+                        )
+                    except Exception as e:
+                        self.log.error(
+                            f"[FEATURE FLAGS] Cache provider store error: {e}"
+                        )
+                        # Flags are already in memory, so continue normally
+
+    def _handle_flag_definition_api_error(self, e, fetch_generation):
+        debug_error = None
+        if fetch_generation <= self._flag_definition_published_generation:
+            self.log.debug("[FEATURE FLAGS] Ignoring stale API error response")
+        elif e.status == 401:
+            detail = (
+                f"Error loading feature flags: {e.message}. "
+                "Please verify both your project_api_key and secret_key. "
+                "More information: https://posthog.com/docs/api/overview"
+            )
+            self.log.error("[FEATURE FLAGS] %s", detail)
+            self._clear_flag_definitions_after_api_error(fetch_generation)
+
+            if self.debug:
+                debug_error = APIError(status=401, message=detail)
+        elif e.status == 402:
+            self.log.warning(
+                "[FEATURE FLAGS] PostHog feature flags quota limited, resetting feature flag data.  Learn more about billing limits at https://posthog.com/docs/billing/limits-alerts"
+            )
+            # Reset all feature flag data when quota limited
+            self._clear_flag_definitions_after_api_error(fetch_generation)
+
+            if self.debug:
+                debug_error = APIError(
+                    status=402,
+                    message="PostHog feature flags quota limited",
+                )
+        else:
+            self.log.error(f"[FEATURE FLAGS] Error loading feature flags: {e}")
+        return debug_error
+
+    def _clear_flag_definitions_after_api_error(self, fetch_generation):
+        self.feature_flags = []
+        self.group_type_mapping = {}
+        self.cohorts = {}
+        self._property_matching_version = 1
+        self._flag_definition_fingerprint = ""
+        self._flags_etag = None
+        self._flag_definition_published_generation = fetch_generation
+        self._flag_definition_cache_generation = fetch_generation
+
+        if self.flag_cache:
+            self.flag_definition_version += 1
+            self.flag_cache._advance_generation(
+                self.flag_definition_version,
+                self._flag_definition_fingerprint,
+            )
 
     def load_feature_flags(self):
         """
@@ -4349,8 +4616,6 @@ class Client(object):
             if _definition_snapshot is not None
             else self._local_evaluation_snapshot()
         )
-        flags_by_key = snapshot["flags_by_key"]
-        property_matching_version = snapshot.get("property_matching_version", 1)
         groups = groups or {}
         person_properties = person_properties or {}
         group_properties = group_properties or {}
@@ -4369,87 +4634,136 @@ class Client(object):
 
         flag_filters = feature_flag.get("filters") or {}
         aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-        group_type_mapping = snapshot["group_type_mapping"]
 
         if aggregation_group_type_index is not None:
-            group_name = group_type_mapping.get(str(aggregation_group_type_index))
-
-            if not group_name:
-                self.log.warning(
-                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
-                )
-                # failover to `/flags`
-                raise InconclusiveMatchError(
-                    "Flag has unknown group type index",
-                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
-                )
-
-            if group_name not in groups:
-                # Group flags are never enabled in `groups` aren't passed in
-                # don't failover to `/flags`, since response will be the same
-                if warn_on_unknown_groups:
-                    self.log.warning(
-                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
-                    )
-                else:
-                    self.log.debug(
-                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
-                    )
-                return False
-
-            if group_name not in group_properties:
-                raise InconclusiveMatchError(
-                    f"Flag has no group properties for group '{group_name}'",
-                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
-                )
-            focused_group_properties = group_properties[group_name]
-            group_key = groups[group_name]
-            return match_feature_flag_properties(
+            return self._compute_group_flag_locally(
                 feature_flag,
-                group_key,
-                focused_group_properties,
-                cohort_properties=snapshot["cohorts"],
-                flags_by_key=flags_by_key,
-                property_matching_version=property_matching_version,
-                evaluation_cache=evaluation_cache,
-                device_id=device_id,
-                bucketing_value=group_key,
-                group_type_mapping=group_type_mapping,
-                groups=groups,
-                group_properties=group_properties,
+                groups,
+                group_properties,
+                warn_on_unknown_groups,
+                device_id,
+                snapshot,
+                evaluation_cache,
+                aggregation_group_type_index,
             )
         else:
-            try:
-                bucketing_value = resolve_bucketing_value(
-                    feature_flag, distinct_id, device_id
-                )
-            except InconclusiveMatchError as e:
-                # No condition is checked without a bucketing value, so a cause in
-                # the definition also applies and outranks missing_context.
-                e.reason = (
-                    _get_definition_unresolved_reason(
-                        feature_flag,
-                        flags_by_key,
-                        snapshot["cohorts"],
-                        group_type_mapping,
-                    )
-                    or e.reason
-                )
-                raise
-            return match_feature_flag_properties(
+            return self._compute_person_flag_locally(
                 feature_flag,
                 distinct_id,
                 person_properties,
-                cohort_properties=snapshot["cohorts"],
-                flags_by_key=flags_by_key,
-                property_matching_version=property_matching_version,
-                evaluation_cache=evaluation_cache,
-                device_id=device_id,
-                bucketing_value=bucketing_value,
-                group_type_mapping=group_type_mapping,
-                groups=groups,
-                group_properties=group_properties,
+                device_id,
+                snapshot,
+                evaluation_cache,
+                groups,
+                group_properties,
             )
+
+    def _compute_group_flag_locally(
+        self,
+        feature_flag,
+        groups,
+        group_properties,
+        warn_on_unknown_groups,
+        device_id,
+        snapshot,
+        evaluation_cache,
+        aggregation_group_type_index,
+    ) -> FlagValue:
+        group_type_mapping = snapshot["group_type_mapping"]
+        flags_by_key = snapshot["flags_by_key"]
+        property_matching_version = snapshot.get("property_matching_version", 1)
+        group_name = group_type_mapping.get(str(aggregation_group_type_index))
+
+        if not group_name:
+            self.log.warning(
+                f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
+            )
+            # failover to `/flags`
+            raise InconclusiveMatchError(
+                "Flag has unknown group type index",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
+
+        if group_name not in groups:
+            # Group flags are never enabled in `groups` aren't passed in
+            # don't failover to `/flags`, since response will be the same
+            if warn_on_unknown_groups:
+                self.log.warning(
+                    f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                )
+            else:
+                self.log.debug(
+                    f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
+                )
+            return False
+
+        if group_name not in group_properties:
+            raise InconclusiveMatchError(
+                f"Flag has no group properties for group '{group_name}'",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
+            )
+        focused_group_properties = group_properties[group_name]
+        group_key = groups[group_name]
+        return match_feature_flag_properties(
+            feature_flag,
+            group_key,
+            focused_group_properties,
+            cohort_properties=snapshot["cohorts"],
+            flags_by_key=flags_by_key,
+            property_matching_version=property_matching_version,
+            evaluation_cache=evaluation_cache,
+            device_id=device_id,
+            bucketing_value=group_key,
+            group_type_mapping=group_type_mapping,
+            groups=groups,
+            group_properties=group_properties,
+        )
+
+    def _compute_person_flag_locally(
+        self,
+        feature_flag,
+        distinct_id,
+        person_properties,
+        device_id,
+        snapshot,
+        evaluation_cache,
+        groups,
+        group_properties,
+    ) -> FlagValue:
+        group_type_mapping = snapshot["group_type_mapping"]
+        flags_by_key = snapshot["flags_by_key"]
+        property_matching_version = snapshot.get("property_matching_version", 1)
+        try:
+            bucketing_value = resolve_bucketing_value(
+                feature_flag, distinct_id, device_id
+            )
+        except InconclusiveMatchError as e:
+            # No condition is checked without a bucketing value, so a cause in
+            # the definition also applies and outranks missing_context.
+            e.reason = (
+                _get_definition_unresolved_reason(
+                    feature_flag,
+                    flags_by_key,
+                    snapshot["cohorts"],
+                    group_type_mapping,
+                )
+                or e.reason
+            )
+            raise
+        return match_feature_flag_properties(
+            feature_flag,
+            distinct_id,
+            person_properties,
+            cohort_properties=snapshot["cohorts"],
+            flags_by_key=flags_by_key,
+            property_matching_version=property_matching_version,
+            evaluation_cache=evaluation_cache,
+            device_id=device_id,
+            bucketing_value=bucketing_value,
+            group_type_mapping=group_type_mapping,
+            groups=groups,
+            group_properties=group_properties,
+        )
 
     def feature_enabled(
         self,
@@ -4555,20 +4869,33 @@ class Client(object):
             )
         )
         # Ensure non-None values for type checking
-        groups = groups or {}
-        person_properties = person_properties or {}
-        group_properties = group_properties or {}
+        return self._get_feature_flag_result_with_context(
+            key,
+            distinct_id,
+            override_match_value,
+            groups or {},
+            person_properties or {},
+            group_properties or {},
+            only_evaluate_locally,
+            send_feature_flag_events,
+            disable_geoip,
+            device_id,
+        )
 
-        flag_result = None
-        flag_details = None
-        # Whether flag_details supplies the reported value or failed-record diagnostics.
-        # A failed record keeps its config version and reason code, but sends no exposure.
-        value_from_details = False
-        request_id = None
-        evaluated_at = None
-        feature_flag_error: Optional[str] = None
-        remote_minimal_flag_called_events = False
-
+    def _get_feature_flag_result_with_context(
+        self,
+        key,
+        distinct_id,
+        override_match_value,
+        groups,
+        person_properties,
+        group_properties,
+        only_evaluate_locally,
+        send_feature_flag_events,
+        disable_geoip,
+        device_id,
+    ):
+        read = _FlagReadResult()
         # Resolve device_id from context if not provided
         if device_id is None:
             device_id = get_context_device_id()
@@ -4584,40 +4911,16 @@ class Client(object):
             group_properties,
             device_id,
         )
-        local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
 
         if flag_value is not None:
-            lookup_match_value = (
-                override_match_value if override_match_value is not None else flag_value
+            read.result = self._resolve_local_flag_result(
+                key,
+                distinct_id,
+                flag_value,
+                override_match_value,
+                snapshot,
             )
-            payload = (
-                self._compute_payload_locally(
-                    key, lookup_match_value, _definition_snapshot=snapshot
-                )
-                if lookup_match_value is not None
-                else None
-            )
-            flag_result = FeatureFlagResult.from_value_and_payload(
-                key, lookup_match_value, payload
-            )
-
-            # Cache the local evaluation, not a payload lookup override.
-            cached_flag_result = flag_result
-            if override_match_value is not None:
-                cached_flag_result = FeatureFlagResult.from_value_and_payload(
-                    key,
-                    flag_value,
-                    self._compute_payload_locally(
-                        key, flag_value, _definition_snapshot=snapshot
-                    ),
-                )
-            if self.flag_cache and cached_flag_result:
-                # The cache rejects invalidated generations, including writes
-                # already in flight when new definitions are published.
-                self.flag_cache.set_cached_flag(
-                    distinct_id, key, cached_flag_result, local_definition_version
-                )
         elif only_evaluate_locally:
             if self.feature_flags is None:
                 self.log.warning(
@@ -4625,130 +4928,227 @@ class Client(object):
                     "Returning None. You can call load_feature_flags() to load flags explicitly."
                 )
         else:
-            try:
-                (
-                    flag_details,
-                    request_id,
-                    evaluated_at,
-                    errors_while_computing,
-                    remote_minimal_flag_called_events,
-                ) = self._get_feature_flag_details_from_server(
-                    key,
-                    distinct_id,
-                    groups,
-                    person_properties,
-                    group_properties,
-                    disable_geoip,
-                    device_id=device_id,
-                )
-                errors = []
-                if errors_while_computing:
-                    errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
-                if flag_details is None:
-                    errors.append(FeatureFlagError.FLAG_MISSING)
-                elif flag_details._server_marked_failed:
-                    errors.append(FeatureFlagError.EVALUATION_FAILED)
-                if errors:
-                    feature_flag_error = ",".join(errors)
-
-                flag_result = FeatureFlagResult.from_flag_details(
-                    flag_details, override_match_value
-                )
-
-                if (
-                    flag_details is not None
-                    and flag_details._malformed_field is not None
-                ):
-                    # The record could not be read, so it reads as disabled. It must
-                    # not replace the last good cached value, which it falls back to
-                    # like a failed request, and it reports what a failed request
-                    # reports: an unknown error and no request details.
-                    feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
-                    request_id = None
-                    evaluated_at = None
-                    flag_result = (
-                        self._get_stale_flag_fallback(distinct_id, key) or flag_result
-                    )
-                # The request-start generation is an invalidation boundary, not
-                # a claim about the server's definitions. Refresh rejects late writes.
-                elif self.flag_cache and flag_result:
-                    self.flag_cache._set_cached_remote_flag(
-                        distinct_id, key, flag_result, local_definition_version
-                    )
-
-                self.log.debug(
-                    f"Successfully computed flag remotely: #{key} -> #{flag_result}"
-                )
-                # A successful payload override reports the caller's value. A failed
-                # record keeps its config version and reason code, never the override.
-                value_from_details = flag_details is not None and (
-                    override_match_value is None or flag_details._server_marked_failed
-                )
-            except QuotaLimitError as e:
-                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
-                feature_flag_error = FeatureFlagError.QUOTA_LIMITED
-                flag_result = self._get_stale_flag_fallback(distinct_id, key)
-            except RequestsTimeout as e:
-                self.log.warning(f"[FEATURE FLAGS] Request timed out: {e}")
-                feature_flag_error = FeatureFlagError.TIMEOUT
-                flag_result = self._get_stale_flag_fallback(distinct_id, key)
-            except RequestsConnectionError as e:
-                self.log.warning(f"[FEATURE FLAGS] Connection error: {e}")
-                feature_flag_error = FeatureFlagError.CONNECTION_ERROR
-                flag_result = self._get_stale_flag_fallback(distinct_id, key)
-            except APIError as e:
-                self.log.warning(f"[FEATURE FLAGS] API error: {e}")
-                feature_flag_error = FeatureFlagError.api_error(e.status)
-                flag_result = self._get_stale_flag_fallback(distinct_id, key)
-            except Exception as e:
-                self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
-                feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
-                flag_result = self._get_stale_flag_fallback(distinct_id, key)
+            self._get_remote_flag_result(
+                read,
+                key,
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                disable_geoip,
+                device_id,
+                override_match_value,
+                snapshot["flag_definition_version"],
+            )
 
         if send_feature_flag_events:
-            # Locally-evaluated flags carry has_experiment in the stored definition;
-            # remotely-evaluated flags carry it in the response metadata. None when
-            # the server (older deployment) does not report it.
-            has_experiment: Optional[bool] = None
-            # Source the gate the same way as has_experiment above; see
-            # _capture_feature_flag_called_if_needed for why.
-            minimal_flag_called_events = self._minimal_flag_called_events
-            # Remotely-evaluated flags carry id and version in the response metadata;
-            # locally-evaluated flags read them from the definition that produced the value.
-            local_flag_id: Optional[int] = None
-            local_flag_version: Optional[int] = None
-            if flag_was_locally_evaluated:
-                local_def = snapshot["flags_by_key"].get(key)
-                if isinstance(local_def, dict):
-                    has_experiment = _parse_has_experiment(
-                        local_def.get("has_experiment")
-                    )
-                    local_flag_id = local_def.get("id")
-                    local_flag_version = local_def.get("version")
-            elif isinstance(flag_details, FeatureFlag):
-                has_experiment = _metadata_has_experiment(flag_details.metadata)
-                minimal_flag_called_events = remote_minimal_flag_called_events
-
-            self._capture_feature_flag_called(
-                distinct_id,
+            self._capture_flag_read_result(
+                read,
                 key,
-                flag_result.get_value() if flag_result else None,
-                flag_result.payload if flag_result else None,
+                distinct_id,
+                snapshot,
                 flag_was_locally_evaluated,
                 groups,
                 disable_geoip,
-                request_id,
-                evaluated_at,
-                flag_details,
-                feature_flag_error,
-                has_experiment,
-                minimal_flag_called_events,
-                local_flag_id=local_flag_id,
-                local_flag_version=local_flag_version,
-                value_from_details=value_from_details,
+            )
+        return read.result
+
+    def _resolve_local_flag_result(
+        self, key, distinct_id, flag_value, override_match_value, snapshot
+    ):
+        local_definition_version = snapshot["flag_definition_version"]
+        lookup_match_value = (
+            override_match_value if override_match_value is not None else flag_value
+        )
+        payload = (
+            self._compute_payload_locally(
+                key, lookup_match_value, _definition_snapshot=snapshot
+            )
+            if lookup_match_value is not None
+            else None
+        )
+        flag_result = FeatureFlagResult.from_value_and_payload(
+            key, lookup_match_value, payload
+        )
+
+        # Cache the local evaluation, not a payload lookup override.
+        cached_flag_result = flag_result
+        if override_match_value is not None:
+            cached_flag_result = FeatureFlagResult.from_value_and_payload(
+                key,
+                flag_value,
+                self._compute_payload_locally(
+                    key, flag_value, _definition_snapshot=snapshot
+                ),
+            )
+        if self.flag_cache and cached_flag_result:
+            # The cache rejects invalidated generations, including writes
+            # already in flight when new definitions are published.
+            self.flag_cache.set_cached_flag(
+                distinct_id, key, cached_flag_result, local_definition_version
+            )
+        return flag_result
+
+    def _get_remote_flag_result(
+        self,
+        read,
+        key,
+        distinct_id,
+        groups,
+        person_properties,
+        group_properties,
+        disable_geoip,
+        device_id,
+        override_match_value,
+        local_definition_version,
+    ):
+        try:
+            (
+                read.details,
+                read.request_id,
+                read.evaluated_at,
+                errors_while_computing,
+                read.minimal_flag_called_events,
+            ) = self._get_feature_flag_details_from_server(
+                key,
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                disable_geoip,
+                device_id=device_id,
+            )
+            self._resolve_remote_flag_result(
+                read,
+                key,
+                distinct_id,
+                override_match_value,
+                local_definition_version,
+                errors_while_computing,
             )
 
-        return flag_result
+            self.log.debug(
+                f"Successfully computed flag remotely: #{key} -> #{read.result}"
+            )
+            # A successful payload override reports the caller's value. A failed
+            # record keeps its config version and reason code, never the override.
+            read.value_from_details = read.details is not None and (
+                override_match_value is None or read.details._server_marked_failed
+            )
+        except QuotaLimitError as e:
+            self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+            read.error = FeatureFlagError.QUOTA_LIMITED
+            read.result = self._get_stale_flag_fallback(distinct_id, key)
+        except RequestsTimeout as e:
+            self.log.warning(f"[FEATURE FLAGS] Request timed out: {e}")
+            read.error = FeatureFlagError.TIMEOUT
+            read.result = self._get_stale_flag_fallback(distinct_id, key)
+        except RequestsConnectionError as e:
+            self.log.warning(f"[FEATURE FLAGS] Connection error: {e}")
+            read.error = FeatureFlagError.CONNECTION_ERROR
+            read.result = self._get_stale_flag_fallback(distinct_id, key)
+        except APIError as e:
+            self.log.warning(f"[FEATURE FLAGS] API error: {e}")
+            read.error = FeatureFlagError.api_error(e.status)
+            read.result = self._get_stale_flag_fallback(distinct_id, key)
+        except Exception as e:
+            self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
+            read.error = FeatureFlagError.UNKNOWN_ERROR
+            read.result = self._get_stale_flag_fallback(distinct_id, key)
+
+    def _resolve_remote_flag_result(
+        self,
+        read,
+        key,
+        distinct_id,
+        override_match_value,
+        local_definition_version,
+        errors_while_computing,
+    ):
+        read.error = self._remote_flag_result_error(
+            errors_while_computing, read.details
+        )
+
+        read.result = FeatureFlagResult.from_flag_details(
+            read.details, override_match_value
+        )
+
+        if read.details is not None and read.details._malformed_field is not None:
+            # The record could not be read, so it reads as disabled. It must
+            # not replace the last good cached value, which it falls back to
+            # like a failed request, and it reports what a failed request
+            # reports: an unknown error and no request details.
+            read.error = FeatureFlagError.UNKNOWN_ERROR
+            read.request_id = None
+            read.evaluated_at = None
+            read.result = self._get_stale_flag_fallback(distinct_id, key) or read.result
+        # The request-start generation is an invalidation boundary, not
+        # a claim about the server's definitions. Refresh rejects late writes.
+        elif self.flag_cache and read.result:
+            self.flag_cache._set_cached_remote_flag(
+                distinct_id, key, read.result, local_definition_version
+            )
+
+    @staticmethod
+    def _remote_flag_result_error(errors_while_computing, flag_details):
+        errors = []
+        if errors_while_computing:
+            errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
+        if flag_details is None:
+            errors.append(FeatureFlagError.FLAG_MISSING)
+        elif flag_details._server_marked_failed:
+            errors.append(FeatureFlagError.EVALUATION_FAILED)
+        return ",".join(errors) if errors else None
+
+    def _capture_flag_read_result(
+        self,
+        read,
+        key,
+        distinct_id,
+        snapshot,
+        flag_was_locally_evaluated,
+        groups,
+        disable_geoip,
+    ):
+        # Locally-evaluated flags carry has_experiment in the stored definition;
+        # remotely-evaluated flags carry it in the response metadata. None when
+        # the server (older deployment) does not report it.
+        has_experiment: Optional[bool] = None
+        # Source the gate the same way as has_experiment above; see
+        # _capture_feature_flag_called_if_needed for why.
+        minimal_flag_called_events = self._minimal_flag_called_events
+        # Remotely-evaluated flags carry id and version in the response metadata;
+        # locally-evaluated flags read them from the definition that produced the value.
+        local_flag_id: Optional[int] = None
+        local_flag_version: Optional[int] = None
+        if flag_was_locally_evaluated:
+            local_def = snapshot["flags_by_key"].get(key)
+            if isinstance(local_def, dict):
+                has_experiment = _parse_has_experiment(local_def.get("has_experiment"))
+                local_flag_id = local_def.get("id")
+                local_flag_version = local_def.get("version")
+        elif isinstance(read.details, FeatureFlag):
+            has_experiment = _metadata_has_experiment(read.details.metadata)
+            minimal_flag_called_events = read.minimal_flag_called_events
+
+        self._capture_feature_flag_called(
+            distinct_id,
+            key,
+            read.result.get_value() if read.result else None,
+            read.result.payload if read.result else None,
+            flag_was_locally_evaluated,
+            groups,
+            disable_geoip,
+            read.request_id,
+            read.evaluated_at,
+            read.details,
+            read.error,
+            has_experiment,
+            minimal_flag_called_events,
+            local_flag_id=local_flag_id,
+            local_flag_version=local_flag_version,
+            value_from_details=read.value_from_details,
+        )
 
     def get_feature_flag_result(
         self,
@@ -5062,14 +5462,7 @@ class Client(object):
             properties["$feature_flag_request_id"] = request_id
         if evaluated_at:
             properties["$feature_flag_evaluated_at"] = evaluated_at
-        if isinstance(flag_details, FeatureFlag):
-            if flag_details.reason and flag_details.reason.description:
-                properties["$feature_flag_reason"] = flag_details.reason.description
-            if isinstance(flag_details.metadata, FlagMetadata):
-                if flag_details.metadata.version:
-                    properties["$feature_flag_version"] = flag_details.metadata.version
-                if flag_details.metadata.id:
-                    properties["$feature_flag_id"] = flag_details.metadata.id
+        self._add_remote_flag_called_metadata(properties, flag_details)
         if local_flag_version:
             properties["$feature_flag_version"] = local_flag_version
         if local_flag_id:
@@ -5089,6 +5482,17 @@ class Client(object):
             details=flag_details,
             value_from_details=value_from_details,
         )
+
+    @staticmethod
+    def _add_remote_flag_called_metadata(properties, flag_details):
+        if isinstance(flag_details, FeatureFlag):
+            if flag_details.reason and flag_details.reason.description:
+                properties["$feature_flag_reason"] = flag_details.reason.description
+            if isinstance(flag_details.metadata, FlagMetadata):
+                if flag_details.metadata.version:
+                    properties["$feature_flag_version"] = flag_details.metadata.version
+                if flag_details.metadata.id:
+                    properties["$feature_flag_id"] = flag_details.metadata.id
 
     def _capture_feature_flag_called_if_needed(
         self,
@@ -5427,15 +5831,9 @@ class Client(object):
         """
         host = self._get_feature_flag_evaluations_host()
 
-        if distinct_id is None:
-            distinct_id = get_context_distinct_id()
-
-        # Resolve device_id from context when not explicitly provided. The context value
-        # may be set via tracing headers; the explicit parameter is an override for callers
-        # who want to bypass it. Used by the remote /flags request for experience-continuity
-        # flag matching.
-        if device_id is None:
-            device_id = get_context_device_id()
+        distinct_id, device_id = self._resolve_feature_flag_identity(
+            distinct_id, device_id
+        )
 
         if not distinct_id or self.disabled:
             # Empty snapshot. The class short-circuits on empty distinct_id so calling
@@ -5459,14 +5857,45 @@ class Client(object):
             )
         )
         groups = groups or {}
-        requested_keys = set(flag_keys) if flag_keys else None
+        return self._evaluate_flags_with_context(
+            host,
+            distinct_id,
+            groups,
+            person_properties,
+            group_properties,
+            only_evaluate_locally,
+            disable_geoip,
+            flag_keys,
+            device_id,
+        )
 
-        records: Dict[str, _EvaluatedFlagRecord] = {}
-        request_id: Optional[str] = None
-        evaluated_at: Optional[int] = None
-        errors_while_computing = False
-        quota_limited = False
-        locally_evaluated_keys: set[str] = set()
+    @staticmethod
+    def _resolve_feature_flag_identity(distinct_id, device_id):
+        if distinct_id is None:
+            distinct_id = get_context_distinct_id()
+
+        # Resolve device_id from context when not explicitly provided. The context value
+        # may be set via tracing headers; the explicit parameter is an override for callers
+        # who want to bypass it. Used by the remote /flags request for experience-continuity
+        # flag matching.
+        if device_id is None:
+            device_id = get_context_device_id()
+
+        return distinct_id, device_id
+
+    def _evaluate_flags_with_context(
+        self,
+        host,
+        distinct_id,
+        groups,
+        person_properties,
+        group_properties,
+        only_evaluate_locally,
+        disable_geoip,
+        flag_keys,
+        device_id,
+    ) -> FeatureFlagEvaluations:
+        requested_keys = set(flag_keys) if flag_keys else None
         unresolved: Dict[str, UnresolvedFlagReason] = {}
         # Try local evaluation first when the poller has loaded definitions.
         local_person_properties = self._person_properties_for_local_evaluation(
@@ -5489,14 +5918,59 @@ class Client(object):
         minimal_flag_called_events = definition_snapshot.get(
             "minimal_flag_called_events", False
         )
-        feature_flags_by_key = definition_snapshot["flags_by_key"]
-        local_flags = local_result.get("featureFlags") or {}
-        local_payloads = local_result.get("featureFlagPayloads") or {}
-        if requested_keys and not requested_keys.issubset(local_flags):
+        result = _FlagEvaluationResult(
+            records=self._local_evaluation_records(local_result, definition_snapshot),
+            minimal_flag_called_events=minimal_flag_called_events,
+        )
+        if requested_keys and not requested_keys.issubset(result.records):
             # A requested flag may have been created since the last definitions poll.
             # Ask /flags for the caller's original scope unless this is a local-only call.
             fallback_to_server = True
 
+        # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
+        # Use the flags decision path directly so the resulting records carry id/version/reason
+        # and fired ``$feature_flag_called`` events match what ``get_feature_flag()`` emits.
+        if fallback_to_server and not only_evaluate_locally:
+            self._evaluate_flags_remotely(
+                result,
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                disable_geoip,
+                flag_keys,
+                device_id,
+                requested_keys,
+            )
+
+        return FeatureFlagEvaluations(
+            host=host,
+            distinct_id=str(distinct_id),
+            flags=result.records,
+            groups=groups,
+            disable_geoip=disable_geoip,
+            request_id=result.request_id,
+            evaluated_at=result.evaluated_at,
+            errors_while_computing=result.errors_while_computing,
+            quota_limited=result.quota_limited,
+            minimal_flag_called_events=result.minimal_flag_called_events,
+            unresolved_flags={
+                key: reason
+                for key, reason in unresolved.items()
+                if key not in result.records
+                or (
+                    isinstance(record := result.records[key], _RemoteFlagRecord)
+                    and record.details._server_marked_failed
+                )
+            },
+        )
+
+    @staticmethod
+    def _local_evaluation_records(local_result, definition_snapshot):
+        records: Dict[str, _EvaluatedFlagRecord] = {}
+        feature_flags_by_key = definition_snapshot["flags_by_key"]
+        local_flags = local_result.get("featureFlags") or {}
+        local_payloads = local_result.get("featureFlagPayloads") or {}
         for key, value in local_flags.items():
             flag_def = feature_flags_by_key.get(key) or {}
             records[key] = _LocalFlagRecord(
@@ -5510,68 +5984,62 @@ class Client(object):
                 locally_evaluated=True,
                 has_experiment=_parse_has_experiment(flag_def.get("has_experiment")),
             )
-            locally_evaluated_keys.add(key)
 
-        # Fall back to remote evaluation for any flags the poller couldn't resolve locally.
-        # Use the flags decision path directly so the resulting records carry id/version/reason
-        # and fired ``$feature_flag_called`` events match what ``get_feature_flag()`` emits.
-        if fallback_to_server and not only_evaluate_locally:
-            try:
-                response = self._get_flags_decision(
-                    distinct_id,
-                    groups=groups,
-                    person_properties=person_properties,
-                    group_properties=group_properties,
-                    disable_geoip=disable_geoip,
-                    flag_keys_to_evaluate=flag_keys,
-                    device_id=device_id,
-                )
-                request_id = response.get("requestId")
-                raw_evaluated_at = response.get("evaluatedAt")
-                evaluated_at = (
-                    raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
-                )
-                errors_while_computing = bool(
-                    response.get("errorsWhileComputingFlags", False)
-                )
-                minimal_flag_called_events = (
-                    response.get("minimalFlagCalledEvents") is True
-                )
-                for key, detail in response.get("flags", {}).items():
-                    if requested_keys is not None and key not in requested_keys:
-                        continue
-                    if key in locally_evaluated_keys:
-                        continue
-                    records[key] = _RemoteFlagRecord(detail)
-            except QuotaLimitError as e:
-                self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
-                quota_limited = True
-            except Exception as e:
-                self.log.exception(
-                    f"[FEATURE FLAGS] Unable to evaluate flags remotely: {e}"
-                )
+        return records
 
-        return FeatureFlagEvaluations(
-            host=host,
-            distinct_id=str(distinct_id),
-            flags=records,
-            groups=groups,
-            disable_geoip=disable_geoip,
-            request_id=request_id,
-            evaluated_at=evaluated_at,
-            errors_while_computing=errors_while_computing,
-            quota_limited=quota_limited,
-            minimal_flag_called_events=minimal_flag_called_events,
-            unresolved_flags={
-                key: reason
-                for key, reason in unresolved.items()
-                if key not in records
-                or (
-                    isinstance(record := records[key], _RemoteFlagRecord)
-                    and record.details._server_marked_failed
-                )
-            },
-        )
+    def _evaluate_flags_remotely(
+        self,
+        result,
+        distinct_id,
+        groups,
+        person_properties,
+        group_properties,
+        disable_geoip,
+        flag_keys,
+        device_id,
+        requested_keys,
+    ):
+        local_keys = set(result.records)
+        try:
+            response = self._get_flags_decision(
+                distinct_id,
+                groups=groups,
+                person_properties=person_properties,
+                group_properties=group_properties,
+                disable_geoip=disable_geoip,
+                flag_keys_to_evaluate=flag_keys,
+                device_id=device_id,
+            )
+            result.request_id = response.get("requestId")
+            raw_evaluated_at = response.get("evaluatedAt")
+            result.evaluated_at = (
+                raw_evaluated_at if isinstance(raw_evaluated_at, int) else None
+            )
+            result.errors_while_computing = bool(
+                response.get("errorsWhileComputingFlags", False)
+            )
+            result.minimal_flag_called_events = (
+                response.get("minimalFlagCalledEvents") is True
+            )
+            self._merge_remote_evaluation_records(
+                result.records, response, requested_keys, local_keys
+            )
+        except QuotaLimitError as e:
+            self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
+            result.quota_limited = True
+        except Exception as e:
+            self.log.exception(
+                f"[FEATURE FLAGS] Unable to evaluate flags remotely: {e}"
+            )
+
+    @staticmethod
+    def _merge_remote_evaluation_records(records, response, requested_keys, local_keys):
+        for key, detail in response.get("flags", {}).items():
+            if requested_keys is not None and key not in requested_keys:
+                continue
+            if key in local_keys:
+                continue
+            records[key] = _RemoteFlagRecord(detail)
 
     _feature_flag_evaluations_host_cache: Optional[_FeatureFlagEvaluationsHost] = None
 
@@ -5607,43 +6075,19 @@ class Client(object):
         snapshot = self._local_evaluation_snapshot()
         # If loading in previous line failed
         if snapshot["flags"]:
-            # Filter flags based on flag_keys_to_evaluate if provided
-            flags_to_process = snapshot["flags"]
-            if flag_keys_to_evaluate:
-                flag_keys_set = set(flag_keys_to_evaluate)
-                flags_to_process = [
-                    flag for flag in snapshot["flags"] if flag["key"] in flag_keys_set
-                ]
-
-            for flag in flags_to_process:
-                try:
-                    flags[flag["key"]] = self._compute_flag_locally(
-                        flag,
-                        distinct_id,
-                        groups=groups,
-                        person_properties=person_properties,
-                        group_properties=group_properties,
-                        warn_on_unknown_groups=warn_on_unknown_groups,
-                        device_id=device_id,
-                        _definition_snapshot=snapshot,
-                    )
-                    matched_payload = self._compute_payload_locally(
-                        flag["key"],
-                        flags[flag["key"]],
-                        _definition_snapshot=snapshot,
-                    )
-                    if matched_payload is not None:
-                        payloads[flag["key"]] = matched_payload
-                except (InconclusiveMatchError, RequiresServerEvaluation) as e:
-                    # No need to log this, since it's just telling us to fall back to `/flags`
-                    fallback_to_flags = True
-                    if unresolved is not None:
-                        unresolved[flag["key"]] = e.reason
-                except Exception as e:
-                    self.log.exception(
-                        f"[FEATURE FLAGS] Error while computing variant and payload: {e}"
-                    )
-                    fallback_to_flags = True
+            fallback_to_flags = self._evaluate_local_flag_set(
+                snapshot,
+                distinct_id,
+                groups,
+                person_properties,
+                group_properties,
+                warn_on_unknown_groups,
+                flag_keys_to_evaluate,
+                device_id,
+                unresolved,
+                flags,
+                payloads,
+            )
         else:
             fallback_to_flags = True
 
@@ -5655,6 +6099,67 @@ class Client(object):
             fallback_to_flags,
             snapshot,
         )
+
+    @staticmethod
+    def _select_flags_for_local_evaluation(snapshot, flag_keys_to_evaluate):
+        # Filter flags based on flag_keys_to_evaluate if provided
+        flags_to_process = snapshot["flags"]
+        if flag_keys_to_evaluate:
+            flag_keys_set = set(flag_keys_to_evaluate)
+            flags_to_process = [
+                flag for flag in snapshot["flags"] if flag["key"] in flag_keys_set
+            ]
+
+        return flags_to_process
+
+    def _evaluate_local_flag_set(
+        self,
+        snapshot,
+        distinct_id,
+        groups,
+        person_properties,
+        group_properties,
+        warn_on_unknown_groups,
+        flag_keys_to_evaluate,
+        device_id,
+        unresolved,
+        flags,
+        payloads,
+    ):
+        fallback_to_flags = False
+        flags_to_process = self._select_flags_for_local_evaluation(
+            snapshot, flag_keys_to_evaluate
+        )
+        for flag in flags_to_process:
+            try:
+                flags[flag["key"]] = self._compute_flag_locally(
+                    flag,
+                    distinct_id,
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    warn_on_unknown_groups=warn_on_unknown_groups,
+                    device_id=device_id,
+                    _definition_snapshot=snapshot,
+                )
+                matched_payload = self._compute_payload_locally(
+                    flag["key"],
+                    flags[flag["key"]],
+                    _definition_snapshot=snapshot,
+                )
+                if matched_payload is not None:
+                    payloads[flag["key"]] = matched_payload
+            except (InconclusiveMatchError, RequiresServerEvaluation) as e:
+                # No need to log this, since it's just telling us to fall back to `/flags`
+                fallback_to_flags = True
+                if unresolved is not None:
+                    unresolved[flag["key"]] = e.reason
+            except Exception as e:
+                self.log.exception(
+                    f"[FEATURE FLAGS] Error while computing variant and payload: {e}"
+                )
+                fallback_to_flags = True
+        return fallback_to_flags
 
     def _initialize_flag_cache(self, cache_url):
         """Initialize feature flag cache for graceful degradation during service outages.
@@ -5706,37 +6211,7 @@ class Client(object):
                 return FlagCache(size, ttl)
 
             elif scheme in ("redis", "rediss"):
-                try:
-                    # Not worth importing redis if we're not using it
-                    import redis
-
-                    redis_url = f"{parsed.scheme}://"
-                    if parsed.username or parsed.password:
-                        redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
-                    host = parsed.hostname or "localhost"
-                    if ":" in host:
-                        host = f"[{host}]"
-                    redis_url += f"{host}:{parsed.port or 6379}"
-                    if parsed.path:
-                        redis_url += parsed.path
-
-                    client = redis.from_url(redis_url)
-
-                    # Test connection before using it
-                    client.ping()
-
-                    return RedisFlagCache(client, default_ttl=ttl)
-
-                except ImportError:
-                    self.log.warning(
-                        "[FEATURE FLAGS] Redis not available, flag caching disabled"
-                    )
-                    return None
-                except Exception as e:
-                    self.log.warning(
-                        f"[FEATURE FLAGS] Redis connection failed: {e}, flag caching disabled"
-                    )
-                    return None
+                return self._initialize_redis_flag_cache(parsed, ttl)
             else:
                 raise ValueError(
                     f"Unknown cache URL scheme: {scheme}. Supported schemes: memory, redis, rediss"
@@ -5747,6 +6222,45 @@ class Client(object):
                 f"[FEATURE FLAGS] Failed to parse cache URL '{cache_url}': {e}"
             )
             return None
+
+    def _initialize_redis_flag_cache(self, parsed, ttl):
+        try:
+            # Not worth importing redis if we're not using it
+            import redis
+
+            redis_url = self._redis_flag_cache_url(parsed)
+
+            client = redis.from_url(redis_url)
+
+            # Test connection before using it
+            client.ping()
+
+            return RedisFlagCache(client, default_ttl=ttl)
+
+        except ImportError:
+            self.log.warning(
+                "[FEATURE FLAGS] Redis not available, flag caching disabled"
+            )
+            return None
+        except Exception as e:
+            self.log.warning(
+                f"[FEATURE FLAGS] Redis connection failed: {e}, flag caching disabled"
+            )
+            return None
+
+    @staticmethod
+    def _redis_flag_cache_url(parsed):
+        redis_url = f"{parsed.scheme}://"
+        if parsed.username or parsed.password:
+            redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
+        host = parsed.hostname or "localhost"
+        if ":" in host:
+            host = f"[{host}]"
+        redis_url += f"{host}:{parsed.port or 6379}"
+        if parsed.path:
+            redis_url += parsed.path
+
+        return redis_url
 
     def feature_flag_definitions(self):
         """

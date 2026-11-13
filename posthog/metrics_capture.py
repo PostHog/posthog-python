@@ -102,16 +102,7 @@ def _to_otlp_any_value(value: Any) -> dict:
     if isinstance(value, int):
         return {"intValue": value}
     if isinstance(value, float):
-        # proto3 JSON has no representation for non-finite floats; encode the proto3
-        # literal strings (not Python's "inf"/"nan") so both SDKs emit identical bytes.
-        if not math.isfinite(value):
-            if math.isnan(value):
-                return {"stringValue": "NaN"}
-            return {"stringValue": "Infinity" if value > 0 else "-Infinity"}
-        # Integral floats encode as intValue, matching the JS Number.isInteger branch.
-        if value.is_integer():
-            return {"intValue": int(value)}
-        return {"doubleValue": value}
+        return _float_otlp_value(value)
     if isinstance(value, str):
         return {"stringValue": value}
     if isinstance(value, (list, tuple)):
@@ -343,18 +334,9 @@ class PostHogMetrics:
         self._flush_interval: float = _validated_flush_interval(
             config.get("flush_interval", _DEFAULT_FLUSH_INTERVAL_SECONDS)
         )
-        max_series = config.get("max_series_per_flush", _DEFAULT_MAX_SERIES_PER_FLUSH)
-        if (
-            not isinstance(max_series, int)
-            or isinstance(max_series, bool)
-            or max_series <= 0
-        ):
-            log.warning(
-                "Ignoring metrics max_series_per_flush %r: expected a positive integer",
-                max_series,
-            )
-            max_series = _DEFAULT_MAX_SERIES_PER_FLUSH
-        self._max_series_per_flush: int = max_series
+        self._max_series_per_flush: int = _validated_max_series(
+            config.get("max_series_per_flush", _DEFAULT_MAX_SERIES_PER_FLUSH)
+        )
         self._before_send: Optional[Callable] = _validated_before_send(
             config.get("before_send")
         )
@@ -450,17 +432,8 @@ class PostHogMetrics:
             "attributes": attributes,
         }
         if self._before_send is not None:
-            try:
-                filtered = self._before_send(sample)
-            except Exception as e:
-                log.error("Error in metrics before_send: %s", e)
-                return
-            if not filtered:
-                return
-            if not isinstance(filtered, dict):
-                log.warning(
-                    "Dropping metric: before_send must return the sample dict or a falsy value"
-                )
+            filtered = _filter_metric_sample(self._before_send, sample)
+            if filtered is None:
                 return
             sample_dict: dict[str, Any] = filtered
             # Defaults keep the static types closed; a hook that removed the field
@@ -471,26 +444,7 @@ class PostHogMetrics:
             unit = sample_dict.get("unit")
             attributes = sample_dict.get("attributes")
 
-        if metric_type not in _VALID_METRIC_TYPES:
-            log.warning(
-                "Dropping metric '%s': unknown metric type '%s'", name, metric_type
-            )
-            return
-
-        if not name or not isinstance(name, str):
-            log.warning("Dropping metric with empty name")
-            return
-        if (
-            not isinstance(value, (int, float))
-            or isinstance(value, bool)
-            or not math.isfinite(value)
-        ):
-            log.warning("Dropping metric '%s': value must be a finite number", name)
-            return
-        if metric_type == "count" and value < 0:
-            log.warning(
-                "Dropping count '%s': counters are monotonic, value must be >= 0", name
-            )
+        if not _valid_metric_sample(metric_type, name, value):
             return
 
         if attributes:
@@ -503,44 +457,52 @@ class PostHogMetrics:
         with self._lock:
             self._reset_after_fork_locked()
 
-            state = self._series.get(key)
+            state = self._admit_series_locked(key, name, metric_type, unit, attributes)
             if state is None:
-                if len(self._series) >= self._max_series_per_flush:
-                    if not self._series_cap_warned:
-                        self._series_cap_warned = True
-                        log.warning(
-                            "Metric series cap reached (%s per flush window); dropping new series "
-                            "until the next flush. Reduce attribute cardinality.",
-                            self._max_series_per_flush,
-                        )
-                    return
-                state = _SeriesState(name, metric_type, unit, attributes)
-                self._series[key] = state
-
-            # Bookkeeping only for admitted samples, so name-cardinality misuse (IDs in
-            # metric names) can't grow this map past the series cap.
-            seen_type = self._type_by_name.get(name)
-            if seen_type is None:
-                self._type_by_name[name] = metric_type
-            elif seen_type != metric_type and name not in self._type_collision_warned:
-                self._type_collision_warned.add(name)
-                log.warning(
-                    "Metric name '%s' is already used as a %s; recording it as a %s too will blend "
-                    "both series in charts. Use a distinct name.",
-                    name,
-                    seen_type,
-                    metric_type,
-                )
+                return
 
             self._fold(state, float(value))
-            if trace_context is not None:
-                state.exemplar = {
-                    "trace_id": trace_context[0],
-                    "span_id": trace_context[1],
-                    "value": float(value),
-                    "time_ms": int(time.time() * 1000),
-                }
+            _record_exemplar(state, trace_context, value)
             self._arm_flush_timer()
+
+    def _admit_series_locked(
+        self,
+        key: str,
+        name: str,
+        metric_type: str,
+        unit: Optional[str],
+        attributes: Optional[dict],
+    ) -> Optional[_SeriesState]:
+        state = self._series.get(key)
+        if state is None:
+            if len(self._series) >= self._max_series_per_flush:
+                if not self._series_cap_warned:
+                    self._series_cap_warned = True
+                    log.warning(
+                        "Metric series cap reached (%s per flush window); dropping new series "
+                        "until the next flush. Reduce attribute cardinality.",
+                        self._max_series_per_flush,
+                    )
+                return None
+            state = _SeriesState(name, metric_type, unit, attributes)
+            self._series[key] = state
+
+        # Bookkeeping only for admitted samples, so name-cardinality misuse (IDs in
+        # metric names) can't grow this map past the series cap.
+        seen_type = self._type_by_name.get(name)
+        if seen_type is None:
+            self._type_by_name[name] = metric_type
+        elif seen_type != metric_type and name not in self._type_collision_warned:
+            self._type_collision_warned.add(name)
+            log.warning(
+                "Metric name '%s' is already used as a %s; recording it as a %s too will blend "
+                "both series in charts. Use a distinct name.",
+                name,
+                seen_type,
+                metric_type,
+            )
+
+        return state
 
     def _reinit_after_fork(self) -> None:
         # Runs in a forked child (via the client's os.register_at_fork hook) before
@@ -734,23 +696,7 @@ class PostHogMetrics:
                     continue
                 self._series[key] = old
                 continue
-            current.window_start_ms = min(current.window_start_ms, old.window_start_ms)
-            # The live window's exemplar is newer; the old one only fills a gap.
-            if current.exemplar is None:
-                current.exemplar = old.exemplar
-            if current.type == "count":
-                current.total = (current.total or 0.0) + (old.total or 0.0)
-            elif current.type == "histogram" and old.hist:
-                if current.hist is None:
-                    current.hist = old.hist
-                else:
-                    current.hist["count"] += old.hist["count"]
-                    current.hist["sum"] += old.hist["sum"]
-                    current.hist["min"] = min(current.hist["min"], old.hist["min"])
-                    current.hist["max"] = max(current.hist["max"], old.hist["max"])
-                    for i, count in enumerate(old.hist["bucket_counts"]):
-                        current.hist["bucket_counts"][i] += count
-            # Gauge: the live window's value is newer — keep it.
+            _merge_series_state(current, old)
         if dropped:
             log.warning(
                 "Dropped %s unsent metric series while merging a failed flush back (series cap %s)",
@@ -795,64 +741,172 @@ class PostHogMetrics:
             metric_key = (state.type, state.name, state.unit or "")
             metric = by_metric.get(metric_key)
             if metric is None:
-                metric = {"name": state.name}
-                if state.unit:
-                    metric["unit"] = state.unit
-                if state.type == "count":
-                    metric["sum"] = {
-                        "aggregationTemporality": _OTLP_TEMPORALITY_DELTA,
-                        "isMonotonic": True,
-                        "dataPoints": [],
-                    }
-                elif state.type == "gauge":
-                    metric["gauge"] = {"dataPoints": []}
-                else:
-                    metric["histogram"] = {
-                        "aggregationTemporality": _OTLP_TEMPORALITY_DELTA,
-                        "dataPoints": [],
-                    }
+                metric = _metric_descriptor(state)
                 by_metric[metric_key] = metric
 
-            attributes = _to_otlp_key_value_list(state.attributes or {})
-            start_nano = _ms_to_unix_nano(state.window_start_ms)
-            exemplars = _build_exemplars(state.exemplar)
-
-            if state.type == "count":
-                metric["sum"]["dataPoints"].append(
-                    {
-                        "attributes": attributes,
-                        "startTimeUnixNano": start_nano,
-                        "timeUnixNano": now_nano,
-                        "asDouble": state.total or 0.0,
-                        **exemplars,
-                    }
-                )
-            elif state.type == "gauge":
-                metric["gauge"]["dataPoints"].append(
-                    {
-                        "attributes": attributes,
-                        "timeUnixNano": now_nano,
-                        "asDouble": state.last or 0.0,
-                        **exemplars,
-                    }
-                )
-            elif state.hist is not None:
-                # Encoding pinned by the ingest's JSON deserializer: nano timestamps are decimal
-                # strings, but count/bucketCounts are plain JSON numbers — string-encoded u64s in
-                # those fields are silently dropped upstream (opentelemetry-rust#3328).
-                metric["histogram"]["dataPoints"].append(
-                    {
-                        "attributes": attributes,
-                        "startTimeUnixNano": start_nano,
-                        "timeUnixNano": now_nano,
-                        "count": state.hist["count"],
-                        "sum": state.hist["sum"],
-                        "min": state.hist["min"],
-                        "max": state.hist["max"],
-                        "bucketCounts": state.hist["bucket_counts"],
-                        "explicitBounds": DEFAULT_HISTOGRAM_BOUNDS,
-                        **exemplars,
-                    }
-                )
+            _append_metric_point(metric, state, now_nano)
 
         return list(by_metric.values())
+
+
+def _float_otlp_value(value: float) -> dict:
+    # proto3 JSON has no representation for non-finite floats; encode the proto3
+    # literal strings (not Python's "inf"/"nan") so both SDKs emit identical bytes.
+    if not math.isfinite(value):
+        if math.isnan(value):
+            return {"stringValue": "NaN"}
+        return {"stringValue": "Infinity" if value > 0 else "-Infinity"}
+    # Integral floats encode as intValue, matching the JS Number.isInteger branch.
+    if value.is_integer():
+        return {"intValue": int(value)}
+    return {"doubleValue": value}
+
+
+def _validated_max_series(max_series: Any) -> int:
+    if (
+        not isinstance(max_series, int)
+        or isinstance(max_series, bool)
+        or max_series <= 0
+    ):
+        log.warning(
+            "Ignoring metrics max_series_per_flush %r: expected a positive integer",
+            max_series,
+        )
+        max_series = _DEFAULT_MAX_SERIES_PER_FLUSH
+    return max_series
+
+
+def _valid_metric_sample(metric_type: str, name: str, value: float) -> bool:
+    if metric_type not in _VALID_METRIC_TYPES:
+        log.warning("Dropping metric '%s': unknown metric type '%s'", name, metric_type)
+        return False
+
+    if not name or not isinstance(name, str):
+        log.warning("Dropping metric with empty name")
+        return False
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+    ):
+        log.warning("Dropping metric '%s': value must be a finite number", name)
+        return False
+    if metric_type == "count" and value < 0:
+        log.warning(
+            "Dropping count '%s': counters are monotonic, value must be >= 0", name
+        )
+        return False
+
+    return True
+
+
+def _filter_metric_sample(before_send: Callable, sample: dict) -> Optional[dict]:
+    try:
+        filtered = before_send(sample)
+    except Exception as e:
+        log.error("Error in metrics before_send: %s", e)
+        return None
+    if not filtered:
+        return None
+    if not isinstance(filtered, dict):
+        log.warning(
+            "Dropping metric: before_send must return the sample dict or a falsy value"
+        )
+        return None
+    return filtered
+
+
+def _merge_series_state(current: _SeriesState, old: _SeriesState) -> None:
+    current.window_start_ms = min(current.window_start_ms, old.window_start_ms)
+    # The live window's exemplar is newer; the old one only fills a gap.
+    if current.exemplar is None:
+        current.exemplar = old.exemplar
+    if current.type == "count":
+        current.total = (current.total or 0.0) + (old.total or 0.0)
+    elif current.type == "histogram" and old.hist:
+        if current.hist is None:
+            current.hist = old.hist
+        else:
+            current.hist["count"] += old.hist["count"]
+            current.hist["sum"] += old.hist["sum"]
+            current.hist["min"] = min(current.hist["min"], old.hist["min"])
+            current.hist["max"] = max(current.hist["max"], old.hist["max"])
+            for i, count in enumerate(old.hist["bucket_counts"]):
+                current.hist["bucket_counts"][i] += count
+    # Gauge: the live window's value is newer — keep it.
+
+
+def _metric_descriptor(state: _SeriesState) -> dict:
+    metric: dict = {"name": state.name}
+    if state.unit:
+        metric["unit"] = state.unit
+    if state.type == "count":
+        metric["sum"] = {
+            "aggregationTemporality": _OTLP_TEMPORALITY_DELTA,
+            "isMonotonic": True,
+            "dataPoints": [],
+        }
+    elif state.type == "gauge":
+        metric["gauge"] = {"dataPoints": []}
+    else:
+        metric["histogram"] = {
+            "aggregationTemporality": _OTLP_TEMPORALITY_DELTA,
+            "dataPoints": [],
+        }
+    return metric
+
+
+def _record_exemplar(
+    state: _SeriesState, trace_context: Optional[tuple[str, str]], value: float
+) -> None:
+    if trace_context is not None:
+        state.exemplar = {
+            "trace_id": trace_context[0],
+            "span_id": trace_context[1],
+            "value": float(value),
+            "time_ms": int(time.time() * 1000),
+        }
+
+
+def _append_metric_point(metric: dict, state: _SeriesState, now_nano: str) -> None:
+    attributes = _to_otlp_key_value_list(state.attributes or {})
+    start_nano = _ms_to_unix_nano(state.window_start_ms)
+    exemplars = _build_exemplars(state.exemplar)
+
+    if state.type == "count":
+        metric["sum"]["dataPoints"].append(
+            {
+                "attributes": attributes,
+                "startTimeUnixNano": start_nano,
+                "timeUnixNano": now_nano,
+                "asDouble": state.total or 0.0,
+                **exemplars,
+            }
+        )
+    elif state.type == "gauge":
+        metric["gauge"]["dataPoints"].append(
+            {
+                "attributes": attributes,
+                "timeUnixNano": now_nano,
+                "asDouble": state.last or 0.0,
+                **exemplars,
+            }
+        )
+    elif state.hist is not None:
+        # Encoding pinned by the ingest's JSON deserializer: nano timestamps are decimal
+        # strings, but count/bucketCounts are plain JSON numbers — string-encoded u64s in
+        # those fields are silently dropped upstream (opentelemetry-rust#3328).
+        metric["histogram"]["dataPoints"].append(
+            {
+                "attributes": attributes,
+                "startTimeUnixNano": start_nano,
+                "timeUnixNano": now_nano,
+                "count": state.hist["count"],
+                "sum": state.hist["sum"],
+                "min": state.hist["min"],
+                "max": state.hist["max"],
+                "bucketCounts": state.hist["bucket_counts"],
+                "explicitBounds": DEFAULT_HISTOGRAM_BOUNDS,
+                **exemplars,
+            }
+        )

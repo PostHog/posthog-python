@@ -1281,6 +1281,96 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
             len(self._warnings(logs, "checkout", "unsupported_definition")), 1
         )
 
+    @parameterized.expand(
+        [
+            ("non_object", []),
+            ("unknown_group_type", {"type": "XOR", "values": []}),
+            ("non_list_values", {"type": "AND", "values": {}}),
+            ("non_object_entry", {"type": "AND", "values": [42]}),
+            (
+                "nested_unsupported_leaf",
+                {
+                    "type": "OR",
+                    "values": [
+                        {
+                            "type": "AND",
+                            "values": [
+                                {"key": "plan", "operator": "bogus", "value": "pro"}
+                            ],
+                        }
+                    ],
+                },
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_malformed_dynamic_cohort_warns_and_remains_unresolved(
+        self, _name, cohort, patch_flags
+    ):
+        client = self._client()
+        definitions = self._definitions(
+            _flag_with("checkout", {"type": "cohort", "value": 42})
+        )
+        definitions["cohorts"] = {"42": cohort}
+
+        with self.assertLogs("posthog", level=logging.WARNING) as logs:
+            self._refresh(
+                client, GetResponse(data=definitions, etag=None, not_modified=False)
+            )
+        self.assertEqual(
+            len(self._warnings(logs, "checkout", "unsupported_definition")), 1
+        )
+        snapshot = client.evaluate_flags(
+            "user", person_properties={"plan": "pro"}, only_evaluate_locally=True
+        )
+        self.assertEqual(snapshot.keys, [])
+        self.assertEqual(
+            dict(snapshot.unresolved_flags),
+            {"checkout": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(
+        [
+            ("canonical_empty", {}),
+            (
+                "nested_supported_group",
+                {
+                    "type": "AND",
+                    "values": [
+                        {},
+                        {
+                            "type": "OR",
+                            "values": [{"key": "plan", "value": "pro"}],
+                        },
+                    ],
+                },
+            ),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_supported_dynamic_cohort_does_not_warn_or_fall_back(
+        self, _name, cohort, patch_flags
+    ):
+        client = self._client()
+        definitions = self._definitions(
+            _flag_with("checkout", {"type": "cohort", "value": 42})
+        )
+        definitions["cohorts"] = {"42": cohort}
+
+        with self.assertNoLogs("posthog", level=logging.WARNING):
+            self._refresh(
+                client, GetResponse(data=definitions, etag=None, not_modified=False)
+            )
+        snapshot = client.evaluate_flags(
+            "user", person_properties={"plan": "pro"}, only_evaluate_locally=True
+        )
+        self.assertIs(
+            snapshot.get_flag("checkout", send_feature_flag_events=False), True
+        )
+        self.assertEqual(dict(snapshot.unresolved_flags), {})
+        patch_flags.assert_not_called()
+
     def test_does_not_warn_for_flags_that_depend_on_the_call(self):
         client = self._client()
 

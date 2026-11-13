@@ -363,6 +363,24 @@ def _legacy_rendering(value: Any) -> tuple[bool, Optional[str], Optional[str]]:
     return True, None, json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def _parse_typed_reason(value: Any) -> Optional[FlagReason]:
+    reason = None
+    raw_reason = _read_typed(value, "reason", dict)
+    if raw_reason is not None:
+        reason = FlagReason(
+            code=_read_typed(raw_reason.get("code"), "reason.code", str) or "",
+            condition_index=_read_int(
+                raw_reason.get("condition_index"), "reason.condition_index"
+            ),
+            description=_read_typed(
+                raw_reason.get("description"), "reason.description", str
+            )
+            or "",
+        )
+
+    return reason
+
+
 def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
     """Parse a ``/flags?v=4`` record, which carries a typed ``value``.
 
@@ -377,19 +395,7 @@ def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
         value = _read_value(resp.get("value"))
         failed = _read_typed(resp.get("failed"), "failed", bool) is True
 
-        reason = None
-        raw_reason = _read_typed(resp.get("reason"), "reason", dict)
-        if raw_reason is not None:
-            reason = FlagReason(
-                code=_read_typed(raw_reason.get("code"), "reason.code", str) or "",
-                condition_index=_read_int(
-                    raw_reason.get("condition_index"), "reason.condition_index"
-                ),
-                description=_read_typed(
-                    raw_reason.get("description"), "reason.description", str
-                )
-                or "",
-            )
+        reason = _parse_typed_reason(resp.get("reason"))
 
         if failed:
             # A failed record has no value, whatever it carries.

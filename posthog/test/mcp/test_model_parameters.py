@@ -102,3 +102,27 @@ def test_request_meta_from_context_supports_pydantic_style_metadata():
     assert request_meta_from_context(SimpleNamespace(meta=meta)) == {
         "x-codex-turn-metadata": {"model": "gpt-5.6-sol"}
     }
+
+
+@pytest.mark.parametrize("method", ["model_dump", "dict"])
+@pytest.mark.parametrize("outcome", ["metadata", "non_object", "raises"])
+def test_request_metadata_serialization_is_best_effort(method, outcome):
+    metadata = {"x-codex-turn-metadata": {"model": "reported-model"}}
+    calls = []
+
+    def serialize(**kwargs):
+        calls.append(kwargs)
+        if outcome == "raises":
+            raise RuntimeError("metadata unavailable")
+        return metadata if outcome == "metadata" else ["not metadata"]
+
+    context = SimpleNamespace(meta=SimpleNamespace(**{method: serialize}))
+
+    assert request_meta_from_context(context) == (
+        metadata if outcome == "metadata" else None
+    )
+    assert calls == [
+        {"mode": "python", "by_alias": True}
+        if method == "model_dump"
+        else {"by_alias": True}
+    ]

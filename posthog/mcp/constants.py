@@ -68,6 +68,7 @@ class PostHogMCPAnalyticsProperty:
     CONVERSATION_ID = "$mcp_conversation_id"
     DURATION_MS = "$mcp_duration_ms"
     ERROR_MESSAGE = "$mcp_error_message"
+    ERROR_STATUS = "$mcp_error_status"
     ERROR_TYPE = "$mcp_error_type"
     FEEDBACK_DETAILS = "$mcp_feedback_details"
     FEEDBACK_FRICTION_POINTS = "$mcp_feedback_friction_points"

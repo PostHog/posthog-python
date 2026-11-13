@@ -868,3 +868,47 @@ class TestMetricsFailureHandling:
         c.metrics.count("m", 1)
         assert c.metrics._flush_timer.interval == 1.0
         c.metrics.reset()
+
+
+@pytest.mark.parametrize("metric_type", ["count", "gauge", "histogram"])
+@pytest.mark.parametrize("current_sampled", [False, True])
+def test_failed_flush_merges_values_recorded_during_send(
+    client, metric_type, current_sampled
+):
+    record = getattr(client.metrics, metric_type)
+    with trace.use_span(otel_span(sampled=True)):
+        record("in-flight", 3)
+    session = mock_session(503)
+
+    def fail_with_concurrent_sample(*args, **kwargs):
+        with trace.use_span(otel_span(sampled=current_sampled)):
+            record("in-flight", 4)
+        return mock.Mock(status_code=503)
+
+    session.post.side_effect = fail_with_concurrent_sample
+    with mock.patch("posthog.metrics_capture._get_session", return_value=session):
+        client.metrics.flush()
+
+    payload, _, _ = flush_and_capture(client)
+    (metric,) = metrics_from(payload)
+    if metric_type == "count":
+        assert metric["sum"]["dataPoints"][0]["asDouble"] == 7.0
+    elif metric_type == "gauge":
+        assert metric["gauge"]["dataPoints"][0]["asDouble"] == 4.0
+    else:
+        (point,) = metric["histogram"]["dataPoints"]
+        assert (point["count"], point["sum"], point["min"], point["max"]) == (
+            2,
+            7.0,
+            3.0,
+            4.0,
+        )
+        assert point["bucketCounts"] == [0, 2] + [0] * 14
+    assert len(metrics_from(payload)) == 1
+    (point,) = data_points_by_type(payload).values()
+    (exemplar,) = point["exemplars"]
+    assert (exemplar["traceId"], exemplar["spanId"], exemplar["asDouble"]) == (
+        OTEL_TRACE_ID,
+        OTEL_SPAN_ID,
+        4.0 if current_sampled else 3.0,
+    )

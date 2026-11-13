@@ -23,9 +23,10 @@ except ImportError:
         "Please install the Claude Agent SDK to use this feature: 'pip install claude-agent-sdk'"
     )
 
-from posthog.ai.claude_agent_sdk.formatting import (
+from .formatting import (
+    _format_user_input,
     format_assistant_blocks,
-    format_tool_result_content,
+    format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
@@ -135,94 +136,76 @@ class PostHogClaudeSDKClient:
         """Instrumented receive_response -- yields all messages, emits PostHog events."""
         async for message in self._client.receive_response():
             try:
-                if isinstance(message, StreamEvent):
-                    self._tracker.process_stream_event(message)
-
-                    if self._tracker.has_completed_generation():
-                        gen = self._tracker.pop_generation()
-                        self._generation_index += 1
-                        self._current_generation_span_id = gen.span_id
-                        self._processor._emit_generation(
-                            gen,
-                            self._trace_id,
-                            self._generation_index,
-                            self._current_input,
-                            self._pending_output or None,
-                            self._distinct_id,
-                            self._extra_props,
-                            self._privacy,
-                            self._groups,
-                        )
-                        self._current_input = self._next_input
-                        self._next_input = None
-                        self._pending_output = []
-
-                elif isinstance(message, AssistantMessage):
-                    self._tracker.set_model(message.model)
-                    parent_id = (
-                        self._tracker.current_span_id
-                        or self._current_generation_span_id
-                    )
-                    for block in message.content:
-                        if isinstance(block, ToolUseBlock):
-                            self._processor._emit_tool_span(
-                                block,
-                                self._trace_id,
-                                parent_id,
-                                self._distinct_id,
-                                self._extra_props,
-                                self._privacy,
-                                self._groups,
-                            )
-                    output_content = format_assistant_blocks(message.content)
-                    if output_content:
-                        self._pending_output = [
-                            {"role": "assistant", "content": output_content}
-                        ]
-
-                elif isinstance(message, UserMessage):
-                    content = message.content
-                    if isinstance(content, str):
-                        self._next_input = [{"role": "user", "content": content}]
-                    elif isinstance(content, list):
-                        formatted: List[Dict[str, Any]] = []
-                        for block in content:
-                            if hasattr(block, "tool_use_id"):
-                                formatted.append(
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": block.tool_use_id,
-                                        "content": format_tool_result_content(
-                                            block, self._processor._client
-                                        ),
-                                    }
-                                )
-                            elif hasattr(block, "text"):
-                                formatted.append({"type": "text", "text": block.text})
-                        if formatted:
-                            self._next_input = [{"role": "user", "content": formatted}]
-
-                elif isinstance(message, ResultMessage):
-                    if not self._tracker.had_any_stream_events:
-                        self._processor._emit_generation_from_result(
-                            message,
-                            self._trace_id,
-                            self._tracker.last_model,
-                            self._query_start,
-                            self._current_input,
-                            self._pending_output,
-                            self._distinct_id,
-                            self._extra_props,
-                            self._privacy,
-                            self._groups,
-                        )
-                    # Don't emit trace here -- wait for disconnect/close
-                    # so multi-turn sessions get one trace at the end
-
+                self._process_message(message)
             except Exception as e:
                 log.debug(f"PostHog instrumentation error (non-fatal): {e}")
-
             yield message
+
+    def _process_message(self, message: Any) -> None:
+        if isinstance(message, StreamEvent):
+            self._tracker.process_stream_event(message)
+
+            if self._tracker.has_completed_generation():
+                gen = self._tracker.pop_generation()
+                self._generation_index += 1
+                self._current_generation_span_id = gen.span_id
+                self._processor._emit_generation(
+                    gen,
+                    self._trace_id,
+                    self._generation_index,
+                    self._current_input,
+                    self._pending_output or None,
+                    self._distinct_id,
+                    self._extra_props,
+                    self._privacy,
+                    self._groups,
+                )
+                self._current_input = self._next_input
+                self._next_input = None
+                self._pending_output = []
+
+        elif isinstance(message, AssistantMessage):
+            self._process_assistant_message(message)
+
+        elif isinstance(message, UserMessage):
+            self._next_input = _format_user_input(
+                message.content, self._processor._client, self._next_input
+            )
+
+        elif isinstance(message, ResultMessage):
+            if not self._tracker.had_any_stream_events:
+                self._processor._emit_generation_from_result(
+                    message,
+                    self._trace_id,
+                    self._tracker.last_model,
+                    self._query_start,
+                    self._current_input,
+                    self._pending_output,
+                    self._distinct_id,
+                    self._extra_props,
+                    self._privacy,
+                    self._groups,
+                )
+            # Don't emit trace here -- wait for disconnect/close
+            # so multi-turn sessions get one trace at the end
+
+    def _process_assistant_message(self, message: "AssistantMessage") -> None:
+        self._tracker.set_model(message.model)
+        parent_id = self._tracker.current_span_id or self._current_generation_span_id
+        for block in message.content:
+            if isinstance(block, ToolUseBlock):
+                self._processor._emit_tool_span(
+                    block,
+                    self._trace_id,
+                    parent_id,
+                    self._distinct_id,
+                    self._extra_props,
+                    self._privacy,
+                    self._groups,
+                )
+        output_content = format_assistant_blocks(message.content)
+        if output_content:
+            self._pending_output = [{"role": "assistant", "content": output_content}]
 
     async def disconnect(self) -> None:
         """
