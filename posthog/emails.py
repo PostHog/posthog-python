@@ -352,15 +352,17 @@ class CancelEmailResult:
 class ScheduledEmail:
     """One email that waits for its send time, as :meth:`Emails.list` returns it.
 
+    PostHog leaves the recipient out, so a key that can only read statuses
+    can't read who a project is about to email. Match an email to its send
+    by ``id``, the ``id`` that :meth:`Emails.send` returned.
+
     Attributes:
         id: The email's message ID.
-        to: The recipient's email address.
         scheduled_at: When the email goes out, in UTC.
         created_at: When PostHog accepted the send.
     """
 
     id: str
-    to: str
     scheduled_at: datetime
     created_at: datetime
 
@@ -1272,15 +1274,9 @@ def _parse_list_response(
     for row in rows:
         row = row if isinstance(row, dict) else {}
         message_id = _text(row.get("id"))
-        to = _text(row.get("to"))
         scheduled_at = _timestamp(row.get("scheduled_at"))
         created_at = _timestamp(row.get("created_at"))
-        if (
-            message_id is None
-            or to is None
-            or scheduled_at is None
-            or created_at is None
-        ):
+        if message_id is None or scheduled_at is None or created_at is None:
             # Dropping a row would hide an email that still goes out.
             raise _sdk_error(
                 "api_error",
@@ -1289,7 +1285,7 @@ def _parse_list_response(
             )
         results.append(
             ScheduledEmail(
-                id=message_id, to=to, scheduled_at=scheduled_at, created_at=created_at
+                id=message_id, scheduled_at=scheduled_at, created_at=created_at
             )
         )
     next_cursor = fields.get("next", "")
@@ -2000,7 +1996,7 @@ class Emails(_EmailsBase):
             page = emails.list()
             while True:
                 for email in page.results:
-                    print(email.id, email.to, email.scheduled_at)
+                    print(email.id, email.scheduled_at)
                 if page.next is None:
                     break
                 page = emails.list(cursor=page.next)

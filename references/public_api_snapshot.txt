@@ -956,7 +956,6 @@ attribute posthog.emails.EmailWarning.message: str
 attribute posthog.emails.ScheduledEmail.created_at: datetime
 attribute posthog.emails.ScheduledEmail.id: str
 attribute posthog.emails.ScheduledEmail.scheduled_at: datetime
-attribute posthog.emails.ScheduledEmail.to: str
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.scheduled_at: Optional[datetime] = None
@@ -1406,7 +1405,7 @@ class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, sta
 class posthog.emails.EmailTracking 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
-class posthog.emails.ScheduledEmail(id: str, to: str, scheduled_at: datetime, created_at: datetime)
+class posthog.emails.ScheduledEmail(id: str, scheduled_at: datetime, created_at: datetime)
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = (), status: str = 'queued', scheduled_at: Optional[datetime] = None)
 class posthog.emails.TemplateEmailArgs 
 class posthog.emails.UpdateEmailResult(id: str, status: str, scheduled_at: datetime)

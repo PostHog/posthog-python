@@ -1109,9 +1109,9 @@ def list_reply(next_cursor: Optional[str] = None) -> Reply:
         200,
         {
             "results": [
+                # PostHog leaves the recipient out, so a key that only reads statuses can't read it.
                 {
                     "id": MESSAGE_ID,
-                    "to": "user@example.com",
                     "scheduled_at": "2026-12-01T07:00:00Z",
                     "created_at": "2026-11-12T10:00:00.123000Z",
                 }
@@ -1141,9 +1141,8 @@ def test_list_reads_scheduled_emails_a_page_at_a_time(_name, args, query, next_c
     [request] = adapter.requests
     assert (request.method, request.url) == ("GET", LIST_URL + query)
     [email] = page.results
-    assert (email.id, email.to, email.scheduled_at, email.created_at) == (
+    assert (email.id, email.scheduled_at, email.created_at) == (
         MESSAGE_ID,
-        "user@example.com",
         datetime(2026, 12, 1, 7, tzinfo=timezone.utc),
         datetime(2026, 11, 12, 10, 0, 0, 123000, tzinfo=timezone.utc),
     )
@@ -1705,7 +1704,7 @@ def test_manage_calls_need_the_secret_key_and_an_enabled_client(_name, call, cod
                     "next": None,
                 },
             )
-            for field in ("id", "to", "scheduled_at", "created_at")
+            for field in ("id", "scheduled_at", "created_at")
         ],
         ("next_not_a_string", {**list_reply()[1], "next": 123}),
         ("next_empty", {**list_reply()[1], "next": ""}),
