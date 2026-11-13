@@ -913,6 +913,8 @@ attribute posthog.debug = False
 attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
+attribute posthog.emails.CancelEmailResult.id: str
+attribute posthog.emails.CancelEmailResult.status: str
 attribute posthog.emails.CodeEmailArgs.attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
 attribute posthog.emails.CodeEmailArgs.bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
@@ -938,6 +940,8 @@ attribute posthog.emails.EmailError.name = name
 attribute posthog.emails.EmailError.retry_after = retry_after
 attribute posthog.emails.EmailError.status_code = status_code
 attribute posthog.emails.EmailError.why = why
+attribute posthog.emails.EmailList.next: Optional[str] = None
+attribute posthog.emails.EmailList.results: tuple[ScheduledEmail, ...]
 attribute posthog.emails.EmailStatus.created_at: datetime
 attribute posthog.emails.EmailStatus.id: str
 attribute posthog.emails.EmailStatus.reason: Optional[str] = None
@@ -949,11 +953,19 @@ attribute posthog.emails.EmailTracking.opens: bool
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
+attribute posthog.emails.ScheduledEmail.created_at: datetime
+attribute posthog.emails.ScheduledEmail.id: str
+attribute posthog.emails.ScheduledEmail.scheduled_at: datetime
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
+attribute posthog.emails.SendEmailResult.scheduled_at: Optional[datetime] = None
+attribute posthog.emails.SendEmailResult.status: str = 'queued'
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
 attribute posthog.emails.TemplateEmailArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.TemplateEmailArgs.template_id: Union[str, UUID]
+attribute posthog.emails.UpdateEmailResult.id: str
+attribute posthog.emails.UpdateEmailResult.scheduled_at: datetime
+attribute posthog.emails.UpdateEmailResult.status: str
 attribute posthog.enable_exception_autocapture = False
 attribute posthog.enable_exception_autocapture_rate_limiting = False
 attribute posthog.enable_full_ai_capture = False
@@ -1384,15 +1396,19 @@ class posthog.client.Client(project_api_key: str, host=None, debug=False, max_qu
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout: float = 15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
+class posthog.emails.CancelEmailResult(id: str, status: str)
 class posthog.emails.CodeEmailArgs 
 class posthog.emails.EmailAttachment 
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
+class posthog.emails.EmailList(results: tuple[ScheduledEmail, ...], next: Optional[str] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
 class posthog.emails.EmailTracking 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
-class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
+class posthog.emails.ScheduledEmail(id: str, scheduled_at: datetime, created_at: datetime)
+class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = (), status: str = 'queued', scheduled_at: Optional[datetime] = None)
 class posthog.emails.TemplateEmailArgs 
+class posthog.emails.UpdateEmailResult(id: str, status: str, scheduled_at: datetime)
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)
 class posthog.exception_utils.AnnotatedValue(value, metadata)
 class posthog.exception_utils.VariableSizeLimiter(max_size=DEFAULT_TOTAL_VARIABLES_SIZE_LIMIT)
@@ -1893,11 +1909,17 @@ method posthog.contexts.ContextScope.set_device_id(device_id: str)
 method posthog.contexts.ContextScope.set_distinct_id(distinct_id: str)
 method posthog.contexts.ContextScope.set_session_id(session_id: str)
 method posthog.emails.AsyncEmails.aclose() -> None
+method posthog.emails.AsyncEmails.cancel(message_id: Union[str, UUID]) -> CancelEmailResult
 method posthog.emails.AsyncEmails.get(message_id: Union[str, UUID]) -> EmailStatus
+method posthog.emails.AsyncEmails.list(*, status: Literal['scheduled'] = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
 method posthog.emails.AsyncEmails.send(**kwargs: Any) -> SendEmailResult
+method posthog.emails.AsyncEmails.update(message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]) -> UpdateEmailResult
+method posthog.emails.Emails.cancel(message_id: Union[str, UUID]) -> CancelEmailResult
 method posthog.emails.Emails.close() -> None
 method posthog.emails.Emails.get(message_id: Union[str, UUID]) -> EmailStatus
+method posthog.emails.Emails.list(*, status: Literal['scheduled'] = 'scheduled', cursor: Optional[str] = None, limit: Optional[int] = None) -> EmailList
 method posthog.emails.Emails.send(**kwargs: Any) -> SendEmailResult
+method posthog.emails.Emails.update(message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]) -> UpdateEmailResult
 method posthog.exception_capture.ExceptionCapture.capture_exception(exception, metadata=None)
 method posthog.exception_capture.ExceptionCapture.close()
 method posthog.exception_capture.ExceptionCapture.exception_handler(exc_type, exc_value, exc_traceback)

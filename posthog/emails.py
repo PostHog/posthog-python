@@ -105,11 +105,34 @@ A send with attachments can also raise:
   doesn't take files yet, or sending email from code is off for the project.
   ``message`` carries PostHog's answer, and no email was sent.
 
-Status: ``emails.get(message_id)`` reads what happened to a sent email, for
+Status: ``emails.get(message_id)`` reads what happened to an email, for
 30 days after the send, as an :class:`EmailStatus`. A key with only
 ``transactional_email:read`` can read statuses but not send. ``get`` raises
 ``not_found`` (404) for an unknown ID, an email older than 30 days, or for a
 few seconds after the send.
+
+Scheduling: pass ``scheduled_at``, an aware ``datetime`` or an ISO 8601
+string with an offset, to send up to 30 days later. The result's ``status`` is
+``scheduled``. Until the email goes out, ``emails.list()`` finds it,
+``emails.update(id, scheduled_at=...)`` moves it, and ``emails.cancel(id)``
+stops it. A naive ``datetime`` raises ``ValueError`` before any request.
+A move that got no answer, such as on a timeout, or a server error (5xx) may
+still reach PostHog later. So from then on, the client refuses to move that
+email to another time, with the code ``move_unconfirmed`` and without a
+request; a move to the same time, however it is written, still goes out. To move it, cancel the email, which a late move
+can't undo, and send it again. A client sends the moves of one email one at a
+time, but moves from another client aren't ordered with its moves.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+result = posthog.emails.send(
+    to="user@example.com",
+    template_id="<template UUID>",
+    scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+)
+posthog.emails.cancel(result.id)
+```
 
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
@@ -134,13 +157,17 @@ import random
 import re
 import threading
 import time
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from types import TracebackType
 from typing import (
     Any,
+    AsyncIterator,
     Awaitable,
     Callable,
+    Iterator,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -149,6 +176,7 @@ from typing import (
     Union,
     overload,
 )
+from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import requests
@@ -166,15 +194,19 @@ from .version import VERSION
 
 __all__ = [
     "AsyncEmails",
+    "CancelEmailResult",
     "CodeEmailArgs",
     "EmailAttachment",
     "EmailError",
+    "EmailList",
     "EmailStatus",
     "EmailTracking",
     "EmailWarning",
     "Emails",
+    "ScheduledEmail",
     "SendEmailResult",
     "TemplateEmailArgs",
+    "UpdateEmailResult",
 ]
 
 log = logging.getLogger("posthog")
@@ -182,12 +214,18 @@ log = logging.getLogger("posthog")
 _SEND_PATH = "/api/projects/@current/messaging/send/email/"
 _UPLOADS_PATH = "/api/projects/@current/messaging/attachments/uploads/"
 _STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
+_LIST_PATH = "/api/projects/@current/messaging/emails/"
+_MAX_LIST_LIMIT = 100
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
 _QUOTA_CODES = frozenset({"quota_limited"})
+# Conflicts a retry can't resolve: the email changed under the request, as posthog-node names them.
+_SETTLED_CONFLICT_CODES = frozenset(
+    {"template_outdated", "already_sending", "canceled"}
+)
 _DAILY_QUOTA_CODES = frozenset({"upload_quota_exceeded"})
 _MAX_ATTACHMENTS = 10
 _STORAGE_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
@@ -250,20 +288,96 @@ class EmailWarning:
     fix: Optional[str] = None
 
 
+_SCHEDULING_UNSUPPORTED = EmailWarning(
+    code="scheduling_unsupported",
+    message="This PostHog predates scheduled sends, so it ignored scheduled_at and sent the email now.",
+    fix="Update PostHog before you schedule emails with it.",
+)
+
+
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is its message ID.
+    """The accepted email. ``id`` is its message ID.
 
     Attributes:
         id: The email's message ID.
         replayed: ``True`` when the response says PostHog replayed an earlier send for
             the same ``idempotency_key`` instead of sending again.
-        warnings: Warnings PostHog returned about the request.
+        warnings: Warnings PostHog returned about the request. A send with
+            ``scheduled_at`` that a PostHog without scheduled sends delivered
+            at once adds ``scheduling_unsupported``.
+        status: ``"scheduled"`` when the email waits for its ``scheduled_at``,
+            or ``"queued"`` when it goes out now.
+        scheduled_at: When a scheduled email goes out, in UTC. ``None`` for an
+            email that goes out now, also when ``scheduled_at`` was at or
+            before now.
     """
 
     id: str
     replayed: bool = False
     warnings: tuple[EmailWarning, ...] = ()
+    status: str = "queued"
+    scheduled_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class UpdateEmailResult:
+    """A scheduled email after :meth:`Emails.update` moved it.
+
+    Attributes:
+        id: The email's message ID.
+        status: ``"scheduled"``, until the email goes out.
+        scheduled_at: When the email goes out now, in UTC.
+    """
+
+    id: str
+    status: str
+    scheduled_at: datetime
+
+
+@dataclass(frozen=True)
+class CancelEmailResult:
+    """A scheduled email after :meth:`Emails.cancel` stopped it.
+
+    Attributes:
+        id: The email's message ID.
+        status: ``"canceled"``.
+    """
+
+    id: str
+    status: str
+
+
+@dataclass(frozen=True)
+class ScheduledEmail:
+    """One email that waits for its send time, as :meth:`Emails.list` returns it.
+
+    PostHog leaves the recipient out, so a key that can only read statuses
+    can't read who a project is about to email. Match an email to its send
+    by ``id``, the ``id`` that :meth:`Emails.send` returned.
+
+    Attributes:
+        id: The email's message ID.
+        scheduled_at: When the email goes out, in UTC.
+        created_at: When PostHog accepted the send.
+    """
+
+    id: str
+    scheduled_at: datetime
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class EmailList:
+    """One page of :meth:`Emails.list`.
+
+    Attributes:
+        results: The emails on this page, the soonest first.
+        next: Pass it as ``cursor`` to read the next page. ``None`` on the last page.
+    """
+
+    results: tuple[ScheduledEmail, ...]
+    next: Optional[str] = None
 
 
 class EmailAttachment(TypedDict):
@@ -291,6 +405,7 @@ class _RecipientArgs(TypedDict):
     distinct_id: NotRequired[Optional[str]]
     idempotency_key: NotRequired[Optional[str]]
     max_retries: NotRequired[Optional[int]]
+    scheduled_at: NotRequired[Optional[Union[datetime, str]]]
 
 
 class TemplateEmailArgs(_RecipientArgs):
@@ -305,6 +420,8 @@ class TemplateEmailArgs(_RecipientArgs):
         idempotency_key: 1 to 255 visible ASCII characters.
         max_retries: Overrides the client's maximum number of retries for this
             send. ``0`` turns retries off.
+        scheduled_at: When to send the email, up to 30 days ahead. See
+            :meth:`Emails.send`.
     """
 
     template_id: Union[str, UUID]
@@ -399,6 +516,8 @@ class CodeEmailArgs(_RecipientArgs):
             first send's result, also when its workflow was paused since.
         max_retries: Overrides the client's maximum number of retries for this
             send. ``0`` turns retries off.
+        scheduled_at: When to send the email, up to 30 days ahead. See
+            :meth:`Emails.send`.
     """
 
     template_key: str
@@ -426,6 +545,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "bcc",
         "attachments",
         "capture_engagement",
+        "scheduled_at",
         "sensitive",
         "tracking",
     }
@@ -438,6 +558,8 @@ class EmailStatus:
 
     ``status`` is one of:
 
+    - ``scheduled``: the email waits for its ``scheduled_at``.
+    - ``canceled``: :meth:`Emails.cancel` stopped the email before it went out.
     - ``queued``: the email waits to go out.
     - ``sent``: PostHog handed the email to the email provider.
     - ``failed``: the email was not sent, and ``reason`` says why.
@@ -490,6 +612,7 @@ class _PreparedSend:
     body: bytes
     idempotency_key: str
     max_retries: Optional[int] = None
+    scheduled: bool = False
     files: tuple[_File, ...] = ()
 
 
@@ -514,6 +637,7 @@ def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
             args.get("distinct_id"),
             args.get("idempotency_key"),
             args.get("max_retries"),
+            args.get("scheduled_at"),
         )
     return _prepare_code_send(args)
 
@@ -543,6 +667,8 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_sender(args))
+    if "scheduled_at" in args:
+        payload["scheduled_at"] = _scheduled_at(args["scheduled_at"])
     if references:
         payload["attachments"] = references
     return _PreparedSend(
@@ -550,6 +676,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
         body=_encode(payload),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
+        scheduled="scheduled_at" in payload,
         files=_each_file_once(files),
     )
 
@@ -816,6 +943,7 @@ def _prepare_send(
     distinct_id: Optional[str],
     idempotency_key: Optional[str],
     max_retries: Optional[int] = None,
+    scheduled_at: Optional[Union[datetime, str]] = None,
 ) -> _PreparedSend:
     to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     max_retries = _retry_limit(max_retries)
@@ -835,11 +963,14 @@ def _prepare_send(
     }
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
+    if scheduled_at is not None:
+        payload["scheduled_at"] = _scheduled_at(scheduled_at)
     return _PreparedSend(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
+        scheduled="scheduled_at" in payload,
     )
 
 
@@ -883,6 +1014,53 @@ def _status_path(message_id: Union[str, UUID]) -> str:
             "message_id must be the message ID that send() returned."
         ) from None
     return _STATUS_PATH.format(message_id=message_uuid)
+
+
+def _scheduled_at(value: Any) -> str:
+    """The send time on the wire: an aware ``datetime`` as UTC ISO 8601, a string with an offset as given."""
+    if isinstance(value, datetime):
+        if value.utcoffset() is None:
+            raise ValueError(
+                "scheduled_at has no timezone. Pass an aware datetime, such as "
+                "datetime.now(timezone.utc) + timedelta(hours=1)."
+            )
+        return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    if isinstance(value, str):
+        parsed = _timestamp(value)
+        if parsed is None or parsed.utcoffset() is None:
+            raise ValueError(
+                "scheduled_at must be an ISO 8601 time with a timezone offset, "
+                "such as 2026-12-01T09:00:00Z or 2026-12-01T09:00:00+02:00."
+            )
+        return value
+    raise TypeError("scheduled_at must be an aware datetime or an ISO 8601 string.")
+
+
+def _prepare_update(scheduled_at: Any) -> bytes:
+    if scheduled_at is None:
+        raise TypeError("update() needs scheduled_at, the email's new send time.")
+    return _encode({"scheduled_at": _scheduled_at(scheduled_at)})
+
+
+def _list_path(status: Any, cursor: Any, limit: Any) -> str:
+    if status != "scheduled":
+        raise ValueError(
+            "status must be 'scheduled': only scheduled emails can be listed."
+        )
+    query: list[tuple[str, str]] = [("status", status)]
+    if cursor is not None:
+        if not isinstance(cursor, str):
+            raise TypeError("cursor must be the next value of the previous page.")
+        if not cursor:
+            raise ValueError("cursor must not be empty.")
+        query.append(("cursor", cursor))
+    if limit is not None:
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            raise TypeError("limit must be an integer.")
+        if not 1 <= limit <= _MAX_LIST_LIMIT:
+            raise ValueError(f"limit must be from 1 to {_MAX_LIST_LIMIT}.")
+        query.append(("limit", str(limit)))
+    return f"{_LIST_PATH}?{urlencode(query)}"
 
 
 def _validate_options(
@@ -942,7 +1120,7 @@ def _idempotency_error_name(status: int, code: str) -> str:
     if status == 409:
         return (
             "validation_error"
-            if code == "template_outdated"
+            if code in _SETTLED_CONFLICT_CODES
             else "concurrent_idempotent_requests"
         )
     # The template send route also answers 422 for send checks such as recipient_suppressed.
@@ -975,7 +1153,10 @@ def _json_object(body: bytes) -> dict[str, Any]:
 
 
 def _parse_response(
-    status: int, body: bytes, retry_after_header: Optional[str]
+    status: int,
+    body: bytes,
+    retry_after_header: Optional[str],
+    scheduled: bool = False,
 ) -> SendEmailResult:
     fields = _json_object(body)
     if 200 <= status < 300:
@@ -984,11 +1165,17 @@ def _parse_response(
             raise _sdk_error(
                 "api_error", "PostHog answered without a message ID.", status
             )
-        warnings = fields.get("warnings")
+        server_warnings = _parse_warnings(fields.get("warnings"))
+        # A PostHog without scheduled sends drops scheduled_at, sends at once and answers no status.
+        unscheduled = (
+            (_SCHEDULING_UNSUPPORTED,) if scheduled and "status" not in fields else ()
+        )
         return SendEmailResult(
             id=message_id,
             replayed=fields.get("replayed") is True,
-            warnings=_parse_warnings(warnings),
+            status=_text(fields.get("status")) or "queued",
+            scheduled_at=_timestamp(fields.get("scheduled_at")),
+            warnings=server_warnings + unscheduled,
         )
     raise _response_error(fields, status, retry_after_header)
 
@@ -1044,6 +1231,79 @@ def _parse_status_response(
         status_at=status_at,
         reason=_text(fields.get("reason")),
     )
+
+
+def _parse_update_response(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> UpdateEmailResult:
+    fields = _success_fields(status, body, retry_after_header)
+    message_id = _text(fields.get("id"))
+    email_status = _text(fields.get("status"))
+    scheduled_at = _timestamp(fields.get("scheduled_at"))
+    if message_id is None or email_status is None or scheduled_at is None:
+        raise _sdk_error(
+            "api_error", "PostHog answered without the email's send time.", status
+        )
+    return UpdateEmailResult(
+        id=message_id, status=email_status, scheduled_at=scheduled_at
+    )
+
+
+def _parse_cancel_response(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> CancelEmailResult:
+    fields = _success_fields(status, body, retry_after_header)
+    message_id = _text(fields.get("id"))
+    if message_id is None or fields.get("status") != "canceled":
+        raise _sdk_error(
+            "api_error", "PostHog answered without a canceled email.", status
+        )
+    return CancelEmailResult(id=message_id, status="canceled")
+
+
+def _parse_list_response(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> EmailList:
+    fields = _success_fields(status, body, retry_after_header)
+    rows = fields.get("results")
+    if not isinstance(rows, list):
+        raise _sdk_error(
+            "api_error", "PostHog answered without a list of emails.", status
+        )
+    results = []
+    for row in rows:
+        row = row if isinstance(row, dict) else {}
+        message_id = _text(row.get("id"))
+        scheduled_at = _timestamp(row.get("scheduled_at"))
+        created_at = _timestamp(row.get("created_at"))
+        if message_id is None or scheduled_at is None or created_at is None:
+            # Dropping a row would hide an email that still goes out.
+            raise _sdk_error(
+                "api_error",
+                "PostHog answered with an email the client can't read.",
+                status,
+            )
+        results.append(
+            ScheduledEmail(
+                id=message_id, scheduled_at=scheduled_at, created_at=created_at
+            )
+        )
+    next_cursor = fields.get("next", "")
+    if next_cursor is not None and _text(next_cursor) is None:
+        # Losing the cursor would end a caller's paging loop early.
+        raise _sdk_error(
+            "api_error", "PostHog answered without the next page's cursor.", status
+        )
+    return EmailList(results=tuple(results), next=next_cursor)
+
+
+def _success_fields(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> Mapping[str, Any]:
+    fields = _json_object(body)
+    if not 200 <= status < 300:
+        raise _response_error(fields, status, retry_after_header)
+    return fields
 
 
 def _pending_uploads_parser(
@@ -1194,6 +1454,7 @@ def _response_error(
 
 def _is_retryable(error: EmailError) -> bool:
     # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
+    # A cancel, or a move to a later time, ends the same however often it lands, so it needs no key.
     if error.status_code is None:
         return error.code == "network_error"
     if error.code == "attachment_upload_failed":
@@ -1247,9 +1508,20 @@ def _headers(
 
 _SEND_NOT_DONE = "no email was sent"
 _GET_NOT_DONE = "no email status was read"
+_UPDATE_NOT_DONE = "no email was moved"
+_CANCEL_NOT_DONE = "no email was canceled"
+_LIST_NOT_DONE = "no emails were listed"
 _SEND_KEY_NEEDED = "Sending email needs secret_key, a project secret API key with the transactional_email:write scope."
 _GET_KEY_NEEDED = (
     "Reading an email status needs secret_key, a project secret API key with the "
+    "transactional_email:read or transactional_email:write scope."
+)
+_MANAGE_KEY_NEEDED = (
+    "Moving or canceling a scheduled email needs secret_key, a project secret API key "
+    "with the transactional_email:write scope."
+)
+_LIST_KEY_NEEDED = (
+    "Listing scheduled emails needs secret_key, a project secret API key with the "
     "transactional_email:read or transactional_email:write scope."
 )
 _ResultT = TypeVar("_ResultT")
@@ -1276,6 +1548,24 @@ def _storage_unreachable(index: int, exc: Exception) -> EmailError:
         "lets the app reach PostHog's file storage.",
         field=f"attachments__{index}",
     )
+
+
+def _move_unconfirmed() -> EmailError:
+    return EmailError(
+        name="application_error",
+        code="move_unconfirmed",
+        message="An earlier move of this email to another time wasn't confirmed, so PostHog may "
+        "still apply it after this one. Nothing was changed.",
+        fix="To move the email, cancel it, which a late move can't undo, and send it again "
+        "at the new time.",
+    )
+
+
+def _move_instant(body: bytes) -> datetime:
+    """The send time a move asks for, so two spellings of one instant compare equal."""
+    when = _timestamp(json.loads(body)["scheduled_at"])
+    assert when is not None  # _prepare_update checked it.
+    return when.astimezone(timezone.utc)
 
 
 def _files_body(files: Sequence[_File]) -> bytes:
@@ -1305,6 +1595,49 @@ class _EmailsBase:
         self._parent_disabled: Callable[[], bool] = lambda: False
         self._admit: Callable[[], Optional[Callable[[], None]]] = lambda: _no_op
         self._host_error: Optional[str] = None
+        # Moves of one email go out one at a time, in turn. A move that got no answer, or a server
+        # error, may still reach PostHog at any later time, so its send time stays here, by email,
+        # until a confirmed cancel of that email. Each entry is an ID and a datetime.
+        self._moves_lock = threading.Lock()
+        self._unconfirmed_moves: dict[str, datetime] = {}
+        self._move_turns: dict[str, tuple[Any, int]] = {}
+        # Emails whose cancel was confirmed while moves of them were out or queued. Those moves
+        # can't undo the cancel, so they record nothing, until the email's last move turn ends.
+        self._canceled_during_moves: set[str] = set()
+
+    def _take_move_turn(self, path: str, new_lock: Callable[[], Any]) -> Any:
+        with self._moves_lock:
+            lock, waiting = self._move_turns.get(path) or (new_lock(), 0)
+            self._move_turns[path] = (lock, waiting + 1)
+            return lock
+
+    def _end_move_turn(self, path: str) -> None:
+        with self._moves_lock:
+            lock, waiting = self._move_turns[path]
+            if waiting == 1:
+                del self._move_turns[path]
+                self._canceled_during_moves.discard(path)
+            else:
+                self._move_turns[path] = (lock, waiting - 1)
+
+    def _check_move(self, path: str, body: bytes) -> None:
+        with self._moves_lock:
+            unconfirmed = self._unconfirmed_moves.get(path)
+        if unconfirmed is not None and unconfirmed != _move_instant(body):
+            # The late move would undo this one, and only PostHog could order the two.
+            raise _move_unconfirmed()
+
+    def _note_unconfirmed_move(self, path: str, body: bytes) -> None:
+        with self._moves_lock:
+            if path not in self._canceled_during_moves:
+                self._unconfirmed_moves[path] = _move_instant(body)
+
+    def _forget_moves(self, path: str) -> None:
+        # A late move can't undo a confirmed cancel: PostHog answers it 409 canceled.
+        with self._moves_lock:
+            self._unconfirmed_moves.pop(path, None)
+            if path in self._move_turns:
+                self._canceled_during_moves.add(path)
 
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()
@@ -1398,10 +1731,20 @@ class Emails(_EmailsBase):
                 outside this call, too.
             max_retries: Overrides the client's maximum number of retries for
                 this send. ``0`` turns retries off.
+            scheduled_at: When to send the email, up to 30 days after this
+                call: an aware ``datetime``, or an ISO 8601 string with an
+                offset, such as ``"2026-12-01T09:00:00+02:00"``. A naive
+                ``datetime`` or a string without an offset raises
+                ``ValueError`` before any request, so the email never goes out
+                in the wrong timezone. A time at or before now sends now. Move
+                or stop a scheduled email with :meth:`update` and
+                :meth:`cancel`, and find it with :meth:`list`. The idempotency
+                key covers the time: the same key with another time raises
+                ``idempotency_key_reused``.
 
         Returns:
-            The queued email. A result means PostHog queued the email, not that
-            it was delivered.
+            The accepted email. A result means PostHog queued or scheduled the
+            email, not that it was delivered. ``status`` says which.
 
         Raises:
             EmailError: PostHog did not queue the email, or the client could
@@ -1429,6 +1772,11 @@ class Emails(_EmailsBase):
                 html=rendered_html,
                 distinct_id="user_123",
             )
+            emails.send(
+                to="user@example.com",
+                template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b",
+                scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+            )
             ```
         """
         prepared = _prepare(kwargs)
@@ -1451,7 +1799,9 @@ class Emails(_EmailsBase):
         )
         return self._call(
             self._posthog_request("POST", prepared.path, prepared.body, headers),
-            _parse_response,
+            lambda status, body, retry_after: _parse_response(
+                status, body, retry_after, prepared.scheduled
+            ),
             prepared.max_retries,
         )
 
@@ -1507,6 +1857,170 @@ class Emails(_EmailsBase):
             )
         finally:
             finish()
+
+    def update(
+        self, message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]
+    ) -> UpdateEmailResult:
+        """Move a scheduled email to another send time.
+
+        Only the time changes. To change the content, the recipient or the
+        sender, :meth:`cancel` the email and send it again.
+
+        Retries like :meth:`send`. A move to a later time ends the same
+        however often it lands, so it takes no idempotency key. A move to now
+        starts the send, so when its answer is lost, the retry can raise
+        ``already_sending`` for an email that was moved: read it with
+        :meth:`get`.
+
+        This client sends the moves of one email one at a time, in turn. A
+        move that got no answer, such as on a timeout, or a server error (5xx)
+        may still reach PostHog later, even after a retry got through. So from
+        then on, this client refuses to move that email to another time,
+        without a request; a move to the same time, however it is written,
+        still goes out. To move it, :meth:`cancel` the email,
+        which a late move can't undo, and send it again. Moves from another
+        client aren't ordered with this client's.
+
+        Args:
+            message_id: The ``id`` that :meth:`send` returned.
+            scheduled_at: The new send time, as :meth:`send` takes it. It must
+                be within 30 days after the first send call. A time at or
+                before now sends the email now.
+
+        Returns:
+            The email with its new send time.
+
+        Raises:
+            EmailError: The email was not moved. ``code`` is
+                ``already_sending`` once PostHog has started sending it,
+                ``canceled`` after a cancel, ``invalid_scheduled_at`` for a time
+                too far ahead, and ``not_found`` for an unknown ID or an email
+                that went out. ``name`` is ``validation_error`` for the first
+                three: a retry can't change them. ``code`` is
+                ``move_unconfirmed``, named ``application_error``, when an
+                earlier move of this email to another time got no answer or a
+                server error, and nothing was sent.
+            TypeError, ValueError: An argument has the wrong type or format.
+
+        Examples:
+            ```python
+            emails.update(result.id, scheduled_at=datetime.now(timezone.utc) + timedelta(hours=2))
+            ```
+        """
+        path = _status_path(message_id)
+        body = _prepare_update(scheduled_at)
+        finish = self._start(_UPDATE_NOT_DONE)
+        try:
+            headers = _headers(
+                self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from, has_body=True
+            )
+            send = self._posthog_request("PATCH", path, body, headers)
+
+            def move() -> requests.Response:
+                try:
+                    response = send()
+                except requests.exceptions.RequestException:
+                    self._note_unconfirmed_move(path, body)
+                    raise
+                if response.status_code >= 500:
+                    # A gateway or server error confirms nothing: the move may still run upstream.
+                    self._note_unconfirmed_move(path, body)
+                return response
+
+            with self._move_turn(path):
+                self._check_move(path, body)
+                return self._call(move, _parse_update_response)
+        finally:
+            finish()
+
+    def cancel(self, message_id: Union[str, UUID]) -> CancelEmailResult:
+        """Stop a scheduled email before it goes out.
+
+        A canceled email never goes out, and :meth:`get` reads ``canceled``.
+        Canceling it again also succeeds. Retries like :meth:`send`.
+
+        Args:
+            message_id: The ``id`` that :meth:`send` returned.
+
+        Returns:
+            The canceled email.
+
+        Raises:
+            EmailError: The email was not canceled. ``code`` is
+                ``already_sending``, named ``validation_error``, once PostHog
+                has started sending it, and ``not_found`` for an unknown ID or
+                an email that went out.
+            ValueError: ``message_id`` is not a message ID.
+        """
+        status_path = _status_path(message_id)
+        finish = self._start(_CANCEL_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from)
+            result = self._call(
+                self._posthog_request("POST", status_path + "cancel/", None, headers),
+                _parse_cancel_response,
+            )
+            self._forget_moves(status_path)
+            return result
+        finally:
+            finish()
+
+    def list(
+        self,
+        *,
+        status: Literal["scheduled"] = "scheduled",
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> EmailList:
+        """List the project's emails that wait for their send time, the soonest first.
+
+        Reads one page. Pass the page's ``next`` as ``cursor`` to read the
+        next one. A list is never retried: call it again.
+
+        Args:
+            status: ``"scheduled"``, the only status PostHog lists.
+            cursor: The ``next`` of the previous page.
+            limit: Emails per page, 1 to 100. PostHog's default is 100.
+
+        Returns:
+            One page of scheduled emails.
+
+        Raises:
+            EmailError: PostHog did not answer with a page it could read, such
+                as one without its ``next`` cursor.
+            TypeError, ValueError: An argument has the wrong type or format.
+
+        Examples:
+            ```python
+            page = emails.list()
+            while True:
+                for email in page.results:
+                    print(email.id, email.scheduled_at)
+                if page.next is None:
+                    break
+                page = emails.list(cursor=page.next)
+            ```
+        """
+        path = _list_path(status, cursor, limit)
+        finish = self._start(_LIST_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_LIST_KEY_NEEDED), self.migrated_from)
+            return self._call(
+                self._posthog_request("GET", path, None, headers),
+                _parse_list_response,
+                0,
+            )
+        finally:
+            finish()
+
+    @contextmanager
+    def _move_turn(self, path: str) -> Iterator[None]:
+        lock = self._take_move_turn(path, threading.Lock)
+        try:
+            with lock:
+                yield
+        finally:
+            self._end_move_turn(path)
 
     def _posthog_request(
         self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
@@ -1672,7 +2186,9 @@ class AsyncEmails(_EmailsBase):
         )
         return await self._call(
             self._posthog_request("POST", prepared.path, prepared.body, headers),
-            _parse_response,
+            lambda status, body, retry_after: _parse_response(
+                status, body, retry_after, prepared.scheduled
+            ),
             prepared.max_retries,
         )
 
@@ -1710,6 +2226,94 @@ class AsyncEmails(_EmailsBase):
             )
         finally:
             finish()
+
+    async def update(
+        self, message_id: Union[str, UUID], *, scheduled_at: Union[datetime, str]
+    ) -> UpdateEmailResult:
+        """Move a scheduled email to another send time.
+
+        Takes the same arguments and raises the same errors as
+        :meth:`Emails.update`.
+        """
+        path = _status_path(message_id)
+        body = _prepare_update(scheduled_at)
+        finish = self._start(_UPDATE_NOT_DONE)
+        try:
+            headers = _headers(
+                self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from, has_body=True
+            )
+            httpx, _ = self._get_client()
+            send = self._posthog_request("PATCH", path, body, headers)
+
+            async def move() -> Any:
+                try:
+                    response = await send()
+                except (httpx.RequestError, asyncio.CancelledError):
+                    # A move canceled while it waited, such as by asyncio.wait_for, got no answer either.
+                    self._note_unconfirmed_move(path, body)
+                    raise
+                if response.status_code >= 500:
+                    # A gateway or server error confirms nothing: the move may still run upstream.
+                    self._note_unconfirmed_move(path, body)
+                return response
+
+            async with self._move_turn(path):
+                self._check_move(path, body)
+                return await self._call(move, _parse_update_response)
+        finally:
+            finish()
+
+    async def cancel(self, message_id: Union[str, UUID]) -> CancelEmailResult:
+        """Stop a scheduled email before it goes out.
+
+        Takes the same argument and raises the same errors as
+        :meth:`Emails.cancel`.
+        """
+        status_path = _status_path(message_id)
+        finish = self._start(_CANCEL_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from)
+            result = await self._call(
+                self._posthog_request("POST", status_path + "cancel/", None, headers),
+                _parse_cancel_response,
+            )
+            self._forget_moves(status_path)
+            return result
+        finally:
+            finish()
+
+    async def list(
+        self,
+        *,
+        status: Literal["scheduled"] = "scheduled",
+        cursor: Optional[str] = None,
+        limit: Optional[int] = None,
+    ) -> EmailList:
+        """List the project's emails that wait for their send time, the soonest first.
+
+        Takes the same arguments and raises the same errors as
+        :meth:`Emails.list`.
+        """
+        path = _list_path(status, cursor, limit)
+        finish = self._start(_LIST_NOT_DONE)
+        try:
+            headers = _headers(self._secret_key(_LIST_KEY_NEEDED), self.migrated_from)
+            return await self._call(
+                self._posthog_request("GET", path, None, headers),
+                _parse_list_response,
+                0,
+            )
+        finally:
+            finish()
+
+    @asynccontextmanager
+    async def _move_turn(self, path: str) -> AsyncIterator[None]:
+        lock = self._take_move_turn(path, asyncio.Lock)
+        try:
+            async with lock:
+                yield
+        finally:
+            self._end_move_turn(path)
 
     def _posthog_request(
         self, method: str, path: str, body: Optional[bytes], headers: dict[str, str]
