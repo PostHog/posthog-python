@@ -416,20 +416,49 @@ _PHONE_INTL_PATTERN = re.compile(
 # twice, cut at the margin and at the limit, and only the start both results share
 # is kept. A match split by the limit cut differs between the two, and one split by
 # the margin cut lies past the end of the second, so neither survives raw.
+#
+# That holds for a match no longer than the margin. A word running past both cuts
+# is never seen whole, and two detectors only match once they reach its far end:
+# URL userinfo needs its `@`, a JWT its second `.`. Such a word is redacted
+# whole instead — see `_unfinished_credential_start`.
 _SCAN_MARGIN = 1024
+_JWT_OPENING = "eyJ"  # base64url of `{"`
+_URL_AUTHORITY_ENDS = "/?#"
+_WHITESPACE_PATTERN = re.compile(r"\s")
 
 
 def _redact_bounded(value: str, redact: Callable[[str], str]) -> str:
     """``redact`` over ``value``, at a cost bounded by what truncation keeps."""
-    if len(value) <= _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN:
+    scan_end = _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN
+    if len(value) <= scan_end:
         return redact(value)
+    unfinished = _unfinished_credential_start(value[: scan_end + 1])
+    if unfinished is not None:
+        return redact(value[:unfinished]) + _REDACTED_VALUE + _TRUNCATION_SUFFIX
     kept = os.path.commonprefix(
-        [
-            redact(value[: _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN]),
-            redact(value[:_MAX_USER_INTENT_LENGTH]),
-        ]
+        [redact(value[:scan_end]), redact(value[:_MAX_USER_INTENT_LENGTH])]
     )
     return kept + _TRUNCATION_SUFFIX
+
+
+def _unfinished_credential_start(head: str) -> Optional[int]:
+    """Where the word running off the end of ``head`` starts, when it starts
+    inside what truncation keeps and opens a credential whose end neither scan
+    reached: a URL authority with no `/`, `?` or `#` after it, or a JWT."""
+    if head[-1].isspace():
+        return None
+    space = _WHITESPACE_PATTERN.search(head[::-1])
+    start = len(head) - space.start() if space else 0
+    if start >= _MAX_USER_INTENT_LENGTH:
+        return None
+    word = head[start:-1]
+    authority = word.rfind("://")
+    if _JWT_OPENING in word or (
+        authority != -1
+        and not any(char in word[authority + 3 :] for char in _URL_AUTHORITY_ENDS)
+    ):
+        return start
+    return None
 
 
 def _is_record(value: Any) -> bool:

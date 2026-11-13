@@ -1,5 +1,6 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import base64
 import json
 import random
 import re
@@ -912,10 +913,69 @@ def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment,
     assert fragment not in captured
 
 
+def _jwt_padded_to(length: int) -> str:
+    """A JWT ``length`` characters long whose payload pads a credential claim with
+    low-entropy filler, so only the known-format pattern, which needs the whole
+    token, recognizes it."""
+
+    def segment(claims: dict) -> str:
+        return (
+            base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        )
+
+    head = segment({"alg": "HS256", "typ": "JWT"})
+    signature = "c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+    filler = "a" * length
+    token = ""
+    while not token or len(token) > length:
+        filler = filler[:-1]
+        payload = segment({"db_password": "hunter2-db", "pad": filler})
+        token = f"{head}.{payload}.{signature}"
+    return token
+
+
+@pytest.mark.parametrize(
+    ("intent", "secret", "kept"),
+    [
+        pytest.param(
+            "Connect with https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Connect with ",
+            id="url password past both cuts",
+        ),
+        pytest.param(
+            "Connect with https://admin:" + "p" * 1500 + "@" + "q" * 2500 + "@db/x",
+            "q" * 32,
+            "Connect with ",
+            id="url password with an @ before the cuts",
+        ),
+        pytest.param(
+            "Open https://h/?next=https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Open ",
+            id="nested url password past both cuts",
+        ),
+        pytest.param(
+            "x " * 775 + _jwt_padded_to(1631) + " tail",
+            "eyJ",
+            "x " * 775,
+            id="jwt whose last separator is past both cuts",
+        ),
+    ],
+)
+def test_intent_scan_fails_closed_on_a_credential_unfinished_at_both_cuts(
+    intent, secret, kept
+):
+    captured = _captured_intent(intent)
+    assert secret not in captured
+    assert captured.startswith(kept)
+
+
 @pytest.mark.parametrize(
     "intent",
     [
         pytest.param("s" * 9000, id="one long word"),
+        pytest.param("https://example.com/" + "a" * 9000, id="long url path"),
         pytest.param("请帮我查询" * 1800, id="long CJK"),
         pytest.param("请帮我查询" * 900, id="CJK"),
         pytest.param("item\n" * 1000, id="newline list"),
