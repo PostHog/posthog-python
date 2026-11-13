@@ -955,6 +955,21 @@ class TestEvaluateFlagsUnresolved(unittest.TestCase):
         self.assertEqual(dict(flags.only(["checkout"]).unresolved_flags), {})
         self.assertEqual(dict(flags.only_accessed().unresolved_flags), {})
         patch_capture.assert_not_called()
+        flags.is_enabled("checkout", True)
+        flags.get_flag("checkout")
+        flags.get_flag("remote-only")
+        properties = _flag_called_properties(patch_capture)
+        expected_errors = "evaluation_failed,local_evaluation_inconclusive"
+        remote_errors = "evaluation_failed"
+        if error_bit:
+            expected_errors = "errors_while_computing_flags," + expected_errors
+            remote_errors = "errors_while_computing_flags," + remote_errors
+        self.assertEqual(properties["checkout"]["$feature_flag_error"], expected_errors)
+        self.assertIsNone(properties["checkout"]["$feature_flag_response"])
+        self.assertEqual(
+            properties["remote-only"]["$feature_flag_error"], remote_errors
+        )
+        self.assertEqual(patch_capture.call_count, 2)
         patch_flags.assert_called_once()
 
     @parameterized.expand(

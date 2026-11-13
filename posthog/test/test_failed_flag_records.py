@@ -134,6 +134,88 @@ def test_failed_snapshot_defaults_diagnostics_and_enrichment(client, shape, erro
 
 @pytest.mark.parametrize("shape", ["v2", "v4"])
 @pytest.mark.parametrize("error_bit", [None, False, True])
+@pytest.mark.parametrize("filter_method", ["only", "only_accessed"])
+def test_filtered_snapshot_preserves_selected_failure_diagnostics(
+    client, shape, error_bit, filter_method
+):
+    raw = response(shape, error_bit)
+    raw["requestId"] = "evaluation-request"
+    raw["evaluatedAt"] = 12345
+    raw["flags"]["failed"]["reason"]["description"] = "Evaluation failed"
+    raw["flags"]["failed"]["metadata"]["has_experiment"] = True
+    raw["flags"]["other-failed"] = copy.deepcopy(raw["flags"]["failed"])
+    raw["flags"]["other-failed"]["key"] = "other-failed"
+    with (
+        mock.patch("posthog.client.flags", return_value=raw) as remote,
+        mock.patch.object(client, "_enqueue", return_value=(True, {})) as enqueue,
+        mock.patch.object(client.log, "warning") as warning,
+    ):
+        snapshot = client.evaluate_flags("user", groups={"company": "acme"})
+        assert snapshot.get_flag_payload("other-failed") is None
+        if filter_method == "only":
+            filtered = snapshot.only(["failed", "off", "missing"])
+            warning.assert_called_once()
+            assert warning.call_args.args[0].endswith("failed, missing")
+        else:
+            assert snapshot.only_accessed().keys == []
+            snapshot.get_flag("failed", send_feature_flag_events=False)
+            snapshot.is_enabled("off", send_feature_flag_events=False)
+            filtered = snapshot.only_accessed()
+            warning.assert_not_called()
+        enqueue.assert_not_called()
+        assert filtered.keys == ["off"]
+        assert dict(filtered.unresolved_flags) == {}
+        assert filtered.get_flag_payload("failed") is None
+        assert (
+            filtered.is_enabled("failed", True, send_feature_flag_events=False) is True
+        )
+        enqueue.assert_not_called()
+
+        assert filtered.get_flag("failed") is None
+        assert filtered.is_enabled("failed") is False
+        assert enqueue.call_count == 1
+        called = enqueue.call_args.args[0]
+        assert called["event"] == "$feature_flag_called"
+        props = called["properties"]
+        assert props["$feature_flag_response"] is None
+        assert props["$feature_flag_error"] == (
+            "errors_while_computing_flags,evaluation_failed"
+            if error_bit
+            else "evaluation_failed"
+        )
+        assert props["$feature_flag_id"] == 1
+        assert props["$feature_flag_version"] == 2
+        assert props["$feature_flag_request_id"] == "evaluation-request"
+        assert props["$feature_flag_evaluated_at"] == 12345
+        assert props["$groups"] == {"company": "acme"}
+        assert "$feature_flag_payload" not in props
+        if shape == "v4":
+            assert props["$feature_flag_config_version"] == 2
+            assert props["$feature_flag_reason_code"] == "dependency_error"
+        else:
+            assert props["$feature_flag_reason"] == "Evaluation failed"
+
+        client.capture("filtered-snapshot", distinct_id="user", flags=filtered)
+        enriched = enqueue.call_args.args[0]
+        assert enriched["event"] == "filtered-snapshot"
+        assert enriched["properties"]["$feature/off"] is False
+        assert "$feature/failed" not in enriched["properties"]
+        assert "$feature/other-failed" not in enriched["properties"]
+        assert enqueue.call_count == 2
+
+        assert filtered.get_flag("other-failed") is None
+        missing = enqueue.call_args.args[0]["properties"]
+        assert missing["$feature_flag_error"] == (
+            "errors_while_computing_flags,flag_missing" if error_bit else "flag_missing"
+        )
+        assert "$feature_flag_id" not in missing
+        assert "$feature_flag_reason_code" not in missing
+        assert enqueue.call_count == 3
+        remote.assert_called_once()
+
+
+@pytest.mark.parametrize("shape", ["v2", "v4"])
+@pytest.mark.parametrize("error_bit", [None, False, True])
 def test_failed_fallback_preserves_only_successful_local_pairs(
     client, shape, error_bit
 ):

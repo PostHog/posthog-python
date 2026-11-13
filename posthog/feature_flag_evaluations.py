@@ -238,13 +238,23 @@ class FeatureFlagEvaluations:
 
         Order-dependent: if nothing has been accessed yet, the returned snapshot is
         empty. The method honors its name — pre-access if you want a populated result.
+        Accessed failures retain private diagnostics, not values or enrichment.
         """
         filtered = {k: self._flags[k] for k in self._accessed if k in self._flags}
+        filtered.update(
+            {
+                k: self._failed_flags[k]
+                for k in self._accessed
+                if k in self._failed_flags
+            }
+        )
         return self._clone_with(filtered)
 
     def only(self, keys: List[str]) -> "FeatureFlagEvaluations":
         """Return a filtered copy containing only flags with the given keys. Keys that
         are not present in the evaluation are dropped and logged as a warning.
+        Selected failures retain private diagnostics but remain absent from values,
+        keys and enrichment; their existing missing-value warning is unchanged.
         """
         filtered: Dict[str, _EvaluatedFlagRecord] = {}
         missing: List[str] = []
@@ -259,6 +269,9 @@ class FeatureFlagEvaluations:
                 "FeatureFlagEvaluations.only() was called with flag keys that are not in the "
                 f"evaluation set and will be dropped: {', '.join(missing)}"
             )
+        filtered.update(
+            {k: self._failed_flags[k] for k in keys if k in self._failed_flags}
+        )
         return self._clone_with(filtered)
 
     @property
@@ -275,8 +288,7 @@ class FeatureFlagEvaluations:
         scope, was inconclusive locally, and no remote value filled the gap. Listed
         flags are not part of :attr:`keys`, and reading one reports the
         ``local_evaluation_inconclusive`` error instead of ``flag_missing``.
-        Currently, a server-marked failed fallback instead reports ``evaluation_failed``;
-        this is an implementation exception to the snapshot inconclusive-error contract.
+        A server-marked failed fallback additionally reports ``evaluation_failed``.
         Reading this mapping does not count as an access and does not fire any event.
         Snapshots returned by :meth:`only` and :meth:`only_accessed`, and by
         ``AsyncClient.evaluate_flags()``, which evaluates only remotely, carry no
@@ -381,8 +393,8 @@ class FeatureFlagEvaluations:
 
         # Build the comma-joined `$feature_flag_error` matching the single-flag path's
         # granularity: response-level errors (errors-while-computing, quota-limited) are
-        # combined with per-flag errors (flag-missing or local-evaluation-inconclusive)
-        # so consumers can filter by type.
+        # combined with per-flag errors. A failed remote fallback must not hide the
+        # original snapshot's local-inconclusive diagnostic.
         errors: List[str] = []
         if self._errors_while_computing:
             errors.append("errors_while_computing_flags")
@@ -390,12 +402,10 @@ class FeatureFlagEvaluations:
             errors.append("quota_limited")
         if failed:
             errors.append(_FeatureFlagError.EVALUATION_FAILED)
+        if key in self._unresolved_flags:
+            errors.append(_FeatureFlagError.LOCAL_EVALUATION_INCONCLUSIVE)
         elif flag is None:
-            errors.append(
-                "local_evaluation_inconclusive"
-                if key in self._unresolved_flags
-                else "flag_missing"
-            )
+            errors.append("flag_missing")
         if errors:
             properties["$feature_flag_error"] = ",".join(errors)
 
