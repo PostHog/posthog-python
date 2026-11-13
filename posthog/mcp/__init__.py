@@ -165,6 +165,7 @@ class McpAnalytics:
             data,
             {
                 "session_id": data.session_id,
+                "session_source": data.session_source,
                 "event_type": MCPAnalyticsEventType.CUSTOM,
                 "event_name": event,
                 "timestamp": datetime.now(timezone.utc),

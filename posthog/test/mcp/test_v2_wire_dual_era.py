@@ -20,6 +20,8 @@ from contextlib import asynccontextmanager
 
 import httpx
 import pytest
+import mcp.types as mcp_types
+from mcp.server.lowlevel import Server
 from mcp.server.mcpserver import MCPServer
 
 from posthog.mcp import (
@@ -72,15 +74,22 @@ def rpc(method, params, request_id=1):
     return {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
 
 
-async def modern_call(http, name, arguments, request_id=1, model=None):
+async def modern_call(
+    http, name, arguments, request_id=1, model=None, meta=None, user_agent=None
+):
     body = rpc(
         "tools/call",
-        {"name": name, "arguments": arguments, "_meta": modern_meta(model=model)},
+        {
+            "name": name,
+            "arguments": arguments,
+            "_meta": {**modern_meta(model=model), **(meta or {})},
+        },
         request_id,
     )
-    return await http.post(
-        "/mcp", json=body, headers=modern_headers("tools/call", name)
-    )
+    headers = modern_headers("tools/call", name)
+    if user_agent:
+        headers = {**headers, "user-agent": user_agent}
+    return await http.post("/mcp", json=body, headers=headers)
 
 
 # --- modern era (2026-07-28) ---------------------------------------------------
@@ -218,6 +227,41 @@ async def test_modern_conversation_anchors_session_across_instances():
     # sharing no state, is the cross-pod contract.
     assert [c["properties"]["$session_id"] for c in calls] == [expected, expected]
     assert [c["properties"]["$mcp_conversation_id"] for c in calls] == [minted, minted]
+
+
+@pytest.mark.parametrize("enable_conversation_id", [True, False])
+async def test_modern_client_conversation_groups_calls_across_instances(
+    enable_conversation_id,
+):
+    """ChatGPT's own conversation id groups fresh per-request instances with no
+    handle and no result change: ``openai/session`` survives the SDK lifting the
+    reserved envelope keys out of ``_meta``."""
+    client = FakeClient()
+    options = MCPAnalyticsOptions(enable_conversation_id=enable_conversation_id)
+    responses = []
+    for _ in range(2):
+        server = make_server()
+        instrument(server, client, options)
+        async with wire(server) as http:
+            responses.append(
+                await modern_call(
+                    http,
+                    "add",
+                    {"a": 1, "b": 1},
+                    meta={"openai/session": "v1/conv-example-0001"},
+                    user_agent="openai-mcp/1.0.0 (ChatGPT)",
+                )
+            )
+    await _flush()
+
+    calls = _events(client, "$mcp_tool_call")
+    assert [c["properties"]["$session_id"] for c in calls] == [
+        "ses_2f5d35b7108d17c807766f2f769a1e8c"
+    ] * 2
+    assert {c["properties"]["$mcp_session_source"] for c in calls} == {
+        "client_metadata"
+    }
+    assert all("conversation_id" not in r.text for r in responses)
 
 
 async def test_modern_result_shape_survives_instrumentation():
@@ -444,3 +488,105 @@ async def test_real_request_headers_reach_the_event():
     props = _events(client, "$mcp_tool_call")[0]["properties"]
     assert props[P.CLIENT_USER_AGENT] == user_agent
     assert props[P.VENDOR_CLIENT] == "cli"
+
+
+# --- internal tools/list (Mcp-Param-* header validation) -----------------------
+
+
+def make_lowlevel_server():
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[
+                mcp_types.Tool(
+                    name="add",
+                    input_schema={
+                        "type": "object",
+                        "properties": {"a": {"type": "integer"}},
+                    },
+                )
+            ]
+        )
+
+    async def on_call_tool(ctx, params):
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="ok")]
+        )
+
+    return Server("low-wire", on_call_tool=on_call_tool, on_list_tools=on_list_tools)
+
+
+@pytest.mark.parametrize(
+    "make", [make_server, make_lowlevel_server], ids=["mcpserver", "lowlevel"]
+)
+async def test_modern_tool_call_emits_no_tools_list_from_header_validation(make):
+    """The SDK's own tools/call path may run the tools/list handler to find the
+    tool's input schema. That is not a request the client sent, so it is no event."""
+    server = make()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions())
+
+    async with wire(server) as http:
+        response = await modern_call(http, "add", {"a": 1, "b": 2})
+    await _flush()
+
+    assert response.status_code == 200
+    assert [event["event"] for event in client.events] == ["$mcp_tool_call"]
+
+
+@pytest.mark.parametrize(
+    "make", [make_server, make_lowlevel_server], ids=["mcpserver", "lowlevel"]
+)
+async def test_modern_client_tools_list_still_emits(make):
+    server = make()
+    client = FakeClient()
+    instrument(server, client, MCPAnalyticsOptions())
+
+    async with wire(server) as http:
+        response = await http.post(
+            "/mcp",
+            json=rpc("tools/list", {"_meta": modern_meta()}),
+            headers=modern_headers("tools/list"),
+        )
+    await _flush()
+
+    assert response.status_code == 200
+    assert len(_events(client, "$mcp_tools_list")) == 1
+
+
+async def test_a_fresh_lowlevel_server_strips_injected_arguments_from_a_strict_tool():
+    received = []
+    strict = {
+        "type": "object",
+        "properties": {"query": {"type": "string"}},
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    async def on_list_tools(ctx, params):
+        return mcp_types.ListToolsResult(
+            tools=[mcp_types.Tool(name="search_docs", input_schema=strict)]
+        )
+
+    async def on_call_tool(ctx, params):
+        received.append(dict(params.arguments or {}))
+        return mcp_types.CallToolResult(
+            content=[mcp_types.TextContent(type="text", text="ok")]
+        )
+
+    server = Server("strict", on_call_tool=on_call_tool, on_list_tools=on_list_tools)
+    instrument(server, FakeClient(), MCPAnalyticsOptions(enable_conversation_id=True))
+
+    async with wire(server) as http:
+        response = await modern_call(
+            http,
+            "search_docs",
+            {
+                "query": "flags",
+                "context": "find docs",
+                "llm_model": "model-a",
+                "conversation_id": "0190f0e8-7a6b-7c3d-9e4f-5a6b7c8d9e0f",
+            },
+        )
+
+    assert "error" not in response.json(), response.text
+    assert received == [{"query": "flags"}]

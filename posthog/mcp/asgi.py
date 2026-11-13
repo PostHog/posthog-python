@@ -51,7 +51,11 @@ from urllib.parse import parse_qs
 from ._instrumentation import HANDSHAKE_OBSERVER_KEY, record_initialize
 from ._internal import MCPAnalyticsData, get_server_tracking_data, tracking_key
 from .logger import log, warn
-from .session import handshake_session_id, new_session_id
+from .session import (  # noqa: F401 - handshake_session_id is public API
+    handshake_session,
+    handshake_session_id,
+    new_session_id,
+)
 from .session_token import (
     MCP_SESSION_HEADER,
     SessionTokenPayload,
@@ -345,12 +349,11 @@ async def _record_initialize(
         from starlette.requests import Request
 
         header = session_header
+        params = _initialize_params(message)[0]
         await record_initialize(
             data,
-            session_id=await handshake_session_id(
-                data, header, decode_session_id(header)
-            ),
-            params=_initialize_params(message)[0],
+            session=await handshake_session(data, header, decode_session_id(header)),
+            params=params,
             result=None,
             extra={"session_id": header, "ctx": _InitializeContext(Request(scope))},
             timestamp=started,

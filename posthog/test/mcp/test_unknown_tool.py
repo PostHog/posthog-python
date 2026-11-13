@@ -234,6 +234,10 @@ async def test_a_call_to_a_tool_that_does_not_exist_is_recorded_as_unknown(build
     [unknown] = events_named(client, "$mcp_unknown_tool")
     assert unknown["properties"]["$mcp_tool_name"] == "no_such_tool"
     assert unknown["properties"]["$session_id"]
+    assert unknown["properties"]["$mcp_session_source"] in {
+        "transport",
+        "generated",
+    }
     assert events_named(client, "$mcp_tool_call") == []
     assert events_named(client, "$exception") == []
 
