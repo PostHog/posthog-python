@@ -1459,6 +1459,65 @@ async def test_async_a_move_after_one_that_got_no_answer_is_refused():
     assert len(seen) == 2
 
 
+def test_a_canceled_email_forgets_its_unconfirmed_move():
+    # A late move can't undo a cancel, so the next move goes out and PostHog says the email is canceled.
+    emails, adapter = emails_with(
+        [
+            requests.exceptions.ReadTimeout("slow"),
+            (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
+            rejected(409, "canceled"),
+        ],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+    emails.cancel(MESSAGE_ID.upper())
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(adapter.requests) == 3
+
+
+def test_a_failed_cancel_keeps_the_unconfirmed_move():
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), rejected(409, "already_sending")],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+    with pytest.raises(EmailError):
+        emails.cancel(MESSAGE_ID)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_a_canceled_email_forgets_its_unconfirmed_move():
+    emails, seen = async_emails_with(
+        [
+            httpx.Response(504),
+            httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"}),
+            httpx.Response(409, json={"code": "canceled"}),
+        ]
+    )
+    emails.max_retries = 0
+    with pytest.raises(EmailError):
+        await emails.update(MESSAGE_ID, scheduled_at=LATER)
+    await emails.cancel(MESSAGE_ID)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(seen) == 3
+
+
 @pytest.mark.asyncio
 async def test_async_a_move_after_a_gateway_timeout_is_refused():
     emails, seen = async_emails_with([httpx.Response(504)])

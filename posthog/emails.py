@@ -1008,10 +1008,6 @@ def _status_path(message_id: Union[str, UUID]) -> str:
     return _STATUS_PATH.format(message_id=message_uuid)
 
 
-def _cancel_path(message_id: Union[str, UUID]) -> str:
-    return _status_path(message_id) + "cancel/"
-
-
 def _scheduled_at(value: Any) -> str:
     """The send time on the wire: an aware ``datetime`` as UTC ISO 8601, a string with an offset as given."""
     if isinstance(value, datetime):
@@ -1593,7 +1589,7 @@ class _EmailsBase:
         self._host_error: Optional[str] = None
         # Moves of one email go out one at a time, in turn. A move that got no answer, or a server
         # error, may still reach PostHog at any later time, so its send time stays here, by email,
-        # for the client's lifetime.
+        # until a confirmed cancel of that email. Each entry is an ID and a datetime.
         self._moves_lock = threading.Lock()
         self._unconfirmed_moves: dict[str, datetime] = {}
         self._move_turns: dict[str, tuple[Any, int]] = {}
@@ -1622,6 +1618,11 @@ class _EmailsBase:
     def _note_unconfirmed_move(self, path: str, body: bytes) -> None:
         with self._moves_lock:
             self._unconfirmed_moves[path] = _move_instant(body)
+
+    def _forget_moves(self, path: str) -> None:
+        # A late move can't undo a confirmed cancel: PostHog answers it 409 canceled.
+        with self._moves_lock:
+            self._unconfirmed_moves.pop(path, None)
 
     def _is_disabled(self) -> bool:
         return self.disabled or self._parent_disabled()
@@ -1936,14 +1937,16 @@ class Emails(_EmailsBase):
                 an email that went out.
             ValueError: ``message_id`` is not a message ID.
         """
-        path = _cancel_path(message_id)
+        status_path = _status_path(message_id)
         finish = self._start(_CANCEL_NOT_DONE)
         try:
             headers = _headers(self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from)
-            return self._call(
-                self._posthog_request("POST", path, None, headers),
+            result = self._call(
+                self._posthog_request("POST", status_path + "cancel/", None, headers),
                 _parse_cancel_response,
             )
+            self._forget_moves(status_path)
+            return result
         finally:
             finish()
 
@@ -2251,14 +2254,16 @@ class AsyncEmails(_EmailsBase):
         Takes the same argument and raises the same errors as
         :meth:`Emails.cancel`.
         """
-        path = _cancel_path(message_id)
+        status_path = _status_path(message_id)
         finish = self._start(_CANCEL_NOT_DONE)
         try:
             headers = _headers(self._secret_key(_MANAGE_KEY_NEEDED), self.migrated_from)
-            return await self._call(
-                self._posthog_request("POST", path, None, headers),
+            result = await self._call(
+                self._posthog_request("POST", status_path + "cancel/", None, headers),
                 _parse_cancel_response,
             )
+            self._forget_moves(status_path)
+            return result
         finally:
             finish()
 
