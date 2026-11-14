@@ -928,8 +928,10 @@ class AsyncClient:
                 flags=kwargs.get("flags"),
                 disable_geoip=kwargs.get("disable_geoip"),
             )
-            if exception is not None and result is not None:
-                mark_exception_as_captured(exception, result)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if result is not None:
+                mark_exception_as_captured(exc_info, result)
             return result
         except Exception as error:
             self.log.exception("Failed to capture exception: %s", error)
@@ -981,6 +983,10 @@ class AsyncClient:
         )
         if exc_info is None or exc_info == (None, None, None):
             self.log.warning("No exception information available")
+            return None
+
+        if exception is None and exception_is_already_captured(exc_info):
+            self.log.debug("Exception already captured, skipping")
             return None
 
         return exc_info

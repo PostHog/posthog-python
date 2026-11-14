@@ -2932,9 +2932,10 @@ class Client(object):
                 disable_geoip=disable_geoip,
             )
 
-            # Mark the exception as captured to prevent duplicate captures
-            if exception is not None and res is not None:
-                mark_exception_as_captured(exception, res)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if res is not None:
+                mark_exception_as_captured(exc_info, res)
 
             return res
         except Exception as e:
@@ -2954,6 +2955,10 @@ class Client(object):
 
         if exc_info is None or exc_info == (None, None, None):
             self.log.warning("No exception information available")
+            return None
+
+        if exception is None and exception_is_already_captured(exc_info):
+            self.log.debug("Exception already captured, skipping")
             return None
 
         return exc_info
