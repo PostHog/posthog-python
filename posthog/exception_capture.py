@@ -53,8 +53,10 @@ class ExceptionCapture:
             rate_limiting_enabled: When ``True``, a :class:`~posthog.bucketed_rate_limiter.BucketedRateLimiter`
                 is created with the given bucket parameters to suppress excess captures of the same
                 exception type.
-            bucket_size: Maximum number of captures allowed per exception type before rate limiting
-                kicks in. Clamped to ``[0, 100]``. Default is :attr:`DEFAULT_BUCKET_SIZE` (``50``).
+            bucket_size: Token capacity of the rate-limiting bucket per exception type.
+                Because the call that empties the bucket is itself treated as rate-limited,
+                a fresh bucket permits ``bucket_size - 1`` captures before limiting takes
+                effect. Clamped to ``[0, 100]``. Default is :attr:`DEFAULT_BUCKET_SIZE` (``50``).
             refill_rate: Tokens restored per completed ``refill_interval_seconds`` interval.
                 Clamped to ``[0, bucket_size]``. Default is :attr:`DEFAULT_REFILL_RATE` (``10``).
             refill_interval_seconds: Duration of each refill interval in seconds.
@@ -190,11 +192,11 @@ class ExceptionCapture:
             hook = getattr(owner, previous_hook_name)
 
     def exception_receiver(self, exc_info, extra_properties):
-        """Receive an exception from an external integration and forward it to PostHog.
+        """Receive an exception from an external caller and forward it to PostHog.
 
-        This is the integration hook used by middleware and framework wrappers (such as the
-        Django or Flask integrations) to pass handled exceptions into the capture pipeline
-        without going through :attr:`sys.excepthook`.
+        Provides an entry point for external callers to pass an ``exc_info`` tuple
+        and extra properties (such as ``"distinct_id"``) into the exception capture
+        pipeline without going through :attr:`sys.excepthook`.
 
         Args:
             exc_info: A three-tuple ``(exc_type, exc_value, exc_traceback)``.
