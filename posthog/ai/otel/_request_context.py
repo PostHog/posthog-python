@@ -9,7 +9,9 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Sequence
 
+from opentelemetry.attributes import BoundedAttributes
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.util import BoundedList
 from opentelemetry.util.types import AttributeValue
 
 from ...contexts import get_context_distinct_id, get_context_session_id, get_tags
@@ -84,14 +86,22 @@ def with_request_context(span: ReadableSpan, context: RequestContext) -> Readabl
     }
     if not extra:
         return span
+    # opentelemetry-sdk before 1.22 reads `.dropped` from these collections, so plain
+    # dicts and tuples break export there.
+    attributes = BoundedAttributes(attributes={**own, **extra})
+    events = BoundedList.from_seq(None, span.events)
+    links = BoundedList.from_seq(None, span.links)
+    attributes.dropped = span.dropped_attributes
+    events.dropped = span.dropped_events
+    links.dropped = span.dropped_links
     return ReadableSpan(
         name=span.name,
         context=span.get_span_context(),
         parent=span.parent,
         resource=span.resource,
-        attributes={**own, **extra},
-        events=span.events,
-        links=span.links,
+        attributes=attributes,
+        events=events,
+        links=links,
         kind=span.kind,
         status=span.status,
         start_time=span.start_time,
