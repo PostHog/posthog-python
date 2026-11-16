@@ -26,8 +26,9 @@ except ImportError:
 
 from posthog import setup
 from .formatting import (
+    _append_assistant_output,
     _format_user_input,
-    format_assistant_blocks,
+    format_assistant_blocks as format_assistant_blocks,
     format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.media import ensure_serializable as _ensure_serializable
@@ -307,12 +308,14 @@ class PostHogClaudeAgentProcessor:
 
         # Two-slot input tracking:
         # - current_input: input for the generation currently in progress
-        # - next_input: tool results that arrive mid-turn, queued for the next generation
+        # - next_input: tool results queued for the next generation
         #
-        # Message ordering from the SDK is:
-        #   message_start → content_blocks → AssistantMessage → UserMessage(tool result) → message_stop
-        # So UserMessage arrives *before* message_stop. When message_stop fires we emit
-        # with current_input, then promote next_input → current_input for the next turn.
+        # The CLI sends each content block as its own AssistantMessage before
+        # message_stop, and each tool result as its own UserMessage after it.
+        # Queued input is promoted when the next generation starts, so it
+        # does not matter which side of message_stop the tool results land on.
+        # Input is used by one generation only: a generation with nothing
+        # queued has no input.
         next_input: Optional[List[Dict[str, Any]]] = None
 
         # Accumulate assistant output per generation
@@ -325,6 +328,14 @@ class PostHogClaudeAgentProcessor:
             # never interrupt the underlying Claude Agent SDK query.
             try:
                 if isinstance(message, StreamEvent):
+                    if _starts_generation(message):
+                        if tracker.current_span_id is not None:
+                            # The previous request never finished (it was
+                            # retried), so its partial output is dropped.
+                            pending_output = []
+                        current_input, next_input = _promote_input(
+                            current_input, next_input
+                        )
                     tracker.process_stream_event(message)
 
                     # Emit $ai_generation when a turn completes
@@ -343,9 +354,7 @@ class PostHogClaudeAgentProcessor:
                             privacy,
                             groups,
                         )
-                        # Promote: tool results from this turn become input for next turn
-                        current_input = next_input
-                        next_input = None
+                        current_input = None
                         pending_output = []
 
                 elif isinstance(message, AssistantMessage):
@@ -361,9 +370,13 @@ class PostHogClaudeAgentProcessor:
                         pending_output,
                     )
 
-                elif isinstance(message, UserMessage):
-                    # UserMessages carry tool results. They arrive *before* message_stop
-                    # for the current turn, so queue them as input for the *next* generation.
+                elif isinstance(message, UserMessage) and not _from_subagent(message):
+                    # UserMessages carry tool results; queue them as input for the
+                    # *next* generation.
+                    if not tracker.had_any_stream_events:
+                        # Without stream events, a tool result ends the assistant
+                        # turn; the result fallback reports the final turn only.
+                        pending_output = []
                     next_input = _format_user_input(
                         message.content, self._client, next_input
                     )
@@ -455,10 +468,10 @@ class PostHogClaudeAgentProcessor:
                     privacy,
                     groups,
                 )
-        output_content = format_assistant_blocks(message.content)
-        if output_content:
-            pending_output = [{"role": "assistant", "content": output_content}]
-        return pending_output
+        if _from_subagent(message):
+            # A subagent's own API calls are not this query's generations.
+            return pending_output
+        return _append_assistant_output(pending_output, message.content)
 
     def _emit_generation(
         self,
@@ -676,6 +689,27 @@ class PostHogClaudeAgentProcessor:
             return str(override)
         # Fall back to instance default
         return self._get_distinct_id(result)
+
+
+def _from_subagent(message: Any) -> bool:
+    return getattr(message, "parent_tool_use_id", None) is not None
+
+
+def _starts_generation(message: "StreamEvent") -> bool:
+    """Whether a main-agent API call is starting (subagent calls are skipped)."""
+    return (
+        not _from_subagent(message)
+        and isinstance(message.event, dict)
+        and message.event.get("type") == "message_start"
+    )
+
+
+def _promote_input(
+    current_input: Optional[List[Dict[str, Any]]],
+    next_input: Optional[List[Dict[str, Any]]],
+) -> tuple[Optional[List[Dict[str, Any]]], None]:
+    """Make queued input the input of the generation that is starting."""
+    return (current_input if next_input is None else next_input), None
 
 
 def _query_inputs(

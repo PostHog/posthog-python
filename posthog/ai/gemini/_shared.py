@@ -70,10 +70,14 @@ def _build_gemini_client_args(
 
     resolved_api_key = api_key
     if resolved_api_key is None:
-        resolved_api_key = os.environ.get("GOOGLE_API_KEY") or os.environ.get("API_KEY")
+        resolved_api_key = (
+            os.environ.get("GOOGLE_API_KEY")
+            or os.environ.get("GEMINI_API_KEY")
+            or os.environ.get("API_KEY")
+        )
     if resolved_api_key is None:
         raise ValueError(
-            "API key must be provided either as parameter or via GOOGLE_API_KEY/API_KEY environment variable"
+            "API key must be provided either as parameter or via GOOGLE_API_KEY/GEMINI_API_KEY/API_KEY environment variable"
         )
 
     client_args["api_key"] = resolved_api_key
