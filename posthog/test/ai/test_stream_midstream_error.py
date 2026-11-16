@@ -273,17 +273,17 @@ class _ConnectError(RuntimeError):
     status_code = 401
 
 
-# A caller's options must reach the error event too; the distinct id keeps the
-# event from being personless, so only the caller can set the option.
-_CALLER_OPTIONS = {"process_person_profile": False}
-_CALLER = {"posthog_distinct_id": "user-1", "posthog_options": _CALLER_OPTIONS}
+# A caller's options must reach the error event too. No distinct id, so the
+# event is personless and process_person_profile: False joins the caller's.
+_CALLER = {"posthog_options": {"cookieless_mode": True}}
+_SENT_OPTIONS = {"cookieless_mode": True, "process_person_profile": False}
 
 
 def _assert_connect_error_event(mock_client):
     props = _props(mock_client)
     assert props["$ai_is_error"] is True
     assert props["$ai_http_status"] == 401
-    assert mock_client.capture_ai.call_args[1]["options"] == _CALLER_OPTIONS
+    assert mock_client.capture_ai.call_args[1]["options"] == _SENT_OPTIONS
 
 
 def test_openai_chat_stream_connect_error(mock_client):
