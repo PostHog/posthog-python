@@ -9,15 +9,16 @@ id, raw result shape) and delegate analytics policy here so both stay in sync.""
 from __future__ import annotations
 
 import asyncio
+from contextlib import contextmanager
 import concurrent.futures
 import copy
 import os
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import (
     Any,
-    ContextManager,
+    Iterator,
     Dict,
     FrozenSet,
     List,
@@ -73,6 +74,7 @@ from ._client_conversation import (
 )
 from .session import (
     ResolvedSession,
+    PendingCustomEvents,
     bind_in_tool_session,
     resolve_anchored_session,
     new_session_id,
@@ -577,6 +579,9 @@ class ToolCallLifecycle:
     conversation_id: Optional[str]
     minted_conversation_id: bool
     input_schema: Any
+    pending_custom_events: PendingCustomEvents = field(
+        default_factory=PendingCustomEvents
+    )
 
     @property
     def is_missing_capability(self) -> bool:
@@ -625,15 +630,47 @@ class ToolCallLifecycle:
             request_session_id=self.request_session_id,
         )
 
-    def in_tool(self, primed: ResolvedSession) -> ContextManager[None]:
-        """Scope the tool body to this call's session: its client id or handle,
-        else the session :meth:`prime_session` returned. A handle minted for this
-        call counts, as in posthog-js, since it is the session the call lands in
-        once its result delivers it."""
+    @contextmanager
+    def in_tool(self, primed: ResolvedSession) -> Iterator[None]:
+        """Scope the tool body to this call's session: its client id or echoed
+        handle, else the session :meth:`prime_session` returned. A handle minted
+        for this call counts only if its result delivers it, so until the call
+        settles its custom events wait in :attr:`pending_custom_events`."""
         anchored = resolve_anchored_session(
             self.conversation_id, self.client_conversation
         )
-        return bind_in_tool_session(self.data, anchored or primed)
+        pending = self.pending_custom_events if self.minted_conversation_id else None
+        with bind_in_tool_session(self.data, anchored or primed, pending):
+            yield
+
+    def settle_left_over_custom_events(self, primed: ResolvedSession) -> None:
+        """Adapters call this once the call is over. A call that ended without
+        recording anything (cancelled, or a path that records nothing) sends what
+        it held back with its primed session."""
+        if self.pending_custom_events.settled is None:
+            self._settle_custom_events(primed)
+
+    def _settle_custom_events(self, session: ResolvedSession) -> None:
+        """Send the custom events this call held back, with its own event's session,
+        without making the call wait on them or fail because of them."""
+        pending = self.pending_custom_events
+        pending.settled = session
+        events, pending.events = pending.events, []
+        for event in events:
+            try:
+                fire_and_forget(
+                    capture_event(
+                        self.data,
+                        {
+                            **event,
+                            "session_id": session.session_id,
+                            "session_source": session.source,
+                        },
+                    ),
+                    self.data,
+                )
+            except Exception as err:  # noqa: BLE001 - analytics must never break a tool call
+                log(f"custom event dropped while settling a call: {err}")
 
     def virtual_result_texts(self, primary_text: str) -> List[str]:
         """Build the text payload for an SDK virtual-tool result."""
@@ -704,6 +741,7 @@ class ToolCallLifecycle:
             return False
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
+        self._settle_custom_events(session)
         await record_unknown_tool(
             self.data,
             session,
@@ -722,6 +760,7 @@ class ToolCallLifecycle:
         # raised: no adapter had an opportunity to deliver it to the agent.
         conversation_id = self._anchored_conversation_id(False)
         session = await self.prepare_session(conversation_id)
+        self._settle_custom_events(session)
         await record_tool_call(
             self.data,
             session,
@@ -750,6 +789,7 @@ class ToolCallLifecycle:
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
+        self._settle_custom_events(session)
         await record_tool_call(
             self.data,
             session,

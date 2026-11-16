@@ -472,6 +472,45 @@ async def test_custom_capture_keeps_its_callers_session_while_another_call_compl
     assert event["properties"]["$session_id"] != calls["bob"]["$session_id"]
 
 
+@pytest.mark.parametrize(
+    "outcome", ["delivered", "undelivered", "raised"], ids=lambda o: o
+)
+@pytest.mark.parametrize("late", [False, True], ids=["in the tool", "after it settles"])
+async def test_a_custom_event_on_a_minted_handle_takes_its_calls_final_session(
+    outcome, late
+):
+    client = FakeClient()
+    key, data = shared_http_server(client)
+    lifecycle = start_call(data, user_agent=OTHER, user="alice")
+    assert lifecycle.minted_conversation_id
+    settled = asyncio.Event()
+
+    async def capture_once_settled():
+        await settled.wait()
+        await McpAnalytics(key).capture("inside_tool")
+
+    with lifecycle.in_tool(await lifecycle.prime_session()):
+        if late:
+            background = asyncio.create_task(capture_once_settled())
+        else:
+            await McpAnalytics(key).capture("inside_tool")
+    if outcome == "raised":
+        await lifecycle.record_error(RuntimeError("boom"), 1.0)
+    else:
+        await lifecycle.record_result(
+            {"content": []}, 1.0, conversation_id_delivered=outcome == "delivered"
+        )
+    settled.set()
+    if late:
+        await background
+    await _flush()
+
+    (event,) = _events(client, "inside_tool")
+    (call,) = _events(client, "$mcp_tool_call")
+    assert event["properties"]["$session_id"] == call["properties"]["$session_id"]
+    assert event["distinct_id"] == call["distinct_id"]
+
+
 async def test_a_capture_in_on_feedback_keeps_its_callers_session():
     client = FakeClient()
     key = FakeServer()

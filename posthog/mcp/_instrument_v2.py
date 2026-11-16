@@ -464,37 +464,42 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
         session = await lifecycle.prime_session()
-
-        start = time.monotonic()
         try:
-            with lifecycle.in_tool(session):
-                result = await original(
-                    name, call_arguments, context=context, convert_result=convert_result
-                )
-        except Exception as error:
-            if await lifecycle.record_if_unknown_tool(
-                _name_owned_by_real_tool_v2(server, name)
-            ):
+            start = time.monotonic()
+            try:
+                with lifecycle.in_tool(session):
+                    result = await original(
+                        name,
+                        call_arguments,
+                        context=context,
+                        convert_result=convert_result,
+                    )
+            except Exception as error:
+                if await lifecycle.record_if_unknown_tool(
+                    _name_owned_by_real_tool_v2(server, name)
+                ):
+                    raise
+                # The outer MCPServer layer converts the raise after this seam; no
+                # freshly minted handle could have been delivered yet.
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
                 raise
-            # The outer MCPServer layer converts the raise after this seam; no
-            # freshly minted handle could have been delivered yet.
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
-            raise
-        duration_ms = (time.monotonic() - start) * 1000
+            duration_ms = (time.monotonic() - start) * 1000
 
-        delivered = False
-        if lifecycle.conversation_id:
-            result, delivered = _deliver_conversation_id(
-                result,
-                lifecycle.conversation_id,
-                lifecycle.minted_conversation_id,
-                mirror=lifecycle.mirrors_output_instructions,
+            delivered = False
+            if lifecycle.conversation_id:
+                result, delivered = _deliver_conversation_id(
+                    result,
+                    lifecycle.conversation_id,
+                    lifecycle.minted_conversation_id,
+                    mirror=lifecycle.mirrors_output_instructions,
+                )
+
+            await lifecycle.record_result(
+                result, duration_ms, conversation_id_delivered=delivered
             )
-
-        await lifecycle.record_result(
-            result, duration_ms, conversation_id_delivered=delivered
-        )
-        return result
+            return result
+        finally:
+            lifecycle.settle_left_over_custom_events(session)
 
     setattr(wrapped, _WRAPPED_FLAG, True)
     tool_manager.call_tool = wrapped
@@ -672,44 +677,49 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
         session = await lifecycle.prime_session()
-
-        start = time.monotonic()
         try:
-            with lifecycle.in_tool(session), raised_tool_error(standalone) as raised:
-                result = await original(ctx, params)
-        except Exception as error:
-            if await lifecycle.record_if_unknown_tool(
-                await registered_tool_exists(standalone, name)
-            ):
+            start = time.monotonic()
+            try:
+                with (
+                    lifecycle.in_tool(session),
+                    raised_tool_error(standalone) as raised,
+                ):
+                    result = await original(ctx, params)
+            except Exception as error:
+                if await lifecycle.record_if_unknown_tool(
+                    await registered_tool_exists(standalone, name)
+                ):
+                    raise
+                # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
+                # handle could have been delivered yet.
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
                 raise
-            # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
-            # handle could have been delivered yet.
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
-            raise
-        duration_ms = (time.monotonic() - start) * 1000
+            duration_ms = (time.monotonic() - start) * 1000
 
-        delivered = False
-        if lifecycle.conversation_id:
-            result, delivered = _deliver_conversation_id(
+            delivered = False
+            if lifecycle.conversation_id:
+                result, delivered = _deliver_conversation_id(
+                    result,
+                    lifecycle.conversation_id,
+                    lifecycle.minted_conversation_id,
+                    mirror=lifecycle.mirrors_output_instructions,
+                )
+
+            if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(standalone, name),
+                conversation_id_delivered=delivered,
+            ):
+                return result
+
+            await lifecycle.record_result(
                 result,
-                lifecycle.conversation_id,
-                lifecycle.minted_conversation_id,
-                mirror=lifecycle.mirrors_output_instructions,
+                duration_ms,
+                conversation_id_delivered=delivered,
+                error=raised.error,
             )
-
-        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(standalone, name),
-            conversation_id_delivered=delivered,
-        ):
             return result
-
-        await lifecycle.record_result(
-            result,
-            duration_ms,
-            conversation_id_delivered=delivered,
-            error=raised.error,
-        )
-        return result
+        finally:
+            lifecycle.settle_left_over_custom_events(session)
 
     setattr(handler, _WRAPPED_FLAG, True)
     _replace_handler(server, _CALL_METHOD, handler, entry.params_type)

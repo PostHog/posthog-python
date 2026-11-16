@@ -160,46 +160,51 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
         session = await lifecycle.prime_session()
-
-        start = time.monotonic()
         try:
-            with lifecycle.in_tool(session):
-                result = await original(
-                    name, call_arguments, context=context, convert_result=convert_result
-                )
-        except Exception as error:
-            if await lifecycle.record_if_unknown_tool(
-                _name_owned_by_real_tool(server, name)
-            ):
+            start = time.monotonic()
+            try:
+                with lifecycle.in_tool(session):
+                    result = await original(
+                        name,
+                        call_arguments,
+                        context=context,
+                        convert_result=convert_result,
+                    )
+            except Exception as error:
+                if await lifecycle.record_if_unknown_tool(
+                    _name_owned_by_real_tool(server, name)
+                ):
+                    raise
+                # The minted prompt-back was never delivered to the agent — don't stamp
+                # an orphan conversation_id it can't echo (an agent-supplied id is kept).
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
                 raise
-            # The minted prompt-back was never delivered to the agent — don't stamp
-            # an orphan conversation_id it can't echo (an agent-supplied id is kept).
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
-            raise
 
-        # Deliver the handle first, then capture the result the agent actually got.
-        # Two channels: mirrored into structuredContent on every response (for
-        # tools whose output schema we declared the key on — clients that read
-        # structuredContent never see the text block), and the prompt-back text
-        # block on the minting response only.
-        delivered = False
-        if lifecycle.conversation_id:
-            if lifecycle.mirrors_output_instructions:
-                result, delivered = mirror_instructions_into_structured_content(
-                    result, lifecycle.conversation_id
-                )
-            if lifecycle.minted_conversation_id:
-                injected = _inject_prompt_back(result, lifecycle.conversation_id)
-                if injected is not result:
-                    delivered = True
-                result = injected
+            # Deliver the handle first, then capture the result the agent actually got.
+            # Two channels: mirrored into structuredContent on every response (for
+            # tools whose output schema we declared the key on — clients that read
+            # structuredContent never see the text block), and the prompt-back text
+            # block on the minting response only.
+            delivered = False
+            if lifecycle.conversation_id:
+                if lifecycle.mirrors_output_instructions:
+                    result, delivered = mirror_instructions_into_structured_content(
+                        result, lifecycle.conversation_id
+                    )
+                if lifecycle.minted_conversation_id:
+                    injected = _inject_prompt_back(result, lifecycle.conversation_id)
+                    if injected is not result:
+                        delivered = True
+                    result = injected
 
-        await lifecycle.record_result(
-            result,
-            (time.monotonic() - start) * 1000,
-            conversation_id_delivered=delivered,
-        )
-        return result
+            await lifecycle.record_result(
+                result,
+                (time.monotonic() - start) * 1000,
+                conversation_id_delivered=delivered,
+            )
+            return result
+        finally:
+            lifecycle.settle_left_over_custom_events(session)
 
     setattr(wrapped, _WRAPPED_FLAG, True)
     tool_manager.call_tool = wrapped

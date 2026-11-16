@@ -11,7 +11,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Iterator, NamedTuple, Optional
+from typing import Any, Dict, Iterator, List, NamedTuple, Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._client_conversation import ClientConversation
@@ -35,9 +35,20 @@ class ResolvedSession(NamedTuple):
     source: str
 
 
+class PendingCustomEvents:
+    """Custom events captured while a call's session is a handle minted for it. That
+    handle groups the call only once its result delivers it, so the events wait
+    until the call settles and then take the call's own session."""
+
+    def __init__(self) -> None:
+        self.events: List[Dict[str, Any]] = []
+        self.settled: Optional[ResolvedSession] = None
+
+
 class _BoundSession(NamedTuple):
     data: MCPAnalyticsData
     session: ResolvedSession
+    pending: Optional[PendingCustomEvents]
 
 
 _in_tool_session: ContextVar[Optional[_BoundSession]] = ContextVar(
@@ -47,12 +58,14 @@ _in_tool_session: ContextVar[Optional[_BoundSession]] = ContextVar(
 
 @contextmanager
 def bind_in_tool_session(
-    data: MCPAnalyticsData, session: ResolvedSession
+    data: MCPAnalyticsData,
+    session: ResolvedSession,
+    pending: Optional[PendingCustomEvents] = None,
 ) -> Iterator[None]:
     """Hold this call's session for the tool body. A concurrent request may rewrite
     ``data.session_id`` while the tool awaits, so a custom event captured inside
     the tool reads its session from here (see :func:`current_session`)."""
-    token = _in_tool_session.set(_BoundSession(data, session))
+    token = _in_tool_session.set(_BoundSession(data, session, pending))
     try:
         yield
     finally:
@@ -63,9 +76,19 @@ def current_session(data: MCPAnalyticsData) -> ResolvedSession:
     """The session a custom event belongs to: the running tool call's on this
     server, else the one the server last resolved."""
     bound = _in_tool_session.get()
-    if bound is not None and bound.data is data:
-        return bound.session
-    return ResolvedSession(data.session_id, data.session_source)
+    if bound is None or bound.data is not data:
+        return ResolvedSession(data.session_id, data.session_source)
+    if bound.pending is not None and bound.pending.settled is not None:
+        return bound.pending.settled
+    return bound.session
+
+
+def unsettled_custom_events(data: MCPAnalyticsData) -> Optional[PendingCustomEvents]:
+    """Where a custom event waits while the running call's session is undecided."""
+    bound = _in_tool_session.get()
+    if bound is None or bound.data is not data or bound.pending is None:
+        return None
+    return bound.pending if bound.pending.settled is None else None
 
 
 def new_session_id() -> str:
