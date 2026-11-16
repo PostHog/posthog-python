@@ -1,5 +1,14 @@
 # posthog
 
+## 7.91.2 — 2026-11-16
+
+### Patch changes
+
+- [84158304](https://github.com/posthog/posthog-python/commit/84158304ab1a30f1868e5526560bb1b91fa1b1be) Honor `GEMINI_API_KEY` when initializing the synchronous and asynchronous Gemini clients, after `GOOGLE_API_KEY` and before the legacy `API_KEY` fallback. — Thanks @pcbeingused333!
+- [ade1ff99](https://github.com/posthog/posthog-python/commit/ade1ff990b3f334a41e284ca32e3241499019d80) `posthog.ai.anthropic`: `messages.stream()` (sync and async) now captures an `$ai_generation` event with `$ai_is_error` when the initial request fails, for example with a 401 or a connection error. Before, only `messages.create(stream=True)` captured that failure, so errors raised on entering the `stream()` context manager were never reported. — Thanks @pcbeingused333!
+- [92fae510](https://github.com/posthog/posthog-python/commit/92fae510c34dd1d1514b9b3b78791c159ab4dc1a) An Anthropic error that arrives as an `error` event inside a stream, such as `overloaded_error`, is no longer recorded with `$ai_http_status: 200`. The anthropic SDK raises it with the stream's 200 status, so `$ai_http_status` now comes from the error type (529 for `overloaded_error`, 429 for `rate_limit_error`), or is 0 for an unknown type. This applies to the LangChain callback handler and to every capture that reads the status through `_get_http_status`. — Thanks @jaeminbird!
+- [53405145](https://github.com/posthog/posthog-python/commit/534051451fd5d242a50974577bcd4f2c00ca5f74) Claude Agent SDK: give each generation the tool results it was called with, and keep every text and tool-use block of a response in its `$ai_output_choices`. — Thanks @MaiAditya for your first contribution 🎉!
+
 ## 7.91.1 — 2026-11-13
 
 ### Patch changes
