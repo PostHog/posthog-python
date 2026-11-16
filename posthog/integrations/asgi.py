@@ -120,10 +120,13 @@ def _server_host(scope: Mapping[str, Any]) -> Optional[str]:
     hostname = _sanitize_text(hostname)
     if not hostname:
         return None
+    return _format_server_host(hostname, port, scope.get("scheme"))
+
+
+def _format_server_host(hostname: str, port: int, scheme: Any) -> str:
     if ":" in hostname and not hostname.startswith("["):
         hostname = f"[{hostname}]"
 
-    scheme = scope.get("scheme")
     default_port = (scheme == "http" and port == 80) or (
         scheme == "https" and port == 443
     )
@@ -148,6 +151,23 @@ def _extract_properties(
         properties["$user_agent"] = user_agent
         properties["$raw_user_agent"] = user_agent
 
+    ip_address = _client_ip(scope, headers)
+    if ip_address:
+        properties["$ip"] = ip_address
+
+    scheme = _sanitize_text(scope.get("scheme"), max_length=16)
+    host = _decode_header(headers.get(b"host")) or _server_host(scope)
+    if scheme and host and path:
+        # Deliberately omit query strings: they commonly contain secrets and
+        # high-cardinality values. The path remains available separately.
+        properties["$current_url"] = f"{scheme}://{host}{path}"
+
+    return properties
+
+
+def _client_ip(
+    scope: Mapping[str, Any], headers: Mapping[bytes, bytes]
+) -> Optional[str]:
     forwarded_for = _decode_header(headers.get(b"x-forwarded-for"))
     if forwarded_for:
         ip_address = _sanitize_text(forwarded_for.split(",", 1)[0])
@@ -160,17 +180,7 @@ def _extract_properties(
             and isinstance(client[0], str)
             else None
         )
-    if ip_address:
-        properties["$ip"] = ip_address
-
-    scheme = _sanitize_text(scope.get("scheme"), max_length=16)
-    host = _decode_header(headers.get(b"host")) or _server_host(scope)
-    if scheme and host and path:
-        # Deliberately omit query strings: they commonly contain secrets and
-        # high-cardinality values. The path remains available separately.
-        properties["$current_url"] = f"{scheme}://{host}{path}"
-
-    return properties
+    return ip_address
 
 
 async def _resolve_callback_result(value):
@@ -252,13 +262,7 @@ class PosthogASGIMiddleware:
 
             _enrich_current_span()
 
-            properties = _extract_properties(scope, headers)
-            if self.extra_properties:
-                extra_properties = await _resolve_callback_result(
-                    self.extra_properties(scope)
-                )
-                if extra_properties:
-                    properties.update(extra_properties)
+            properties = await self._request_properties(scope, headers)
             for key, value in properties.items():
                 contexts.tag(key, value)
 
@@ -282,3 +286,13 @@ class PosthogASGIMiddleware:
                             exception, _capture_metadata=_CAPTURE_METADATA
                         )
                 raise
+
+    async def _request_properties(self, scope, headers) -> dict[str, Any]:
+        properties = _extract_properties(scope, headers)
+        if self.extra_properties:
+            extra_properties = await _resolve_callback_result(
+                self.extra_properties(scope)
+            )
+            if extra_properties:
+                properties.update(extra_properties)
+        return properties

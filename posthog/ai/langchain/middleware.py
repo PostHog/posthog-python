@@ -252,22 +252,9 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         if not isinstance(run, GenerationMetadata):
             return
 
-        output: LLMResult | BaseException
-        if isinstance(result, BaseException):
-            output = result
-        else:
-            generations = [
-                ChatGeneration(message=message)
-                for message in result.result
-                if isinstance(message, AIMessage)
-            ]
-            if not generations:
-                return
-            metadata = generations[-1].message.response_metadata
-            output = LLMResult(
-                generations=[generations],
-                llm_output=metadata if isinstance(metadata, dict) else None,
-            )
+        output = _model_output(result)
+        if output is None:
+            return
 
         root_id = _root_id(state)
         self._safely_call(
@@ -366,6 +353,26 @@ def _public_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return {
         key: value for key, value in state.items() if not key.startswith("_posthog_")
     }
+
+
+def _model_output(
+    result: ModelResponse[Any] | BaseException,
+) -> LLMResult | BaseException | None:
+    if isinstance(result, BaseException):
+        return result
+    else:
+        generations = [
+            ChatGeneration(message=message)
+            for message in result.result
+            if isinstance(message, AIMessage)
+        ]
+        if not generations:
+            return None
+        metadata = generations[-1].message.response_metadata
+        return LLMResult(
+            generations=[generations],
+            llm_output=metadata if isinstance(metadata, dict) else None,
+        )
 
 
 __all__ = ["PostHogMiddleware"]

@@ -166,18 +166,7 @@ def _to_v1_event(msg: dict) -> dict:
     """
     properties = dict(msg.get("properties") or {})
 
-    # Relocate top-level $set/$set_once into properties; v1 has no top-level
-    # form. On the unusual collision where properties already carries the key,
-    # the properties value wins.
-    for key in _RELOCATE_TO_PROPERTIES:
-        top_val = msg.get(key)
-        if top_val is None:
-            continue
-        existing = properties.get(key)
-        if isinstance(top_val, dict) and isinstance(existing, dict):
-            properties[key] = {**top_val, **existing}
-        elif key not in properties:
-            properties[key] = top_val
+    _relocate_v1_properties(msg, properties)
 
     for key in _STRIP_FROM_PROPERTIES:
         properties.pop(key, None)
@@ -403,21 +392,9 @@ def _parse_v1_response(res: "requests.Response") -> _V1ParsedResponse:
             # don't loop forever re-sending against a broken success.
             return _V1ParsedResponse(status, True, retry_after, malformed=True)
 
-    message = ""
-    try:
-        payload = res.json()
-        if isinstance(payload, dict):
-            message = (
-                payload.get("error_description")
-                or payload.get("error")
-                or payload.get("detail")
-                or ""
-            )
-    except (ValueError, AttributeError):
-        pass
-    if not message:
-        message = res.text or f"capture v1 request failed with status {status}"
-    return _V1ParsedResponse(status, False, retry_after, error_message=message)
+    return _V1ParsedResponse(
+        status, False, retry_after, error_message=_v1_error_message(res, status)
+    )
 
 
 def _backoff(attempt_index: int, retry_after: Optional[float]) -> None:
@@ -536,78 +513,155 @@ def _send_v1_batch(
         parsed = _parse_v1_response(res)
 
         if parsed.is_success:
-            if parsed.malformed:
-                raise CaptureV1Error(
-                    parsed.status_code,
-                    "capture v1 returned a success status with an unparseable body",
-                    request_id=request_id,
-                    attempts=attempt,
-                    drops=all_drops,
-                )
-            results = parsed.results or {}
-            _log_result_summary(request_id, attempt, results)
-
-            retry_events: list[dict] = []
-            retry_uuids: list[str] = []
-            for event, uid in zip(pending_events, pending_uuids):
-                directive = results.get(uid)
-                if directive is None:
-                    # Absent from the map: treated as accepted (matches posthog-rs).
-                    continue
-                if directive.result == _RESULT_RETRY:
-                    retry_events.append(event)
-                    retry_uuids.append(uid)
-                elif directive.result == _RESULT_DROP:
-                    # Terminal per-event rejection; keep it so it is surfaced
-                    # even when the rest of the batch succeeds (see below).
-                    all_drops.append((uid, directive.details))
-                # ok / warning / unrecognized -> terminal success.
-
-            if not retry_uuids:
-                # Nothing left to resend. If the server dropped any events,
-                # surface them via on_error even though the request was a 2xx —
-                # a success status does not mean every event was delivered.
-                if all_drops:
-                    raise CaptureV1Error(
-                        parsed.status_code,
-                        f"{len(all_drops)} event(s) dropped by the server",
-                        request_id=request_id,
-                        attempts=attempt,
-                        drops=all_drops,
-                    )
+            pending_events, pending_uuids = _apply_v1_results(
+                parsed,
+                pending_events,
+                pending_uuids,
+                all_drops,
+                request_id,
+                attempt,
+                last_attempt,
+            )
+            if not pending_uuids:
                 return
-            if last_attempt:
-                raise CaptureV1Error(
-                    parsed.status_code,
-                    f"{len(retry_uuids)} event(s) still pending retry after {attempt} attempt(s)",
-                    request_id=request_id,
-                    attempts=attempt,
-                    retry_exhausted=retry_uuids,
-                    drops=all_drops,
-                )
-            pending_events, pending_uuids = retry_events, retry_uuids
             _backoff(attempt_index, parsed.retry_after)
             continue
 
         # Non-2xx. Retryable transient statuses back off; everything else
         # (400/401/402/413/415/...) is terminal. Any drops collected from a
         # prior 2xx attempt ride along so on_error still sees them.
-        v1_error = CaptureV1Error(
-            parsed.status_code,
-            parsed.error_message,
-            retry_after=parsed.retry_after,
-            request_id=request_id,
-            attempts=attempt,
-            drops=all_drops,
+        last_exc = _v1_batch_failure(
+            parsed, request_id, attempt, all_drops, last_attempt
         )
-        if parsed.status_code in _RETRYABLE_STATUSES:
-            last_exc = v1_error
-            if last_attempt:
-                raise v1_error
-            _backoff(attempt_index, parsed.retry_after)
-            continue
-        raise v1_error
+        _backoff(attempt_index, parsed.retry_after)
 
     # Unreachable in practice (every branch returns or continues).
     if last_exc:
         raise last_exc
+
+
+def _relocate_v1_properties(msg: dict, properties: dict) -> None:
+    # Relocate top-level $set/$set_once into properties; v1 has no top-level
+    # form. On the unusual collision where properties already carries the key,
+    # the properties value wins.
+    for key in _RELOCATE_TO_PROPERTIES:
+        top_val = msg.get(key)
+        if top_val is None:
+            continue
+        existing = properties.get(key)
+        if isinstance(top_val, dict) and isinstance(existing, dict):
+            properties[key] = {**top_val, **existing}
+        elif key not in properties:
+            properties[key] = top_val
+
+
+def _v1_error_message(res: "requests.Response", status: int) -> str:
+    message = ""
+    try:
+        payload = res.json()
+        if isinstance(payload, dict):
+            message = (
+                payload.get("error_description")
+                or payload.get("error")
+                or payload.get("detail")
+                or ""
+            )
+    except (ValueError, AttributeError):
+        pass
+    if not message:
+        message = res.text or f"capture v1 request failed with status {status}"
+    return message
+
+
+def _apply_v1_results(
+    parsed: _V1ParsedResponse,
+    pending_events: list[dict],
+    pending_uuids: list[str],
+    all_drops: list[tuple[str, Optional[str]]],
+    request_id: str,
+    attempt: int,
+    last_attempt: bool,
+) -> tuple[list[dict], list[str]]:
+    if parsed.malformed:
+        raise CaptureV1Error(
+            parsed.status_code,
+            "capture v1 returned a success status with an unparseable body",
+            request_id=request_id,
+            attempts=attempt,
+            drops=all_drops,
+        )
+    results = parsed.results or {}
+    _log_result_summary(request_id, attempt, results)
+
+    retry_events, retry_uuids = _partition_v1_results(
+        pending_events, pending_uuids, results, all_drops
+    )
+
+    if not retry_uuids:
+        # Nothing left to resend. If the server dropped any events,
+        # surface them via on_error even though the request was a 2xx —
+        # a success status does not mean every event was delivered.
+        if all_drops:
+            raise CaptureV1Error(
+                parsed.status_code,
+                f"{len(all_drops)} event(s) dropped by the server",
+                request_id=request_id,
+                attempts=attempt,
+                drops=all_drops,
+            )
+        return [], []
+    if last_attempt:
+        raise CaptureV1Error(
+            parsed.status_code,
+            f"{len(retry_uuids)} event(s) still pending retry after {attempt} attempt(s)",
+            request_id=request_id,
+            attempts=attempt,
+            retry_exhausted=retry_uuids,
+            drops=all_drops,
+        )
+    return retry_events, retry_uuids
+
+
+def _partition_v1_results(
+    pending_events: list[dict],
+    pending_uuids: list[str],
+    results: dict[str, _V1EventResult],
+    all_drops: list[tuple[str, Optional[str]]],
+) -> tuple[list[dict], list[str]]:
+    retry_events: list[dict] = []
+    retry_uuids: list[str] = []
+    for event, uid in zip(pending_events, pending_uuids):
+        directive = results.get(uid)
+        if directive is None:
+            # Absent from the map: treated as accepted (matches posthog-rs).
+            continue
+        if directive.result == _RESULT_RETRY:
+            retry_events.append(event)
+            retry_uuids.append(uid)
+        elif directive.result == _RESULT_DROP:
+            # Terminal per-event rejection; keep it so it is surfaced
+            # even when the rest of the batch succeeds (see below).
+            all_drops.append((uid, directive.details))
+        # ok / warning / unrecognized -> terminal success.
+
+    return retry_events, retry_uuids
+
+
+def _v1_batch_failure(
+    parsed: _V1ParsedResponse,
+    request_id: str,
+    attempt: int,
+    all_drops: list[tuple[str, Optional[str]]],
+    last_attempt: bool,
+) -> CaptureV1Error:
+    error = CaptureV1Error(
+        parsed.status_code,
+        parsed.error_message,
+        retry_after=parsed.retry_after,
+        request_id=request_id,
+        attempts=attempt,
+        drops=all_drops,
+    )
+    if parsed.status_code not in _RETRYABLE_STATUSES or last_attempt:
+        raise error
+    return error

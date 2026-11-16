@@ -33,7 +33,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -71,6 +71,7 @@ from .feedback import (
     resolve_send_feedback_tool_name,
 )
 from ._client_conversation import (
+    ClientConversationRow,
     meta_client_name,
     read_client_conversation,
     recognize_client,
@@ -268,6 +269,7 @@ class PostHogMCP(Client):
             event["error"] = capture_exception(
                 error if error is not None else f"Tool {tool_name} returned an error"
             )
+            event["error_status"] = http_status(error)
         self._emit(event)
 
     def capture_initialize(
@@ -496,34 +498,9 @@ class PostHogMCP(Client):
         # descriptor, which a host re-preparing an already-prepared list hands
         # straight back. Warning about that would be warning about ourselves.
         if report_missing:
-            name = self._missing_capability_tool_name
-            existing = _find_tool(prepared, name)
-            if existing is not None and not self._is_sdk_virtual_tool(existing):
-                self._warn_virtual_tool_collision(
-                    VIRTUAL_TOOL_MISSING_CAPABILITY,
-                    name,
-                    'PostHogMCP(missing_capability_tool_name="...")',
-                )
-            elif existing is None:
-                prepared.append(build_report_missing_descriptor(name))
+            self._append_missing_capability(prepared)
         if collect_feedback and self._collect_feedback is not None:
-            name = self._feedback_tool_name
-            existing = _find_tool(prepared, name)
-            # Both virtual tools under one name: missing-capability wins in
-            # `prepare_tool_call`, so advertising this one too would dead-letter
-            # the feedback path. Same precedence as `instrument()`.
-            duplicate = name == self._missing_capability_tool_name
-            if duplicate or (
-                existing is not None and not self._is_sdk_virtual_tool(existing)
-            ):
-                self._warn_virtual_tool_collision(
-                    VIRTUAL_TOOL_FEEDBACK,
-                    name,
-                    'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
-                    variant="duplicate" if duplicate else "blocked",
-                )
-            elif existing is None:
-                prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
+            self._append_feedback(prepared)
         # Read ownership before any analytics field lands on the schemas.
         conversation_ownership = _collect_conversation_ownership(prepared)
         prepared = self._inject_models(prepared)
@@ -532,6 +509,37 @@ class PostHogMCP(Client):
         client = recognize_manual_client(headers, None, None)
         advertise = client is None or not client.handle_free
         return self._inject_conversation(prepared, conversation_ownership, advertise)
+
+    def _append_missing_capability(self, prepared: List[Any]) -> None:
+        name = self._missing_capability_tool_name
+        existing = _find_tool(prepared, name)
+        if existing is not None and not self._is_sdk_virtual_tool(existing):
+            self._warn_virtual_tool_collision(
+                VIRTUAL_TOOL_MISSING_CAPABILITY,
+                name,
+                'PostHogMCP(missing_capability_tool_name="...")',
+            )
+        elif existing is None:
+            prepared.append(build_report_missing_descriptor(name))
+
+    def _append_feedback(self, prepared: List[Any]) -> None:
+        name = self._feedback_tool_name
+        existing = _find_tool(prepared, name)
+        # Both virtual tools under one name: missing-capability wins in
+        # `prepare_tool_call`, so advertising this one too would dead-letter
+        # the feedback path. Same precedence as `instrument()`.
+        duplicate = name == self._missing_capability_tool_name
+        if duplicate or (
+            existing is not None and not self._is_sdk_virtual_tool(existing)
+        ):
+            self._warn_virtual_tool_collision(
+                VIRTUAL_TOOL_FEEDBACK,
+                name,
+                'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
+                variant="duplicate" if duplicate else "blocked",
+            )
+        elif existing is None:
+            prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
 
     def _warn_virtual_tool_collision(
         self,
@@ -610,6 +618,71 @@ class PostHogMCP(Client):
             if isinstance(raw_context, str) and raw_context.strip()
             else None
         )
+        prepared_args, llm_model, llm_model_source = self._prepare_model(
+            name, args, request_meta, original_tool
+        )
+
+        prepared_args, session_id, conversation_id, conversation_state = (
+            self._prepare_conversation(
+                name,
+                args,
+                prepared_args,
+                original_tool,
+                session_id,
+                recognize_manual_client(
+                    headers, request_meta, (client_info or {}).get("name")
+                ),
+                request_meta,
+            )
+        )
+        # A supplied `original_tool` is a real application tool by this name (it
+        # comes from the host's own list, which never holds a virtual tool), so
+        # the real tool wins — the stateless twin of the ownership check
+        # instrument() runs. Without it the name match stands, and the
+        # documented remedy for a collision is renaming PostHog's tool.
+        # The name check against missing-capability keeps one precedence when
+        # both tools share a name: without it both flags are true, and a
+        # dispatcher testing `is_feedback` first misroutes every call.
+        is_feedback = self._is_feedback_call(name, original_tool)
+        # Same guard for the missing-capability tool. Unlike feedback it has no
+        # constructor enable switch on this path (the name is always populated),
+        # so `original_tool` is the only ownership signal available here.
+        is_missing_capability = (
+            name == self._missing_capability_tool_name and original_tool is None
+        )
+        return PreparedToolCall(
+            args=prepared_args,
+            intent=intent,
+            intent_source="context_parameter" if intent else None,
+            llm_model=llm_model,
+            llm_model_source=llm_model_source,
+            is_missing_capability=is_missing_capability,
+            is_feedback=is_feedback,
+            feedback_report=(
+                parse_feedback_report(args, self._collect_feedback)
+                if is_feedback
+                else None
+            ),
+            session_id=session_id,
+            conversation_id=conversation_id,
+            _conversation_state=conversation_state,
+        )
+
+    def _is_feedback_call(self, name: str, original_tool: Any) -> bool:
+        return (
+            self._collect_feedback is not None
+            and name == self._feedback_tool_name
+            and name != self._missing_capability_tool_name
+            and original_tool is None
+        )
+
+    def _prepare_model(
+        self,
+        name: str,
+        args: Optional[JsonRecord],
+        request_meta: Optional[JsonRecord],
+        original_tool: Any,
+    ) -> Tuple[Optional[JsonRecord], Optional[str], Optional[MCPAnalyticsModelSource]]:
         analytics_owns_model = False
         llm_model: Optional[str] = None
         llm_model_source: Optional[MCPAnalyticsModelSource] = None
@@ -627,6 +700,29 @@ class PostHogMCP(Client):
         if analytics_owns_model:
             prepared_args = _strip_args(prepared_args, "llm_model")
 
+        return prepared_args, llm_model, llm_model_source
+
+    def _owns_conversation_parameter(
+        self, ownership: Optional[_ConversationOwnership]
+    ) -> bool:
+        return (
+            self._enable_conversation_id
+            and ownership is not None
+            and ownership.conversation_id
+        )
+
+    def _prepare_conversation(
+        self,
+        name: str,
+        args: Optional[JsonRecord],
+        prepared_args: Optional[JsonRecord],
+        original_tool: Any,
+        session_id: Optional[str],
+        client: Optional[ClientConversationRow],
+        request_meta: Optional[JsonRecord],
+    ) -> Tuple[
+        Optional[JsonRecord], Optional[str], Optional[str], PreparedConversationState
+    ]:
         ownership = (
             _conversation_ownership_of(original_tool)
             if original_tool is not None
@@ -635,9 +731,6 @@ class PostHogMCP(Client):
         # Reads fail open on unknown ownership; strips need a positive answer.
         can_read_conversation = self._enable_conversation_id and (
             ownership is None or ownership.conversation_id
-        )
-        client = recognize_manual_client(
-            headers, request_meta, (client_info or {}).get("name")
         )
         handle_free = client is not None and client.handle_free
         client_conversation = read_client_conversation(client, request_meta)
@@ -661,54 +754,25 @@ class PostHogMCP(Client):
             )
         elif conversation_id:
             session_id = derive_session_id_from_conversation(conversation_id)
-        if (
-            self._enable_conversation_id
-            and ownership is not None
-            and ownership.conversation_id
-        ):
+        if self._owns_conversation_parameter(ownership):
             prepared_args = _strip_args(prepared_args, "conversation_id")
-        # A supplied `original_tool` is a real application tool by this name (it
-        # comes from the host's own list, which never holds a virtual tool), so
-        # the real tool wins — the stateless twin of the ownership check
-        # instrument() runs. Without it the name match stands, and the
-        # documented remedy for a collision is renaming PostHog's tool.
-        # The name check against missing-capability keeps one precedence when
-        # both tools share a name: without it both flags are true, and a
-        # dispatcher testing `is_feedback` first misroutes every call.
-        is_feedback = (
-            self._collect_feedback is not None
-            and name == self._feedback_tool_name
-            and name != self._missing_capability_tool_name
-            and original_tool is None
+        state = self._prepared_conversation_state(
+            ownership, minted_conversation_id, handle_free
         )
-        # Same guard for the missing-capability tool. Unlike feedback it has no
-        # constructor enable switch on this path (the name is always populated),
-        # so `original_tool` is the only ownership signal available here.
-        is_missing_capability = (
-            name == self._missing_capability_tool_name and original_tool is None
-        )
-        return PreparedToolCall(
-            args=prepared_args,
-            intent=intent,
-            intent_source="context_parameter" if intent else None,
-            llm_model=llm_model,
-            llm_model_source=llm_model_source,
-            is_missing_capability=is_missing_capability,
-            is_feedback=is_feedback,
-            feedback_report=(
-                parse_feedback_report(args, self._collect_feedback)
-                if is_feedback
-                else None
-            ),
-            session_id=session_id,
-            conversation_id=conversation_id,
-            _conversation_state=PreparedConversationState(
-                minted_conversation_id=minted_conversation_id,
-                output_instructions=self._enable_conversation_id
-                and not handle_free
-                and ownership is not None
-                and ownership.output_instructions,
-            ),
+        return prepared_args, session_id, conversation_id, state
+
+    def _prepared_conversation_state(
+        self,
+        ownership: Optional[_ConversationOwnership],
+        minted_conversation_id: Optional[str],
+        handle_free: bool,
+    ) -> PreparedConversationState:
+        return PreparedConversationState(
+            minted_conversation_id=minted_conversation_id,
+            output_instructions=self._enable_conversation_id
+            and not handle_free
+            and ownership is not None
+            and ownership.output_instructions,
         )
 
     def prepare_tool_result(
@@ -738,10 +802,7 @@ class PostHogMCP(Client):
                 prepared, handle
             )
         if minted_conversation_id:
-            injected = inject_prompt_back(prepared, handle)
-            if injected is not prepared:
-                delivered = True
-            prepared = injected
+            prepared, delivered = _deliver_minted_handle(prepared, handle, delivered)
             if delivered:
                 conversation_id = handle
                 session_id = derive_session_id_from_conversation(handle)
@@ -1047,3 +1108,12 @@ def _tool_schema(tool: Any) -> Optional[Dict[str, Any]]:
         if schema is None:
             schema = getattr(tool, "inputSchema", None)
     return schema if isinstance(schema, dict) else None
+
+
+def _deliver_minted_handle(
+    prepared: Any, handle: str, delivered: bool
+) -> Tuple[Any, bool]:
+    injected = inject_prompt_back(prepared, handle)
+    if injected is not prepared:
+        delivered = True
+    return injected, delivered

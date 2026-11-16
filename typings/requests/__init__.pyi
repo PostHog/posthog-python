@@ -6,10 +6,22 @@ from .auth import AuthBase as _AuthBase
 class PreparedRequest:
     headers: dict[str, str]
 
+class Request:
+    def __init__(
+        self,
+        method: str,
+        url: str,
+        *,
+        data: bytes | None = ...,
+        headers: dict[str, str] | None = ...,
+    ) -> None: ...
+    def prepare(self) -> PreparedRequest: ...
+
 class Response:
     status_code: int
     ok: bool
     text: str
+    content: bytes
     headers: dict[str, str]
     def json(self) -> Any: ...
     def close(self) -> None: ...
@@ -19,6 +31,22 @@ class Session:
     headers: dict[str, str]
     def mount(self, prefix: str, adapter: adapters.HTTPAdapter) -> None: ...
     def close(self) -> None: ...
+    def merge_environment_settings(
+        self,
+        url: str,
+        proxies: dict[str, str],
+        stream: bool | None,
+        verify: bool | str | None,
+        cert: str | None,
+    ) -> dict[str, Any]: ...
+    def send(
+        self,
+        request: PreparedRequest,
+        *,
+        timeout: float | None = ...,
+        allow_redirects: bool = ...,
+        **kwargs: Any,
+    ) -> Response: ...
     def request(
         self,
         method: str,

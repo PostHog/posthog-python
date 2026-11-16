@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Set, Union
 
 from .types import FeatureFlag as _FeatureFlag
+from .types import FeatureFlagError as _FeatureFlagError
 from .types import FlagMetadata as _FlagMetadata
 from .types import FlagValue, UnresolvedFlagReason, _parse_flag_payload
 
@@ -152,7 +153,13 @@ class FeatureFlagEvaluations:
         """Internal — instances are created by the SDK via ``Client.evaluate_flags()``."""
         self._host = host
         self._distinct_id = distinct_id
-        self._flags = flags
+        self._failed_flags = {
+            key: flag
+            for key, flag in flags.items()
+            if isinstance(flag, _RemoteFlagRecord)
+            and flag.details._server_marked_failed
+        }
+        self._flags = {k: v for k, v in flags.items() if k not in self._failed_flags}
         self._groups: Dict[str, Union[str, int]] = dict(groups or {})
         self._disable_geoip = disable_geoip
         self._request_id = request_id
@@ -181,9 +188,10 @@ class FeatureFlagEvaluations:
         Args:
             key: The feature flag key.
             default_value: Returned when the flag has no value in this evaluation —
-                the key was not part of the evaluated set, or the evaluation itself
-                came back empty (failed ``/flags`` request, quota limit, or no
-                resolvable ``distinct_id``). Defaults to ``False``.
+                the key was not part of the evaluated set, the server marked its
+                record failed, or the evaluation itself came back empty (failed
+                ``/flags`` request, quota limit, or no resolvable ``distinct_id``).
+                Defaults to ``False``.
             send_feature_flag_events: Whether this read sends ``$feature_flag_called``.
                 When ``False``, no event is sent and the dedupe cache is left alone,
                 but the key still counts as accessed for :meth:`only_accessed`.
@@ -202,7 +210,8 @@ class FeatureFlagEvaluations:
 
         Returns the variant string for multivariate flags, ``True`` for enabled flags
         without a variant, ``False`` for disabled flags, and ``None`` for flags that
-        were not returned by the evaluation.
+        were not returned or whose remote record was marked failed by the server.
+        An unreadable remote record retains its disabled (``False``) result.
 
         Pass ``send_feature_flag_events=False`` to skip the event for this read, as
         with :meth:`is_enabled`.
@@ -229,13 +238,23 @@ class FeatureFlagEvaluations:
 
         Order-dependent: if nothing has been accessed yet, the returned snapshot is
         empty. The method honors its name — pre-access if you want a populated result.
+        Accessed failures retain private diagnostics, not values or enrichment.
         """
         filtered = {k: self._flags[k] for k in self._accessed if k in self._flags}
+        filtered.update(
+            {
+                k: self._failed_flags[k]
+                for k in self._accessed
+                if k in self._failed_flags
+            }
+        )
         return self._clone_with(filtered)
 
     def only(self, keys: List[str]) -> "FeatureFlagEvaluations":
         """Return a filtered copy containing only flags with the given keys. Keys that
         are not present in the evaluation are dropped and logged as a warning.
+        Selected failures retain private diagnostics but remain absent from values,
+        keys and enrichment; their existing missing-value warning is unchanged.
         """
         filtered: Dict[str, _EvaluatedFlagRecord] = {}
         missing: List[str] = []
@@ -250,6 +269,9 @@ class FeatureFlagEvaluations:
                 "FeatureFlagEvaluations.only() was called with flag keys that are not in the "
                 f"evaluation set and will be dropped: {', '.join(missing)}"
             )
+        filtered.update(
+            {k: self._failed_flags[k] for k in keys if k in self._failed_flags}
+        )
         return self._clone_with(filtered)
 
     @property
@@ -265,8 +287,9 @@ class FeatureFlagEvaluations:
         A flag is listed when it has a loaded local definition, was in the requested
         scope, was inconclusive locally, and no remote value filled the gap. Listed
         flags are not part of :attr:`keys`, and reading one reports the
-        ``local_evaluation_inconclusive`` error instead of ``flag_missing``. Reading
-        this mapping does not count as an access and does not fire any event.
+        ``local_evaluation_inconclusive`` error instead of ``flag_missing``.
+        A server-marked failed fallback additionally reports ``evaluation_failed``.
+        Reading this mapping does not count as an access and does not fire any event.
         Snapshots returned by :meth:`only` and :meth:`only_accessed`, and by
         ``AsyncClient.evaluate_flags()``, which evaluates only remotely, carry no
         entries.
@@ -337,53 +360,9 @@ class FeatureFlagEvaluations:
         if not self._distinct_id:
             return
 
-        flag = self._flags.get(key)
-        if flag is None:
-            response: Optional[FlagValue] = None
-        elif not flag.enabled:
-            response = False
-        else:
-            response = flag.variant if flag.variant is not None else True
-
-        properties: Dict[str, Any] = {
-            "$feature_flag": key,
-            "$feature_flag_response": response,
-            "locally_evaluated": flag.locally_evaluated if flag else False,
-            f"$feature/{key}": response,
-        }
-
-        if flag is not None:
-            if flag.payload is not None:
-                properties["$feature_flag_payload"] = flag.payload
-            if flag.id:
-                properties["$feature_flag_id"] = flag.id
-            if flag.version:
-                properties["$feature_flag_version"] = flag.version
-            if flag.reason:
-                properties["$feature_flag_reason"] = flag.reason
-
-        if self._request_id:
-            properties["$feature_flag_request_id"] = self._request_id
-        if self._evaluated_at and not (flag and flag.locally_evaluated):
-            properties["$feature_flag_evaluated_at"] = self._evaluated_at
-
-        # Build the comma-joined `$feature_flag_error` matching the single-flag path's
-        # granularity: response-level errors (errors-while-computing, quota-limited) are
-        # combined with per-flag errors (flag-missing or local-evaluation-inconclusive)
-        # so consumers can filter by type.
-        errors: List[str] = []
-        if self._errors_while_computing:
-            errors.append("errors_while_computing_flags")
-        if self._quota_limited:
-            errors.append("quota_limited")
-        if flag is None:
-            errors.append(
-                "local_evaluation_inconclusive"
-                if key in self._unresolved_flags
-                else "flag_missing"
-            )
-        if errors:
-            properties["$feature_flag_error"] = ",".join(errors)
+        flag = self._flags.get(key) or self._failed_flags.get(key)
+        response = None if key in self._failed_flags else _flag_response(flag)
+        properties = self._get_flag_called_properties(key, flag, response)
 
         self._host.capture_flag_called_event_if_needed(
             distinct_id=self._distinct_id,
@@ -394,8 +373,70 @@ class FeatureFlagEvaluations:
             properties=properties,
             has_experiment=flag.has_experiment if flag else None,
             minimal_flag_called_events=self._minimal_flag_called_events,
-            # The record that supplied the value. A remotely evaluated experiment
-            # split also sends $experiment_exposure, whatever this read returned.
+            # A failed record still supplies config-version and reason-code diagnostics.
+            # Only a successful experiment split also sends $experiment_exposure.
             details=flag.details if isinstance(flag, _RemoteFlagRecord) else None,
             value_from_details=True,
         )
+
+    def _get_flag_called_properties(self, key, flag, response) -> Dict[str, Any]:
+        properties: Dict[str, Any] = {
+            "$feature_flag": key,
+            "$feature_flag_response": response,
+            "locally_evaluated": flag.locally_evaluated if flag else False,
+            f"$feature/{key}": response,
+        }
+
+        if flag is not None:
+            _add_flag_metadata_properties(properties, flag)
+
+        if self._request_id:
+            properties["$feature_flag_request_id"] = self._request_id
+        if self._evaluated_at and not (flag and flag.locally_evaluated):
+            properties["$feature_flag_evaluated_at"] = self._evaluated_at
+
+        errors = self._get_access_errors(key, flag)
+        if errors:
+            properties["$feature_flag_error"] = ",".join(errors)
+
+        return properties
+
+    def _get_access_errors(self, key, flag) -> List[str]:
+        # Build the comma-joined `$feature_flag_error` matching the single-flag path's
+        # granularity: response-level errors (errors-while-computing, quota-limited) are
+        # combined with per-flag errors. A failed remote fallback must not hide the
+        # original snapshot's local-inconclusive diagnostic.
+        errors: List[str] = []
+        if self._errors_while_computing:
+            errors.append("errors_while_computing_flags")
+        if self._quota_limited:
+            errors.append("quota_limited")
+        if key in self._failed_flags:
+            errors.append(_FeatureFlagError.EVALUATION_FAILED)
+        if key in self._unresolved_flags:
+            errors.append(_FeatureFlagError.LOCAL_EVALUATION_INCONCLUSIVE)
+        elif flag is None:
+            errors.append("flag_missing")
+        return errors
+
+
+def _flag_response(flag: Optional[_EvaluatedFlagRecord]) -> Optional[FlagValue]:
+    if flag is None:
+        return None
+    elif not flag.enabled:
+        return False
+    else:
+        return flag.variant if flag.variant is not None else True
+
+
+def _add_flag_metadata_properties(
+    properties: Dict[str, Any], flag: _EvaluatedFlagRecord
+) -> None:
+    if flag.payload is not None:
+        properties["$feature_flag_payload"] = flag.payload
+    if flag.id:
+        properties["$feature_flag_id"] = flag.id
+    if flag.version:
+        properties["$feature_flag_version"] = flag.version
+    if flag.reason:
+        properties["$feature_flag_reason"] = flag.reason

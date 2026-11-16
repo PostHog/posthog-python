@@ -69,17 +69,21 @@ def _experiment_body(name: str, options: ExperimentOptions) -> bytes:
     for key, value in options.items():
         if key in ("id", "started_at"):
             continue
-        if key == "run_source":
-            if value is not None and value not in ("ci", "local", "scheduled"):
-                raise ValueError("run_source must be ci, local, scheduled, or None.")
-            data[key] = value
-        elif key in ("expected_item_count", "expected_result_count"):
-            data[key] = _count(value, key)
-        elif key == "dataset_revision_id":
-            data[key] = None if value is None else _uuid(value)
-        else:
-            data[key] = _identifier(value, key)
+        data[key] = _experiment_option(key, value)
     return _encode(data)
+
+
+def _experiment_option(key: str, value: Any) -> Any:
+    if key == "run_source":
+        if value is not None and value not in ("ci", "local", "scheduled"):
+            raise ValueError("run_source must be ci, local, scheduled, or None.")
+        return value
+    elif key in ("expected_item_count", "expected_result_count"):
+        return _count(value, key)
+    elif key == "dataset_revision_id":
+        return None if value is None else _uuid(value)
+    else:
+        return _identifier(value, key)
 
 
 @dataclass(frozen=True)
@@ -95,9 +99,7 @@ def _upload_body(items: list[bytes], results: list[bytes]) -> bytes:
     )
 
 
-def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
-    # Validate the finite submission before sending any chunk. Receipts and
-    # prepared bodies use memory proportional to this caller-sized sequence.
+def _result_declarations(results: tuple[EvaluationResult, ...]) -> dict[str, bytes]:
     identities: set[tuple[str, str]] = set()
     declarations: dict[str, bytes] = {}
     for result in results:
@@ -114,44 +116,108 @@ def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
             if previous != result.item._json:
                 raise ValueError("Conflicting declarations for the same item UUID.")
 
+    return declarations
+
+
+def _group_ends(results: tuple[EvaluationResult, ...]) -> list[int]:
+    # A calculation only names a version, so ingestion-only clients cannot
+    # discover its dependencies. Keep every supplied result for that item in
+    # one request. Merge overlapping spans to retain the original order.
+    first: dict[str, int] = {}
+    last: dict[str, int] = {}
+    composite_items: set[str] = set()
+    for index, result in enumerate(results):
+        first.setdefault(result.item_id, index)
+        last[result.item_id] = index + 1
+        if result.calculate:
+            composite_items.add(result.item_id)
+    spans = {first[item_id]: last[item_id] for item_id in composite_items}
+    ends: list[int] = []
+    index = 0
+    while index < len(results):
+        end = index + 1
+        while index < end:
+            end = max(end, spans.get(index, index + 1))
+            index += 1
+        ends.append(end)
+    return ends
+
+
+def _group_extra(
+    group_results: list[bytes],
+    new_items: list[bytes],
+    encoded_results: list[bytes],
+    items: list[bytes],
+) -> int:
+    extra = sum(map(len, group_results)) + len(group_results) - (not encoded_results)
+    if new_items:
+        extra += sum(map(len, new_items)) + len(new_items) - (not items)
+    return extra
+
+
+def _encoded_group(
+    group: tuple[EvaluationResult, ...], declarations: dict[str, bytes]
+) -> tuple[list[bytes], dict[str, bytes]]:
+    return (
+        [result._json for result in group],
+        {
+            result.item_id: declarations[result.item_id]
+            for result in group
+            if result.item_id in declarations
+        },
+    )
+
+
+def _group_fits(result_count: int, item_count: int, size: int) -> bool:
+    return (
+        result_count <= _MAX_RESULTS
+        and item_count <= _MAX_ITEMS
+        and size <= _MAX_REQUEST_BYTES
+    )
+
+
+def _chunks(results: tuple[EvaluationResult, ...]) -> list[_Chunk]:
+    # Validate the finite submission before sending any chunk. Receipts and
+    # prepared bodies use memory proportional to this caller-sized sequence.
+    declarations = _result_declarations(results)
     chunks: list[_Chunk] = []
     item_ids: set[str] = set()
     items: list[bytes] = []
     encoded_results: list[bytes] = []
     start = 0
     size = len(_upload_body([], []))
-    for index, result in enumerate(results):
-        # Include declarations wherever their results occur. This makes every
-        # chunk independently replayable even after a lost acknowledgment.
-        item = (
-            declarations.get(result.item_id) if result.item_id not in item_ids else None
-        )
-        extra = len(result._json) + bool(encoded_results)
-        if item is not None:
-            extra += len(item) + bool(items)
-        if encoded_results and (
-            len(encoded_results) >= _MAX_RESULTS
-            or len(items) + (item is not None) > _MAX_ITEMS
-            or size + extra > _MAX_REQUEST_BYTES
-        ):
+    group_start = 0
+    for end in _group_ends(results):
+        group = results[group_start:end]
+        group_results, group_items = _encoded_group(group, declarations)
+        while True:
+            new_items = [body for id, body in group_items.items() if id not in item_ids]
+            extra = _group_extra(group_results, new_items, encoded_results, items)
+            if _group_fits(
+                len(encoded_results) + len(group),
+                len(items) + len(new_items),
+                size + extra,
+            ):
+                break
+            if not encoded_results:
+                raise ValueError(
+                    "One result or composite item group exceeds the upload request limit."
+                )
             chunks.append(
                 _Chunk(
-                    start, results[start:index], _upload_body(items, encoded_results)
+                    start,
+                    results[start:group_start],
+                    _upload_body(items, encoded_results),
                 )
             )
-            start, size = index, len(_upload_body([], []))
+            start, size = group_start, len(_upload_body([], []))
             item_ids, items, encoded_results = set(), [], []
-            item = declarations.get(result.item_id)
-            extra = len(result._json) + (len(item) if item is not None else 0)
-        if size + extra > _MAX_REQUEST_BYTES:
-            raise ValueError(
-                "One result and its item exceed the upload request byte limit."
-            )
-        if item is not None:
-            item_ids.add(result.item_id)
-            items.append(item)
-        encoded_results.append(result._json)
+        # Repeat available declarations in every request for exact recovery.
+        item_ids.update(group_items)
+        items.extend(new_items)
+        encoded_results.extend(group_results)
         size += extra
+        group_start = end
     if encoded_results:
         chunks.append(
             _Chunk(start, results[start:], _upload_body(items, encoded_results))
@@ -245,6 +311,11 @@ class Experiment:
         Returns per-chunk receipts; an empty sequence makes no requests. Memory
         scales with the caller's sequence. For large datasets, call in batches.
         BulkUploadError exposes committed chunks and pending_results to retry.
+        Items with calculations keep all their supplied results in one request.
+        Interleaved items may form a larger indivisible group; an oversized
+        group fails before any I/O. Group each item's results together when
+        preparing large batches. Stored inputs require evaluation:read and
+        llm_analytics:read; ingestion-only keys must supply every pinned input.
         """
         prepared = tuple(results)
         chunks = _chunks(prepared)

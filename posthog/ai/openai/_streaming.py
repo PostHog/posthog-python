@@ -26,10 +26,7 @@ class _ResponsesStreamState:
 
     def process_chunk(self, chunk: Any) -> None:
         response = getattr(chunk, "response", None)
-        if response and self.model is None and hasattr(response, "model"):
-            self.model = response.model
-        if response and self.service_tier is None:
-            self.service_tier = getattr(response, "service_tier", None)
+        self._record_response_metadata(response)
 
         chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
         if chunk_usage:
@@ -45,6 +42,12 @@ class _ResponsesStreamState:
             stop_reason = _responses_stop_reason(response)
             if stop_reason is not None:
                 self.stop_reason = stop_reason
+
+    def _record_response_metadata(self, response: Any) -> None:
+        if response and self.model is None and hasattr(response, "model"):
+            self.model = response.model
+        if response and self.service_tier is None:
+            self.service_tier = getattr(response, "service_tier", None)
 
 
 @dataclass
@@ -82,25 +85,28 @@ class _ChatCompletionsStreamState:
             merge_usage_stats(self.usage_stats, chunk_usage)
 
         for choice in getattr(chunk, "choices", None) or []:
-            index = getattr(choice, "index", None)
-            if not isinstance(index, int):
-                index = 0
-            view = _ChoiceStream([choice])
+            self._process_choice(choice)
 
-            content = extract_openai_content_from_chunk(view, "chat")
-            if content is not None:
-                self._outputs.setdefault(index, []).append(content)
+    def _process_choice(self, choice: Any) -> None:
+        index = getattr(choice, "index", None)
+        if not isinstance(index, int):
+            index = 0
+        view = _ChoiceStream([choice])
 
-            chunk_tool_calls = extract_openai_tool_calls_from_chunk(view)
-            if chunk_tool_calls:
-                accumulate_openai_tool_calls(
-                    self._tool_calls.setdefault(index, {}), chunk_tool_calls
-                )
+        content = extract_openai_content_from_chunk(view, "chat")
+        if content is not None:
+            self._outputs.setdefault(index, []).append(content)
 
-            # Like a non-streamed completion, the stop reason is the first choice's.
-            finish_reason = getattr(choice, "finish_reason", None)
-            if finish_reason is not None and index == 0:
-                self.stop_reason = finish_reason
+        chunk_tool_calls = extract_openai_tool_calls_from_chunk(view)
+        if chunk_tool_calls:
+            accumulate_openai_tool_calls(
+                self._tool_calls.setdefault(index, {}), chunk_tool_calls
+            )
+
+        # Like a non-streamed completion, the stop reason is the first choice's.
+        finish_reason = getattr(choice, "finish_reason", None)
+        if finish_reason is not None and index == 0:
+            self.stop_reason = finish_reason
 
     @property
     def tool_calls(self) -> Optional[List[Dict[str, Any]]]:

@@ -165,17 +165,58 @@ class _AsyncConsumer:
             for _ in batch:
                 self.queue.task_done()
 
-    async def next(self) -> tuple[list[dict[str, Any]], bool]:
-        items: list[dict[str, Any]] = []
-        total_size = 0
-        stop = False
-        started = asyncio.get_running_loop().time()
+    async def _prepare_queued_event(
+        self, queued: _QueuedEvent
+    ) -> Optional[tuple[dict[str, Any], int]]:
+        try:
+            process_task = queued.context.run(
+                asyncio.create_task, self._process_queued_event(queued.event)
+            )
+            item = await process_task
+        except Exception as error:
+            self.log.error(
+                "unable to process queued event, dropping (%s)",
+                type(error).__name__,
+            )
+            self.queue.task_done()
+            return None
 
+        if item is None:
+            self.queue.task_done()
+            return None
+
+        try:
+            item_size = await _serialized_event_size(item)
+        except Exception:
+            self.log.error("unable to serialize queued event for sizing, dropping")
+            self.queue.task_done()
+            return None
+
+        if item_size > MAX_MSG_SIZE:
+            self.log.error(
+                "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                item.get("event"),
+                item_size,
+                MAX_MSG_SIZE // 1024,
+            )
+            self.queue.task_done()
+            return None
+        return item, item_size
+
+    def _take_carryover(self, items: list[dict[str, Any]]) -> int:
         if self._carryover is not None:
             carried_item, carried_size = self._carryover
             self._carryover = None
             items.append(carried_item)
-            total_size = carried_size
+            return carried_size
+        return 0
+
+    async def next(self) -> tuple[list[dict[str, Any]], bool]:
+        items: list[dict[str, Any]] = []
+        stop = False
+        started = asyncio.get_running_loop().time()
+
+        total_size = self._take_carryover(items)
 
         while len(items) < self.flush_at:
             remaining = self.flush_interval - (
@@ -193,39 +234,10 @@ class _AsyncConsumer:
                 stop = True
                 break
 
-            try:
-                process_task = queued.context.run(
-                    asyncio.create_task, self._process_queued_event(queued.event)
-                )
-                item = await process_task
-            except Exception as error:
-                self.log.error(
-                    "unable to process queued event, dropping (%s)",
-                    type(error).__name__,
-                )
-                self.queue.task_done()
+            prepared = await self._prepare_queued_event(queued)
+            if prepared is None:
                 continue
-
-            if item is None:
-                self.queue.task_done()
-                continue
-
-            try:
-                item_size = await _serialized_event_size(item)
-            except Exception:
-                self.log.error("unable to serialize queued event for sizing, dropping")
-                self.queue.task_done()
-                continue
-
-            if item_size > MAX_MSG_SIZE:
-                self.log.error(
-                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
-                    item.get("event"),
-                    item_size,
-                    MAX_MSG_SIZE // 1024,
-                )
-                self.queue.task_done()
-                continue
+            item, item_size = prepared
 
             if items and total_size + item_size > BATCH_SIZE_LIMIT:
                 self._carryover = (item, item_size)

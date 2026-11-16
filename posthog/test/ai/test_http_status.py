@@ -122,3 +122,36 @@ def test_status_code_errors_keep_their_status(mock_client):
         )
 
     assert mock_client.capture.call_args[1]["properties"]["$ai_http_status"] == 503
+
+
+def _anthropic_stream_error_event(error_type):
+    """The error the anthropic SDK raises for an SSE `error` event: it carries
+    the status of the stream response, which is 200."""
+    import anthropic
+    from unittest.mock import MagicMock
+
+    response = MagicMock(status_code=200, headers={})
+    body = {"type": "error", "error": {"type": error_type, "message": "x"}}
+    return anthropic.Anthropic(api_key="k")._make_status_error(
+        str(body), body=body, response=response
+    )
+
+
+@pytest.mark.parametrize(
+    "error_type, status",
+    [("overloaded_error", 529), ("rate_limit_error", 429), ("api_error", 500)],
+)
+def test_anthropic_stream_error_event_status(error_type, status):
+    from posthog.ai.langchain.callbacks import (
+        _get_http_status as _langchain_http_status,
+    )
+
+    error = _anthropic_stream_error_event(error_type)
+    assert error.status_code == 200
+    assert _get_http_status(error) == status
+    assert _langchain_http_status(error) == status
+
+
+def test_anthropic_stream_error_event_of_unknown_type_is_not_a_200():
+    error = _anthropic_stream_error_event("some_new_error")
+    assert _get_http_status(error) == 0

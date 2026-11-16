@@ -236,18 +236,9 @@ async def async_batch_post(
                 _process_response(response)
                 return
 
-            location = response.headers.get("Location") or response.headers.get(
-                "location"
+            redirect_url = _capture_redirect_url(
+                base_url, request_url, response, redirect_count
             )
-            redirect_url = (
-                _same_origin_redirect_url(base_url, request_url, location)
-                if location
-                else None
-            )
-            if redirect_url is None:
-                raise APIError(400, "Cross-origin or invalid redirect blocked")
-            if redirect_count >= 5:
-                raise APIError(400, "Too many capture redirects")
             request_url = redirect_url
     finally:
         if owns_client:
@@ -275,3 +266,17 @@ async def async_send_v1_batch(
         max_retries=max_retries,
         historical_migration=historical_migration,
     )
+
+
+def _capture_redirect_url(
+    base_url: str, request_url: str, response: Any, redirect_count: int
+) -> str:
+    location = response.headers.get("Location") or response.headers.get("location")
+    redirect_url = (
+        _same_origin_redirect_url(base_url, request_url, location) if location else None
+    )
+    if redirect_url is None:
+        raise APIError(400, "Cross-origin or invalid redirect blocked")
+    if redirect_count >= 5:
+        raise APIError(400, "Too many capture redirects")
+    return redirect_url

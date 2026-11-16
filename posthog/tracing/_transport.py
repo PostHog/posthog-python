@@ -66,21 +66,28 @@ def parse_retry_after(value: Any, now: Optional[datetime] = None) -> Optional[fl
     raw = value.strip()
     if re.match(r"^\d+\s*,", raw):
         raw = raw.split(",", 1)[0].strip()
+    seconds: Optional[float]
     if _DELTA_SECONDS_RE.match(raw):
         seconds = float(raw)
     elif _NUMERIC_RE.match(raw):
         return None
     else:
-        try:
-            when = parsedate_to_datetime(raw)
-        except (TypeError, ValueError, IndexError):
+        seconds = _retry_after_date_seconds(raw, now)
+        if seconds is None:
             return None
-        if when.tzinfo is None:
-            when = when.replace(tzinfo=timezone.utc)
-        seconds = (when - (now or datetime.now(timezone.utc))).total_seconds()
     if not math.isfinite(seconds) or seconds <= 0:
         return None
     return seconds
+
+
+def _retry_after_date_seconds(raw: str, now: Optional[datetime]) -> Optional[float]:
+    try:
+        when = parsedate_to_datetime(raw)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return (when - (now or datetime.now(timezone.utc))).total_seconds()
 
 
 def send_traces_batch(client: Any, payload: dict) -> SendOutcome:

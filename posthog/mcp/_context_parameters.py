@@ -55,11 +55,7 @@ def add_context_parameter_to_schema(
     """
     schema = input_schema
 
-    if (
-        schema
-        and isinstance(schema.get("properties"), dict)
-        and "context" in schema["properties"]
-    ):
+    if schema_has_param(schema, "context"):
         log(
             f"WARN: Tool \"{tool_name}\" already has 'context' parameter. Skipping context injection."
         )
@@ -89,11 +85,15 @@ def add_context_parameter_to_schema(
     }
 
     if required:
-        required_list = schema.get("required")
-        if isinstance(required_list, list):
-            if "context" not in required_list:
-                required_list.append("context")
-        else:
-            schema["required"] = ["context"]
+        _require_context(schema)
 
     return schema
+
+
+def _require_context(schema: Dict[str, Any]) -> None:
+    required_list = schema.get("required")
+    if isinstance(required_list, list):
+        if "context" not in required_list:
+            required_list.append("context")
+    else:
+        schema["required"] = ["context"]

@@ -20,6 +20,16 @@ if TYPE_CHECKING:
 
 
 class ExceptionCapture:
+    """Installs process-wide exception hooks that forward uncaught exceptions to PostHog.
+
+    Hooks are installed on :attr:`sys.excepthook` (main-thread unhandled exceptions) and
+    :attr:`threading.excepthook` (exceptions that escape worker threads). The original
+    hooks are restored when :meth:`close` is called.
+
+    Optionally enforces client-side rate limiting per exception type so that a sudden
+    burst of identical errors does not flood the PostHog ingestion pipeline.
+    """
+
     log = logging.getLogger("posthog")
 
     # more generous defaults than the browser SDK (10, 1, 10) because one
@@ -36,6 +46,22 @@ class ExceptionCapture:
         refill_rate=DEFAULT_REFILL_RATE,
         refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS,
     ):
+        """Install exception hooks and configure optional rate limiting.
+
+        Args:
+            client: The PostHog :class:`~posthog.client.Client` used to send captured exceptions.
+            rate_limiting_enabled: When ``True``, a :class:`~posthog.bucketed_rate_limiter.BucketedRateLimiter`
+                is created with the given bucket parameters to suppress excess captures of the same
+                exception type.
+            bucket_size: Token capacity of the rate-limiting bucket per exception type.
+                Because the call that empties the bucket is itself treated as rate-limited,
+                a fresh bucket permits ``bucket_size - 1`` captures before limiting takes
+                effect. Clamped to ``[0, 100]``. Default is :attr:`DEFAULT_BUCKET_SIZE` (``50``).
+            refill_rate: Tokens restored per completed ``refill_interval_seconds`` interval.
+                Clamped to ``[0, bucket_size]``. Default is :attr:`DEFAULT_REFILL_RATE` (``10``).
+            refill_interval_seconds: Duration of each refill interval in seconds.
+                Clamped to ``[0, 86400]``. Default is :attr:`DEFAULT_REFILL_INTERVAL_SECONDS` (``10``).
+        """
         self.client = client
         self._closed = False
         self.original_excepthook = sys.excepthook
@@ -55,6 +81,15 @@ class ExceptionCapture:
             )
 
     def close(self):
+        """Uninstall exception hooks and restore the hooks that were in place at construction time.
+
+        Idempotent: calling :meth:`close` a second time has no effect. After closing,
+        the rate limiter (if any) is also stopped and its per-key buckets are cleared.
+
+        This method is intentionally not thread-safe with respect to concurrent :meth:`close`
+        calls; callers that share an :class:`ExceptionCapture` across threads should arrange
+        external synchronisation if they need to close it concurrently.
+        """
         if self._closed:
             return
 
@@ -83,6 +118,17 @@ class ExceptionCapture:
             self._rate_limiter.stop()
 
     def exception_handler(self, exc_type, exc_value, exc_traceback):
+        """Handle an unhandled exception from :attr:`sys.excepthook`.
+
+        Forwards the exception to PostHog with ``level="fatal"`` and
+        ``mechanism.type="onuncaughtexception"``, then delegates to the previous
+        ``sys.excepthook`` so that normal Python crash output is preserved.
+
+        Args:
+            exc_type: The exception class.
+            exc_value: The exception instance.
+            exc_traceback: The traceback object.
+        """
         if not self._closed:
             capture_metadata: _ExceptionCaptureMetadata = {
                 "level": "fatal",
@@ -104,6 +150,16 @@ class ExceptionCapture:
         previous_hook(exc_type, exc_value, exc_traceback)
 
     def thread_exception_handler(self, args):
+        """Handle an unhandled exception from :attr:`threading.excepthook`.
+
+        Forwards the exception to PostHog with ``level="error"`` and
+        ``mechanism.type="onuncaughtexception"``, then delegates to the previous
+        ``threading.excepthook``.
+
+        Args:
+            args: The :class:`threading.ExceptHookArgs` object supplied by the threading machinery,
+                containing ``exc_type``, ``exc_value``, ``exc_traceback``, and ``thread``.
+        """
         if not self._closed:
             capture_metadata: _ExceptionCaptureMetadata = {
                 "level": "error",
@@ -136,6 +192,17 @@ class ExceptionCapture:
             hook = getattr(owner, previous_hook_name)
 
     def exception_receiver(self, exc_info, extra_properties):
+        """Receive an exception from an external caller and forward it to PostHog.
+
+        Provides an entry point for external callers to pass an ``exc_info`` tuple
+        and extra properties (such as ``"distinct_id"``) into the exception capture
+        pipeline without going through :attr:`sys.excepthook`.
+
+        Args:
+            exc_info: A three-tuple ``(exc_type, exc_value, exc_traceback)``.
+            extra_properties: A mapping of extra properties. If it contains a ``"distinct_id"``
+                key, that value is used as the PostHog distinct ID for the captured event.
+        """
         if "distinct_id" in extra_properties:
             metadata = {"distinct_id": extra_properties["distinct_id"]}
         else:
@@ -143,6 +210,18 @@ class ExceptionCapture:
         self.capture_exception((exc_info[0], exc_info[1], exc_info[2]), metadata)
 
     def capture_exception(self, exception, metadata=None):
+        """Capture a single exception and send it to PostHog.
+
+        A convenience wrapper around the internal :meth:`_capture_exception` method intended
+        for direct call sites that already hold an exception object or ``(type, value, tb)``
+        tuple outside of the ``sys.excepthook`` flow.
+
+        Args:
+            exception: Either an :class:`Exception` instance or a three-tuple
+                ``(exc_type, exc_value, exc_traceback)`` as returned by :func:`sys.exc_info`.
+            metadata: Optional mapping with an optional ``"distinct_id"`` key to associate
+                the event with a specific PostHog person.
+        """
         self._capture_exception(exception, metadata)
 
     def _capture_exception(

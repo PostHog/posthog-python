@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from datetime import datetime
 from typing import Any, Callable, Literal, Sequence, TypeVar, cast, overload
 from uuid import UUID
@@ -13,7 +14,10 @@ from ._scorer_types import (
     CategoricalScorerConfig,
     NumericScorerConfig,
     Scorer,
+    ScorerCalculation,
+    ScorerComposition,
     ScorerConfig,
+    ScorerInput,
     ScorerKind,
     ScorerOrder,
     ScorerPage,
@@ -56,6 +60,89 @@ def _kind(value: Any) -> ScorerKind:
     return cast(ScorerKind, value)
 
 
+def _calculation(value: Any) -> ScorerCalculation:
+    if value not in ("reported", "composite"):
+        raise ValueError("Unsupported scorer calculation.")
+    return cast(ScorerCalculation, value)
+
+
+def _alias(value: Any) -> str:
+    value = _text(value)
+    if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", value) or value in {
+        "number",
+        "min",
+        "max",
+        "abs",
+        "and",
+        "or",
+        "not",
+        "if",
+        "else",
+        "in",
+        "is",
+        "lambda",
+        "for",
+        "await",
+    }:
+        raise ValueError("Invalid composite input alias.")
+    return value
+
+
+def _composition(value: Any) -> ScorerComposition:
+    data = _mapping(value)
+    expression = _text(data.get("expression"))
+    if not expression.strip() or len(expression) > 1024:
+        raise ValueError("A formula must contain 1–1024 characters.")
+    inputs = data.get("inputs")
+    if not isinstance(inputs, list) or not 1 <= len(inputs) <= 16:
+        raise ValueError("A composite requires 1–16 reported inputs.")
+    prepared = [
+        {
+            "alias": _alias(_mapping(row).get("alias")),
+            "scorer_version_id": _uuid(row.get("scorer_version_id")),
+        }
+        for row in inputs
+    ]
+    if len({row["alias"] for row in prepared}) != len(prepared):
+        raise ValueError("Composite input aliases must be unique.")
+    return cast(ScorerComposition, {"expression": expression, "inputs": prepared})
+
+
+def _scoring(
+    data: dict[str, Any],
+) -> tuple[ScorerCalculation, ScorerComposition | None]:
+    calculation = _calculation(data.get("calculation", "reported"))
+    composition = data.get("composition")
+    if calculation == "composite":
+        return calculation, _composition(composition)
+    if composition is not None:
+        raise ValueError("Reported scorers cannot contain a composition.")
+    return calculation, None
+
+
+def _input_scorers(value: Any) -> tuple[ScorerInput, ...]:
+    if not isinstance(value, list):
+        raise ValueError("Expected input scorer metadata.")
+    return tuple(
+        ScorerInput(
+            alias=_alias(_mapping(row)["alias"]),
+            scorer_version_id=_uuid(row["scorer_version_id"]),
+            definition_id=_uuid(row["definition_id"]),
+            name=_text(row["name"]),
+            kind=_kind(row["kind"]),
+            version=_integer(row["version"], minimum=1),
+            config=cast(ScorerConfig, _mapping(row["config"])),
+            latest_version_id=None
+            if row["latest_version_id"] is None
+            else _uuid(row["latest_version_id"]),
+            latest_version=None
+            if row["latest_version"] is None
+            else _integer(row["latest_version"], minimum=1),
+        )
+        for row in value
+    )
+
+
 def _timestamp(value: Any) -> datetime:
     parsed = datetime.fromisoformat(_text(value).replace("Z", "+00:00"))
     if parsed.tzinfo is None or parsed.utcoffset() is None:
@@ -70,6 +157,7 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
+    calculation, composition = _scoring(data)
     archived = data["archived"]
     if not isinstance(archived, bool):
         raise ValueError("Expected boolean archived state.")
@@ -89,10 +177,17 @@ def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
         created_by=None if created_by is None else _mapping(created_by),
         team=_integer(data["team"], minimum=1),
         tags=_response_tags(data.get("tags", [])),
+        calculation=calculation,
+        composition=composition,
+        input_scorers=_input_scorers(data.get("input_scorers", [])),
+        dependent_composite_count=_integer(
+            data.get("dependent_composite_count", 0), minimum=0
+        ),
     )
 
 
 def _version(data: dict[str, Any]) -> ScorerVersion[ScorerConfig]:
+    calculation, composition = _scoring(data)
     created_by = data["created_by"]
     return ScorerVersion(
         id=_uuid(data["id"]),
@@ -102,6 +197,8 @@ def _version(data: dict[str, Any]) -> ScorerVersion[ScorerConfig]:
         config=cast(ScorerConfig, _mapping(data["config"])),
         created_at=_timestamp(data["created_at"]),
         created_by=None if created_by is None else _mapping(created_by),
+        calculation=calculation,
+        composition=composition,
     )
 
 
@@ -154,12 +251,20 @@ def _create_body(
     config: ScorerConfig,
     description: str | None | _Omitted,
     tags: Sequence[str] | _Omitted,
+    calculation: ScorerCalculation,
+    composition: ScorerComposition | None,
 ) -> bytes:
     data: dict[str, Any] = {
         "name": name,
         "kind": _kind(kind),
         "config": _mapping(config),
     }
+    if _calculation(calculation) == "composite":
+        data["calculation"] = calculation
+        data["composition"] = _composition(composition)
+        _composite_config(kind, config)
+    elif composition is not None:
+        raise ValueError("Only composite scorers accept a composition.")
     if not isinstance(description, _Omitted):
         data["description"] = description
     if not isinstance(tags, _Omitted):
@@ -192,9 +297,14 @@ def _version_body(
     base_version: int | None,
     name: str | _Omitted,
     description: str | None | _Omitted,
+    composition: ScorerComposition | None,
 ) -> bytes:
     data = _metadata(name, description)
     data["config"] = _mapping(config)
+    if composition is not None:
+        data["composition"] = _composition(composition)
+        if config.get("step") is not None:
+            raise ValueError("Numeric composite scorers do not accept a step.")
     if base_version is not None:
         data["base_version"] = _integer(base_version, minimum=1)
     return _encode(data)
@@ -209,6 +319,8 @@ def _list_params(
     order_by: ScorerOrder | None,
     tags: Sequence[str] | None,
     tag_match: Literal["any", "all"],
+    calculation: ScorerCalculation | None,
+    input_definition_id: str | UUID | None,
 ) -> dict[str, str | int]:
     tag_params = _tag_params(tags, tag_match)
     params: dict[str, str | int] = {
@@ -219,6 +331,10 @@ def _list_params(
         params["search"] = search
     if kind is not None:
         params["kind"] = _kind(kind)
+    if calculation is not None:
+        params["calculation"] = _calculation(calculation)
+    if input_definition_id is not None:
+        params["input_definition_id"] = _uuid(input_definition_id)
     if archived is not None:
         if not isinstance(archived, bool):
             raise ValueError("archived must be a boolean.")
@@ -227,6 +343,30 @@ def _list_params(
         params["order_by"] = order_by
     params.update(tag_params)
     return params
+
+
+def _composite_config(kind: ScorerKind, config: ScorerConfig) -> None:
+    if kind == "numeric" and config.get("step") is not None:
+        raise ValueError("Numeric composite scorers do not accept a step.")
+
+
+def _validation_body(
+    kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None
+) -> bytes:
+    data: dict[str, Any] = {
+        "kind": _kind(kind),
+        "composition": _composition(composition),
+    }
+    if config is not None:
+        data["config"] = _mapping(config)
+        _composite_config(kind, config)
+    return _encode(data)
+
+
+def _validation(data: dict[str, Any]) -> bool:
+    if data.get("valid") is not True:
+        raise ValueError("Expected successful formula validation.")
+    return True
 
 
 def _version_params(limit: int, cursor: str | None) -> dict[str, str | int]:
@@ -262,6 +402,8 @@ class Scorers:
         config: BooleanScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -273,6 +415,8 @@ class Scorers:
         config: NumericScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -284,6 +428,8 @@ class Scorers:
         config: CategoricalScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     def create(
@@ -294,17 +440,23 @@ class Scorers:
         config: ScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[ScorerConfig]:
         """Create a scorer and its first version, optionally assigning tags.
 
         Tag names are trimmed, lowercased, deduplicated, and sorted by the server.
+        Set calculation="composite" with a composition to calculate item scores
+        on the server. Calculation and output kind cannot change after creation.
         """
         return _parse(
             _scorer,
             self._transport.request(
                 "POST",
                 self._base,
-                body=_create_body(name, kind, config, description, tags),
+                body=_create_body(
+                    name, kind, config, description, tags, calculation, composition
+                ),
                 retry_safe=False,
             ),
         )
@@ -324,6 +476,8 @@ class Scorers:
         order_by: ScorerOrder | None = None,
         tags: Sequence[str] | None = None,
         tag_match: Literal["any", "all"] = "any",
+        calculation: ScorerCalculation | None = None,
+        input_definition_id: str | UUID | None = None,
     ) -> ScorerPage:
         """Fetch one page. Omit ``archived`` to list active scorers.
 
@@ -331,6 +485,8 @@ class Scorers:
         Search matches names and descriptions; scorer names are not unique.
         ``tags`` accepts up to 20 names. ``tag_match`` matches any (default) or
         all selected tags; an empty sequence disables tag filtering.
+        Use calculation to select reported/composite scorers, and
+        input_definition_id to find composites depending on a source scorer.
         """
         return _parse(
             _scorer_page,
@@ -338,7 +494,16 @@ class Scorers:
                 "GET",
                 self._base,
                 params=_list_params(
-                    limit, offset, search, kind, archived, order_by, tags, tag_match
+                    limit,
+                    offset,
+                    search,
+                    kind,
+                    archived,
+                    order_by,
+                    tags,
+                    tag_match,
+                    calculation,
+                    input_definition_id,
                 ),
             ),
         )
@@ -376,12 +541,15 @@ class Scorers:
         base_version: int | None = None,
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
+        composition: ScorerComposition | None = None,
     ) -> Scorer[_ConfigT]:
         """Create an immutable version and return the updated scorer.
 
         Pass the observed ``current_version`` as ``base_version`` to detect
         concurrent writes. Conflicts are surfaced without automatic refresh.
         Identical configuration is allowed, for example after a prompt change.
+        Composite versions require composition, including every pinned input,
+        even when only changing the output configuration.
         """
         return cast(
             Scorer[_ConfigT],
@@ -390,7 +558,9 @@ class Scorers:
                 self._transport.request(
                     "POST",
                     self._path(scorer_id) + "new_version/",
-                    body=_version_body(config, base_version, name, description),
+                    body=_version_body(
+                        config, base_version, name, description, composition
+                    ),
                     retry_safe=False,
                 ),
             ),
@@ -404,6 +574,28 @@ class Scorers:
             _version,
             self._transport.request(
                 "GET", self._path(scorer_id) + f"versions/{_uuid(version_id)}/"
+            ),
+        )
+
+    def validate_composition(
+        self,
+        *,
+        kind: ScorerKind,
+        composition: ScorerComposition,
+        config: ScorerConfig | None = None,
+    ) -> bool:
+        """Validate a formula without saving, using llm_analytics:read access.
+
+        Returns True on validation success; invalid formulas raise
+        EvaluationAPIError. Omit config to check syntax and types only.
+        Runtime values and output bounds are checked during calculation.
+        """
+        return _parse(
+            _validation,
+            self._transport.request(
+                "POST",
+                self._base + "validate_composition/",
+                body=_validation_body(kind, composition, config),
             ),
         )
 
@@ -440,6 +632,8 @@ class AsyncScorers:
         config: BooleanScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -451,6 +645,8 @@ class AsyncScorers:
         config: NumericScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -462,6 +658,8 @@ class AsyncScorers:
         config: CategoricalScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     async def create(
@@ -472,6 +670,8 @@ class AsyncScorers:
         config: ScorerConfig,
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        calculation: ScorerCalculation = "reported",
+        composition: ScorerComposition | None = None,
     ) -> Scorer[ScorerConfig]:
         """Create a scorer with optional tags. See Scorers.create."""
         return _parse(
@@ -479,7 +679,9 @@ class AsyncScorers:
             await self._transport.request(
                 "POST",
                 self._base,
-                body=_create_body(name, kind, config, description, tags),
+                body=_create_body(
+                    name, kind, config, description, tags, calculation, composition
+                ),
                 retry_safe=False,
             ),
         )
@@ -501,6 +703,8 @@ class AsyncScorers:
         order_by: ScorerOrder | None = None,
         tags: Sequence[str] | None = None,
         tag_match: Literal["any", "all"] = "any",
+        calculation: ScorerCalculation | None = None,
+        input_definition_id: str | UUID | None = None,
     ) -> ScorerPage:
         """Fetch one page with optional tag filters. See Scorers.list."""
         return _parse(
@@ -509,7 +713,16 @@ class AsyncScorers:
                 "GET",
                 self._base,
                 params=_list_params(
-                    limit, offset, search, kind, archived, order_by, tags, tag_match
+                    limit,
+                    offset,
+                    search,
+                    kind,
+                    archived,
+                    order_by,
+                    tags,
+                    tag_match,
+                    calculation,
+                    input_definition_id,
                 ),
             ),
         )
@@ -542,6 +755,7 @@ class AsyncScorers:
         base_version: int | None = None,
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
+        composition: ScorerComposition | None = None,
     ) -> Scorer[_ConfigT]:
         """Create a version; ``base_version`` detects concurrent configuration edits.
 
@@ -554,7 +768,9 @@ class AsyncScorers:
                 await self._transport.request(
                     "POST",
                     self._path(scorer_id) + "new_version/",
-                    body=_version_body(config, base_version, name, description),
+                    body=_version_body(
+                        config, base_version, name, description, composition
+                    ),
                     retry_safe=False,
                 ),
             ),
@@ -568,6 +784,23 @@ class AsyncScorers:
             _version,
             await self._transport.request(
                 "GET", self._path(scorer_id) + f"versions/{_uuid(version_id)}/"
+            ),
+        )
+
+    async def validate_composition(
+        self,
+        *,
+        kind: ScorerKind,
+        composition: ScorerComposition,
+        config: ScorerConfig | None = None,
+    ) -> bool:
+        """Validate without saving. See Scorers.validate_composition."""
+        return _parse(
+            _validation,
+            await self._transport.request(
+                "POST",
+                self._base + "validate_composition/",
+                body=_validation_body(kind, composition, config),
             ),
         )
 

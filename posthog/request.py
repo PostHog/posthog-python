@@ -296,24 +296,7 @@ def _process_response(
             )
             raise QuotaLimitError(res.status_code, "Feature flags quota limited")
         return response
-    retry_after = None
-    retry_after_header = res.headers.get("Retry-After")
-    if retry_after_header:
-        try:
-            retry_after = float(retry_after_header)
-        except (ValueError, TypeError):
-            try:
-                from email.utils import parsedate_to_datetime
-
-                retry_after = max(
-                    0.0,
-                    (
-                        parsedate_to_datetime(retry_after_header)
-                        - datetime.now(timezone.utc)
-                    ).total_seconds(),
-                )
-            except (ValueError, TypeError):
-                pass
+    retry_after = _response_retry_after(res)
 
     try:
         payload = res.json()
@@ -550,3 +533,26 @@ class DatetimeSerializer(json.JSONEncoder):
 
     def encode(self, o: Any) -> str:
         return super().encode(_replace_non_finite_floats(o))
+
+
+def _response_retry_after(res: requests.Response) -> Optional[float]:
+    retry_after = None
+    retry_after_header = res.headers.get("Retry-After")
+    if retry_after_header:
+        try:
+            retry_after = float(retry_after_header)
+        except (ValueError, TypeError):
+            try:
+                from email.utils import parsedate_to_datetime
+
+                retry_after = max(
+                    0.0,
+                    (
+                        parsedate_to_datetime(retry_after_header)
+                        - datetime.now(timezone.utc)
+                    ).total_seconds(),
+                )
+            except (ValueError, TypeError):
+                pass
+
+    return retry_after

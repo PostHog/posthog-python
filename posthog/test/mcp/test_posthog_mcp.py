@@ -797,3 +797,69 @@ def test_capture_without_a_session_gets_a_fresh_one_per_call():
     assert session.startswith("ses_")
     assert first["distinct_id"] == session
     assert second["properties"]["$session_id"] != session
+
+
+class _UncopyableToolResult:
+    def __init__(self):
+        self.content = []
+        self.structuredContent = {"rows": []}
+
+    def __copy__(self):
+        return self
+
+
+class _FailingModelCopyResult(_UncopyableToolResult):
+    def model_copy(self, **kwargs):
+        raise ValueError("result is read-only")
+
+
+class _FailingResultWrapper:
+    def __init__(self, root):
+        self.root = root
+
+    def model_copy(self, **kwargs):
+        raise ValueError("wrapper is read-only")
+
+
+@pytest.mark.parametrize(
+    "make_result",
+    [
+        _UncopyableToolResult,
+        _FailingModelCopyResult,
+        lambda: _FailingResultWrapper(
+            SimpleNamespace(content=[], structuredContent={"rows": []})
+        ),
+        lambda: SimpleNamespace(
+            root=SimpleNamespace(content=[], structuredContent={"rows": []})
+        ),
+    ],
+    ids=["uncopyable", "model-copy-fails", "rewrap-fails", "plain-wrapper"],
+)
+def test_prepare_tool_result_copy_failures_never_pin_a_shared_handle(make_result):
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    result = make_result()
+    target = getattr(result, "root", result)
+
+    prepared = client.prepare_tool_result(result, call)
+
+    assert target.content == []
+    assert target.structuredContent == {"rows": []}
+    if isinstance(result, SimpleNamespace):
+        assert prepared.result is not result
+        assert prepared.result.root is not target
+        assert prepared.result.root.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+            "conversation_id": prepared.conversation_id
+        }
+        assert (
+            prepared.result.root.content[-1].text
+            == _handle_block(prepared.conversation_id)["text"]
+        )
+        assert prepared.session_id == derive_session_id_from_conversation(
+            prepared.conversation_id
+        )
+    else:
+        assert prepared.result is result
+        assert prepared.conversation_id is None
+        assert prepared.session_id is None

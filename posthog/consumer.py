@@ -73,14 +73,17 @@ class _DrainSignal:
         with self._queue.mutex:
             return self._requests > 0 and (consumer.running or consumer._drain_on_stop)
 
+    def _is_draining_locked(self, consumer) -> bool:
+        return self._requests > 0 and (
+            consumer is None or consumer.running or consumer._drain_on_stop
+        )
+
     def get(self, timeout: float, consumer=None):
         """Get an item, or wake with ``Empty`` when draining or stopping."""
         with self._queue.not_empty:
             deadline = time.monotonic() + timeout
             while True:
-                draining = self._requests > 0 and (
-                    consumer is None or consumer.running or consumer._drain_on_stop
-                )
+                draining = self._is_draining_locked(consumer)
                 if consumer is not None and not consumer.running and not draining:
                     raise Empty
                 if self._queue._qsize():
@@ -213,6 +216,44 @@ class Consumer(Thread):
         with self.queue.mutex:
             return self.running or self._drain_on_stop
 
+    def _event_size(self, item) -> Optional[int]:
+        try:
+            item_size = len(json.dumps(item, cls=DatetimeSerializer).encode())
+        except Exception:
+            # Callback-modified events can still contain invalid mapping
+            # keys or circular references. Never log the payload here.
+            self.log.error("Unable to serialize queued event for sizing, dropping.")
+            return None
+        if item_size > self.max_msg_size:
+            # Log only name and size: AI events may carry unredacted
+            # multimodal payloads that must not leak into logs.
+            self.log.error(
+                "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                item.get("event") if isinstance(item, dict) else type(item),
+                item_size,
+                self.max_msg_size // 1024,
+                self.endpoint,
+            )
+            return None
+        return item_size
+
+    def _next_queue_timeout(self, start_time: float) -> Optional[float]:
+        # While draining we take only what is already queued, never waiting
+        # for `flush_interval` to elapse or for `flush_at` to be reached.
+        draining = self._draining()
+        if not self.running and not draining:
+            return None
+        remaining = self.flush_interval - (time.monotonic() - start_time)
+        if not draining and remaining <= 0:
+            return None
+
+        return 0 if draining else remaining
+
+    @staticmethod
+    def _acknowledge(queue, count: int) -> None:
+        for _ in range(count):
+            queue.task_done()
+
     def next(self):
         """Return the next batch of items to upload."""
         queue = self.queue
@@ -224,47 +265,21 @@ class Consumer(Thread):
 
         try:
             while len(items) < self.flush_at:
-                # While draining we take only what is already queued, never waiting
-                # for `flush_interval` to elapse or for `flush_at` to be reached.
-                draining = self._draining()
-                if not self.running and not draining:
-                    break
-                remaining = self.flush_interval - (time.monotonic() - start_time)
-                if not draining and remaining <= 0:
+                timeout = self._next_queue_timeout(start_time)
+                if timeout is None:
                     break
 
                 try:
                     if self._drain_signal is not None:
                         item = self._drain_signal.get(
-                            timeout=0 if draining else remaining,
+                            timeout=timeout,
                             consumer=self,
                         )
                     else:
-                        item = queue.get(block=True, timeout=remaining)
+                        item = queue.get(block=True, timeout=timeout)
                     pending_items += 1
-                    try:
-                        item_size = len(
-                            json.dumps(item, cls=DatetimeSerializer).encode()
-                        )
-                    except Exception:
-                        # Callback-modified events can still contain invalid mapping
-                        # keys or circular references. Never log the payload here.
-                        self.log.error(
-                            "Unable to serialize queued event for sizing, dropping."
-                        )
-                        queue.task_done()
-                        pending_items -= 1
-                        continue
-                    if item_size > self.max_msg_size:
-                        # Log only name and size: AI events may carry unredacted
-                        # multimodal payloads that must not leak into logs.
-                        self.log.error(
-                            "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
-                            item.get("event") if isinstance(item, dict) else type(item),
-                            item_size,
-                            self.max_msg_size // 1024,
-                            self.endpoint,
-                        )
+                    item_size = self._event_size(item)
+                    if item_size is None:
                         queue.task_done()
                         pending_items -= 1
                         continue
@@ -276,13 +291,11 @@ class Consumer(Thread):
                 except Empty:
                     break
         except BaseException:
-            for _ in range(pending_items):
-                queue.task_done()
+            self._acknowledge(queue, pending_items)
             raise
 
         if not self._can_upload():
-            for _ in range(pending_items):
-                queue.task_done()
+            self._acknowledge(queue, pending_items)
             return []
 
         return items

@@ -506,6 +506,9 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "rollout_percentage": 100,
                                 },
                                 {"properties": [], "rollout_percentage": 0},
+                                # Early exit must stop before this conclusive match,
+                                # preserving the earlier missing-context fallback.
+                                {"properties": [], "rollout_percentage": 100},
                             ],
                         },
                     }

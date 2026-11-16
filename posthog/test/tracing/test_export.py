@@ -394,6 +394,55 @@ class TestExportFailures:
         assert sender.payloads == []
         assert queued(pipeline) == []
 
+    def test_encoding_failure_keeps_the_retry_batch_separate_from_later_spans(
+        self, clock, caplog
+    ):
+        caplog.set_level("WARNING", logger="posthog")
+        sender = FakeSender(SendOutcome("retry-later"), SendOutcome("ok"))
+        pipeline, _, _ = make_traces(sender=sender, max_export_batch_size=4)
+        pipeline.start_span("bad").end()
+        pipeline.start_span("retry-me").end()
+        encode = export_module.build_otlp_span
+
+        def encode_unless_bad(record):
+            if record.name == "bad":
+                raise RuntimeError("bad")
+            return encode(record)
+
+        with mock.patch.object(export_module, "build_otlp_span", encode_unless_bad):
+            pipeline.flush()
+            pipeline.start_span("later").end()
+            clock["now"] += 100
+            pipeline.flush()
+
+        assert [[span["name"] for span in batch] for batch in sender.batches()] == [
+            ["retry-me"],
+            ["retry-me"],
+            ["later"],
+        ]
+        assert sender.batches()[0] == sender.batches()[1]
+        assert queued(pipeline) == []
+        warnings = [
+            r.getMessage() for r in caplog.records if "Dropping" in r.getMessage()
+        ]
+        assert len(warnings) == 1
+        assert "Dropping 1 span(s)" in warnings[0]
+
+    def test_close_during_encoding_abandons_the_batch_without_sending(self):
+        pipeline, sender, _ = make_traces()
+        pipeline.start_span("closing").end()
+        pipeline.start_span("queued").end()
+
+        def close_and_fail(record):
+            pipeline.close()
+            raise RuntimeError("encoder failed after shutdown")
+
+        with mock.patch.object(export_module, "build_otlp_span", close_and_fail):
+            pipeline.flush()
+
+        assert sender.payloads == []
+        assert queued(pipeline) == []
+
     def test_counts_a_span_it_failed_to_encode_once(self, caplog):
         caplog.set_level("WARNING", logger="posthog")
         sender = FakeSender(SendOutcome("fatal"))

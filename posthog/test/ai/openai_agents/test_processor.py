@@ -1222,3 +1222,70 @@ def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):
     mock_client.capture.assert_not_called()
     mock_client.capture_ai.assert_called_once()
     assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"
+
+
+@pytest.mark.parametrize("full_capture", [False, True])
+@pytest.mark.parametrize("privacy", [False, True])
+def test_transcription_privacy_wins_over_full_capture_without_mutating_config(
+    mock_client, mock_span, full_capture, privacy
+):
+    mock_client.enable_full_ai_capture = full_capture
+    processor = PostHogTracingProcessor(
+        client=mock_client, distinct_id="audio-user", privacy_mode=privacy
+    )
+    config = {
+        "prompt": "private prompt",
+        "instructions": "private instructions",
+        "language": "en",
+    }
+    data = TranscriptionSpanData(
+        input="AAAA",
+        input_format="pcm",
+        output="private transcript",
+        model_config=config,
+    )
+    mock_span.span_data = data
+    processor.on_span_end(mock_span)
+
+    capture = mock_client.capture_ai if full_capture else mock_client.capture
+    capture.assert_called_once()
+    props = capture.call_args.kwargs["properties"]
+    assert capture.call_args.kwargs["distinct_id"] == "audio-user"
+    assert props["$ai_input"] == (
+        None if privacy else "AAAA" if full_capture else "[base64 audio redacted]"
+    )
+    assert props["$ai_output_state"] == (None if privacy else "private transcript")
+    assert props["model_config"] == {
+        "prompt": None if privacy else "private prompt",
+        "instructions": None if privacy else "private instructions",
+        "language": "en",
+    }
+    assert (
+        data.model_config
+        == config
+        == {
+            "prompt": "private prompt",
+            "instructions": "private instructions",
+            "language": "en",
+        }
+    )
+
+
+def test_span_error_category_keeps_precedence_and_privacy_summary(
+    mock_client, mock_span
+):
+    processor = PostHogTracingProcessor(client=mock_client, privacy_mode=True)
+    mock_client.enable_full_ai_capture = False
+    mock_span.span_data = GenerationSpanData(model="gpt-4o", usage={"input_tokens": 0})
+    mock_span.error = {
+        "type": "UserError",
+        "message": "private ModelBehaviorError and MaxTurnsExceeded",
+    }
+    processor.on_span_end(mock_span)
+
+    props = mock_client.capture.call_args.kwargs["properties"]
+    assert props["$ai_error_type"] == "model_behavior_error"
+    assert props["$ai_error"] == "UserError"
+    assert props["$ai_input_tokens"] == props["$ai_total_tokens"] == 0
+    assert "$ai_output_tokens" not in props
+    assert props["$process_person_profile"] is False
