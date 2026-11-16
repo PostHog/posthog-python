@@ -76,7 +76,7 @@ class AsyncClient:
     ):
         """
         Args:
-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)
+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)
             vertexai: Whether to use Vertex AI authentication
             credentials: Vertex AI credentials object
             project: GCP project ID for Vertex AI
@@ -144,7 +144,7 @@ class AsyncModels(_GeminiModelsPolicy):
     ):
         """
         Args:
-            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY or API_KEY environment variable (not required for Vertex AI)
+            api_key: Google AI API key. If not provided, will use GOOGLE_API_KEY, GEMINI_API_KEY, or API_KEY environment variables in that order (not required for Vertex AI)
             vertexai: Whether to use Vertex AI authentication
             credentials: Vertex AI credentials object
             project: GCP project ID for Vertex AI
