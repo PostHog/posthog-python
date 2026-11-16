@@ -54,6 +54,9 @@ class OptionalCaptureArgs(TypedDict):
         options: Capture options for this event, such as ``{"process_person_profile": False}``.
             Sent as given, for PostHog to validate. An option wins over its legacy ``$`` property,
             such as ``$process_person_profile``. A value that is not a dict is logged and ignored.
+            An identify-style event, such as ``$identify`` or ``$set``, gets
+            ``process_person_profile: True`` when this call leaves it unset, unless the SDK
+            generated its distinct ID.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]
@@ -115,6 +118,7 @@ class OptionalSetArgs(TypedDict):
             and replaced with a newly generated UUID.
         disable_geoip: Whether to disable GeoIP lookup for this operation. Defaults to False.
         options: Capture options for this event, sent as given. See ``OptionalCaptureArgs``.
+            ``process_person_profile`` is ``True`` unless this call sets it.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]

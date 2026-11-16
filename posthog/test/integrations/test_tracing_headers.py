@@ -202,9 +202,7 @@ async def test_session_only_capture_is_personless_and_flags_are_empty(
     event = enqueue.call_args.args[0]
     assert UUID(event["distinct_id"])
     assert event["properties"]["$session_id"] == "header-session"
-    assert enqueue.call_args.kwargs["derived_options"] == {
-        "process_person_profile": False
-    }
+    assert enqueue.call_args.kwargs["personless"] is True
 
 
 @pytest.mark.asyncio

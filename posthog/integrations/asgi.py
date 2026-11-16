@@ -182,6 +182,12 @@ async def _resolve_callback_result(value):
 class PosthogASGIMiddleware:
     """Add PostHog context and automatic exception capture to an ASGI app.
 
+    It creates a context for each HTTP or WebSocket request and captures
+    exceptions that escape the app. In FastAPI or Starlette, add it with
+    ``app.add_middleware(PosthogASGIMiddleware, client=posthog)``. For Litestar,
+    another ASGI framework or a raw ASGI app, wrap the app with
+    ``app = PosthogASGIMiddleware(app, client=posthog)``.
+
     Args:
         app: The downstream ASGI application.
         client: Optional destination for automatically captured exceptions. The

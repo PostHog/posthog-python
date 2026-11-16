@@ -1,5 +1,5 @@
 ---
-title: "PostHog Python SDK 8.x (experimental)"
+title: "PostHog Python SDK 8.x"
 sidebar: Docs
 showTitle: true
 contentMaxWidthClass: max-w-full
@@ -120,6 +120,29 @@ posthog.shutdown()
 
 In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [AsyncClient](#asyncclient).
 
+### Use AsyncPosthog in FastAPI
+
+Keep one `AsyncPosthog` client for the lifetime of your app. A FastAPI lifespan handler does this.
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from posthog import AsyncPosthog
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncPosthog("<ph_project_token>", host="<ph_client_api_host>") as posthog:
+        app.state.posthog = posthog
+        yield
+
+app = FastAPI(lifespan=lifespan)
+```
+
+### The posthoganalytics package
+
+`posthoganalytics` is the same SDK under another module name. Use it when another module named `posthog` is on your import path.
+
 ## Setup
 
 ### `Client(...)`
@@ -160,7 +183,7 @@ Name | Type | Description | Default
 `email_request_max_retries` | `int` | Number of retries for an email send after a network error, a rate limit, or an unavailable service. Defaults to 2. Set to 0 when a job runner already retries the send. | `2`
 `migrated_from` | `Optional[str]` | The email provider you moved from, such as `"resend"`. `emails` sends it with every request. | `None`
 `super_properties` |  | Properties for every captured event. They fill only keys the event leaves unset, before `before_send` runs. `$set`, `$set_once`, `$groups` and `$group_set` fill one level deep. An event's own properties and context tags override them, and `before_send` can change or remove them. | `None`
-`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. | `None`
+`super_options` |  | Capture options for every captured event, such as `{"cookieless_mode": True}`. They fill only options the event leaves unset, before `before_send` runs. An event's own `options` and context options override them, and `before_send` can change them. They never set `process_person_profile` on identify-style events, such as `$identify` or `$set`, whose distinct ID the SDK did not generate: those default it to `True`. | `None`
 `enable_exception_autocapture` |  | Automatically capture uncaught exceptions. | `False`
 `log_captured_exceptions` |  | Also log exceptions captured by error tracking. | `False`
 `project_root` |  | Root path used to determine in-app stack frames for captured exceptions. Defaults to the current working directory. | `None`
@@ -172,7 +195,7 @@ Name | Type | Description | Default
 `flag_definition_cache_provider` | `Optional[FlagDefinitionCacheProvider]` | Optional external cache provider for sharing feature flag definitions across workers. | `None`
 `capture_exception_code_variables` |  | Capture local variable values on exception stack frames. | `False`
 `capture_trace_context` |  | When OpenTelemetry is installed and a valid span is active at capture time, add its trace and span IDs as `$trace_id` and `$span_id` properties to events captured with `capture()` and `capture_ai()`, so they can be correlated with backend traces. They fill after context tags and `super_properties`, before `before_send`. A `$trace_id` or `$span_id` from the event, a context tag or `super_properties` stops the SDK adding either ID. Exception events (`capture_exception`) always attach these IDs regardless of this setting. Defaults to False. | `False`
-`traces` | `Optional[dict]` | Config dict for distributed tracing: `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
+`traces` | `Optional[dict]` | Config dict for distributed tracing. Non-empty string values for `service.name`, `service.version` and `deployment.environment` in `resource_attributes` take precedence over `service_name`, `service_version` and `environment`, respectively. Options include `service_name`, `service_version`, `environment`, `resource_attributes`, `flush_interval` (5 s), `max_queue_size` (2048), `max_export_batch_size` (512), `max_live_spans` (10000), `max_span_age` (3600 s), `max_attributes_per_span` (128), `max_events_per_span` (128), `max_attribute_value_length` (8192). `before_span_send` is a callable, or a list run in order, that receives each finished span as a dict (`trace_id`, `span_id` and `parent_span_id` are read-only) and returns it, edited, or `None` to drop it; a hook that raises drops the span. The span dict has `name`, `kind`, `status`, `attributes`, `events`, `start_time_ns`, `end_time_ns`, `trace_id`, `span_id` and `parent_span_id`, and its attributes are plain Python values. The hook runs after `posthogDistinctId` and `sessionId` are attached, so it can scrub them. It must be a regular function. An `async` hook drops every span. In a list of hooks, the first one to return `None` stops the chain. An entry that isn't callable turns tracing off for the client. Past a per-span cap, the earliest attributes and events are kept and the span reports how many were dropped. `posthogDistinctId` and `sessionId` don't count toward the attribute cap and are never dropped. `max_attribute_value_length` also applies to strings nested in lists and dictionaries. All caps are applied again after `before_span_send`. Spans beyond `max_queue_size` are dropped. An invalid value falls back to its default with a warning. Tracing is off until this is provided. Spans export on a background timer even with `sync_mode`; serverless handlers should call `flush()` before returning. Defaults to None. | `None`
 `code_variables_mask_patterns` |  | Variable-name patterns to mask when capturing code variables. | `None`
 `code_variables_ignore_patterns` |  | Variable-name patterns to omit when capturing code variables. | `None`
 `code_variables_mask_url_credentials` |  | Scrub credentials embedded in URLs/DSNs (e.g. `user:pass@host`) from captured code variables, regardless of the surrounding variable name. Defaults to True. | `None`
@@ -182,7 +205,7 @@ Name | Type | Description | Default
 `exception_autocapture_bucket_size` |  | Maximum burst of autocaptured exceptions allowed per exception type (token bucket size, clamped to 0-100). | `DEFAULT_BUCKET_SIZE`
 `exception_autocapture_refill_rate` |  | Tokens restored per refill interval for each exception type's bucket. | `DEFAULT_REFILL_RATE`
 `exception_autocapture_refill_interval_seconds` |  | Seconds between token refills for autocaptured exception rate limiting. | `DEFAULT_REFILL_INTERVAL_SECONDS`
-`capture_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture()` uploads. `CaptureCompression.GZIP` or `DEFLATE` (or the strings `"gzip"`/`"deflate"`). When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. | `None`
+`capture_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture()` uploads. `CaptureCompression.GZIP`, `DEFLATE` or `ZSTD` (or the strings `"gzip"`, `"deflate"` or `"zstd"`). `ZSTD` needs `pip install posthog[zstd]`. When omitted, the `POSTHOG_CAPTURE_COMPRESSION` env var is consulted, then no compression. | `None`
 `capture_ai_compression` | `Optional[Union[CaptureCompression, str]]` | Request-body compression for `capture_ai()` uploads, set independently of `capture_compression`. Defaults to no compression, and the env var does not apply. `CaptureCompression.ZSTD` suits large AI payloads. | `None`
 `capture_ai_max_queue_size` | `int` | Maximum number of AI events buffered before upload. Defaults to 1000, lower than `max_queue_size` because AI events are much larger. | `1000`
 `capture_ai_timeout` | `float` | Seconds allowed for one AI upload request. Defaults to 30, longer than `timeout` because AI batches are much larger. | `30`
@@ -219,7 +242,7 @@ Name | Type | Description | Default
 `flags` |  | A FeatureFlagEvaluations snapshot from evaluate_flags(). The exact values from the snapshot are attached with no extra /flags request. | 
 `send_feature_flags` |  | Deprecated. Prefer flags=... from evaluate_flags(). When truthy, evaluates flags during capture and attaches them to the event. | 
 `disable_geoip` |  | Whether to disable GeoIP for this event. It wins over a `$geoip_disable` in context tags or `super_properties`. A `$geoip_disable` property in this call's `properties` wins over it. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. They override context options and `super_options`, which fill in before `before_send` runs. An option overrides its legacy `$` property, such as `$process_person_profile`. A `None` option counts as unset. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Examples:**
 
@@ -317,12 +340,17 @@ start_span(name: str, *, kind: Optional[str] = None, attributes: Optional[Mappin
 
 Start a span for distributed tracing. Alpha.
 
+The span API is experimental and can change in a minor release. Spans
+already sent are kept; the SDK API isn't frozen yet.
+
 Returns a span handle. Use it as a context manager to make it the active
 span for the block and end it on exit (recording a raised exception on
 the way out); or call `end()` yourself for a span that cannot wrap a
 block. Spans started inside the block nest under it automatically.
 Always returns a usable handle, even when tracing is off, so calling
-code never branches.
+code never branches. At `max_live_spans` open spans, the SDK first
+evicts spans open longer than `max_span_age` seconds, which are never
+exported. If it is still at the limit, the returned span isn't recorded.
 
 **Parameters:**
 
@@ -331,9 +359,9 @@ Name | Type | Description | Default
 `name` | `str` | A low-cardinality operation name, e.g. `GET /users/:id`. Variable values belong in attributes, not the name. | *required*
 `kind` | `Optional[str]` | `internal` (default), `server`, `client`, `producer` or `consumer`. | `None`
 `attributes` | `Optional[Mapping[str, Any]]` | Initial attributes. | `None`
-`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. | `None`
+`parent` | `Union[Span, str, None]` | A span handle, or an inbound W3C `traceparent` header value to continue a remote trace. Defaults to the active span. A forked child starts with no active span; pass the parent span to continue a trace across a fork. The active span is tracked with `contextvars`, so it carries across `await`. Threads don't reliably inherit it, so pass `parent=span` in a thread or a `ThreadPoolExecutor` task. A malformed `traceparent` starts a new trace and doesn't raise. A continued trace propagates the sampled flag it received. PostHog doesn't sample, so the span is exported whichever way the flag is set. | `None`
 `tracestate` | `Optional[str]` | The inbound `tracestate` header accompanying a `traceparent` string `parent`; preserved and propagated. | `None`
-`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. | `None`
+`start_time` | `Union[datetime, float, None]` | A `datetime` or epoch seconds, to backdate the span. PostHog clamps a start time more than 24 hours old to the receive time. | `None`
 
 **Examples:**
 
@@ -386,7 +414,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | The timestamp of the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -813,7 +841,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[Union[str, UUID]]` | A unique identifier for the event. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP for this event. | `None`
 `distinct_id` | `Optional[ID_TYPES]` | The distinct ID of the user performing the action. Falls back to the context distinct ID, then to `$<group_type>_<group_key>`. | `None`
-`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. | `None`
+`options` | `Optional[Dict[str, Any]]` | Capture options for this event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -902,6 +930,8 @@ server receipt. Event draining has no timeout. Queued spans get one final
 flush with up to 30 seconds waiting for an in-flight flush, then a fresh
 30-second drain budget; the last HTTP request is not cut short. Any spans
 it cannot send are discarded with a warning, as are spans still open.
+A script that exits without calling `shutdown()` gets only a brief
+best-effort span flush, so don't rely on it.
 Lifecycle cleanup is attempted once, and cleanup failures
 are logged without retry. When called directly from an SDK callback such as
 `on_error`, shutdown is deferred to avoid blocking the worker that
@@ -1043,7 +1073,10 @@ Set a capture option for every event captured within the current context.
 Context options fill options an event leaves unset, before
 `before_send` runs, so the hook sees them. They override
 `super_options`. An event's own `options` override them, and
-`before_send` can change them.
+`before_send` can change them. They never set
+`process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -1619,6 +1652,12 @@ PosthogASGIMiddleware(app: _ASGIApp, client: Optional[Client] = None, capture_ex
 
 Add PostHog context and automatic exception capture to an ASGI app.
 
+It creates a context for each HTTP or WebSocket request and captures
+exceptions that escape the app. In FastAPI or Starlette, add it with
+`app.add_middleware(PosthogASGIMiddleware, client=posthog)`. For Litestar,
+another ASGI framework or a raw ASGI app, wrap the app with
+`app = PosthogASGIMiddleware(app, client=posthog)`.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -1827,6 +1866,9 @@ Enable TCP keepalive for SDK HTTP connections.
 
 This helps prevent idle pooled connections from being dropped by network
 infrastructure. Call during initialization, before making API requests.
+Where the platform supports the corresponding socket options, it uses
+a 60 second idle time, a 60 second probe interval and 3 probes before
+timeout. Unsupported settings keep their system defaults.
 
 ### `posthog.request.disable_connection_reuse`
 
@@ -2215,7 +2257,10 @@ Set a capture option for every event captured within the current context.
 
 Context options fill options an event leaves unset, before `before_send`
 runs, so the hook sees them. They override `super_options`. An event's
-own `options` override them, and `before_send` can change them.
+own `options` override them, and `before_send` can change them. They
+never set `process_person_profile` on identify-style events, such as
+`$identify` or `$set`, whose distinct ID the SDK did not generate:
+those default it to `True`.
 
 **Parameters:**
 
@@ -2425,7 +2470,7 @@ Name | Type | Description | Default
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
 `distinct_id` | `Optional[ID_TYPES]` | Optional distinct ID of the user performing the action | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 **Examples:**
 
@@ -2455,7 +2500,7 @@ Name | Type | Description | Default
 `timestamp` | `Optional[Union[datetime, str]]` | Optional timestamp for the event. UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | `None`
 `uuid` | `Optional[str]` | Optional UUID for the event | `None`
 `disable_geoip` | `Optional[bool]` | Whether to disable GeoIP lookup | `None`
-`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given | `None`
+`options` | `Optional[Dict[str, Any]]` | Optional capture options for the event, sent as given. `process_person_profile` is `True` unless this call sets it. | `None`
 
 <details class="details" open markdown="1">
 <summary>Details</summary>
@@ -3052,7 +3097,7 @@ Name | Type | Description | Default
 `flags` |  | A `FeatureFlagEvaluations` snapshot from `evaluate_flags()`. The exact flag values from the snapshot are attached to the event with no additional network call — prefer this over `send_feature_flags`. | 
 `send_feature_flags` |  | Deprecated — prefer `flags` with a `FeatureFlagEvaluations` snapshot. Whether to include currently active feature flags in the event properties. Can be a boolean or a SendFeatureFlagsOptions object. Defaults to False. Fires a hidden `/flags` request on capture and may return different values than the ones the code branched on. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this event. Defaults to False. | 
-`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. | 
+`options` |  | Capture options for this event, such as `{"process_person_profile": False}`. Sent as given, for PostHog to validate. An option wins over its legacy `$` property, such as `$process_person_profile`. A value that is not a dict is logged and ignored. An identify-style event, such as `$identify` or `$set`, gets `process_person_profile: True` when this call leaves it unset, unless the SDK generated its distinct ID. | 
 
 **Attributes:**
 
@@ -3601,7 +3646,7 @@ reason: UnresolvedFlagReason = UnresolvedFlagReason.UNSUPPORTED_DEFINITION
 ### `CaptureError`
 
 ```python
-CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
+CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[Sequence[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
 ```
 
 Bases: `APIError`
@@ -3616,6 +3661,9 @@ events were dropped or ran out of retries.
 `event_results` maps each event uuid to its last verdict from a 2xx
 response. Events missing from it never got a verdict, because every
 attempt that reached them failed as a whole request.
+
+`drops` lists each event the server dropped on a 2xx response as a
+`CaptureDroppedEvent`.
 
 **Functions:**
 
@@ -3646,7 +3694,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = drops or []
+drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`
@@ -3788,6 +3836,12 @@ characters, so a chained traceback keeps the outermost exception and
 may lose its cause). Returns the span, so calls chain. Inside
 `with span:` a raised `Exception` is recorded automatically, so
 this is for exceptions that are caught and handled.
+
+The stack trace contains file paths from your server. Remove
+`exception.stacktrace` in `before_span_send` to keep them in your
+process. The `exception` event uses one of the span's event slots. A
+span whose event slots are full keeps its `error` status and the
+exception message, but loses the exception type and stack trace.
 
 **Examples:**
 
@@ -4191,7 +4245,7 @@ Name | Type | Description | Default
 `timestamp` |  | When the properties were set (defaults to current time). UTC is preferred; non-UTC datetimes and parseable ISO timestamp strings are converted to UTC. | 
 `uuid` |  | Unique identifier for this operation. If not provided, one is generated. This UUID is returned, so you can correlate it with actions in your app. If provided, it must be a valid UUID string or uuid.UUID instance; invalid values are ignored and replaced with a newly generated UUID. | 
 `disable_geoip` |  | Whether to disable GeoIP lookup for this operation. Defaults to False. | 
-`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. | 
+`options` |  | Capture options for this event, sent as given. See `OptionalCaptureArgs`. `process_person_profile` is `True` unless this call sets it. | 
 
 **Attributes:**
 

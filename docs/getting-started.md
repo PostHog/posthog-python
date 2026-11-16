@@ -37,3 +37,26 @@ posthog.shutdown()
 ```
 
 In an asyncio app, use `AsyncPosthog` as an async context manager instead. See [AsyncClient](#asyncclient).
+
+## Use AsyncPosthog in FastAPI
+
+Keep one `AsyncPosthog` client for the lifetime of your app. A FastAPI lifespan handler does this.
+
+```python
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from posthog import AsyncPosthog
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncPosthog("<ph_project_token>", host="<ph_client_api_host>") as posthog:
+        app.state.posthog = posthog
+        yield
+
+app = FastAPI(lifespan=lifespan)
+```
+
+## The posthoganalytics package
+
+`posthoganalytics` is the same SDK under another module name. Use it when another module named `posthog` is on your import path.

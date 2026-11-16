@@ -333,11 +333,6 @@ def _group_identify_distinct_id(passed, group_type, group_key) -> str:
     return distinct_id
 
 
-def _personless_options(personless: bool) -> dict[str, Any]:
-    """The lowest option layer: no person profile for a generated distinct ID."""
-    return {"process_person_profile": False} if personless else {}
-
-
 def add_context_tags(properties):
     properties = properties or {}
     current_context = _get_current_context()
@@ -1307,7 +1302,10 @@ class Client(object):
                 ``{"cookieless_mode": True}``. They fill only options the event
                 leaves unset, before ``before_send`` runs. An event's own
                 ``options`` and context options override them, and
-                ``before_send`` can change them.
+                ``before_send`` can change them. They never set
+                ``process_person_profile`` on identify-style events, such as
+                ``$identify`` or ``$set``, whose distinct ID the SDK did not
+                generate: those default it to ``True``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -1344,8 +1342,11 @@ class Client(object):
                 ``super_properties`` stops the SDK adding either ID. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
-            traces: Config dict for distributed tracing: ``service_name``,
-                ``service_version``, ``environment``, ``resource_attributes``,
+            traces: Config dict for distributed tracing. Non-empty string values for
+                ``service.name``, ``service.version`` and ``deployment.environment``
+                in ``resource_attributes`` take precedence over ``service_name``,
+                ``service_version`` and ``environment``, respectively. Options include
+                ``service_name``, ``service_version``, ``environment``, ``resource_attributes``,
                 ``flush_interval`` (5 s), ``max_queue_size`` (2048),
                 ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
                 ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
@@ -1354,10 +1355,26 @@ class Client(object):
                 list run in order, that receives each finished span as a dict
                 (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)
                 and returns it, edited, or ``None`` to drop it; a hook that
-                raises drops the span. Tracing is off until this is provided.
-                Spans export on a background timer even with ``sync_mode``;
-                serverless handlers should call ``flush()`` before returning.
-                Defaults to None.
+                raises drops the span. The span dict has ``name``, ``kind``,
+                ``status``, ``attributes``, ``events``, ``start_time_ns``,
+                ``end_time_ns``, ``trace_id``, ``span_id`` and
+                ``parent_span_id``, and its attributes are plain Python values.
+                The hook runs after ``posthogDistinctId`` and ``sessionId`` are
+                attached, so it can scrub them. It must be a regular function.
+                An ``async`` hook drops every span. In a list of hooks, the
+                first one to return ``None`` stops the chain. An entry that
+                isn't callable turns tracing off for the client. Past a
+                per-span cap, the earliest attributes and events are kept and
+                the span reports how many were dropped. ``posthogDistinctId``
+                and ``sessionId`` don't count toward the attribute cap and are
+                never dropped. ``max_attribute_value_length`` also applies to
+                strings nested in lists and dictionaries. All caps are applied
+                again after ``before_span_send``. Spans beyond
+                ``max_queue_size`` are dropped. An invalid value falls back to
+                its default with a warning. Tracing is off until this is
+                provided. Spans export on a background timer even with
+                ``sync_mode``; serverless handlers should call ``flush()``
+                before returning. Defaults to None.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -1383,8 +1400,9 @@ class Client(object):
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
             capture_compression: Request-body compression for ``capture()``
-                uploads. ``CaptureCompression.GZIP`` or ``DEFLATE`` (or the
-                strings ``"gzip"``/``"deflate"``). When omitted, the
+                uploads. ``CaptureCompression.GZIP``, ``DEFLATE`` or ``ZSTD``
+                (or the strings ``"gzip"``, ``"deflate"`` or ``"zstd"``).
+                ``ZSTD`` needs ``pip install posthog[zstd]``. When omitted, the
                 ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
                 compression.
             capture_ai_compression: Request-body compression for
@@ -1973,7 +1991,10 @@ class Client(object):
         Context options fill options an event leaves unset, before
         ``before_send`` runs, so the hook sees them. They override
         ``super_options``. An event's own ``options`` override them, and
-        ``before_send`` can change them.
+        ``before_send`` can change them. They never set
+        ``process_person_profile`` on identify-style events, such as
+        ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+        those default it to ``True``.
 
         Args:
             key: The option name, such as ``"process_person_profile"``.
@@ -2327,6 +2348,9 @@ class Client(object):
                 ``super_options``, which fill in before ``before_send`` runs.
                 An option overrides its legacy ``$`` property, such as
                 ``$process_person_profile``. A ``None`` option counts as unset.
+                An identify-style event, such as ``$identify`` or ``$set``,
+                gets ``process_person_profile: True`` when this call leaves it
+                unset, unless the SDK generated its distinct ID.
 
         Examples:
             ```python
@@ -2526,7 +2550,7 @@ class Client(object):
             property_allowlist=property_allowlist,
             context_properties=_context_tag_defaults(),
             context_options=_context_get_context_options(),
-            derived_options=_personless_options(personless),
+            personless=personless,
             system_properties=system_context(),
             flag_properties=extra_properties,
             trace_properties=trace_properties,
@@ -2709,6 +2733,7 @@ class Client(object):
                 Falls back to the context distinct ID, then to
                 ``$<group_type>_<group_key>``.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -2787,6 +2812,7 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -3151,7 +3177,7 @@ class Client(object):
         property_allowlist=None,
         context_properties=None,
         context_options=None,
-        derived_options=None,
+        personless=False,
         system_properties=None,
         flag_properties=None,
         trace_properties=None,
@@ -3196,7 +3222,7 @@ class Client(object):
                 release_id=self._release_id,
                 context_properties=context_properties,
                 context_options=context_options,
-                derived_options=derived_options,
+                personless=personless,
                 property_allowlist=property_allowlist,
                 is_server=self.is_server,
                 disable_geoip=self.disable_geoip,
@@ -3432,12 +3458,17 @@ class Client(object):
         """
         Start a span for distributed tracing. Alpha.
 
+        The span API is experimental and can change in a minor release. Spans
+        already sent are kept; the SDK API isn't frozen yet.
+
         Returns a span handle. Use it as a context manager to make it the active
         span for the block and end it on exit (recording a raised exception on
         the way out); or call ``end()`` yourself for a span that cannot wrap a
         block. Spans started inside the block nest under it automatically.
         Always returns a usable handle, even when tracing is off, so calling
-        code never branches.
+        code never branches. At ``max_live_spans`` open spans, the SDK first
+        evicts spans open longer than ``max_span_age`` seconds, which are never
+        exported. If it is still at the limit, the returned span isn't recorded.
 
         Args:
             name: A low-cardinality operation name, e.g. ``GET /users/:id``.
@@ -3448,10 +3479,19 @@ class Client(object):
             parent: A span handle, or an inbound W3C ``traceparent`` header
                 value to continue a remote trace. Defaults to the active span.
                 A forked child starts with no active span; pass the parent
-                span to continue a trace across a fork.
+                span to continue a trace across a fork. The active span is
+                tracked with ``contextvars``, so it carries across ``await``.
+                Threads don't reliably inherit it, so pass ``parent=span`` in
+                a thread or a ``ThreadPoolExecutor`` task. A malformed
+                ``traceparent`` starts a new trace and doesn't raise. A
+                continued trace propagates the sampled flag it received.
+                PostHog doesn't sample, so the span is exported whichever way
+                the flag is set.
             tracestate: The inbound ``tracestate`` header accompanying a
                 ``traceparent`` string ``parent``; preserved and propagated.
             start_time: A ``datetime`` or epoch seconds, to backdate the span.
+                PostHog clamps a start time more than 24 hours old to the
+                receive time.
 
         Examples:
             ```python
@@ -4041,6 +4081,8 @@ class Client(object):
         flush with up to 30 seconds waiting for an in-flight flush, then a fresh
         30-second drain budget; the last HTTP request is not cut short. Any spans
         it cannot send are discarded with a warning, as are spans still open.
+        A script that exits without calling ``shutdown()`` gets only a brief
+        best-effort span flush, so don't rely on it.
         Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
