@@ -1,5 +1,73 @@
 # posthog
 
+## 7.91.2 — 2026-11-16
+
+### Patch changes
+
+- [84158304](https://github.com/posthog/posthog-python/commit/84158304ab1a30f1868e5526560bb1b91fa1b1be) Honor `GEMINI_API_KEY` when initializing the synchronous and asynchronous Gemini clients, after `GOOGLE_API_KEY` and before the legacy `API_KEY` fallback. — Thanks @pcbeingused333!
+- [ade1ff99](https://github.com/posthog/posthog-python/commit/ade1ff990b3f334a41e284ca32e3241499019d80) `posthog.ai.anthropic`: `messages.stream()` (sync and async) now captures an `$ai_generation` event with `$ai_is_error` when the initial request fails, for example with a 401 or a connection error. Before, only `messages.create(stream=True)` captured that failure, so errors raised on entering the `stream()` context manager were never reported. — Thanks @pcbeingused333!
+- [92fae510](https://github.com/posthog/posthog-python/commit/92fae510c34dd1d1514b9b3b78791c159ab4dc1a) An Anthropic error that arrives as an `error` event inside a stream, such as `overloaded_error`, is no longer recorded with `$ai_http_status: 200`. The anthropic SDK raises it with the stream's 200 status, so `$ai_http_status` now comes from the error type (529 for `overloaded_error`, 429 for `rate_limit_error`), or is 0 for an unknown type. This applies to the LangChain callback handler and to every capture that reads the status through `_get_http_status`. — Thanks @jaeminbird!
+- [53405145](https://github.com/posthog/posthog-python/commit/534051451fd5d242a50974577bcd4f2c00ca5f74) Claude Agent SDK: give each generation the tool results it was called with, and keep every text and tool-use block of a response in its `$ai_output_choices`. — Thanks @MaiAditya for your first contribution 🎉!
+
+## 7.91.1 — 2026-11-13
+
+### Patch changes
+
+- [3511570b](https://github.com/posthog/posthog-python/commit/3511570b4d19f84589b59dcd677df0c7b0d05cfe) Treat server-marked failed feature flag records as unevaluated: direct result, value, enabled and payload getters return None rather than a disabled False result or placeholder payload. Snapshot value and payload reads return None, enablement honors the caller's default, and failed keys are omitted from enumeration and capture enrichment. Bulk value and payload maps omit failed remote records while preserving successful locally computed values and payloads for those keys. Preserve selected or accessed failure diagnostics through snapshot filters and report local_evaluation_inconclusive alongside evaluation_failed after an unresolved failed fallback; healthy False and malformed-record compatibility are unchanged. — Thanks @marandaneto!
+
+## 7.91.0 — 2026-11-13
+
+### Minor changes
+
+- [cd821fbe](https://github.com/posthog/posthog-python/commit/cd821fbe07f4ee8db9509ecb2bd54f128cdf31c6) A code send with `posthog.emails.send` takes `cc`, `bcc` and `attachments`: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files, with the HTML counted twice when there is no `text`, since PostHog derives the text from it. An attachment is a `filename` and its `content`, as bytes or a Base64 string, with an optional `content_type` and `content_id`. The client checks the limits before any request, uploads each file PostHog doesn't hold yet straight to PostHog's file storage over https, never following a redirect, then sends the email with each file's SHA-256. A refused or redirected upload raises `EmailError` with the code `attachment_upload_failed`, and an unreachable storage `network_error` with `field` naming the attachment. Either way no email is sent. — Thanks @Silthus!
+
+## 7.90.0 — 2026-11-13
+
+### Minor changes
+
+- [dd7577bc](https://github.com/posthog/posthog-python/commit/dd7577bccbe22cf4b2da970b1373d6f16bafeb20) `posthog.mcp`: a failed tool call now sets `$mcp_error_status` to the HTTP status behind it, read from the raised exception or its cause chain (`status_code`, `statusCode` or `status`, on the exception or its `response`, as `httpx.HTTPStatusError` and `requests.HTTPError` carry it). Failures from an upstream API now group by status in MCP Analytics instead of landing in "unknown". — Thanks @lucasheriques!
+
+### Patch changes
+
+- [9e4935f7](https://github.com/posthog/posthog-python/commit/9e4935f7036f03905f6e0475d7d3ab3b4cc9dbff) `posthog.mcp`: on mcp 1.x (1.10 and later), a tool registered with the low-level `Server`'s `@server.call_tool()` decorator that raises now reports the exception it raised, with its cause chain, stack frames and `$mcp_error_status`, and `$mcp_error_type` names its class. Before, the decorator converted the exception into an error result first, so the failure was a generic `Error` with no frames and no status. — Thanks @lucasheriques!
+- [01398616](https://github.com/posthog/posthog-python/commit/013986168a131efed4a86d75a222e554f2f542d8) `posthog.mcp`: a failed tool call on a standalone FastMCP server now reports the exception the tool raised, with its cause chain and stack frames, and `$mcp_error_type` names its class. Before, FastMCP converted the exception into an error result first, so the failure was a generic `Error` with no frames. — Thanks @lucasheriques!
+
+## 7.89.0 — 2026-11-12
+
+### Minor changes
+
+- [ac25b4bf](https://github.com/posthog/posthog-python/commit/ac25b4bf287794288dc25b0c10a5cc04c39c7a16) A send with `template_key` now takes `tracking` and `sensitive`. The template form doesn't take either one.
+  
+  `tracking` chooses what PostHog tracks for the email. `tracking=True` turns on opens, clicks and engagement events. `tracking=False` turns them all off. A dict such as `{"clicks": True}` or `{"engagement": False}` turns each kind on or off, and a key you leave out keeps its default. Without it, PostHog counts opens, captures engagement events, and counts clicks only when the email isn't sensitive.
+  
+  `sensitive` marks an email that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. A send that sets neither option works exactly as before.
+  
+  ```python
+  posthog.emails.send(
+      to="user@example.com",
+      template_key="newsletter",
+      subject="What's new at Acme",
+      html=rendered_html,
+      sensitive=False,
+  )
+  ```
+  
+  `capture_engagement` is deprecated in favor of `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both.
+  
+  `tracking` and `sensitive` need PostHog's API support, which is rolling out. Until it reaches your PostHog instance, PostHog refuses a send that sets either one. — Thanks @Silthus!
+
+## 7.88.0 — 2026-11-12
+
+### Minor changes
+
+- [9636fa20](https://github.com/posthog/posthog-python/commit/9636fa20e4ea4315e8b6b6fd43c0ee63ec9bf054) Support versioned composite scorers for offline evaluations, including formula validation, dependency metadata, explicit server calculations, stored outcome receipts, and composite-safe bulk uploads. — Thanks @Radu-Raicea!
+
+## 7.87.2 — 2026-11-12
+
+### Patch changes
+
+- [5378ece8](https://github.com/posthog/posthog-python/commit/5378ece8efd17c9ca626346b8c1f7136dc1eb8cb) Keep `frozenset` and `deque` property values when cleaning events instead of replacing them with `None`. — Thanks @Ishkirat-Singh for your first contribution 🎉!
+
 ## 7.87.1 — 2026-11-11
 
 ### Patch changes

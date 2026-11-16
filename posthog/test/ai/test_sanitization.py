@@ -672,3 +672,32 @@ def test_sanitize_messages_importable_from_utils():
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMediaPlaceholderMimeHints(unittest.TestCase):
+    def test_media_kind_in_placeholders_preserves_mime_and_format_classification(self):
+        cases = {
+            "audio/wav": "audio",
+            "video/mp4": "video",
+            "application/pdf": "file",
+            "AUDIO": "audio",
+            "video": "video",
+            "image": "image",
+            "mp3": "audio",
+            "webm": "video",
+            "png": "image",
+            "pdf": "file",
+        }
+        for mime, kind in cases.items():
+            with self.subTest(mime=mime):
+                value = {"inline_data": {"mime_type": mime, "data": LONG_RAW_BASE64}}
+                self.assertEqual(
+                    redact_media(value),
+                    {
+                        "inline_data": {
+                            "mime_type": mime,
+                            "data": f"[base64 {kind} redacted]",
+                        }
+                    },
+                )
+                self.assertEqual(value["inline_data"]["data"], LONG_RAW_BASE64)

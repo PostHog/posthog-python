@@ -10,6 +10,7 @@ from typing_extensions import Required, TypedDict
 
 
 ScorerKind = Literal["boolean", "numeric", "categorical"]
+ScorerCalculation = Literal["reported", "composite"]
 ScorerOrder = Literal[
     "name",
     "-name",
@@ -89,6 +90,43 @@ ScorerConfig = BooleanScorerConfig | NumericScorerConfig | CategoricalScorerConf
 _ConfigT = TypeVar("_ConfigT", bound=ScorerConfig, covariant=True)
 
 
+class ScorerCompositionInput(TypedDict):
+    """A formula alias and an exact reported scorer-version UUID."""
+
+    alias: str
+    scorer_version_id: str
+
+
+class ScorerComposition(TypedDict):
+    """Server-evaluated formula and its pinned inputs for the same item.
+
+    Formulas accept 1–16 reported inputs; nested composites are unsupported.
+    Boolean inputs retain their raw polarity and categorical inputs are key
+    lists. Use ``number(flag)`` and ``"key" in categories`` explicitly.
+    """
+
+    expression: str
+    inputs: list[ScorerCompositionInput]
+
+
+@dataclass(frozen=True)
+class ScorerInput:
+    """Pinned input metadata alongside the source's latest version.
+
+    A new source version never changes the composite's pinned configuration.
+    """
+
+    alias: str
+    scorer_version_id: str
+    definition_id: str
+    name: str
+    kind: ScorerKind
+    version: int
+    config: ScorerConfig
+    latest_version_id: str | None
+    latest_version: int | None
+
+
 @dataclass(frozen=True)
 class Scorer(Generic[_ConfigT]):
     """Scorer metadata and the configuration of its current immutable version.
@@ -112,6 +150,10 @@ class Scorer(Generic[_ConfigT]):
     created_by: dict[str, Any] | None
     team: int
     tags: tuple[str, ...] = ()
+    calculation: ScorerCalculation = "reported"
+    composition: ScorerComposition | None = None
+    input_scorers: tuple[ScorerInput, ...] = ()
+    dependent_composite_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -125,6 +167,8 @@ class ScorerVersion(Generic[_ConfigT]):
     config: _ConfigT
     created_at: datetime
     created_by: dict[str, Any] | None
+    calculation: ScorerCalculation = "reported"
+    composition: ScorerComposition | None = None
 
 
 @dataclass(frozen=True)

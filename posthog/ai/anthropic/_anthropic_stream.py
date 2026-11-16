@@ -53,38 +53,10 @@ class _AnthropicStreamAccumulator:
         event_usage = extract_anthropic_usage_from_event(event)
         merge_usage_stats(self.usage_stats, event_usage)
         if getattr(event, "type", None) == "message_delta":
-            usage = getattr(event, "usage", None)
-            self._apply_cumulative_input_usage(usage)
-            output_tokens = getattr(usage, "output_tokens", None)
-            if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
-                # output_tokens on a message_delta is cumulative too, so the
-                # incremental merge above must not stack successive deltas
-                # (server tools can emit several in one stream). Keep the
-                # latest total; a field the event omits leaves the prior one.
-                self.usage_stats["output_tokens"] = output_tokens
-            # thinking tokens on a message_delta are cumulative as well
-            thinking_tokens = extract_anthropic_usage_from_event(event).get(
-                "reasoning_tokens"
-            )
-            if thinking_tokens is not None:
-                self.usage_stats["reasoning_tokens"] = thinking_tokens
+            self._apply_delta_usage(event)
 
         if getattr(event, "type", None) == "content_block_start":
-            block, tool = handle_anthropic_content_block_start(event)
-
-            self._blocks_by_index.append(block or {})
-
-            if block:
-                self.content_blocks.append(block)
-                if block.get("type") in ("text", "thinking"):
-                    self.current_text_block = block
-                else:
-                    self.current_text_block = None
-
-            if tool:
-                tool_id = tool["block"].get("id")
-                if tool_id:
-                    self.tools_in_progress[tool_id] = tool
+            self._start_block(event)
 
         delta_text = handle_anthropic_text_delta(event, self.current_text_block)
         if delta_text:
@@ -105,3 +77,37 @@ class _AnthropicStreamAccumulator:
             delta_stop_reason = getattr(delta, "stop_reason", None)
             if delta_stop_reason is not None:
                 self.stop_reason = delta_stop_reason
+
+    def _apply_delta_usage(self, event: Any) -> None:
+        usage = getattr(event, "usage", None)
+        self._apply_cumulative_input_usage(usage)
+        output_tokens = getattr(usage, "output_tokens", None)
+        if isinstance(output_tokens, int) and not isinstance(output_tokens, bool):
+            # output_tokens on a message_delta is cumulative too, so the
+            # incremental merge above must not stack successive deltas
+            # (server tools can emit several in one stream). Keep the
+            # latest total; a field the event omits leaves the prior one.
+            self.usage_stats["output_tokens"] = output_tokens
+        # thinking tokens on a message_delta are cumulative as well
+        thinking_tokens = extract_anthropic_usage_from_event(event).get(
+            "reasoning_tokens"
+        )
+        if thinking_tokens is not None:
+            self.usage_stats["reasoning_tokens"] = thinking_tokens
+
+    def _start_block(self, event: Any) -> None:
+        block, tool = handle_anthropic_content_block_start(event)
+
+        self._blocks_by_index.append(block or {})
+
+        if block:
+            self.content_blocks.append(block)
+            if block.get("type") in ("text", "thinking"):
+                self.current_text_block = block
+            else:
+                self.current_text_block = None
+
+        if tool:
+            tool_id = tool["block"].get("id")
+            if tool_id:
+                self.tools_in_progress[tool_id] = tool

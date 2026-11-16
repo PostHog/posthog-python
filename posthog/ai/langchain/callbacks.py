@@ -54,6 +54,7 @@ from posthog.ai.utils import (
     _privacy_mode_enabled,
     _redact_mcp_tool_credentials,
     _responses_stop_reason,
+    _stream_error_event_status,
     with_privacy_mode,
 )
 from posthog.client import Client
@@ -1101,6 +1102,8 @@ def _get_http_status(error: BaseException) -> int:
     for attribute in ("status_code", "code"):
         value = getattr(error, attribute, None)
         if isinstance(value, int) and not isinstance(value, bool):
+            if attribute == "status_code":
+                return _stream_error_event_status(error, value)
             return value
     return 0
 

@@ -37,39 +37,7 @@ def _format_responses_output_items(items: Any) -> List[FormattedContentItem]:
         item_type = _item_attr(item, "type")
 
         if item_type == "message":
-            message_content = _item_attr(item, "content")
-            if isinstance(message_content, list):
-                for content_item in message_content:
-                    content_item_type = _item_attr(content_item, "type")
-                    content_item_text = _item_attr(content_item, "text")
-                    content_item_refusal = _item_attr(content_item, "refusal")
-
-                    if content_item_type == "output_text" and (
-                        content_item_text is not None
-                    ):
-                        content.append({"type": "text", "text": content_item_text})
-
-                    elif content_item_type == "refusal" and (
-                        content_item_refusal is not None
-                    ):
-                        content.append(
-                            {"type": "refusal", "refusal": content_item_refusal}
-                        )
-
-                    elif content_item_text is not None:
-                        content.append({"type": "text", "text": content_item_text})
-
-                    elif content_item_type == "input_image" and (
-                        _item_attr(content_item, "image_url") is not None
-                    ):
-                        image_content: FormattedImageContent = {
-                            "type": "image",
-                            "image": _item_attr(content_item, "image_url"),
-                        }
-                        content.append(image_content)
-
-            elif message_content is not None:
-                content.append({"type": "text", "text": str(message_content)})
+            content.extend(_format_response_message_content(item))
 
         elif item_type == "function_call":
             call_id = _item_attr(item, "call_id")
@@ -139,63 +107,9 @@ def format_openai_response(response: Any) -> List[FormattedMessage]:
 
     # Handle Chat Completions response format
     if hasattr(response, "choices"):
-        content: List[FormattedContentItem] = []
-        role = "assistant"
-
-        for choice in response.choices:
-            if hasattr(choice, "message") and choice.message:
-                if choice.message.role:
-                    role = choice.message.role
-
-                if choice.message.content:
-                    content.append(
-                        {
-                            "type": "text",
-                            "text": choice.message.content,
-                        }
-                    )
-
-                # A refused request carries its text in `refusal` and leaves `content` empty
-                refusal = getattr(choice.message, "refusal", None)
-                if refusal:
-                    content.append({"type": "refusal", "refusal": refusal})
-
-                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    for tool_call in choice.message.tool_calls:
-                        # Custom tools carry their free-form text in `custom.input`,
-                        # with no `function` object.
-                        is_custom = getattr(tool_call, "type", None) == "custom"
-                        call = getattr(
-                            tool_call, "custom" if is_custom else "function", None
-                        )
-                        if call is None:
-                            continue
-                        content.append(
-                            {
-                                "type": "function",
-                                "id": tool_call.id,
-                                "function": {
-                                    "name": call.name,
-                                    "arguments": call.input
-                                    if is_custom
-                                    else call.arguments,
-                                },
-                            }
-                        )
-
-                # Handle audio output (gpt-4o-audio-preview)
-                if hasattr(choice.message, "audio") and choice.message.audio:
-                    # Convert Pydantic model to dict to capture all fields from OpenAI
-                    audio_dict = choice.message.audio.model_dump()
-                    content.append({"type": "audio", **audio_dict})
-
-        if content:
-            output.append(
-                {
-                    "role": role,
-                    "content": content,
-                }
-            )
+        message = _format_chat_completion_choices(response.choices)
+        if message is not None:
+            output.append(message)
 
     # Handle Responses API format
     if hasattr(response, "output"):
@@ -233,53 +147,13 @@ def format_openai_input(
 
     if messages is not None:
         for msg in messages:
-            plain = to_plain(msg)
-            if not isinstance(plain, dict):
-                plain = {"role": "user", "content": str(plain)}
-
-            formatted: Dict[str, Any] = {
-                "role": plain.get("role", "user"),
-                "content": plain.get("content"),
-            }
-
-            for key in ("tool_calls", "tool_call_id", "name", "audio", "refusal"):
-                if plain.get(key) is not None:
-                    formatted[key] = (
-                        to_plain(plain[key]) if key == "audio" else plain[key]
-                    )
-
-            formatted_messages.append(cast(FormattedMessage, formatted))
+            formatted_messages.append(_format_chat_input_message(msg))
 
     # Handle Responses API format
     if input_data is not None:
         if isinstance(input_data, list):
             for item in input_data:
-                if not isinstance(item, (dict, str)):
-                    item = to_plain(item)
-
-                if (
-                    isinstance(item, dict)
-                    and "type" in item
-                    and "role" not in item
-                    and "content" not in item
-                ):
-                    formatted_messages.append(cast(FormattedMessage, to_plain(item)))
-                    continue
-
-                role = "user"
-                content = ""
-
-                if isinstance(item, dict):
-                    role = item.get("role", "user")
-                    content = item.get("content", "")
-
-                elif isinstance(item, str):
-                    content = item
-
-                else:
-                    content = str(item)
-
-                formatted_messages.append({"role": role, "content": content})
+                formatted_messages.append(_format_response_input_item(item))
 
         elif isinstance(input_data, str):
             formatted_messages.append({"role": "user", "content": input_data})
@@ -367,93 +241,15 @@ def extract_openai_web_search_count(response: Any) -> int:
         Number of web search requests (exact count or binary 1/0)
     """
 
-    # Priority 1: Check for exact count in Responses API output
-    if hasattr(response, "output"):
-        web_search_count = 0
-
-        for item in response.output:
-            if hasattr(item, "type") and item.type == "web_search_call":
-                web_search_count += 1
-
-        web_search_count = max(0, web_search_count)
-
-        if web_search_count > 0:
-            return web_search_count
-
-    # Priority 2: Binary detection (returns 1 or 0)
-
-    # Check root-level indicators (Perplexity)
-    if hasattr(response, "citations"):
-        citations = getattr(response, "citations")
-
-        if citations and len(citations) > 0:
-            return 1
-
-    if hasattr(response, "search_results"):
-        search_results = getattr(response, "search_results")
-
-        if search_results and len(search_results) > 0:
-            return 1
-
-    if hasattr(response, "usage") and hasattr(response.usage, "search_context_size"):
-        if response.usage.search_context_size:
-            return 1
-
-    # Check for url_citation annotations in choices (Chat Completions)
-    if hasattr(response, "choices"):
-        for choice in response.choices:
-            # Check message.annotations (non-streaming or final chunk)
-            if hasattr(choice, "message") and hasattr(choice.message, "annotations"):
-                annotations = choice.message.annotations
-
-                if annotations:
-                    for annotation in annotations:
-                        # Support both dict and object formats
-                        annotation_type = (
-                            annotation.get("type")
-                            if isinstance(annotation, dict)
-                            else getattr(annotation, "type", None)
-                        )
-
-                        if annotation_type == "url_citation":
-                            return 1
-
-            # Check delta.annotations (streaming chunks)
-            if hasattr(choice, "delta") and hasattr(choice.delta, "annotations"):
-                annotations = choice.delta.annotations
-
-                if annotations:
-                    for annotation in annotations:
-                        # Support both dict and object formats
-                        annotation_type = (
-                            annotation.get("type")
-                            if isinstance(annotation, dict)
-                            else getattr(annotation, "type", None)
-                        )
-
-                        if annotation_type == "url_citation":
-                            return 1
-
-    # Check for url_citation annotations in output (Responses API)
-    if hasattr(response, "output"):
-        for item in response.output:
-            if hasattr(item, "content") and isinstance(item.content, list):
-                for content_item in item.content:
-                    if hasattr(content_item, "annotations"):
-                        annotations = content_item.annotations
-
-                        if annotations:
-                            for annotation in annotations:
-                                # Support both dict and object formats
-                                annotation_type = (
-                                    annotation.get("type")
-                                    if isinstance(annotation, dict)
-                                    else getattr(annotation, "type", None)
-                                )
-
-                                if annotation_type == "url_citation":
-                                    return 1
-
+    count = _count_response_web_search_calls(response)
+    if count > 0:
+        return count
+    if _has_root_web_search(response):
+        return 1
+    if _has_choice_web_citations(response):
+        return 1
+    if _has_response_web_citations(response):
+        return 1
     return 0
 
 
@@ -482,49 +278,7 @@ def extract_openai_usage_from_response(response: Any) -> TokenUsage:
     if not hasattr(response, "usage") or not response.usage:
         return TokenUsage()
 
-    cached_tokens = None
-    input_tokens = None
-    output_tokens = None
-    reasoning_tokens = None
-
-    # Responses API format
-    if hasattr(response.usage, "input_tokens"):
-        input_tokens = response.usage.input_tokens
-    if hasattr(response.usage, "output_tokens"):
-        output_tokens = response.usage.output_tokens
-    if hasattr(response.usage, "input_tokens_details") and hasattr(
-        response.usage.input_tokens_details, "cached_tokens"
-    ):
-        cached_tokens = response.usage.input_tokens_details.cached_tokens
-    if hasattr(response.usage, "output_tokens_details") and hasattr(
-        response.usage.output_tokens_details, "reasoning_tokens"
-    ):
-        reasoning_tokens = response.usage.output_tokens_details.reasoning_tokens
-
-    # Chat Completions format
-    if hasattr(response.usage, "prompt_tokens"):
-        input_tokens = response.usage.prompt_tokens
-    if hasattr(response.usage, "completion_tokens"):
-        output_tokens = response.usage.completion_tokens
-    if hasattr(response.usage, "prompt_tokens_details") and hasattr(
-        response.usage.prompt_tokens_details, "cached_tokens"
-    ):
-        cached_tokens = response.usage.prompt_tokens_details.cached_tokens
-    if hasattr(response.usage, "completion_tokens_details") and hasattr(
-        response.usage.completion_tokens_details, "reasoning_tokens"
-    ):
-        reasoning_tokens = response.usage.completion_tokens_details.reasoning_tokens
-
-    result = TokenUsage()
-    if input_tokens is not None:
-        result["input_tokens"] = input_tokens
-    if output_tokens is not None:
-        result["output_tokens"] = output_tokens
-
-    if cached_tokens is not None and cached_tokens > 0:
-        result["cache_read_input_tokens"] = cached_tokens
-    if reasoning_tokens is not None and reasoning_tokens > 0:
-        result["reasoning_tokens"] = reasoning_tokens
+    result = _extract_openai_response_token_usage(response.usage)
 
     web_search_count = extract_openai_web_search_count(response)
     if web_search_count > 0:
@@ -577,74 +331,11 @@ def extract_openai_usage_from_chunk(
         if not hasattr(chunk, "usage") or not chunk.usage:
             return usage
 
-        # Chat Completions API uses prompt_tokens and completion_tokens
-        # Standardize to input_tokens and output_tokens
-        usage["input_tokens"] = getattr(chunk.usage, "prompt_tokens", 0)
-        usage["output_tokens"] = getattr(chunk.usage, "completion_tokens", 0)
-
-        # Handle cached tokens
-        if hasattr(chunk.usage, "prompt_tokens_details") and hasattr(
-            chunk.usage.prompt_tokens_details, "cached_tokens"
-        ):
-            cached = chunk.usage.prompt_tokens_details.cached_tokens
-            if cached is not None:
-                usage["cache_read_input_tokens"] = cached
-
-        # Handle reasoning tokens
-        if hasattr(chunk.usage, "completion_tokens_details") and hasattr(
-            chunk.usage.completion_tokens_details, "reasoning_tokens"
-        ):
-            reasoning = chunk.usage.completion_tokens_details.reasoning_tokens
-            if reasoning is not None:
-                usage["reasoning_tokens"] = reasoning
-
-        # Capture raw usage metadata for backend processing
-        # Serialize to dict here in the converter (not in utils)
-        serialized = serialize_raw_usage(chunk.usage)
-        if serialized:
-            usage["raw_usage"] = serialized
+        usage.update(_extract_openai_stream_token_usage(chunk.usage, "chat"))
+        _add_openai_raw_usage(usage, chunk.usage)
 
     elif provider_type == "responses":
-        # For Responses API, usage is only in chunk.response.usage on the terminal
-        # event. A run cut short (e.g. by max_output_tokens) ends on
-        # response.incomplete instead of response.completed, and is still billed.
-        if getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
-            if (
-                hasattr(chunk, "response")
-                and hasattr(chunk.response, "usage")
-                and chunk.response.usage
-            ):
-                response_usage = chunk.response.usage
-                usage["input_tokens"] = getattr(response_usage, "input_tokens", 0)
-                usage["output_tokens"] = getattr(response_usage, "output_tokens", 0)
-
-                # Handle cached tokens
-                if hasattr(response_usage, "input_tokens_details") and hasattr(
-                    response_usage.input_tokens_details, "cached_tokens"
-                ):
-                    cached = response_usage.input_tokens_details.cached_tokens
-                    if cached is not None:
-                        usage["cache_read_input_tokens"] = cached
-
-                # Handle reasoning tokens
-                if hasattr(response_usage, "output_tokens_details") and hasattr(
-                    response_usage.output_tokens_details, "reasoning_tokens"
-                ):
-                    reasoning = response_usage.output_tokens_details.reasoning_tokens
-                    if reasoning is not None:
-                        usage["reasoning_tokens"] = reasoning
-
-                # Extract web search count from the complete response
-                if hasattr(chunk, "response"):
-                    web_search_count = extract_openai_web_search_count(chunk.response)
-                    if web_search_count > 0:
-                        usage["web_search_count"] = web_search_count
-
-                # Capture raw usage metadata for backend processing
-                # Serialize to dict here in the converter (not in utils)
-                serialized = serialize_raw_usage(response_usage)
-                if serialized:
-                    usage["raw_usage"] = serialized
+        usage.update(_extract_openai_response_chunk_usage(chunk))
 
     return usage
 
@@ -669,28 +360,7 @@ def extract_openai_content_from_chunk(
     """
 
     if provider_type == "chat":
-        # Chat Completions API format
-        if (
-            hasattr(chunk, "choices")
-            and chunk.choices
-            and len(chunk.choices) > 0
-            and chunk.choices[0].delta
-        ):
-            delta = chunk.choices[0].delta
-
-            if delta.content:
-                return delta.content
-
-            audio_delta = getattr(delta, "audio", None)
-            if audio_delta is not None:
-                plain_audio = to_plain(audio_delta)
-                if isinstance(plain_audio, dict):
-                    return {"type": "audio", **plain_audio}
-                return {"type": "audio"}
-
-            refusal_delta = getattr(delta, "refusal", None)
-            if refusal_delta:
-                return {"type": "refusal", "refusal": refusal_delta}
+        return _extract_openai_chat_content(chunk)
 
     elif provider_type == "responses":
         # Responses API format
@@ -714,37 +384,14 @@ def extract_openai_tool_calls_from_chunk(chunk: Any) -> Optional[List[Dict[str, 
         List of tool call deltas if present, None otherwise
     """
     if (
-        hasattr(chunk, "choices")
-        and chunk.choices
-        and len(chunk.choices) > 0
-        and chunk.choices[0].delta
+        _has_openai_chat_delta(chunk)
         and hasattr(chunk.choices[0].delta, "tool_calls")
         and chunk.choices[0].delta.tool_calls
     ):
         tool_calls = []
         for tool_call in chunk.choices[0].delta.tool_calls:
-            tc_dict = {
-                "index": getattr(tool_call, "index", None),
-            }
+            tool_calls.append(_format_openai_tool_delta(tool_call))
 
-            if hasattr(tool_call, "id") and tool_call.id:
-                tc_dict["id"] = tool_call.id
-
-            if hasattr(tool_call, "type") and tool_call.type:
-                tc_dict["type"] = tool_call.type
-
-            if hasattr(tool_call, "function") and tool_call.function:
-                function_dict = {}
-                if hasattr(tool_call.function, "name") and tool_call.function.name:
-                    function_dict["name"] = tool_call.function.name
-                if (
-                    hasattr(tool_call.function, "arguments")
-                    and tool_call.function.arguments
-                ):
-                    function_dict["arguments"] = tool_call.function.arguments
-                tc_dict["function"] = function_dict
-
-            tool_calls.append(tc_dict)
         return tool_calls
 
     return None
@@ -768,27 +415,7 @@ def accumulate_openai_tool_calls(
         chunk_tool_calls: List of tool call deltas from current chunk
     """
     for tool_call_delta in chunk_tool_calls:
-        index = tool_call_delta.get("index")
-        if index is None:
-            # Some OpenAI-compatible providers omit the index. A delta with a new id
-            # or a function name starts a call, and one with neither continues the
-            # latest call. Those calls get keys of their own, so they can never
-            # collide with an index the provider sends later.
-            call_id = tool_call_delta.get("id")
-            index = next(
-                (
-                    key
-                    for key, tc in accumulated_tool_calls.items()
-                    if call_id and tc["id"] == call_id
-                ),
-                None,
-            )
-            if index is None:
-                has_name = bool((tool_call_delta.get("function") or {}).get("name"))
-                if accumulated_tool_calls and not call_id and not has_name:
-                    index = next(reversed(accumulated_tool_calls))
-                else:
-                    index = f"no-index-{len(accumulated_tool_calls)}"
+        index = _openai_tool_delta_index(accumulated_tool_calls, tool_call_delta)
 
         # Initialize tool call if first time seeing this index
         if index not in accumulated_tool_calls:
@@ -801,22 +428,7 @@ def accumulate_openai_tool_calls(
                 },
             }
 
-        # Update with new data from delta
-        tc = accumulated_tool_calls[index]
-
-        if "id" in tool_call_delta and tool_call_delta["id"]:
-            tc["id"] = tool_call_delta["id"]
-
-        if "type" in tool_call_delta and tool_call_delta["type"]:
-            tc["type"] = tool_call_delta["type"]
-
-        if "function" in tool_call_delta:
-            func_delta = tool_call_delta["function"]
-            if "name" in func_delta and func_delta["name"]:
-                tc["function"]["name"] = func_delta["name"]
-            if "arguments" in func_delta and func_delta["arguments"]:
-                # Arguments are sent incrementally, concatenate them
-                tc["function"]["arguments"] += func_delta["arguments"]
+        _apply_openai_tool_delta(accumulated_tool_calls[index], tool_call_delta)
 
 
 def format_openai_streaming_output(
@@ -837,93 +449,12 @@ def format_openai_streaming_output(
     """
 
     if provider_type == "chat":
-        content_items: List[FormattedContentItem] = []
-
-        # Add text content if present
-        if isinstance(accumulated_content, str) and accumulated_content:
-            content_items.append({"type": "text", "text": accumulated_content})
-        elif isinstance(accumulated_content, list):
-            text_parts: List[str] = []
-            audio_id: Optional[str] = None
-            audio_data_parts: List[str] = []
-            audio_transcript_parts: List[str] = []
-            refusal_parts: List[str] = []
-
-            for item in accumulated_content:
-                if isinstance(item, str):
-                    if item:
-                        text_parts.append(item)
-                elif isinstance(item, dict) and item.get("type") == "audio":
-                    if audio_id is None and item.get("id"):
-                        audio_id = item["id"]
-                    if item.get("data"):
-                        audio_data_parts.append(item["data"])
-                    if item.get("transcript"):
-                        audio_transcript_parts.append(item["transcript"])
-                elif isinstance(item, dict) and item.get("type") == "refusal":
-                    if item.get("refusal"):
-                        refusal_parts.append(item["refusal"])
-
-            if text_parts:
-                content_items.append({"type": "text", "text": "".join(text_parts)})
-
-            if audio_data_parts or audio_transcript_parts:
-                audio_block: Dict[str, Any] = {"type": "audio"}
-                if audio_id is not None:
-                    audio_block["id"] = audio_id
-                if audio_data_parts:
-                    audio_block["data"] = "".join(audio_data_parts)
-                if audio_transcript_parts:
-                    audio_block["transcript"] = "".join(audio_transcript_parts)
-                content_items.append(audio_block)
-
-            if refusal_parts:
-                content_items.append(
-                    {"type": "refusal", "refusal": "".join(refusal_parts)}
-                )
-
-        # Add tool calls if present
-        if tool_calls:
-            for tool_call in tool_calls:
-                if "function" in tool_call:
-                    function_call: FormattedFunctionCall = {
-                        "type": "function",
-                        "id": tool_call.get("id", ""),
-                        "function": tool_call["function"],
-                    }
-                    content_items.append(function_call)
-
-        # Return formatted message with content
-        if content_items:
-            return [{"role": "assistant", "content": content_items}]
-        else:
-            # Empty response
-            return [{"role": "assistant", "content": []}]
+        return _format_openai_chat_stream_output(accumulated_content, tool_calls)
 
     elif provider_type == "responses":
-        if isinstance(accumulated_content, list) and not accumulated_content:
-            return []
-        if isinstance(accumulated_content, list) and accumulated_content:
-            items: List[Any] = []
-            for entry in accumulated_content:
-                if isinstance(entry, list):
-                    items.extend(entry)
-                else:
-                    items.append(entry)
-
-            content_items = _format_responses_output_items(items)
-            role = _responses_output_role(items)
-
-            if content_items:
-                return [{"role": role, "content": content_items}]
-            return []
-        elif isinstance(accumulated_content, str):
-            return [
-                {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": accumulated_content}],
-                }
-            ]
+        output = _format_openai_responses_stream_output(accumulated_content)
+        if output is not None:
+            return output
 
     # Fallback for any other format
     return [
@@ -950,3 +481,558 @@ def format_openai_streaming_input(
     from posthog.ai.utils import merge_system_prompt
 
     return merge_system_prompt(kwargs, "openai")
+
+
+def _format_response_message_content(item: Any) -> List[FormattedContentItem]:
+    content: List[FormattedContentItem] = []
+    message_content = _item_attr(item, "content")
+    if isinstance(message_content, list):
+        for content_item in message_content:
+            block = _format_response_content_item(content_item)
+            if block is not None:
+                content.append(block)
+
+    elif message_content is not None:
+        content.append({"type": "text", "text": str(message_content)})
+
+    return content
+
+
+def _format_response_content_item(content_item: Any) -> Optional[FormattedContentItem]:
+    content_item_type = _item_attr(content_item, "type")
+    content_item_text = _item_attr(content_item, "text")
+    content_item_refusal = _item_attr(content_item, "refusal")
+
+    if content_item_type == "output_text" and (content_item_text is not None):
+        return {"type": "text", "text": content_item_text}
+
+    elif content_item_type == "refusal" and (content_item_refusal is not None):
+        return {"type": "refusal", "refusal": content_item_refusal}
+
+    elif content_item_text is not None:
+        return {"type": "text", "text": content_item_text}
+
+    elif content_item_type == "input_image" and (
+        _item_attr(content_item, "image_url") is not None
+    ):
+        image_content: FormattedImageContent = {
+            "type": "image",
+            "image": _item_attr(content_item, "image_url"),
+        }
+        return image_content
+
+    return None
+
+
+def _format_chat_message(message: Any) -> List[FormattedContentItem]:
+    content: List[FormattedContentItem] = []
+    if message.content:
+        content.append(
+            {
+                "type": "text",
+                "text": message.content,
+            }
+        )
+
+    # A refused request carries its text in `refusal` and leaves `content` empty
+    refusal = getattr(message, "refusal", None)
+    if refusal:
+        content.append({"type": "refusal", "refusal": refusal})
+
+    if hasattr(message, "tool_calls") and message.tool_calls:
+        for tool_call in message.tool_calls:
+            block = _format_chat_tool_call(tool_call)
+            if block is not None:
+                content.append(block)
+
+    # Handle audio output (gpt-4o-audio-preview)
+    if hasattr(message, "audio") and message.audio:
+        # Convert Pydantic model to dict to capture all fields from OpenAI
+        audio_dict = message.audio.model_dump()
+        content.append({"type": "audio", **audio_dict})
+
+    return content
+
+
+def _format_chat_tool_call(tool_call: Any) -> Optional[FormattedContentItem]:
+    # Custom tools carry their free-form text in `custom.input`,
+    # with no `function` object.
+    is_custom = getattr(tool_call, "type", None) == "custom"
+    call = getattr(tool_call, "custom" if is_custom else "function", None)
+    if call is None:
+        return None
+    return {
+        "type": "function",
+        "id": tool_call.id,
+        "function": {
+            "name": call.name,
+            "arguments": call.input if is_custom else call.arguments,
+        },
+    }
+
+
+def _format_chat_input_message(msg: Any) -> FormattedMessage:
+    plain = to_plain(msg)
+    if not isinstance(plain, dict):
+        plain = {"role": "user", "content": str(plain)}
+
+    formatted: Dict[str, Any] = {
+        "role": plain.get("role", "user"),
+        "content": plain.get("content"),
+    }
+
+    for key in ("tool_calls", "tool_call_id", "name", "audio", "refusal"):
+        if plain.get(key) is not None:
+            formatted[key] = to_plain(plain[key]) if key == "audio" else plain[key]
+
+    return cast(FormattedMessage, formatted)
+
+
+def _format_response_input_item(item: Any) -> FormattedMessage:
+    if not isinstance(item, (dict, str)):
+        item = to_plain(item)
+
+    if (
+        isinstance(item, dict)
+        and "type" in item
+        and "role" not in item
+        and "content" not in item
+    ):
+        return cast(FormattedMessage, to_plain(item))
+
+    role = "user"
+    content = ""
+
+    if isinstance(item, dict):
+        role = item.get("role", "user")
+        content = item.get("content", "")
+
+    elif isinstance(item, str):
+        content = item
+
+    else:
+        content = str(item)
+
+    return {"role": role, "content": content}
+
+
+def _count_response_web_search_calls(response: Any) -> int:
+    # Priority 1: exact count in Responses API output.
+    count = 0
+    if hasattr(response, "output"):
+        for item in response.output:
+            if hasattr(item, "type") and item.type == "web_search_call":
+                count += 1
+    return max(0, count)
+
+
+def _has_root_web_search(response: Any) -> bool:
+    # Priority 2: binary detection, including Perplexity root-level indicators.
+    for field in ("citations", "search_results"):
+        if hasattr(response, field):
+            values = getattr(response, field)
+            if values and len(values) > 0:
+                return True
+    if hasattr(response, "usage") and hasattr(response.usage, "search_context_size"):
+        if response.usage.search_context_size:
+            return True
+    return False
+
+
+def _has_url_citation_annotations(item: Any) -> bool:
+    if hasattr(item, "annotations"):
+        annotations = item.annotations
+        if annotations:
+            for annotation in annotations:
+                if _item_attr(annotation, "type") == "url_citation":
+                    return True
+    return False
+
+
+def _has_choice_web_citations(response: Any) -> bool:
+    if hasattr(response, "choices"):
+        for choice in response.choices:
+            # Check message before delta, including streaming chunks.
+            for field in ("message", "delta"):
+                if hasattr(choice, field):
+                    if _has_url_citation_annotations(getattr(choice, field)):
+                        return True
+    return False
+
+
+def _has_response_web_citations(response: Any) -> bool:
+    if hasattr(response, "output"):
+        for item in response.output:
+            if hasattr(item, "content") and isinstance(item.content, list):
+                for content_item in item.content:
+                    if _has_url_citation_annotations(content_item):
+                        return True
+    return False
+
+
+def _extract_openai_response_token_usage(usage: Any) -> TokenUsage:
+    # Read Responses fields first, then Chat Completions fields. The latter
+    # override only fields they report, including explicitly null values.
+    counts = _read_openai_response_usage_fields(usage, "responses")
+    counts.update(_read_openai_response_usage_fields(usage, "chat"))
+    result: Dict[str, Any] = {}
+    for field in ("input_tokens", "output_tokens"):
+        value = counts.get(field)
+        if value is not None:
+            result[field] = value
+    _add_openai_response_details(result, counts)
+    return cast(TokenUsage, result)
+
+
+def _read_openai_response_usage_fields(usage: Any, api_type: str) -> Dict[str, Any]:
+    if api_type == "responses":
+        token_fields = (
+            ("input_tokens", "input_tokens"),
+            ("output_tokens", "output_tokens"),
+        )
+        detail_fields = (
+            ("cache_read_input_tokens", "input_tokens_details", "cached_tokens"),
+            ("reasoning_tokens", "output_tokens_details", "reasoning_tokens"),
+        )
+    else:
+        token_fields = (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        )
+        detail_fields = (
+            ("cache_read_input_tokens", "prompt_tokens_details", "cached_tokens"),
+            ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens"),
+        )
+    counts = {}
+    for output, field in token_fields:
+        if hasattr(usage, field):
+            counts[output] = getattr(usage, field)
+    for output, field, detail in detail_fields:
+        if hasattr(usage, field) and hasattr(getattr(usage, field), detail):
+            counts[output] = getattr(getattr(usage, field), detail)
+    return counts
+
+
+def _add_openai_response_details(
+    result: Dict[str, Any], counts: Dict[str, Any]
+) -> None:
+    for field in ("cache_read_input_tokens", "reasoning_tokens"):
+        value = counts.get(field)
+        if value is not None and value > 0:
+            result[field] = value
+
+
+def _extract_openai_stream_token_usage(raw: Any, provider_type: str) -> TokenUsage:
+    if provider_type == "chat":
+        input_field, output_field = "prompt_tokens", "completion_tokens"
+        input_details, output_details = (
+            "prompt_tokens_details",
+            "completion_tokens_details",
+        )
+    else:
+        input_field, output_field = "input_tokens", "output_tokens"
+        input_details, output_details = "input_tokens_details", "output_tokens_details"
+    usage: Dict[str, Any] = {
+        "input_tokens": getattr(raw, input_field, 0),
+        "output_tokens": getattr(raw, output_field, 0),
+    }
+    # Unlike non-streaming usage, explicitly reported zero details are retained.
+    for output, field, detail in (
+        ("cache_read_input_tokens", input_details, "cached_tokens"),
+        ("reasoning_tokens", output_details, "reasoning_tokens"),
+    ):
+        if hasattr(raw, field) and hasattr(getattr(raw, field), detail):
+            value = getattr(getattr(raw, field), detail)
+            if value is not None:
+                usage[output] = value
+    return cast(TokenUsage, usage)
+
+
+def _add_openai_raw_usage(usage: TokenUsage, raw: Any) -> None:
+    # Capture raw usage metadata for backend processing. Serialize in the converter.
+    serialized = serialize_raw_usage(raw)
+    if serialized:
+        usage["raw_usage"] = serialized
+
+
+def _has_openai_chat_delta(chunk: Any) -> bool:
+    return bool(
+        hasattr(chunk, "choices")
+        and chunk.choices
+        and len(chunk.choices) > 0
+        and chunk.choices[0].delta
+    )
+
+
+def _format_openai_tool_delta(tool_call: Any) -> Dict[str, Any]:
+    tc_dict = {
+        "index": getattr(tool_call, "index", None),
+    }
+
+    if hasattr(tool_call, "id") and tool_call.id:
+        tc_dict["id"] = tool_call.id
+
+    if hasattr(tool_call, "type") and tool_call.type:
+        tc_dict["type"] = tool_call.type
+
+    if hasattr(tool_call, "function") and tool_call.function:
+        tc_dict["function"] = _format_openai_function_delta(tool_call.function)
+
+    return tc_dict
+
+
+def _format_openai_function_delta(function: Any) -> Dict[str, Any]:
+    function_dict = {}
+    if hasattr(function, "name") and function.name:
+        function_dict["name"] = function.name
+    if hasattr(function, "arguments") and function.arguments:
+        function_dict["arguments"] = function.arguments
+    return function_dict
+
+
+def _openai_tool_delta_index(
+    accumulated_tool_calls: Dict[Union[int, str], Dict[str, Any]],
+    tool_call_delta: Dict[str, Any],
+) -> Union[int, str]:
+    index = tool_call_delta.get("index")
+    if index is None:
+        # Some OpenAI-compatible providers omit the index. A delta with a new id
+        # or a function name starts a call, and one with neither continues the
+        # latest call. Those calls get keys of their own, so they can never
+        # collide with an index the provider sends later.
+        call_id = tool_call_delta.get("id")
+        index = _openai_tool_index_by_id(accumulated_tool_calls, call_id)
+
+        if index is None:
+            has_name = bool((tool_call_delta.get("function") or {}).get("name"))
+            if accumulated_tool_calls and not call_id and not has_name:
+                index = next(reversed(accumulated_tool_calls))
+            else:
+                index = f"no-index-{len(accumulated_tool_calls)}"
+
+    return index
+
+
+def _apply_openai_tool_delta(
+    tc: Dict[str, Any], tool_call_delta: Dict[str, Any]
+) -> None:
+    # Update with new data from delta
+
+    for field in ("id", "type"):
+        if field in tool_call_delta and tool_call_delta[field]:
+            tc[field] = tool_call_delta[field]
+
+    if "function" in tool_call_delta:
+        func_delta = tool_call_delta["function"]
+        if "name" in func_delta and func_delta["name"]:
+            tc["function"]["name"] = func_delta["name"]
+        if "arguments" in func_delta and func_delta["arguments"]:
+            # Arguments are sent incrementally, concatenate them
+            tc["function"]["arguments"] += func_delta["arguments"]
+
+
+def _format_openai_chat_stream_output(
+    accumulated_content: Any, tool_calls: Optional[List[Dict[str, Any]]]
+) -> List[FormattedMessage]:
+    content_items: List[FormattedContentItem] = []
+
+    # Add text content if present
+    if isinstance(accumulated_content, str) and accumulated_content:
+        content_items.append({"type": "text", "text": accumulated_content})
+    elif isinstance(accumulated_content, list):
+        content_items.extend(_merge_openai_chat_stream_parts(accumulated_content))
+
+    # Add tool calls if present
+    if tool_calls:
+        for tool_call in tool_calls:
+            if "function" in tool_call:
+                function_call: FormattedFunctionCall = {
+                    "type": "function",
+                    "id": tool_call.get("id", ""),
+                    "function": tool_call["function"],
+                }
+                content_items.append(function_call)
+
+    # Return formatted message with content
+    if content_items:
+        return [{"role": "assistant", "content": content_items}]
+    else:
+        # Empty response
+        return [{"role": "assistant", "content": []}]
+
+
+def _merge_openai_chat_stream_parts(
+    accumulated_content: List[Any],
+) -> List[FormattedContentItem]:
+    text_parts: List[str] = []
+    audio_id: Optional[str] = None
+    audio_data_parts: List[str] = []
+    audio_transcript_parts: List[str] = []
+    refusal_parts: List[str] = []
+
+    for item in accumulated_content:
+        if isinstance(item, str):
+            if item:
+                text_parts.append(item)
+        elif isinstance(item, dict) and item.get("type") == "audio":
+            audio_id = _append_openai_audio_delta(
+                item, audio_id, audio_data_parts, audio_transcript_parts
+            )
+        elif isinstance(item, dict) and item.get("type") == "refusal":
+            if item.get("refusal"):
+                refusal_parts.append(item["refusal"])
+
+    return _format_openai_chat_stream_parts(
+        text_parts, audio_id, audio_data_parts, audio_transcript_parts, refusal_parts
+    )
+
+
+def _append_openai_audio_delta(
+    item: Dict[str, Any],
+    audio_id: Optional[str],
+    data_parts: List[str],
+    transcript_parts: List[str],
+) -> Optional[str]:
+    if audio_id is None and item.get("id"):
+        audio_id = item["id"]
+    if item.get("data"):
+        data_parts.append(item["data"])
+    if item.get("transcript"):
+        transcript_parts.append(item["transcript"])
+    return audio_id
+
+
+def _format_openai_chat_stream_parts(
+    text_parts: List[str],
+    audio_id: Optional[str],
+    audio_data_parts: List[str],
+    audio_transcript_parts: List[str],
+    refusal_parts: List[str],
+) -> List[FormattedContentItem]:
+    content_items: List[FormattedContentItem] = []
+    if text_parts:
+        content_items.append({"type": "text", "text": "".join(text_parts)})
+
+    if audio_data_parts or audio_transcript_parts:
+        audio_block: Dict[str, Any] = {"type": "audio"}
+        if audio_id is not None:
+            audio_block["id"] = audio_id
+        if audio_data_parts:
+            audio_block["data"] = "".join(audio_data_parts)
+        if audio_transcript_parts:
+            audio_block["transcript"] = "".join(audio_transcript_parts)
+        content_items.append(audio_block)
+
+    if refusal_parts:
+        content_items.append({"type": "refusal", "refusal": "".join(refusal_parts)})
+
+    return content_items
+
+
+def _format_openai_responses_stream_output(
+    accumulated_content: Any,
+) -> Optional[List[FormattedMessage]]:
+    if isinstance(accumulated_content, list) and not accumulated_content:
+        return []
+    if isinstance(accumulated_content, list) and accumulated_content:
+        items: List[Any] = []
+        for entry in accumulated_content:
+            if isinstance(entry, list):
+                items.extend(entry)
+            else:
+                items.append(entry)
+
+        content_items = _format_responses_output_items(items)
+        role = _responses_output_role(items)
+
+        if content_items:
+            return [{"role": role, "content": content_items}]
+        return []
+    elif isinstance(accumulated_content, str):
+        return [
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": accumulated_content}],
+            }
+        ]
+
+    return None
+
+
+def _format_chat_completion_choices(choices: Any) -> Optional[FormattedMessage]:
+    content: List[FormattedContentItem] = []
+    role = "assistant"
+
+    for choice in choices:
+        if hasattr(choice, "message") and choice.message:
+            if choice.message.role:
+                role = choice.message.role
+            content.extend(_format_chat_message(choice.message))
+
+    if content:
+        return {
+            "role": role,
+            "content": content,
+        }
+
+    return None
+
+
+def _extract_openai_response_chunk_usage(chunk: Any) -> TokenUsage:
+    usage = TokenUsage()
+    # For Responses API, usage is only in chunk.response.usage on the terminal
+    # event. A run cut short (e.g. by max_output_tokens) ends on
+    # response.incomplete instead of response.completed, and is still billed.
+    if getattr(chunk, "type", None) in _RESPONSES_TERMINAL_EVENT_TYPES:
+        if (
+            hasattr(chunk, "response")
+            and hasattr(chunk.response, "usage")
+            and chunk.response.usage
+        ):
+            response_usage = chunk.response.usage
+            usage.update(
+                _extract_openai_stream_token_usage(response_usage, "responses")
+            )
+            # Extract web search count from the complete response.
+            if hasattr(chunk, "response"):
+                web_search_count = extract_openai_web_search_count(chunk.response)
+                if web_search_count > 0:
+                    usage["web_search_count"] = web_search_count
+            _add_openai_raw_usage(usage, response_usage)
+
+    return usage
+
+
+def _extract_openai_chat_content(chunk: Any) -> Optional[Any]:
+    # Chat Completions API format
+    if _has_openai_chat_delta(chunk):
+        delta = chunk.choices[0].delta
+
+        if delta.content:
+            return delta.content
+
+        audio_delta = getattr(delta, "audio", None)
+        if audio_delta is not None:
+            plain_audio = to_plain(audio_delta)
+            if isinstance(plain_audio, dict):
+                return {"type": "audio", **plain_audio}
+            return {"type": "audio"}
+
+        refusal_delta = getattr(delta, "refusal", None)
+        if refusal_delta:
+            return {"type": "refusal", "refusal": refusal_delta}
+
+    return None
+
+
+def _openai_tool_index_by_id(
+    accumulated_tool_calls: Dict[Union[int, str], Dict[str, Any]], call_id: Any
+) -> Optional[Union[int, str]]:
+    return next(
+        (
+            key
+            for key, tc in accumulated_tool_calls.items()
+            if call_id and tc["id"] == call_id
+        ),
+        None,
+    )

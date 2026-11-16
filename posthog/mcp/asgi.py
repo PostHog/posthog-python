@@ -116,15 +116,7 @@ class PostHogMcpStatelessSessionMiddleware:
         if scope.get("type") != "http":
             await self.app(scope, receive, send)
             return
-        # Tell the in-process fallback that this request's handshake is captured
-        # here. Two stacked middlewares see the same request; the outer one owns it.
-        # The SSE transport stays unmarked: its session is in a query parameter, so
-        # its first request captures the handshake, in the session its calls use.
-        observer = None
-        if HANDSHAKE_OBSERVER_KEY not in scope and not _is_sse(scope):
-            observer = self._analytics()
-            if observer is not None:
-                scope[HANDSHAKE_OBSERVER_KEY] = observer
+        observer = self._handshake_observer(scope)
 
         try:
             incoming_header = read_mcp_session_header(_headers_dict(scope))
@@ -148,15 +140,7 @@ class PostHogMcpStatelessSessionMiddleware:
 
         # Guard the whole sniff+mint path: on any failure (a raising receive() or
         # adversarial body) the request passes through untouched, per the contract.
-        token = None
-        initialize = None
-        try:
-            body, receive = await _buffer_body(receive)
-            initialize = _parse_initialize(body)
-            if initialize is not None:
-                token = _mint_token(initialize)
-        except Exception as error:  # noqa: BLE001
-            log(f"PostHog MCP session middleware: mint failed - {error}")
+        initialize, token, receive = await _sniff_initialize(receive)
 
         if initialize is None:
             await self.app(scope, receive, send)
@@ -175,6 +159,19 @@ class PostHogMcpStatelessSessionMiddleware:
             send = _sending_session_header(send, token)
 
         await self.app(scope, receive, send)
+
+    def _handshake_observer(self, scope: Any) -> Optional[MCPAnalyticsData]:
+        # Tell the in-process fallback that this request's handshake is captured
+        # here. Two stacked middlewares see the same request; the outer one owns it.
+        # The SSE transport stays unmarked: its session is in a query parameter, so
+        # its first request captures the handshake, in the session its calls use.
+        observer = None
+        if HANDSHAKE_OBSERVER_KEY not in scope and not _is_sse(scope):
+            observer = self._analytics()
+            if observer is not None:
+                scope[HANDSHAKE_OBSERVER_KEY] = observer
+
+        return observer
 
 
 def _is_sse(scope: Any) -> bool:
@@ -482,3 +479,17 @@ def _wrap_app_factory(original: Any, server: Any = None) -> Any:
 
     setattr(factory, _AUTOWIRED, True)
     return factory
+
+
+async def _sniff_initialize(receive: Any) -> tuple[Any, Optional[str], Any]:
+    token = None
+    initialize = None
+    try:
+        body, receive = await _buffer_body(receive)
+        initialize = _parse_initialize(body)
+        if initialize is not None:
+            token = _mint_token(initialize)
+    except Exception as error:  # noqa: BLE001
+        log(f"PostHog MCP session middleware: mint failed - {error}")
+
+    return initialize, token, receive

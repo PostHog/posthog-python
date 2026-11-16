@@ -143,6 +143,21 @@ def _resolve_before_span_send(value: Any) -> Tuple[Callable, ...]:
     return tuple(supplied)
 
 
+def _config_mapping(config: Any) -> Mapping:
+    if not isinstance(config, Mapping):
+        if config is not None:
+            log.warning(
+                "Ignoring traces config: expected a dict, got %s", type(config).__name__
+            )
+        config = {}
+    unknown = [key for key in config if key not in _KNOWN_KEYS]
+    if unknown:
+        log.warning(
+            "Ignoring unknown traces option(s): %s", ", ".join(map(str, unknown))
+        )
+    return config
+
+
 def resolve_traces_config(
     config: Any, host_resource_attributes: Optional[Mapping[str, str]] = None
 ) -> ResolvedTracesConfig:
@@ -152,18 +167,7 @@ def resolve_traces_config(
     ``resource_attributes`` win; a string ``service.name`` / ``service.version``
     / ``deployment.environment`` there wins over the named fields.
     """
-    if not isinstance(config, Mapping):
-        if config is not None:
-            log.warning(
-                "Ignoring traces config: expected a dict, got %s", type(config).__name__
-            )
-        config = {}
-
-    unknown = [key for key in config if key not in _KNOWN_KEYS]
-    if unknown:
-        log.warning(
-            "Ignoring unknown traces option(s): %s", ", ".join(map(str, unknown))
-        )
+    config = _config_mapping(config)
 
     resource_attributes: Dict[str, Any] = dict(host_resource_attributes or {})
     resource_attributes.update(

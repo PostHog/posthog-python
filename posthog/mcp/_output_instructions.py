@@ -198,6 +198,28 @@ def mirror_instructions_into_structured_content(
                 }, True
         return result, False
 
+    return _mirror_model_instructions(result, payload)
+
+
+def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
+    """Return a shallow copy with one changed attribute, or ``None`` when the
+    object cannot be copied safely."""
+    try:
+        copied = copy.copy(value)
+    except Exception:  # noqa: BLE001 - analytics must not break tool results
+        return None
+    if copied is value:
+        return None
+    try:
+        setattr(copied, attr, updated)
+    except Exception:  # noqa: BLE001 - read-only result objects fail closed
+        return None
+    return copied
+
+
+def _mirror_model_instructions(
+    result: Any, payload: Dict[str, Any]
+) -> Tuple[Any, bool]:
     # CallToolResult model (or the ServerResult wrapper around one).
     target = getattr(result, "root", result)
     attr, structured = _read_attr(target, _STRUCTURED_CONTENT_ATTRS)
@@ -212,6 +234,12 @@ def mirror_instructions_into_structured_content(
     # result object, and pinning one conversation's handle onto it would serve
     # that handle to every later caller (and, through the handle, collapse
     # unrelated clients into one session).
+    return _copy_structured_result(result, target, attr, updated)
+
+
+def _copy_structured_result(
+    result: Any, target: Any, attr: str, updated: Any
+) -> Tuple[Any, bool]:
     copy_model = getattr(target, "model_copy", None)
     if callable(copy_model):
         try:
@@ -234,19 +262,3 @@ def mirror_instructions_into_structured_content(
     if new_result is None:
         return result, False
     return new_result, True
-
-
-def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
-    """Return a shallow copy with one changed attribute, or ``None`` when the
-    object cannot be copied safely."""
-    try:
-        copied = copy.copy(value)
-    except Exception:  # noqa: BLE001 - analytics must not break tool results
-        return None
-    if copied is value:
-        return None
-    try:
-        setattr(copied, attr, updated)
-    except Exception:  # noqa: BLE001 - read-only result objects fail closed
-        return None
-    return copied

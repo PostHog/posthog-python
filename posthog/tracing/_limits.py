@@ -55,19 +55,7 @@ def _truncate(value: Any, max_length: int, state: _WalkState, depth: int) -> Any
         return None
     is_container = isinstance(value, (Mapping, list, tuple, set, frozenset))
     if not is_container:
-        # Leaves are charged too: a shared subtree is walked once per path.
-        if state.remaining_nodes <= 0:
-            return value
-        state.remaining_nodes -= 1
-        if isinstance(value, str):
-            return truncate_string(value, max_length)
-        if isinstance(value, (bool, int, float, date)) or callable(value):
-            return value
-        # The encoder stringifies anything else, so bound that text.
-        try:
-            return truncate_string(str(value), max_length)
-        except Exception:
-            return UNSERIALIZABLE_VALUE
+        return _truncate_leaf(value, max_length, state)
 
     marker = id(value)
     if marker in state.ancestors:
@@ -84,6 +72,22 @@ def _truncate(value: Any, max_length: int, state: _WalkState, depth: int) -> Any
         return _truncate_items(value, max_length, state, depth)
     finally:
         state.ancestors.discard(marker)
+
+
+def _truncate_leaf(value: Any, max_length: int, state: _WalkState) -> Any:
+    # Leaves are charged too: a shared subtree is walked once per path.
+    if state.remaining_nodes <= 0:
+        return value
+    state.remaining_nodes -= 1
+    if isinstance(value, str):
+        return truncate_string(value, max_length)
+    if isinstance(value, (bool, int, float, date)) or callable(value):
+        return value
+    # The encoder stringifies anything else, so bound that text.
+    try:
+        return truncate_string(str(value), max_length)
+    except Exception:
+        return UNSERIALIZABLE_VALUE
 
 
 def _truncate_mapping(
@@ -188,6 +192,17 @@ def apply_span_limits(
             non_negative_count(record.dropped_attributes_count) + dropped_attributes
         )
 
+    _apply_event_limits(record, max_events, max_attributes_per_event, max_length)
+
+    if record.status is not None and record.status.message:
+        record.status = SpanStatus(
+            record.status.code, truncate_string(record.status.message, max_length)
+        )
+
+
+def _apply_event_limits(
+    record: SpanRecord, max_events: int, max_attributes_per_event: int, max_length: int
+) -> None:
     kept_events: list = []
     dropped_events = 0
     for event in record.events:
@@ -207,9 +222,4 @@ def apply_span_limits(
     if dropped_events:
         record.dropped_events_count = (
             non_negative_count(record.dropped_events_count) + dropped_events
-        )
-
-    if record.status is not None and record.status.message:
-        record.status = SpanStatus(
-            record.status.code, truncate_string(record.status.message, max_length)
         )

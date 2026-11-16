@@ -6,7 +6,7 @@ into standardized formats for PostHog tracking.
 """
 
 import json
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from posthog.ai.media import to_plain
 from posthog.ai.types import (
@@ -42,57 +42,9 @@ def format_anthropic_response(response: Any) -> List[FormattedMessage]:
     # Process content blocks from the response
     if hasattr(response, "content"):
         for choice in response.content:
-            if (
-                hasattr(choice, "type")
-                and choice.type == "text"
-                and hasattr(choice, "text")
-                and choice.text
-            ):
-                text_content: FormattedTextContent = {
-                    "type": "text",
-                    "text": choice.text,
-                }
-                content.append(text_content)
-
-            elif (
-                hasattr(choice, "type")
-                and choice.type == "tool_use"
-                and hasattr(choice, "name")
-                and hasattr(choice, "id")
-            ):
-                function_call: FormattedFunctionCall = {
-                    "type": "function",
-                    "id": choice.id,
-                    "function": {
-                        "name": choice.name,
-                        "arguments": getattr(choice, "input", {}),
-                    },
-                }
-                content.append(function_call)
-
-            elif getattr(choice, "type", None) == "thinking":
-                content.append(
-                    {
-                        "type": "thinking",
-                        "thinking": getattr(choice, "thinking", None),
-                        "signature": getattr(choice, "signature", None),
-                    }
-                )
-
-            elif getattr(choice, "type", None) == "redacted_thinking":
-                content.append(
-                    {
-                        "type": "redacted_thinking",
-                        "data": getattr(choice, "data", None),
-                    }
-                )
-
-            else:
-                # Catches blocks the branches above skip on falsy values (e.g. TextBlock(text=""))
-                # so empty-but-valid content survives instead of being silently dropped.
-                plain = to_plain(choice)
-                if isinstance(plain, dict) and plain.get("type"):
-                    content.append(plain)
+            block = _format_anthropic_response_block(choice)
+            if block is not None:
+                content.append(block)
 
     if content:
         message: FormattedMessage = {
@@ -272,15 +224,7 @@ def extract_anthropic_usage_from_response(response: Any) -> TokenUsage:
     if output_tokens is not None:
         result["output_tokens"] = output_tokens
 
-    if hasattr(response.usage, "cache_read_input_tokens"):
-        cache_read = response.usage.cache_read_input_tokens
-        if cache_read and cache_read > 0:
-            result["cache_read_input_tokens"] = cache_read
-
-    if hasattr(response.usage, "cache_creation_input_tokens"):
-        cache_creation = response.usage.cache_creation_input_tokens
-        if cache_creation and cache_creation > 0:
-            result["cache_creation_input_tokens"] = cache_creation
+    _add_anthropic_cache_usage(result, response.usage)
 
     thinking_tokens = _extract_thinking_tokens(response.usage)
     if thinking_tokens > 0:
@@ -312,21 +256,7 @@ def extract_anthropic_usage_from_event(event: Any) -> TokenUsage:
 
     usage: TokenUsage = TokenUsage()
 
-    # Handle usage stats from message_start event
-    if hasattr(event, "type") and event.type == "message_start":
-        if hasattr(event, "message") and hasattr(event.message, "usage"):
-            usage["input_tokens"] = getattr(event.message.usage, "input_tokens", 0)
-            usage["cache_creation_input_tokens"] = getattr(
-                event.message.usage, "cache_creation_input_tokens", 0
-            )
-            usage["cache_read_input_tokens"] = getattr(
-                event.message.usage, "cache_read_input_tokens", 0
-            )
-            # Capture raw usage metadata for backend processing
-            # Serialize to dict here in the converter (not in utils)
-            serialized = serialize_raw_usage(event.message.usage)
-            if serialized:
-                usage["raw_usage"] = serialized
+    usage.update(_extract_anthropic_start_usage(event))
 
     # Handle usage stats from message_delta event
     if hasattr(event, "usage") and event.usage:
@@ -374,42 +304,7 @@ def handle_anthropic_content_block_start(
     if not hasattr(event, "content_block"):
         return None, None
 
-    block = event.content_block
-
-    if not hasattr(block, "type"):
-        return None, None
-
-    if block.type == "text":
-        content_block: StreamingContentBlock = {"type": "text", "text": ""}
-        return content_block, None
-
-    elif block.type == "tool_use":
-        tool_block: StreamingContentBlock = {
-            "type": "function",
-            "id": getattr(block, "id", ""),
-            "function": {"name": getattr(block, "name", ""), "arguments": {}},
-        }
-        tool_in_progress: ToolInProgress = {"block": tool_block, "input_string": ""}
-        return tool_block, tool_in_progress
-
-    elif block.type == "thinking":
-        thinking_block: StreamingContentBlock = {
-            "type": "thinking",
-            "thinking": getattr(block, "thinking", "") or "",
-        }
-        signature = getattr(block, "signature", None)
-        if signature:
-            thinking_block["signature"] = signature
-        return thinking_block, None
-
-    elif block.type == "redacted_thinking":
-        redacted_block: StreamingContentBlock = {
-            "type": "redacted_thinking",
-            "data": getattr(block, "data", None),
-        }
-        return redacted_block, None
-
-    return None, None
+    return _start_anthropic_block(event.content_block)
 
 
 def handle_anthropic_text_delta(
@@ -442,24 +337,7 @@ def handle_anthropic_text_delta(
 
         return delta_text
 
-    if hasattr(event, "delta") and hasattr(event.delta, "thinking"):
-        delta_thinking = event.delta.thinking or ""
-
-        if current_block is not None and current_block.get("type") == "thinking":
-            thinking_val = current_block.get("thinking")
-            current_block["thinking"] = (thinking_val or "") + delta_thinking
-
-        return None
-
-    if hasattr(event, "delta") and hasattr(event.delta, "signature"):
-        delta_signature = event.delta.signature or ""
-
-        if current_block is not None and current_block.get("type") == "thinking":
-            signature_val = current_block.get("signature")
-            current_block["signature"] = (signature_val or "") + delta_signature
-
-        return None
-
+    _accumulate_anthropic_thinking_delta(event, current_block)
     return None
 
 
@@ -487,13 +365,7 @@ def handle_anthropic_tool_delta(
     ):
         return
 
-    if hasattr(event, "index") and event.index < len(content_blocks):
-        block = content_blocks[event.index]
-
-        if block.get("type") == "function" and block.get("id") in tools_in_progress:
-            tool = tools_in_progress[block["id"]]
-            partial_json = getattr(event.delta, "partial_json", "")
-            tool["input_string"] += partial_json
+    _append_anthropic_tool_json(event, content_blocks, tools_in_progress)
 
 
 def finalize_anthropic_tool_input(
@@ -570,3 +442,157 @@ def format_anthropic_streaming_output_complete(
                 "content": [{"type": "text", "text": accumulated_content}],
             }
         ]
+
+
+def _format_anthropic_response_block(choice: Any) -> Optional[FormattedContentItem]:
+    if (
+        hasattr(choice, "type")
+        and choice.type == "text"
+        and hasattr(choice, "text")
+        and choice.text
+    ):
+        text_content: FormattedTextContent = {
+            "type": "text",
+            "text": choice.text,
+        }
+        return text_content
+
+    elif (
+        hasattr(choice, "type")
+        and choice.type == "tool_use"
+        and hasattr(choice, "name")
+        and hasattr(choice, "id")
+    ):
+        function_call: FormattedFunctionCall = {
+            "type": "function",
+            "id": choice.id,
+            "function": {
+                "name": choice.name,
+                "arguments": getattr(choice, "input", {}),
+            },
+        }
+        return function_call
+
+    return _format_anthropic_reasoning_block(choice)
+
+
+def _format_anthropic_reasoning_block(choice: Any) -> Optional[FormattedContentItem]:
+    if getattr(choice, "type", None) == "thinking":
+        return {
+            "type": "thinking",
+            "thinking": getattr(choice, "thinking", None),
+            "signature": getattr(choice, "signature", None),
+        }
+
+    elif getattr(choice, "type", None) == "redacted_thinking":
+        return {
+            "type": "redacted_thinking",
+            "data": getattr(choice, "data", None),
+        }
+
+    else:
+        # Catches blocks the branches above skip on falsy values (e.g. TextBlock(text=""))
+        # so empty-but-valid content survives instead of being silently dropped.
+        plain = to_plain(choice)
+        if isinstance(plain, dict) and plain.get("type"):
+            return plain
+
+    return None
+
+
+def _add_anthropic_cache_usage(result: TokenUsage, usage: Any) -> None:
+    if hasattr(usage, "cache_read_input_tokens"):
+        cache_read = usage.cache_read_input_tokens
+        if cache_read and cache_read > 0:
+            result["cache_read_input_tokens"] = cache_read
+
+    if hasattr(usage, "cache_creation_input_tokens"):
+        cache_creation = usage.cache_creation_input_tokens
+        if cache_creation and cache_creation > 0:
+            result["cache_creation_input_tokens"] = cache_creation
+
+
+def _extract_anthropic_start_usage(event: Any) -> TokenUsage:
+    usage = TokenUsage()
+    # Handle usage stats from message_start event
+    if hasattr(event, "type") and event.type == "message_start":
+        if hasattr(event, "message") and hasattr(event.message, "usage"):
+            usage["input_tokens"] = getattr(event.message.usage, "input_tokens", 0)
+            usage["cache_creation_input_tokens"] = getattr(
+                event.message.usage, "cache_creation_input_tokens", 0
+            )
+            usage["cache_read_input_tokens"] = getattr(
+                event.message.usage, "cache_read_input_tokens", 0
+            )
+            # Capture raw usage metadata for backend processing
+            # Serialize to dict here in the converter (not in utils)
+            serialized = serialize_raw_usage(event.message.usage)
+            if serialized:
+                usage["raw_usage"] = serialized
+
+    return usage
+
+
+def _start_anthropic_block(
+    block: Any,
+) -> Tuple[Optional[StreamingContentBlock], Optional[ToolInProgress]]:
+    if not hasattr(block, "type"):
+        return None, None
+
+    if block.type == "text":
+        content_block: StreamingContentBlock = {"type": "text", "text": ""}
+        return content_block, None
+
+    elif block.type == "tool_use":
+        tool_block: StreamingContentBlock = {
+            "type": "function",
+            "id": getattr(block, "id", ""),
+            "function": {"name": getattr(block, "name", ""), "arguments": {}},
+        }
+        tool_in_progress: ToolInProgress = {"block": tool_block, "input_string": ""}
+        return tool_block, tool_in_progress
+
+    elif block.type == "thinking":
+        thinking_block: StreamingContentBlock = {
+            "type": "thinking",
+            "thinking": getattr(block, "thinking", "") or "",
+        }
+        signature = getattr(block, "signature", None)
+        if signature:
+            thinking_block["signature"] = signature
+        return thinking_block, None
+
+    elif block.type == "redacted_thinking":
+        redacted_block: StreamingContentBlock = {
+            "type": "redacted_thinking",
+            "data": getattr(block, "data", None),
+        }
+        return redacted_block, None
+
+    return None, None
+
+
+def _accumulate_anthropic_thinking_delta(
+    event: Any, current_block: Optional[StreamingContentBlock]
+) -> None:
+    fields: Tuple[Literal["thinking", "signature"], ...] = ("thinking", "signature")
+    for field in fields:
+        if hasattr(event, "delta") and hasattr(event.delta, field):
+            value = getattr(event.delta, field) or ""
+            if current_block is not None and current_block.get("type") == "thinking":
+                current_block[field] = (current_block.get(field) or "") + value
+            return
+
+
+def _append_anthropic_tool_json(
+    event: Any,
+    content_blocks: List[StreamingContentBlock],
+    tools_in_progress: Dict[str, ToolInProgress],
+) -> None:
+    if hasattr(event, "index") and event.index < len(content_blocks):
+        block = content_blocks[event.index]
+
+        if block.get("type") == "function" and block.get("id") in tools_in_progress:
+            tool = tools_in_progress[block["id"]]
+            partial_json = getattr(event.delta, "partial_json", "")
+            tool["input_string"] += partial_json

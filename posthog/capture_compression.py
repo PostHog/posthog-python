@@ -105,6 +105,10 @@ def _resolve_capture_compression(
 
     fallback = CaptureCompression.NONE
 
+    return _resolve_env_compression(fallback)
+
+
+def _resolve_env_compression(fallback: CaptureCompression) -> CaptureCompression:
     raw = os.environ.get(CAPTURE_COMPRESSION_ENV_VAR)
     if raw is None or raw.strip() == "":
         return fallback

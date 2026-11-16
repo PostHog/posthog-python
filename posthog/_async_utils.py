@@ -139,13 +139,9 @@ class _BackgroundEventLoopRunner:
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
         with self._lock:
-            if (
-                self._loop is not None
-                and self._thread is not None
-                and self._thread.is_alive()
-                and not self._loop.is_closed()
-            ):
-                return self._loop
+            ready_loop = self._ready_loop()
+            if ready_loop is not None:
+                return ready_loop
 
             startup: _LoopStartup
             if self._thread is None or not self._thread.is_alive():
@@ -176,30 +172,10 @@ class _BackgroundEventLoopRunner:
         loop = None
         try:
             loop = asyncio.new_event_loop()
-            original_run_in_executor = loop.run_in_executor
-
-            def run_in_executor(executor, func, *args):
-                call = _ContextExecutorCall(copy_context(), func, args)
-                return original_run_in_executor(executor, call)
-
-            try:
-                setattr(loop, "run_in_executor", run_in_executor)
-            except (AttributeError, TypeError):
-                # A loop that cannot carry callback context is unsafe for
-                # lifecycle re-entry from executor threads. Use the equivalent
-                # context-aware platform loop rather than silently losing it.
-                loop.close()
-                loop = _ContextEventLoop()
+            loop = self._install_context_executor(loop)
             asyncio.set_event_loop(loop)
         except BaseException as error:
-            if loop is not None and not loop.is_closed():
-                loop.close()
-            with self._lock:
-                if startup.error is None:
-                    startup.error = error
-                if self._thread is threading.current_thread():
-                    self._thread = None
-                startup.done.set()
+            self._fail_startup(startup, loop, error)
             return
 
         with self._lock:
@@ -216,17 +192,7 @@ class _BackgroundEventLoopRunner:
         try:
             loop.run_forever()
         finally:
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            loop.run_until_complete(loop.shutdown_default_executor())
-            asyncio.set_event_loop(None)
-            loop.close()
+            self._close_loop(loop)
             current = threading.current_thread()
             with self._lock:
                 if self._thread is current:
@@ -236,3 +202,60 @@ class _BackgroundEventLoopRunner:
                 if self._startup is startup:
                     self._startup = None
                 self._closing_threads.discard(current)
+
+    def _ready_loop(self) -> asyncio.AbstractEventLoop | None:
+        if (
+            self._loop is not None
+            and self._thread is not None
+            and self._thread.is_alive()
+            and not self._loop.is_closed()
+        ):
+            return self._loop
+        return None
+
+    @staticmethod
+    def _close_loop(loop: asyncio.AbstractEventLoop) -> None:
+        pending = asyncio.all_tasks(loop)
+        for task in pending:
+            task.cancel()
+        if pending:
+            loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(loop.shutdown_default_executor())
+        asyncio.set_event_loop(None)
+        loop.close()
+
+    @staticmethod
+    def _install_context_executor(
+        loop: asyncio.AbstractEventLoop,
+    ) -> asyncio.AbstractEventLoop:
+        original_run_in_executor = loop.run_in_executor
+
+        def run_in_executor(executor, func, *args):
+            call = _ContextExecutorCall(copy_context(), func, args)
+            return original_run_in_executor(executor, call)
+
+        try:
+            setattr(loop, "run_in_executor", run_in_executor)
+        except (AttributeError, TypeError):
+            # A loop that cannot carry callback context is unsafe for
+            # lifecycle re-entry from executor threads. Use the equivalent
+            # context-aware platform loop rather than silently losing it.
+            loop.close()
+            loop = _ContextEventLoop()
+        return loop
+
+    def _fail_startup(
+        self,
+        startup: _LoopStartup,
+        loop: asyncio.AbstractEventLoop | None,
+        error: BaseException,
+    ) -> None:
+        if loop is not None and not loop.is_closed():
+            loop.close()
+        with self._lock:
+            if startup.error is None:
+                startup.error = error
+            if self._thread is threading.current_thread():
+                self._thread = None
+            startup.done.set()
