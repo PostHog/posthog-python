@@ -15,7 +15,16 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, FrozenSet, List, Literal, Optional, Set
+from typing import (
+    Any,
+    ContextManager,
+    Dict,
+    FrozenSet,
+    List,
+    Literal,
+    Optional,
+    Set,
+)
 
 from ._capture import capture_event
 from ._context_parameters import (
@@ -64,8 +73,9 @@ from ._client_conversation import (
 )
 from .session import (
     ResolvedSession,
+    bind_in_tool_session,
+    resolve_anchored_session,
     new_session_id,
-    resolve_session_id,
     resolve_session_id_with_source,
     touch_connection_session,
 )
@@ -409,7 +419,7 @@ async def prime_session(
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload] = None,
     request_session_id: Optional[str] = None,
-) -> None:
+) -> ResolvedSession:
     """Point the shared per-server session at *this* request before the tool body runs.
 
     ``McpAnalytics.capture()`` reads ``data.session_id`` for custom in-tool
@@ -423,7 +433,7 @@ async def prime_session(
     and a concurrent request would read it. A call that carries one is primed
     like any other, which also counts its arrival on a one-client connection.
     """
-    await resolve_session_id(
+    return await resolve_session_id_with_source(
         data, mcp_session_id, token=token, request_session_id=request_session_id
     )
 
@@ -607,13 +617,23 @@ class ToolCallLifecycle:
             request_session_id=self.request_session_id,
         )
 
-    async def prime_session(self) -> None:
-        await prime_session(
+    async def prime_session(self) -> ResolvedSession:
+        return await prime_session(
             self.data,
             mcp_session_id=self.mcp_session_id,
             token=self.token,
             request_session_id=self.request_session_id,
         )
+
+    def in_tool(self, primed: ResolvedSession) -> ContextManager[None]:
+        """Scope the tool body to this call's session: its client id or handle,
+        else the session :meth:`prime_session` returned. A handle minted for this
+        call counts, as in posthog-js, since it is the session the call lands in
+        once its result delivers it."""
+        anchored = resolve_anchored_session(
+            self.conversation_id, self.client_conversation
+        )
+        return bind_in_tool_session(self.data, anchored or primed)
 
     def virtual_result_texts(self, primary_text: str) -> List[str]:
         """Build the text payload for an SDK virtual-tool result."""
@@ -668,7 +688,8 @@ class ToolCallLifecycle:
             protocol_version=self.protocol_version,
             extra=self.extra,
         )
-        return await handle_feedback(report, self.feedback_options)
+        with bind_in_tool_session(self.data, session):
+            return await handle_feedback(report, self.feedback_options)
 
     async def record_if_unknown_tool(
         self, tool_exists: Optional[bool], *, conversation_id_delivered: bool = False

@@ -8,8 +8,10 @@ rolls over after an inactivity timeout."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import NamedTuple, Optional
+from typing import Iterator, NamedTuple, Optional
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._client_conversation import ClientConversation
@@ -31,6 +33,39 @@ class ResolvedSession(NamedTuple):
 
     session_id: str
     source: str
+
+
+class _BoundSession(NamedTuple):
+    data: MCPAnalyticsData
+    session: ResolvedSession
+
+
+_in_tool_session: ContextVar[Optional[_BoundSession]] = ContextVar(
+    "posthog_mcp_in_tool_session", default=None
+)
+
+
+@contextmanager
+def bind_in_tool_session(
+    data: MCPAnalyticsData, session: ResolvedSession
+) -> Iterator[None]:
+    """Hold this call's session for the tool body. A concurrent request may rewrite
+    ``data.session_id`` while the tool awaits, so a custom event captured inside
+    the tool reads its session from here (see :func:`current_session`)."""
+    token = _in_tool_session.set(_BoundSession(data, session))
+    try:
+        yield
+    finally:
+        _in_tool_session.reset(token)
+
+
+def current_session(data: MCPAnalyticsData) -> ResolvedSession:
+    """The session a custom event belongs to: the running tool call's on this
+    server, else the one the server last resolved."""
+    bound = _in_tool_session.get()
+    if bound is not None and bound.data is data:
+        return bound.session
+    return ResolvedSession(data.session_id, data.session_source)
 
 
 def new_session_id() -> str:
@@ -122,6 +157,24 @@ async def handshake_session_id(
     return (await handshake_session(data, mcp_session_id, token)).session_id
 
 
+def resolve_anchored_session(
+    conversation_id: Optional[str],
+    client_conversation: Optional[ClientConversation],
+) -> Optional[ResolvedSession]:
+    """Rules 1 and 2 of "Session identity": the session one call carries itself,
+    which never touches the server's shared state."""
+    if client_conversation is not None:
+        return ResolvedSession(
+            derive_session_id_from_client_conversation(*client_conversation),
+            "client_metadata",
+        )
+    if conversation_id:
+        return ResolvedSession(
+            derive_session_id_from_conversation(conversation_id), "conversation"
+        )
+    return None
+
+
 async def resolve_session_id_with_source(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
@@ -167,16 +220,9 @@ async def resolve_session_id_with_source(
     in place of process memory, which belongs to a one-client connection and on a
     shared HTTP server would group unrelated clients.
     """
-    if client_conversation is not None:
-        return ResolvedSession(
-            derive_session_id_from_client_conversation(*client_conversation),
-            "client_metadata",
-        )
-
-    if conversation_id:
-        return ResolvedSession(
-            derive_session_id_from_conversation(conversation_id), "conversation"
-        )
+    anchored = resolve_anchored_session(conversation_id, client_conversation)
+    if anchored is not None:
+        return anchored
 
     async with data.session_lock:
         now = datetime.now(timezone.utc)

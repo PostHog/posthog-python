@@ -4,6 +4,7 @@ any handle or transport session. Every call lands on fresh server state, as on a
 per-request stateless server. Session ids below are the spec's vectors, which
 posthog-js reproduces too. Runs under both MCP majors."""
 
+import asyncio
 import json
 from datetime import timedelta
 from types import SimpleNamespace
@@ -31,7 +32,11 @@ from posthog.mcp.session import (
 )
 from posthog.mcp.session_token import SessionTokenPayload
 from posthog.mcp.request_headers import get_request_headers
-from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
+from posthog.mcp.types import (
+    CollectFeedbackOptions,
+    MCPAnalyticsOptions,
+    UserIdentity,
+)
 from posthog.test.mcp._helpers import (
     FakeClient,
     events_named as _events,
@@ -410,16 +415,141 @@ async def test_custom_capture_in_a_metadata_call_is_not_the_previous_callers(
     bob = start_call(
         data, user_agent=CHATGPT, user="bob", meta=CHATGPT_META, token=bob_token
     )
-    await bob.prime_session()
-    await McpAnalytics(key).capture("inside_tool")
+    with bob.in_tool(await bob.prime_session()):
+        await McpAnalytics(key).capture("inside_tool")
     await _flush()
 
     (event,) = _events(client, "inside_tool")
     assert event["distinct_id"] != "alice"
     assert "alice_only" not in json.dumps(event["properties"])
-    assert event["properties"]["$session_id"] not in ("ses_alice", CHATGPT_SESSION)
-    if bob_token:
-        assert event["properties"]["$session_id"] == "ses_bob"
+    assert event["properties"]["$session_id"] == CHATGPT_SESSION
+
+
+@pytest.mark.parametrize(
+    "alice_call",
+    [
+        {"user_agent": CHATGPT},
+        {"user_agent": CHATGPT, "meta": CHATGPT_META},
+        {"user_agent": OTHER, "arguments": {"conversation_id": HANDLE}},
+        {"user_agent": OTHER},
+    ],
+    ids=["no id", "a client id", "an echoed handle", "a minted handle"],
+)
+async def test_custom_capture_keeps_its_callers_session_while_another_call_completes(
+    alice_call,
+):
+    client = FakeClient()
+    key, data = shared_http_server(client)
+    alice_primed, bob_done = asyncio.Event(), asyncio.Event()
+
+    async def alice():
+        lifecycle = start_call(data, user="alice", **alice_call)
+        with lifecycle.in_tool(await lifecycle.prime_session()):
+            alice_primed.set()
+            await bob_done.wait()
+            await McpAnalytics(key).capture("inside_tool")
+        await lifecycle.record_result(
+            {"content": []},
+            1.0,
+            conversation_id_delivered=bool(lifecycle.minted_conversation_id),
+        )
+
+    async def bob():
+        await alice_primed.wait()
+        await run_call(data, user_agent=CHATGPT, user="bob")
+        bob_done.set()
+
+    await asyncio.gather(asyncio.create_task(alice()), asyncio.create_task(bob()))
+    await _flush()
+
+    (event,) = _events(client, "inside_tool")
+    calls = {
+        e["distinct_id"]: e["properties"] for e in _events(client, "$mcp_tool_call")
+    }
+    assert event["distinct_id"] != "bob"
+    assert "bob_only" not in json.dumps(event["properties"])
+    assert event["properties"]["$session_id"] == calls["alice"]["$session_id"]
+    assert event["properties"]["$session_id"] != calls["bob"]["$session_id"]
+
+
+async def test_a_capture_in_on_feedback_keeps_its_callers_session():
+    client = FakeClient()
+    key = FakeServer()
+    alice_waiting, bob_done = asyncio.Event(), asyncio.Event()
+
+    async def on_feedback(report):
+        alice_waiting.set()
+        await bob_done.wait()
+        await McpAnalytics(key).capture("in_on_feedback")
+        return "thanks"
+
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(
+            identify=identify_by_user_header,
+            collect_feedback=CollectFeedbackOptions(on_feedback=on_feedback),
+        ),
+        sink=McpEventSink(client),
+        session_id=new_session_id(),
+    )
+    set_server_tracking_data(key, data)
+
+    async def alice():
+        await start_tool_call_lifecycle(
+            data,
+            name="send_feedback",
+            arguments={"feedback_type": "other", "summary": "hi"},
+            request_meta=None,
+            allow_self_reported_model=True,
+            mcp_session_id=None,
+            token=SessionTokenPayload(session_id="ses_alice"),
+            client_name=None,
+            client_version=None,
+            protocol_version=None,
+            extra=http_extra(OTHER, **{"x-user": "alice"}),
+        ).record_feedback()
+
+    async def bob():
+        await alice_waiting.wait()
+        await run_call(
+            data,
+            user_agent=OTHER,
+            user="bob",
+            token=SessionTokenPayload(session_id="ses_bob"),
+        )
+        bob_done.set()
+
+    await asyncio.gather(asyncio.create_task(alice()), asyncio.create_task(bob()))
+    await _flush()
+
+    (event,) = _events(client, "in_on_feedback")
+    assert event["distinct_id"] != "bob"
+    assert event["properties"]["$session_id"] == "ses_alice"
+
+
+@pytest.mark.parametrize(
+    "on_other_server", [False, True], ids=["same server", "other server"]
+)
+async def test_custom_capture_outside_a_tool_uses_the_servers_session(on_other_server):
+    client = FakeClient()
+    key, data = shared_http_server(client)
+    other_key, other_data = shared_http_server(client)
+    lifecycle = start_call(
+        data,
+        user_agent=OTHER,
+        user="alice",
+        token=SessionTokenPayload(session_id="ses_alice"),
+    )
+    with lifecycle.in_tool(await lifecycle.prime_session()):
+        if on_other_server:
+            await McpAnalytics(other_key).capture("outside")
+    if not on_other_server:
+        data.session_id = "ses_server_current"
+        await McpAnalytics(key).capture("outside")
+    await _flush()
+
+    (event,) = _events(client, "outside")
+    expected = other_data.session_id if on_other_server else "ses_server_current"
+    assert event["properties"]["$session_id"] == expected
 
 
 @pytest.mark.parametrize(

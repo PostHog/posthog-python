@@ -59,6 +59,7 @@ from .request_headers import get_request_headers
 from .session import (
     derive_session_id_from_conversation,
     derive_session_id_from_mcp_session,
+    current_session,
     new_session_id,
 )
 from .session_token import (
@@ -161,11 +162,12 @@ class McpAnalytics:
         data = get_server_tracking_data(self._key)
         if data is None:
             return
+        session_id, session_source = current_session(data)
         coro = capture_event(
             data,
             {
-                "session_id": data.session_id,
-                "session_source": data.session_source,
+                "session_id": session_id,
+                "session_source": session_source,
                 "event_type": MCPAnalyticsEventType.CUSTOM,
                 "event_name": event,
                 "timestamp": datetime.now(timezone.utc),

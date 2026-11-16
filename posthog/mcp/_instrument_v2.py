@@ -463,13 +463,14 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await lifecycle.prime_session()
+        session = await lifecycle.prime_session()
 
         start = time.monotonic()
         try:
-            result = await original(
-                name, call_arguments, context=context, convert_result=convert_result
-            )
+            with lifecycle.in_tool(session):
+                result = await original(
+                    name, call_arguments, context=context, convert_result=convert_result
+                )
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
                 _name_owned_by_real_tool_v2(server, name)
@@ -670,11 +671,11 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await lifecycle.prime_session()
+        session = await lifecycle.prime_session()
 
         start = time.monotonic()
         try:
-            with raised_tool_error(standalone) as raised:
+            with lifecycle.in_tool(session), raised_tool_error(standalone) as raised:
                 result = await original(ctx, params)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(

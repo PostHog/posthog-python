@@ -280,13 +280,16 @@ def _wrap_call_tool(
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await lifecycle.prime_session()
+        session = await lifecycle.prime_session()
 
         start = time.monotonic()
         try:
-            with raised_tool_error(
-                server if high_level is None else high_level
-            ) as raised:
+            with (
+                lifecycle.in_tool(session),
+                raised_tool_error(
+                    server if high_level is None else high_level
+                ) as raised,
+            ):
                 result = await original(req)
         except Exception as error:
             if await lifecycle.record_if_unknown_tool(
