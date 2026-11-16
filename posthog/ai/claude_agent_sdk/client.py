@@ -24,13 +24,17 @@ except ImportError:
     )
 
 from .formatting import (
+    _append_assistant_output,
     _format_user_input,
-    format_assistant_blocks,
+    format_assistant_blocks as format_assistant_blocks,
     format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
     _GenerationTracker,
+    _from_subagent,
+    _promote_input,
+    _starts_generation,
 )
 from posthog.client import Client
 
@@ -130,6 +134,8 @@ class PostHogClaudeSDKClient:
         """
         # Track the prompt as input for the next generation
         self._current_input = [{"role": "user", "content": prompt}]
+        self._next_input = None
+        self._pending_output = []
         await self._client.query(prompt, session_id)
 
     async def receive_response(self):
@@ -143,6 +149,14 @@ class PostHogClaudeSDKClient:
 
     def _process_message(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
+            if _starts_generation(message):
+                if self._tracker.current_span_id is not None:
+                    # The previous request never finished (it was retried),
+                    # so its partial output is dropped.
+                    self._pending_output = []
+                self._current_input, self._next_input = _promote_input(
+                    self._current_input, self._next_input
+                )
             self._tracker.process_stream_event(message)
 
             if self._tracker.has_completed_generation():
@@ -160,14 +174,17 @@ class PostHogClaudeSDKClient:
                     self._privacy,
                     self._groups,
                 )
-                self._current_input = self._next_input
-                self._next_input = None
+                self._current_input = None
                 self._pending_output = []
 
         elif isinstance(message, AssistantMessage):
             self._process_assistant_message(message)
 
-        elif isinstance(message, UserMessage):
+        elif isinstance(message, UserMessage) and not _from_subagent(message):
+            if not self._tracker.had_any_stream_events:
+                # Without stream events, a tool result ends the assistant turn;
+                # the result fallback reports the final turn only.
+                self._pending_output = []
             self._next_input = _format_user_input(
                 message.content, self._processor._client, self._next_input
             )
@@ -203,9 +220,10 @@ class PostHogClaudeSDKClient:
                     self._privacy,
                     self._groups,
                 )
-        output_content = format_assistant_blocks(message.content)
-        if output_content:
-            self._pending_output = [{"role": "assistant", "content": output_content}]
+        if not _from_subagent(message):
+            self._pending_output = _append_assistant_output(
+                self._pending_output, message.content
+            )
 
     async def disconnect(self) -> None:
         """

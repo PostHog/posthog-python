@@ -1,5 +1,6 @@
 """Stateful Claude client delivery, turn boundaries, and teardown contracts."""
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
@@ -370,3 +371,227 @@ async def test_processor_cancellation_propagates_without_synthetic_generation_or
     assert finalized.is_set()
     ph.capture.assert_not_called()
     ph.flush.assert_not_called()
+
+
+def cli_tool_turn():
+    """Message order the Claude Code CLI (2.1.212) emits for a turn with two tool calls.
+
+    Each content block arrives as its own AssistantMessage, and each tool result
+    arrives as its own UserMessage after the generation's message_stop.
+    """
+    return [
+        stream(
+            "message_start", message={"model": "claude", "usage": {"input_tokens": 12}}
+        ),
+        AssistantMessage(model="claude", content=[TextBlock(text="Reading.")]),
+        AssistantMessage(
+            model="claude",
+            content=[ToolUseBlock(id="tool-1", name="Read", input={"path": "a"})],
+        ),
+        AssistantMessage(
+            model="claude",
+            content=[ToolUseBlock(id="tool-2", name="Read", input={"path": "b"})],
+        ),
+        stream("message_delta", usage={"output_tokens": 4}),
+        stream("message_stop"),
+        UserMessage(content=[ToolResultBlock(tool_use_id="tool-2", content="b text")]),
+        UserMessage(content=[ToolResultBlock(tool_use_id="tool-1", content="a text")]),
+        stream(
+            "message_start", message={"model": "claude", "usage": {"input_tokens": 20}}
+        ),
+        AssistantMessage(model="claude", content=[TextBlock(text="Done.")]),
+        stream("message_delta", usage={"output_tokens": 2}),
+        stream("message_stop"),
+        result(),
+    ]
+
+
+async def run_turn(sdk, monkeypatch, use_client, messages):
+    ph = analytics()
+    if use_client:
+        client = PostHogClaudeSDKClient(posthog_client=ph)
+        await client.query("question")
+        respond(sdk, messages)
+        assert [msg async for msg in client.receive_response()] == messages
+    else:
+
+        async def query(**kwargs):
+            for message in messages:
+                yield message
+
+        monkeypatch.setattr(
+            "posthog.ai.claude_agent_sdk.processor.original_query", query
+        )
+        processor = PostHogClaudeAgentProcessor(client=ph)
+        assert [msg async for msg in processor.query(prompt="question")] == messages
+    return [event["properties"] for event in events(ph, "$ai_generation")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_cli_order_keeps_every_output_block_in_its_generation(
+    sdk, monkeypatch, use_client
+):
+    one, two = await run_turn(sdk, monkeypatch, use_client, cli_tool_turn())
+    assert one["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Reading."},
+                {
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": {"path": "a"}},
+                },
+                {
+                    "type": "function",
+                    "function": {"name": "Read", "arguments": {"path": "b"}},
+                },
+            ],
+        }
+    ]
+    assert two["$ai_output_choices"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_cli_order_gives_tool_results_to_the_next_generation(
+    sdk, monkeypatch, use_client
+):
+    one, two = await run_turn(sdk, monkeypatch, use_client, cli_tool_turn())
+    assert one["$ai_input"] == [{"role": "user", "content": "question"}]
+    assert two["$ai_input"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "tool-2", "content": "b text"},
+                {"type": "tool_result", "tool_use_id": "tool-1", "content": "a text"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_subagent_messages_stay_out_of_main_generation_content(
+    sdk, monkeypatch, use_client
+):
+    turn = cli_tool_turn()
+    # The CLI forwards a subagent's messages with parent_tool_use_id set while
+    # the tool that started it runs, between the two main generations.
+    turn[7:7] = [
+        AssistantMessage(
+            model="claude",
+            content=[TextBlock(text="subagent says")],
+            parent_tool_use_id="tool-1",
+        ),
+        UserMessage(
+            content=[ToolResultBlock(tool_use_id="sub-tool", content="sub result")],
+            parent_tool_use_id="tool-1",
+        ),
+    ]
+    one, two = await run_turn(sdk, monkeypatch, use_client, turn)
+    assert [b["tool_use_id"] for b in two["$ai_input"][0]["content"]] == [
+        "tool-2",
+        "tool-1",
+    ]
+    assert two["$ai_output_choices"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_subagent_stream_events_do_not_take_queued_tool_results(
+    sdk, monkeypatch, use_client
+):
+    turn = cli_tool_turn()
+    # The subagent started by tool-1 makes its own API call after tool-2's
+    # result is queued and before tool-1's result arrives.
+    turn[7:7] = [
+        replace(stream(kind), parent_tool_use_id="tool-1")
+        for kind in ("message_start", "message_stop")
+    ]
+    generations = await run_turn(sdk, monkeypatch, use_client, turn)
+    assert [b["tool_use_id"] for b in generations[-1]["$ai_input"][0]["content"]] == [
+        "tool-2",
+        "tool-1",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_retried_request_reports_only_the_finished_attempt(
+    sdk, monkeypatch, use_client
+):
+    messages = [
+        stream("message_start", message={"model": "claude", "usage": {}}),
+        AssistantMessage(model="claude", content=[TextBlock(text="partial")]),
+        stream("message_start", message={"model": "claude", "usage": {}}),
+        AssistantMessage(model="claude", content=[TextBlock(text="full")]),
+        stream("message_stop"),
+        result(),
+    ]
+    (generation,) = await run_turn(sdk, monkeypatch, use_client, messages)
+    assert generation["$ai_input"] == [{"role": "user", "content": "question"}]
+    assert generation["$ai_output_choices"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": "full"}]}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_generation_without_queued_input_has_no_input(
+    sdk, monkeypatch, use_client
+):
+    messages = [
+        stream("message_start", message={"model": "claude", "usage": {}}),
+        AssistantMessage(model="claude", content=[TextBlock(text="one")]),
+        stream("message_stop"),
+        stream("message_start", message={"model": "claude", "usage": {}}),
+        AssistantMessage(model="claude", content=[TextBlock(text="two")]),
+        stream("message_stop"),
+        result(),
+    ]
+    one, two = await run_turn(sdk, monkeypatch, use_client, messages)
+    assert one["$ai_input"] == [{"role": "user", "content": "question"}]
+    assert "$ai_input" not in two
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_result_fallback_reports_every_block_of_the_final_turn_only(
+    sdk, monkeypatch, use_client
+):
+    turn = [m for m in cli_tool_turn() if not isinstance(m, StreamEvent)]
+    turn[-1:-1] = [AssistantMessage(model="claude", content=[TextBlock(text="Bye.")])]
+    (generation,) = await run_turn(sdk, monkeypatch, use_client, turn)
+    assert generation["$ai_input"] == [{"role": "user", "content": "question"}]
+    assert generation["$ai_output_choices"] == [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "Done."},
+                {"type": "text", "text": "Bye."},
+            ],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_result_fallback_does_not_carry_output_into_the_next_query(sdk):
+    ph = analytics()
+    client = PostHogClaudeSDKClient(posthog_client=ph)
+    for prompt in ("first", "second"):
+        await client.query(prompt)
+        messages = [
+            AssistantMessage(model="claude", content=[TextBlock(text=prompt)]),
+            result(),
+        ]
+        respond(sdk, messages)
+        assert [msg async for msg in client.receive_response()] == messages
+    second = events(ph, "$ai_generation")[1]["properties"]
+    assert second["$ai_output_choices"] == [
+        {"role": "assistant", "content": [{"type": "text", "text": "second"}]}
+    ]
