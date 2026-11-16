@@ -47,6 +47,7 @@ from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
+    _stream_error_event_status,
     finalize_ai_content,
     _format_ai_error,
     get_model_params,
@@ -1046,6 +1047,8 @@ def _get_http_status(error: BaseException) -> int:
     for attribute in ("status_code", "code"):
         value = getattr(error, attribute, None)
         if isinstance(value, int) and not isinstance(value, bool):
+            if attribute == "status_code":
+                return _stream_error_event_status(error, value)
             return value
     return 0
 
