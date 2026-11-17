@@ -1512,15 +1512,20 @@ def _looks_like_secret(value):
     """Last-resort credential check, layered cheapest first."""
     if _PEM_PRIVATE_KEY_MARKER in value:
         return True
-    n = len(value)
-    if n < _SECRET_MIN_LENGTH:
-        return False
-    if _is_high_entropy_secret(value):
+    if len(value) >= _SECRET_MIN_LENGTH and _is_high_entropy_secret(value):
         return True
     # Known formats the entropy gate misses (e.g. AWS AKIA ids: only two char classes).
-    if n <= _KNOWN_SECRET_MAX_SCAN_LENGTH:
-        return _KNOWN_SECRET_RE.search(value) is not None
-    return False
+    return _looks_like_known_secret(value)
+
+
+def _looks_like_known_secret(value):
+    """A PEM private key or a known vendor credential format, with no entropy guess."""
+    if _PEM_PRIVATE_KEY_MARKER in value:
+        return True
+    return (
+        _SECRET_MIN_LENGTH <= len(value) <= _KNOWN_SECRET_MAX_SCAN_LENGTH
+        and _KNOWN_SECRET_RE.search(value) is not None
+    )
 
 
 def _mask_string(value, config):

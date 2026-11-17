@@ -11,16 +11,25 @@ runs later in the pipeline) but before truncation.
 from __future__ import annotations
 
 import json
+import os
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+import sys
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from ._event_types import MCPAnalyticsEventType
+from ._truncation import (
+    _MAX_USER_INTENT_LENGTH,
+    _REDACTED_VALUE,
+    _TRUNCATION_SUFFIX,
+    MAX_BREADTH,
+    normalize,
+)
 
 # SDK-injected arguments stripped from captured $mcp_parameters (they surface as
 # dedicated properties: $mcp_intent and $mcp_conversation_id).
 _INJECTED_ARGUMENT_NAMES = ("context", "conversation_id")
-_REDACTED_VALUE = "[redacted]"
+_CAPTURED_REQUEST_FIELDS = ("id", "jsonrpc", "method", "params")
 _BINARY_DATA_MARKER = "[binary data redacted - not supported by PostHog MCP analytics]"
 _ENCODED_REDACTED_VALUE = "%5Bredacted%5D"
 _BASE64_PATTERN = re.compile(r"^[A-Za-z0-9+/\n\r]+=*$")
@@ -403,6 +412,54 @@ _PHONE_INTL_PATTERN = re.compile(
     r"(?<!\w)\+\d{1,3}(?:[ ./()-]{0,2}\d){7,13}(?![\w])", re.ASCII
 )
 
+# The canonical bounded scan: text longer than the limit plus a margin is redacted
+# twice, cut at the margin and at the limit, and only the start both results share
+# is kept. A match split by the limit cut differs between the two, and one split by
+# the margin cut lies past the end of the second, so neither survives raw.
+#
+# That holds for a match no longer than the margin. A word running past both cuts
+# is never seen whole, and two detectors only match once they reach its far end:
+# URL userinfo needs its `@`, a JWT its second `.`. Such a word is redacted
+# whole instead — see `_unfinished_credential_start`.
+_SCAN_MARGIN = 1024
+_JWT_OPENING = "eyJ"  # base64url of `{"`
+_URL_AUTHORITY_ENDS = "/?#"
+_WHITESPACE_PATTERN = re.compile(r"\s")
+
+
+def _redact_bounded(value: str, redact: Callable[[str], str]) -> str:
+    """``redact`` over ``value``, at a cost bounded by what truncation keeps."""
+    scan_end = _MAX_USER_INTENT_LENGTH + _SCAN_MARGIN
+    if len(value) <= scan_end:
+        return redact(value)
+    unfinished = _unfinished_credential_start(value[: scan_end + 1])
+    if unfinished is not None:
+        return redact(value[:unfinished]) + _REDACTED_VALUE + _TRUNCATION_SUFFIX
+    kept = os.path.commonprefix(
+        [redact(value[:scan_end]), redact(value[:_MAX_USER_INTENT_LENGTH])]
+    )
+    return kept + _TRUNCATION_SUFFIX
+
+
+def _unfinished_credential_start(head: str) -> Optional[int]:
+    """Where the word running off the end of ``head`` starts, when it starts
+    inside what truncation keeps and opens a credential whose end neither scan
+    reached: a URL authority with no `/`, `?` or `#` after it, or a JWT."""
+    if head[-1].isspace():
+        return None
+    space = _WHITESPACE_PATTERN.search(head[::-1])
+    start = len(head) - space.start() if space else 0
+    if start >= _MAX_USER_INTENT_LENGTH:
+        return None
+    word = head[start:-1]
+    authority = word.rfind("://")
+    if _JWT_OPENING in word or (
+        authority != -1
+        and not any(char in word[authority + 3 :] for char in _URL_AUTHORITY_ENDS)
+    ):
+        return start
+    return None
+
 
 def _is_record(value: Any) -> bool:
     return isinstance(value, dict)
@@ -423,10 +480,10 @@ def _is_binary_blob(value: str) -> bool:
 
 
 def _sanitize_text(value: str) -> str:
-    return _sanitize_urls(_redact_credentials(value))
+    return _sanitize_urls(_redact_credentials(value, _is_secret))
 
 
-def _redact_credentials(value: str) -> str:
+def _redact_credentials(value: str, is_secret: Callable[[str], bool]) -> str:
     """Redact PostHog tokens, then any other word that reads as a credential.
 
     Both run before the URL pass, because rewriting a URL changes the text they
@@ -436,7 +493,9 @@ def _redact_credentials(value: str) -> str:
     redacts or percent-encodes, so it never exposes a credential the detectors
     could have matched."""
     value = _redact_json_members(value)
-    return _redact_secret_tokens(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
+    return _redact_secret_tokens(
+        _POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value), is_secret
+    )
 
 
 def _redact_json_members(value: str) -> str:
@@ -600,7 +659,11 @@ def sanitize_free_text(value: Any) -> Any:
         return sanitize_captured_value(value)
     if _is_binary_blob(value):
         return _BINARY_DATA_MARKER
-    return _sanitize_urls(redact_pii(_redact_credentials(value)))
+    return _redact_bounded(value, _redact_free_text)
+
+
+def _redact_free_text(value: str) -> str:
+    return _sanitize_urls(redact_pii(_redact_credentials(value, _is_secret)))
 
 
 def _sanitize_resource_name(value: Any) -> Any:
@@ -615,7 +678,7 @@ def _sanitize_resource_name(value: Any) -> Any:
     return _sanitize_urls(_POSTHOG_TOKEN_PATTERN.sub(_REDACTED_VALUE, value))
 
 
-def _redact_secret_tokens(value: str) -> str:
+def _redact_secret_tokens(value: str, is_secret: Callable[[str], bool]) -> str:
     """Redact credential-looking words, leaving the surrounding text intact.
 
     The PostHog-token pattern above only knows ``phc_``/``phx_``; a failure
@@ -631,13 +694,25 @@ def _redact_secret_tokens(value: str) -> str:
     because no single word in it looks like a credential.
     """
     if " " not in value:
-        return _REDACTED_VALUE if _is_secret(value) else value
+        return _REDACTED_VALUE if is_secret(value) else value
     return " ".join(
-        _REDACTED_VALUE if _is_secret(word) else word for word in value.split(" ")
+        _REDACTED_VALUE if is_secret(word) else word for word in value.split(" ")
     )
 
 
 def _is_secret(word: str) -> bool:
+    from posthog.exception_utils import _looks_like_secret
+
+    return _judge_without_markers(word, _looks_like_secret)
+
+
+def _is_known_secret(word: str) -> bool:
+    from posthog.exception_utils import _looks_like_known_secret
+
+    return _judge_without_markers(word, _looks_like_known_secret)
+
+
+def _judge_without_markers(word: str, looks_like_secret: Callable[[str], bool]) -> bool:
     # Judge the word without this sanitizer's own markers. A value can be
     # sanitized twice (a response's content blocks are), and the marker's
     # character mix is enough to push a short uri like
@@ -646,9 +721,7 @@ def _is_secret(word: str) -> bool:
     # the word keeps a real credential written around one detectable.
     word = word.replace(_ENCODED_REDACTED_VALUE, "").replace(_REDACTED_VALUE, "")
     try:
-        from posthog.exception_utils import _looks_like_secret
-
-        return bool(word) and _looks_like_secret(word)
+        return bool(word) and looks_like_secret(word)
     except Exception:  # noqa: BLE001 - redaction must never break capture
         return False
 
@@ -727,35 +800,69 @@ def redact_pii(value: Any) -> Any:
 
 
 def sanitize_captured_value(value: Any) -> Any:
-    return _sanitize_value_with(value, _sanitize_string)
+    return _sanitize_value_with(value, _sanitize_captured_leaf, lambda key: key)
 
 
 def sanitize_free_text_value(value: Any) -> Any:
-    """:func:`sanitize_captured_value` with the free-text string pass
+    """:func:`sanitize_captured_value` with the free-text pass
     (:func:`sanitize_free_text`) on every string leaf, so nested agent-narrated
-    values get structured-PII redaction in the load-bearing order too."""
-    return _sanitize_value_with(value, sanitize_free_text)
+    values get structured-PII redaction in the load-bearing order too. Keys and
+    numbers get it as well, since a value sent as JSON text carries them: a
+    number that holds an identifier becomes ``[redacted]``, so the text stays
+    valid JSON."""
+    return _sanitize_value_with(
+        value, _sanitize_free_text_leaf, _sanitize_free_text_key
+    )
 
 
-def _sanitize_value_with(value: Any, sanitize_string_fn: Any) -> Any:
-    if value is None:
-        return value
+def _sanitize_captured_leaf(value: Any) -> Any:
+    return _sanitize_string(value) if isinstance(value, str) else value
+
+
+def _sanitize_free_text_leaf(value: Any) -> Any:
     if isinstance(value, str):
-        return sanitize_string_fn(value)
-    if isinstance(value, list):
-        return [_sanitize_value_with(item, sanitize_string_fn) for item in value]
-    # bool is an int subclass; both pass through unchanged.
-    if not isinstance(value, dict):
-        return value
+        return sanitize_free_text(value)
+    # bool is an int subclass and passes through unchanged.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            text = str(value)
+        except ValueError:  # an int past Python's digit limit for str()
+            return _REDACTED_VALUE
+        return value if sanitize_free_text(text) == text else _REDACTED_VALUE
+    return value
 
-    result: Dict[str, Any] = {}
-    for key, nested in value.items():
-        result[key] = (
-            _REDACTED_VALUE
-            if _should_redact_key(str(key))
-            else _sanitize_value_with(nested, sanitize_string_fn)
-        )
-    return result
+
+def _sanitize_free_text_key(key: Any) -> Any:
+    """A key is a name, so it keeps the known credential formats but skips the
+    entropy detector, which reads ``Get_Organization_Memberships`` as a credential:
+    two such keys would both become ``[redacted]`` and one value would be lost."""
+    if not isinstance(key, str):
+        return _sanitize_free_text_leaf(key)
+    return _redact_bounded(
+        key,
+        lambda text: _sanitize_urls(
+            redact_pii(_redact_credentials(text, _is_known_secret))
+        ),
+    )
+
+
+def _sanitize_value_with(
+    value: Any,
+    sanitize_leaf: Callable[[Any], Any],
+    sanitize_key: Callable[[Any], Any],
+) -> Any:
+    if isinstance(value, list):
+        return [
+            _sanitize_value_with(item, sanitize_leaf, sanitize_key) for item in value
+        ]
+    if not isinstance(value, dict):
+        return sanitize_leaf(value)
+    return {
+        sanitize_key(key): _REDACTED_VALUE
+        if _should_redact_key(str(key))
+        else _sanitize_value_with(nested, sanitize_leaf, sanitize_key)
+        for key, nested in value.items()
+    }
 
 
 def sanitize_event(event: Dict[str, Any]) -> Dict[str, Any]:
@@ -918,58 +1025,56 @@ def build_captured_mcp_parameters(
     strip_llm_model: bool = False,
     strip_argument_names: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
-    """Build the sanitized ``$mcp_parameters`` payload from a request, stripping
-    the injected ``context`` argument before logging."""
-    if not _is_record(request):
-        return {"request": sanitize_captured_value(request)}
-
-    captured_request: Dict[str, Any] = {}
-    for key in ("id", "jsonrpc", "method"):
-        if key in request:
-            captured_request[key] = sanitize_captured_value(request[key])
-
+    """Build the sanitized ``$mcp_parameters`` payload from a request: its id,
+    JSON-RPC version, method and params, without the SDK-injected arguments. The
+    entry and nesting limits apply before sanitizing, so a call with a huge
+    argument object costs what a call at those limits costs."""
     names_to_strip = strip_argument_names
     if names_to_strip is None:
         names_to_strip = set(_INJECTED_ARGUMENT_NAMES)
         if strip_llm_model:
             names_to_strip.add("llm_model")
 
-    if "params" in request:
-        captured_request["params"] = _build_captured_mcp_params(
-            request["params"], strip_argument_names=names_to_strip
-        )
-
-    return {"request": captured_request}
+    return sanitize_captured_value(
+        limit_entries({"request": _pick_captured_fields(request, names_to_strip)})
+    )
 
 
-def _build_captured_mcp_params(params: Any, *, strip_argument_names: Set[str]) -> Any:
-    if not _is_record(params):
-        return sanitize_captured_value(params)
-
-    captured: Dict[str, Any] = {}
-    for key, value in params.items():
-        captured[key] = (
-            _build_captured_mcp_arguments(
-                value, strip_argument_names=strip_argument_names
-            )
-            if key == "arguments"
-            else sanitize_captured_value(value)
-        )
-    return captured
+def limit_entries(value: Any) -> Any:
+    """``value`` within the entry and nesting limits, strings left whole, so a
+    sanitizer reads at most what the event can keep and still sees past a
+    string's cut. A credential key's value is replaced unread, as the sanitizer
+    would replace it."""
+    return normalize(
+        value, max_string_length=sys.maxsize, redacts_key=_should_redact_key
+    )
 
 
-def _build_captured_mcp_arguments(
-    arguments: Any, *, strip_argument_names: Set[str]
-) -> Any:
-    if not _is_record(arguments):
-        return sanitize_captured_value(arguments)
+def _pick_captured_fields(request: Any, strip_argument_names: Set[str]) -> Any:
+    if not _is_record(request):
+        return request
+    fields = {key: request[key] for key in _CAPTURED_REQUEST_FIELDS if key in request}
+    params = fields.get("params")
+    if isinstance(params, dict) and _is_record(params.get("arguments")):
+        fields["params"] = {
+            **params,
+            "arguments": _kept_arguments(params["arguments"], strip_argument_names),
+        }
+    return fields
 
-    captured: Dict[str, Any] = {}
+
+def _kept_arguments(
+    arguments: Dict[str, Any], strip_argument_names: Set[str]
+) -> Dict[str, Any]:
+    """The arguments without the stripped names, which the entry limit does not
+    count. Copies one more than the limit, enough for it to see that more remain."""
+    kept: Dict[str, Any] = {}
     for key, value in arguments.items():
-        if key in strip_argument_names:
-            continue
-        captured[key] = sanitize_captured_value(value)
-    return captured
+        if key not in strip_argument_names:
+            kept[key] = value
+        if len(kept) > MAX_BREADTH:
+            break
+    return kept
 
 
 def _sanitize_url_fragment(

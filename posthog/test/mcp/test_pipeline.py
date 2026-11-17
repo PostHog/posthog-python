@@ -1,8 +1,10 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import base64
 import json
-import re
 import random
+import re
+import time
 from datetime import datetime, timezone
 
 import pytest
@@ -24,7 +26,12 @@ from posthog.mcp._sanitization import (
     sanitize_event,
 )
 from posthog.mcp._sink import McpCaptureOptions, process_mcp_event
-from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
+from posthog.mcp._truncation import (
+    MAX_EVENT_BYTES,
+    normalize,
+    truncate_event,
+    truncate_text,
+)
 
 # --- ids ---------------------------------------------------------------------
 
@@ -865,6 +872,125 @@ def test_sanitize_event_resource_name_keeps_identifiers_and_redacts_uris(
     assert result["resource_name"] == expected
 
 
+def _captured_intent(intent: str) -> str:
+    return truncate_event(sanitize_event({"user_intent": intent}))["user_intent"]
+
+
+def _straddling(identifier: str, cut: int) -> str:
+    """An intent whose start shrinks by about 1500 characters when redacted, with
+    ``identifier`` starting a few characters before the ``cut``-th."""
+    shrinking_start = "see https://h/?token=" + "x" * 1500
+    padding = ("w " * 1000)[: cut - 4 - len(shrinking_start) - 1]
+    return f"{shrinking_start} {padding}{identifier} " + "tail " * 2000
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("1-1." * 250_000, id="separated digits"),
+        pytest.param("lorem ipsum " * 100_000, id="prose"),
+    ],
+)
+def test_intent_scan_is_bounded_by_what_truncation_keeps(intent):
+    started = time.perf_counter()
+    _captured_intent(intent)
+    assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.parametrize("cut", [2048, 3072], ids=["at the limit", "at the margin"])
+@pytest.mark.parametrize(
+    ("identifier", "fragment"),
+    [
+        ("4111 1111 1111 1111", "4111"),
+        ("123 45 6789", "123"),
+        ("(415) 555 0142", "(415)"),
+        ("https://admin:hunter2@db.example.com/x", "hunter2"),
+        ("+44\u00a0 20 7946 0958", "+44"),
+    ],
+)
+def test_intent_scan_never_splits_an_identifier_at_its_cut(identifier, fragment, cut):
+    captured = _captured_intent(_straddling(identifier, cut))
+    assert fragment not in captured
+
+
+def _jwt_padded_to(length: int) -> str:
+    """A JWT ``length`` characters long whose payload pads a credential claim with
+    low-entropy filler, so only the known-format pattern, which needs the whole
+    token, recognizes it."""
+
+    def segment(claims: dict) -> str:
+        return (
+            base64.urlsafe_b64encode(json.dumps(claims).encode()).decode().rstrip("=")
+        )
+
+    head = segment({"alg": "HS256", "typ": "JWT"})
+    signature = "c2lnbmF0dXJlLXNpZ25hdHVyZQ"
+    filler = "a" * length
+    token = ""
+    while not token or len(token) > length:
+        filler = filler[:-1]
+        payload = segment({"db_password": "hunter2-db", "pad": filler})
+        token = f"{head}.{payload}.{signature}"
+    return token
+
+
+@pytest.mark.parametrize(
+    ("intent", "secret", "kept"),
+    [
+        pytest.param(
+            "Connect with https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Connect with ",
+            id="url password past both cuts",
+        ),
+        pytest.param(
+            "Connect with https://admin:" + "p" * 1500 + "@" + "q" * 2500 + "@db/x",
+            "q" * 32,
+            "Connect with ",
+            id="url password with an @ before the cuts",
+        ),
+        pytest.param(
+            "Open https://h/?next=https://admin:" + "p" * 4000 + "@localhost/x",
+            "p" * 32,
+            "Open ",
+            id="nested url password past both cuts",
+        ),
+        pytest.param(
+            "x " * 775 + _jwt_padded_to(1631) + " tail",
+            "eyJ",
+            "x " * 775,
+            id="jwt whose last separator is past both cuts",
+        ),
+    ],
+)
+def test_intent_scan_fails_closed_on_a_credential_unfinished_at_both_cuts(
+    intent, secret, kept
+):
+    captured = _captured_intent(intent)
+    assert secret not in captured
+    assert captured.startswith(kept)
+
+
+@pytest.mark.parametrize(
+    "intent",
+    [
+        pytest.param("s" * 9000, id="one long word"),
+        pytest.param("https://example.com/" + "a" * 9000, id="long url path"),
+        pytest.param("请帮我查询" * 1800, id="long CJK"),
+        pytest.param("请帮我查询" * 900, id="CJK"),
+        pytest.param("item\n" * 1000, id="newline list"),
+        pytest.param("Open /" + "very/long/path/" * 300, id="prose then a long path"),
+    ],
+)
+def test_intent_with_no_word_boundary_keeps_its_start(intent):
+    assert _captured_intent(intent) == truncate_text(intent, 2048)
+
+
+def test_intent_scan_keeps_what_truncation_keeps():
+    intent = "lorem ipsum " * 1000
+    assert _captured_intent(intent) == truncate_text(intent, 2048)
+
+
 def test_sanitize_event_redacts_pii_from_intent():
     event = {
         "user_intent": "Looking up orders for jane.doe@acme.com and calling +1 (415) 555-0142 about a refund.",
@@ -1190,6 +1316,65 @@ def test_build_captured_mcp_parameters_only_strips_sdk_owned_model(
 
     captured = build_captured_mcp_parameters(request, strip_llm_model=strip_llm_model)
     assert captured["request"]["params"]["arguments"].get("llm_model") == expected_model
+
+
+class _CountingDict(dict):
+    """A dict that counts the entries anything reads through ``items()``."""
+
+    reads = 0
+
+    def items(self):
+        for item in super().items():
+            _CountingDict.reads += 1
+            yield item
+
+
+def _nested_counting_dicts(depth: int) -> _CountingDict:
+    nested = _CountingDict(leaf="x")
+    for _ in range(depth - 1):
+        nested = _CountingDict(child=nested)
+    return nested
+
+
+@pytest.mark.parametrize(
+    ("arguments", "max_reads"),
+    [
+        pytest.param(
+            _CountingDict({f"a{i}": i for i in range(10_000)}), 101, id="wide"
+        ),
+        pytest.param({"deep": _nested_counting_dicts(1000)}, 10, id="deep"),
+        pytest.param(
+            {"password": _CountingDict({f"a{i}": i for i in range(10)})},
+            0,
+            id="credential key",
+        ),
+    ],
+)
+def test_captured_parameters_read_only_what_the_limits_keep(arguments, max_reads):
+    _CountingDict.reads = 0
+    build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert _CountingDict.reads <= max_reads
+
+
+def test_captured_parameters_do_not_count_stripped_arguments_toward_the_limit():
+    arguments = {
+        "context": "intent",
+        "conversation_id": "c",
+        **{f"a{i}": i for i in range(100)},
+    }
+    captured = build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert captured["request"]["params"]["arguments"] == {
+        f"a{i}": i for i in range(100)
+    }
+
+
+def test_captured_parameters_redact_a_credential_key_unread():
+    arguments = {"password": {"nested": "hunter2"}, "q": "x"}
+    captured = build_captured_mcp_parameters({"params": {"arguments": arguments}})
+    assert captured["request"]["params"]["arguments"] == {
+        "password": "[redacted]",
+        "q": "x",
+    }
 
 
 async def test_process_mcp_event_basic():
