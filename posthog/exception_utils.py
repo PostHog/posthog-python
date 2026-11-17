@@ -413,7 +413,7 @@ def get_lines_from_file(
     loader=None,  # type: Optional[Any]
     module=None,  # type: Optional[str]
 ):
-    # type: (...) -> Tuple[List[Annotated[str]], Optional[Annotated[str]], List[Annotated[str]]]
+    # type: (...) -> Tuple[List[str], Optional[str], List[str]]
     context_lines = 5
     source = _get_source_lines(filename, loader, module)
 
@@ -423,14 +423,20 @@ def get_lines_from_file(
     lower_bound = max(0, lineno - context_lines)
     upper_bound = min(lineno + 1 + context_lines, len(source))
 
+    def strip_line(line):
+        # type: (str) -> str
+        # strip_string wraps a truncated line in an AnnotatedValue, which the
+        # event payload can't serialize, so keep only the truncated text.
+        stripped = strip_string(line.strip("\r\n"), max_length=max_length)
+        if isinstance(stripped, AnnotatedValue):
+            return cast(str, stripped.value)
+        return stripped
+
     try:
-        pre_context = [
-            strip_string(line.strip("\r\n"), max_length=max_length)
-            for line in source[lower_bound:lineno]
-        ]
-        context_line = strip_string(source[lineno].strip("\r\n"), max_length=max_length)
+        pre_context = [strip_line(line) for line in source[lower_bound:lineno]]
+        context_line = strip_line(source[lineno])
         post_context = [
-            strip_string(line.strip("\r\n"), max_length=max_length)
+            strip_line(line)
             for line in source[(lineno + 1) : upper_bound]  # noqa: E203
         ]
         return pre_context, context_line, post_context
@@ -464,7 +470,7 @@ def get_source_context(
     tb_lineno,  # type: int
     max_value_length=None,  # type: Optional[int]
 ):
-    # type: (...) -> Tuple[List[Annotated[str]], Optional[Annotated[str]], List[Annotated[str]]]
+    # type: (...) -> Tuple[List[str], Optional[str], List[str]]
     try:
         abs_path = frame.f_code.co_filename  # type: Optional[str]
     except Exception:
