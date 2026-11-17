@@ -1022,6 +1022,10 @@ class AsyncClient:
                 self.log.warning("No exception information available")
                 return None
 
+            if exception is None and exception_is_already_captured(exc_info):
+                self.log.debug("Exception already captured, skipping")
+                return None
+
             exceptions = exceptions_from_error_tuple(exc_info)
             event = handle_in_app(
                 {"exception": {"values": exceptions}},

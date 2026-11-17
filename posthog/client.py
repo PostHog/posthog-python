@@ -2925,6 +2925,10 @@ class Client(object):
                 self.log.warning("No exception information available")
                 return None
 
+            if exception is None and exception_is_already_captured(exc_info):
+                self.log.debug("Exception already captured, skipping")
+                return None
+
             # Format stack trace for cymbal
             capture_metadata_input = dict(kwargs).get("_capture_metadata")
             capture_metadata = (
