@@ -391,6 +391,11 @@ class CodeEmailArgs(_RecipientArgs):
             key you leave out keeps its default. Turn clicks on for a
             sensitive email only when its links are safe to send through
             PostHog's click tracking. The template form doesn't take it.
+        headers: Header names and values to send with the email, such as
+            ``{"List-Unsubscribe": "<https://example.com/unsubscribe>",
+            "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}``. PostHog
+            refuses a header it doesn't allow, with ``code``
+            ``unknown_header``. The template form doesn't take it.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -413,6 +418,7 @@ class CodeEmailArgs(_RecipientArgs):
     capture_engagement: NotRequired[Optional[bool]]
     sensitive: NotRequired[Optional[bool]]
     tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
+    headers: NotRequired[Optional[Mapping[str, str]]]
 
 
 _ATTACHMENT_FIELDS = frozenset(EmailAttachment.__annotations__)
@@ -428,6 +434,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "capture_engagement",
         "sensitive",
         "tracking",
+        "headers",
     }
 )
 
@@ -582,6 +589,10 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
             sender[flag] = args[flag]
     if "tracking" in args:
         sender["tracking"] = _tracking(args["tracking"])
+    if "headers" in args:
+        if not isinstance(args["headers"], Mapping):
+            raise TypeError("headers must be a dict of header names and values.")
+        sender["headers"] = dict(args["headers"])
     return sender
 
 

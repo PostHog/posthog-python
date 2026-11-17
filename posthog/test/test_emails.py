@@ -636,6 +636,10 @@ async def test_async_get_retries_an_unavailable_service():
 
 
 HTML = "<p>Reset it here.</p>"
+UNSUBSCRIBE_HEADERS = {
+    "List-Unsubscribe": "<https://example.com/unsubscribe?u=1>",
+    "List-Unsubscribe-Post": "List-Unsubscribe=One-Click",
+}
 INVITE = b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n"
 INVITE_BASE64 = "QkVHSU46VkNBTEVOREFSDQpFTkQ6VkNBTEVOREFSDQo="
 
@@ -685,6 +689,11 @@ def send_code(emails: Emails, **overrides: Any):
             {"html": HTML},
         ),
         (
+            "headers_as_given",
+            {"html": HTML, "headers": UNSUBSCRIBE_HEADERS},
+            {"html": HTML, "headers": UNSUBSCRIBE_HEADERS},
+        ),
+        (
             "none_as_left_out",
             {
                 "html": HTML,
@@ -692,6 +701,7 @@ def send_code(emails: Emails, **overrides: Any):
                 "from_": None,
                 "reply_to": None,
                 "capture_engagement": None,
+                "headers": None,
                 "distinct_id": None,
             },
             {"html": HTML},
@@ -928,6 +938,17 @@ async def test_async_client_posts_rendered_content_and_names_the_provider():
             },
             TypeError,
         ),
+        (
+            "headers_on_template_form",
+            {
+                "template_id": TEMPLATE_ID,
+                "template_key": None,
+                "subject": None,
+                "headers": UNSUBSCRIBE_HEADERS,
+            },
+            TypeError,
+        ),
+        ("headers_not_a_mapping", {"html": HTML, "headers": "x"}, TypeError),
         ("tracking_not_bool_or_dict", {"html": HTML, "tracking": "off"}, TypeError),
         ("sensitive_not_bool", {"html": HTML, "sensitive": "yes"}, TypeError),
     ]
