@@ -14,7 +14,7 @@ import traceback
 import tracemalloc
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from ipaddress import ip_address
@@ -947,6 +947,971 @@ def test_rejects_a_code_send_that_mixes_or_misses_fields(_name, overrides, error
         )
 
     assert adapter.requests == []
+
+
+# Scheduled sends: schedule, move, cancel and list.
+
+CANCEL_URL = f"{STATUS_URL}cancel/"
+LIST_URL = "https://us.posthog.com/api/projects/@current/messaging/emails/"
+LATER = datetime(2026, 12, 1, 9, 0, tzinfo=timezone(timedelta(hours=2)))
+
+
+@parameterized.expand(
+    [
+        ("aware_datetime_goes_as_utc", LATER, "2026-12-01T07:00:00Z"),
+        ("utc_string_as_given", "2026-12-01T07:00:00Z", "2026-12-01T07:00:00Z"),
+        (
+            "offset_string_as_given",
+            "2026-12-01T09:00:00.250+02:00",
+            "2026-12-01T09:00:00.250+02:00",
+        ),
+        ("space_separated_as_given", "2026-12-01 07:00Z", "2026-12-01 07:00Z"),
+    ]
+)
+def test_send_schedules_both_forms_for_a_time_with_an_offset(_name, value, wire):
+    emails, adapter = emails_with(
+        [
+            accepted(status="scheduled", scheduled_at="2026-12-01T07:00:00Z"),
+            accepted(status="scheduled", scheduled_at="2026-12-01T07:00:00Z"),
+        ]
+    )
+
+    template_result = send(emails, scheduled_at=value)
+    code_result = send_code(emails, html=HTML, scheduled_at=value)
+
+    for result in (template_result, code_result):
+        assert result.status == "scheduled"
+        assert result.scheduled_at == datetime(2026, 12, 1, 7, tzinfo=timezone.utc)
+        assert result.warnings == ()
+    assert [
+        json.loads(request.body)["scheduled_at"] for request in adapter.requests
+    ] == [
+        wire,
+        wire,
+    ]
+
+
+@parameterized.expand(
+    [
+        ("left_out", lambda emails: send(emails)),
+        ("passed_as_none", lambda emails: send(emails, scheduled_at=None)),
+        (
+            "code_form_as_none",
+            lambda emails: send_code(emails, html=HTML, scheduled_at=None),
+        ),
+    ]
+)
+def test_a_send_now_carries_no_scheduled_at_and_reads_queued(_name, call):
+    emails, adapter = emails_with([accepted()])
+
+    result = call(emails)
+
+    assert (result.status, result.scheduled_at, result.warnings) == ("queued", None, ())
+    assert "scheduled_at" not in json.loads(adapter.requests[0].body)
+
+
+@parameterized.expand(
+    [
+        ("template_form", lambda emails: send(emails, scheduled_at=LATER)),
+        (
+            "code_form",
+            lambda emails: send_code(emails, html=HTML, scheduled_at=LATER),
+        ),
+    ]
+)
+def test_a_server_without_scheduled_sends_warns_that_it_sent_now(_name, call):
+    # A PostHog that predates scheduled sends drops scheduled_at, sends at once and answers no status.
+    emails, _ = emails_with([accepted()])
+
+    result = call(emails)
+
+    assert (result.status, result.scheduled_at) == ("queued", None)
+    assert [w.code for w in result.warnings] == ["scheduling_unsupported"]
+
+
+def test_a_time_at_or_before_now_reads_as_the_servers_queued_answer():
+    emails, _ = emails_with([accepted(status="queued", scheduled_at=None)])
+
+    result = send(emails, scheduled_at="2020-01-01T00:00:00Z")
+
+    assert (result.status, result.scheduled_at, result.warnings) == ("queued", None, ())
+
+
+@parameterized.expand(
+    [
+        ("naive_datetime", datetime(2026, 12, 1, 9), ValueError),
+        ("string_without_offset", "2026-12-01T09:00:00", ValueError),
+        ("date_only_string", "2026-12-01", ValueError),
+        ("natural_language", "in 1 min", ValueError),
+        ("not_a_date", "2026-13-01T09:00:00Z", ValueError),
+        ("empty_string", "", ValueError),
+        ("unix_timestamp", 1796115600, TypeError),
+        ("date", date(2026, 12, 1), TypeError),
+    ]
+)
+def test_refuses_a_time_without_a_timezone_before_any_request(_name, value, error):
+    emails, adapter = emails_with([])
+
+    for call in (
+        lambda: send(emails, scheduled_at=value),
+        lambda: send_code(emails, html=HTML, scheduled_at=value),
+        lambda: emails.update(MESSAGE_ID, scheduled_at=value),
+    ):
+        with pytest.raises(error, match="scheduled_at"):
+            call()
+
+    assert adapter.requests == []
+
+
+def test_update_moves_a_scheduled_email_and_returns_its_new_time():
+    emails, adapter = emails_with(
+        [
+            (
+                200,
+                {
+                    "id": MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-01T07:00:00Z",
+                },
+                {},
+            )
+        ]
+    )
+
+    result = emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert (result.id, result.status, result.scheduled_at) == (
+        MESSAGE_ID,
+        "scheduled",
+        datetime(2026, 12, 1, 7, tzinfo=timezone.utc),
+    )
+    [request] = adapter.requests
+    assert (request.method, request.url) == ("PATCH", STATUS_URL)
+    assert json.loads(request.body) == {"scheduled_at": "2026-12-01T07:00:00Z"}
+    assert request.headers["Content-Type"] == "application/json"
+    assert request.headers["Authorization"] == f"Bearer {SECRET_KEY}"
+    assert "Idempotency-Key" not in request.headers
+
+
+def test_cancel_stops_a_scheduled_email():
+    emails, adapter = emails_with([(200, {"id": MESSAGE_ID, "status": "canceled"}, {})])
+
+    result = emails.cancel(MESSAGE_ID)
+
+    assert (result.id, result.status) == (MESSAGE_ID, "canceled")
+    [request] = adapter.requests
+    assert (request.method, request.url, request.body) == ("POST", CANCEL_URL, None)
+    assert "Idempotency-Key" not in request.headers
+
+
+def list_reply(next_cursor: Optional[str] = None) -> Reply:
+    return (
+        200,
+        {
+            "results": [
+                # PostHog leaves the recipient out, so a key that only reads statuses can't read it.
+                {
+                    "id": MESSAGE_ID,
+                    "scheduled_at": "2026-12-01T07:00:00Z",
+                    "created_at": "2026-11-12T10:00:00.123000Z",
+                }
+            ],
+            "next": next_cursor,
+        },
+        {},
+    )
+
+
+@parameterized.expand(
+    [
+        ("first_page", {}, "?status=scheduled", "cursor_2"),
+        (
+            "next_page",
+            {"cursor": "cursor_2", "limit": 50},
+            "?status=scheduled&cursor=cursor_2&limit=50",
+            None,
+        ),
+    ]
+)
+def test_list_reads_scheduled_emails_a_page_at_a_time(_name, args, query, next_cursor):
+    emails, adapter = emails_with([list_reply(next_cursor)])
+
+    page = emails.list(**args)
+
+    [request] = adapter.requests
+    assert (request.method, request.url) == ("GET", LIST_URL + query)
+    [email] = page.results
+    assert (email.id, email.scheduled_at, email.created_at) == (
+        MESSAGE_ID,
+        datetime(2026, 12, 1, 7, tzinfo=timezone.utc),
+        datetime(2026, 11, 12, 10, 0, 0, 123000, tzinfo=timezone.utc),
+    )
+    assert page.next == next_cursor
+
+
+@parameterized.expand(
+    [
+        ("zero", {"limit": 0}, ValueError),
+        ("over_a_page", {"limit": 101}, ValueError),
+        ("not_an_int", {"limit": "10"}, TypeError),
+        ("a_bool", {"limit": True}, TypeError),
+        ("empty_cursor", {"cursor": ""}, ValueError),
+        ("empty_status", {"status": ""}, ValueError),
+        ("another_status", {"status": "sent"}, ValueError),
+    ]
+)
+def test_list_refuses_bad_arguments_before_any_request(_name, args, error):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(error):
+        emails.list(**args)
+
+    assert adapter.requests == []
+
+
+@parameterized.expand(
+    [
+        ("update", lambda emails, id: emails.update(id, scheduled_at=LATER)),
+        ("cancel", lambda emails, id: emails.cancel(id)),
+    ]
+)
+def test_update_and_cancel_refuse_an_id_that_is_not_a_message_id(_name, call):
+    emails, adapter = emails_with([])
+
+    with pytest.raises(ValueError, match="message_id"):
+        call(emails, "msg_1")
+
+    assert adapter.requests == []
+
+
+def test_update_needs_a_time():
+    emails, adapter = emails_with([])
+
+    with pytest.raises(TypeError, match="scheduled_at"):
+        emails.update(MESSAGE_ID, scheduled_at=None)
+
+    assert adapter.requests == []
+
+
+MANAGE_CALLS = [
+    (
+        "update",
+        lambda emails: emails.update(MESSAGE_ID, scheduled_at=LATER),
+        (
+            200,
+            {
+                "id": MESSAGE_ID,
+                "status": "scheduled",
+                "scheduled_at": "2026-12-01T07:00:00Z",
+            },
+            {},
+        ),
+    ),
+    (
+        "cancel",
+        lambda emails: emails.cancel(MESSAGE_ID),
+        (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
+    ),
+]
+
+
+@parameterized.expand(
+    [
+        (f"{name}_{case}", call, success, first_reply, retried)
+        for name, call, success in MANAGE_CALLS
+        for case, first_reply, retried in [
+            ("rate_limited", rejected(429, "throttled"), True),
+            ("service_unavailable", rejected(503, "delivery_unavailable"), True),
+            ("connection_error", requests.exceptions.ConnectionError("down"), True),
+            ("already_sending", rejected(409, "already_sending"), False),
+            ("canceled", rejected(409, "canceled"), False),
+            ("not_found", rejected(404, "not_found"), False),
+            ("too_far", rejected(400, "invalid_scheduled_at"), False),
+            ("over_quota", rejected(429, "quota_limited"), False),
+        ]
+    ]
+)
+def test_update_and_cancel_retry_like_a_send(
+    _name, call, success, first_reply, retried
+):
+    emails, adapter = emails_with([first_reply, success])
+
+    if retried:
+        assert call(emails).id == MESSAGE_ID
+        assert len(adapter.requests) == 2
+    else:
+        with pytest.raises(EmailError):
+            call(emails)
+        assert len(adapter.requests) == 1
+
+
+@parameterized.expand(
+    [
+        ("move_while_sending", MANAGE_CALLS[0][1], "already_sending"),
+        ("move_after_a_cancel", MANAGE_CALLS[0][1], "canceled"),
+        ("cancel_while_sending", MANAGE_CALLS[1][1], "already_sending"),
+    ]
+)
+def test_a_cancel_or_move_too_late_is_a_validation_error(_name, call, code):
+    emails, adapter = emails_with([rejected(409, code)])
+
+    with pytest.raises(EmailError) as raised:
+        call(emails)
+
+    # As with template_outdated, a retry can't resolve it, so posthog-node names it this way too.
+    assert (raised.value.status_code, raised.value.code, raised.value.name) == (
+        409,
+        code,
+        "validation_error",
+    )
+    assert len(adapter.requests) == 1
+
+
+SOONER = datetime(2026, 11, 30, 9, 0, tzinfo=timezone.utc)
+MOVED_LATER = MANAGE_CALLS[0][2]
+OTHER_MESSAGE_ID = "01a18356-c56c-0001-e494-7666bc915199"
+NO_ANSWERS = [
+    ("connection_error", requests.exceptions.ConnectionError("down")),
+    ("timeout", requests.exceptions.ReadTimeout("slow")),
+    # A gateway or server error confirms nothing: the move may still be running upstream.
+    ("gateway_timeout", (504, None, {})),
+    ("bad_gateway", (502, None, {})),
+    ("unavailable", rejected(503, "delivery_unavailable")),
+    ("server_error", rejected(500, "server_error")),
+]
+
+
+def assert_move_unconfirmed(error: EmailError) -> None:
+    assert (error.name, error.code, error.status_code) == (
+        "application_error",
+        "move_unconfirmed",
+        None,
+    )
+    assert (
+        "wasn't confirmed" in error.message and "Nothing was changed" in error.message
+    )
+    assert error.fix is not None and "cancel it" in error.fix
+
+
+@parameterized.expand(NO_ANSWERS)
+def test_a_move_after_one_that_got_no_answer_is_refused(_name, no_answer):
+    # PostHog may still apply the unanswered move after a newer one, which would undo the newer one.
+    emails, adapter = emails_with([no_answer], max_retries=0)
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID.upper(), scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 1
+
+
+def test_a_move_is_refused_even_when_a_retry_of_the_unanswered_one_got_an_answer():
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), MOVED_LATER], max_retries=1
+    )
+    emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 2
+
+
+@parameterized.expand(
+    [
+        ("same_datetime", LATER, LATER),
+        ("string_then_datetime", "2026-12-01T09:00:00+02:00", LATER),
+        ("datetime_then_string", LATER, "2026-12-01T07:00:00.000+00:00"),
+        ("utc_datetime", LATER, datetime(2026, 12, 1, 7, tzinfo=timezone.utc)),
+    ]
+)
+def test_a_move_to_the_same_time_as_the_unanswered_one_still_goes_out(
+    _name, unanswered_time, same_time
+):
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), MOVED_LATER], max_retries=0
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=unanswered_time)
+
+    assert emails.update(MESSAGE_ID, scheduled_at=same_time).id == MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+@parameterized.expand(
+    [
+        ("too_far", rejected(400, "invalid_scheduled_at")),
+        ("rate_limited", rejected(429, "throttled")),
+        ("not_found", rejected(404, "not_found")),
+    ]
+)
+def test_a_move_after_one_that_was_refused_still_goes_out(_name, refusal):
+    # PostHog answered, so the earlier move can't land later.
+    emails, adapter = emails_with([refusal, MOVED_LATER], max_retries=0)
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert emails.update(MESSAGE_ID, scheduled_at=LATER).id == MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+def test_a_move_of_another_email_still_goes_out():
+    emails, adapter = emails_with(
+        [
+            requests.exceptions.ReadTimeout("slow"),
+            (
+                200,
+                {
+                    "id": OTHER_MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-11-30T09:00:00Z",
+                },
+                {},
+            ),
+        ],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert emails.update(OTHER_MESSAGE_ID, scheduled_at=SOONER).id == OTHER_MESSAGE_ID
+    assert len(adapter.requests) == 2
+
+
+def test_a_move_called_while_an_earlier_one_waits_is_sent_after_it():
+    first_sent, release = threading.Event(), threading.Event()
+
+    class SlowAdapter(FakeAdapter):
+        def send(self, request: requests.PreparedRequest, **kwargs: Any):
+            if not self.requests:
+                first_sent.set()
+                release.wait(5)
+            return super().send(request, **kwargs)
+
+    adapter = SlowAdapter([requests.exceptions.ReadTimeout("slow"), MOVED_LATER])
+    session = requests.Session()
+    session.mount("https://", adapter)
+    emails = Emails(SECRET_KEY, session=session, max_retries=0)
+    outcomes: dict[str, Any] = {}
+
+    def move(name: str, scheduled_at: datetime) -> None:
+        try:
+            outcomes[name] = emails.update(MESSAGE_ID, scheduled_at=scheduled_at)
+        except EmailError as exc:
+            outcomes[name] = exc
+
+    first = threading.Thread(target=move, args=("first", LATER))
+    first.start()
+    assert first_sent.wait(5)
+    second = threading.Thread(target=move, args=("second", SOONER))
+    second.start()
+    second.join(
+        0.2
+    )  # Without ordering, the second move goes out now, alongside the first.
+    release.set()
+    first.join(5)
+    second.join(5)
+
+    assert isinstance(outcomes["first"], EmailError)
+    assert_move_unconfirmed(outcomes["second"])
+    assert len(adapter.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_one_that_got_no_answer_is_refused():
+    first_sent, release = asyncio.Event(), asyncio.Event()
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            first_sent.set()
+            await release.wait()
+            raise httpx.ReadTimeout("slow", request=request)
+        return httpx.Response(200, json=MOVED_LATER[1])
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    first = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=LATER))
+    await first_sent.wait()
+    queued = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+    for _ in range(5):  # Without ordering, the queued move goes out now.
+        await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(EmailError):
+        await first
+    with pytest.raises(EmailError) as queued_error:
+        await queued
+    with pytest.raises(EmailError) as later_error:
+        await emails.update(MESSAGE_ID.upper(), scheduled_at=SOONER)
+
+    assert_move_unconfirmed(queued_error.value)
+    assert_move_unconfirmed(later_error.value)
+    assert len(seen) == 1
+    assert (await emails.update(MESSAGE_ID, scheduled_at=LATER)).id == MESSAGE_ID
+    assert len(seen) == 2
+
+
+def test_a_canceled_email_forgets_its_unconfirmed_move():
+    # A late move can't undo a cancel, so the next move goes out and PostHog says the email is canceled.
+    emails, adapter = emails_with(
+        [
+            requests.exceptions.ReadTimeout("slow"),
+            (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
+            rejected(409, "canceled"),
+        ],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+    emails.cancel(MESSAGE_ID.upper())
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(adapter.requests) == 3
+
+
+def test_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
+    first_sent, cancel_sent, release = (
+        threading.Event(),
+        threading.Event(),
+        threading.Event(),
+    )
+
+    class SlowAdapter(FakeAdapter):
+        calls = 0
+
+        def send(self, request: requests.PreparedRequest, **kwargs: Any):
+            self.calls += 1
+            if self.calls == 1:
+                first_sent.set()
+                release.wait(5)
+            elif request.method == "POST":
+                cancel_sent.set()
+            return super().send(request, **kwargs)
+
+    # Replies go in the order requests reach the adapter: the cancel answers before the move times out.
+    adapter = SlowAdapter(
+        [
+            (200, {"id": MESSAGE_ID, "status": "canceled"}, {}),
+            requests.exceptions.ReadTimeout("slow"),
+            rejected(409, "canceled"),
+            rejected(409, "canceled"),
+        ]
+    )
+    session = requests.Session()
+    session.mount("https://", adapter)
+    emails = Emails(SECRET_KEY, session=session, max_retries=0)
+    moved: list[Any] = []
+
+    def move() -> None:
+        try:
+            moved.append(emails.update(MESSAGE_ID, scheduled_at=LATER))
+        except EmailError as exc:
+            moved.append(exc)
+
+    queued: list[Any] = []
+
+    def queue_move() -> None:
+        try:
+            queued.append(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+        except EmailError as exc:
+            queued.append(exc)
+
+    mover = threading.Thread(target=move)
+    mover.start()
+    assert first_sent.wait(5)
+    canceler = threading.Thread(target=emails.cancel, args=(MESSAGE_ID,))
+    canceler.start()
+    assert cancel_sent.wait(5)
+    canceler.join(5)
+    assert not canceler.is_alive()  # The cancel doesn't wait for the move.
+    queuer = threading.Thread(target=queue_move)
+    queuer.start()
+    queuer.join(0.2)  # It waits its turn behind the first move.
+    release.set()
+    mover.join(5)
+    queuer.join(5)
+    assert isinstance(moved[0], EmailError) and moved[0].code == "network_error"
+    # The move queued after the cancel reaches PostHog, which answers it canceled.
+    assert (queued[0].code, queued[0].status_code) == ("canceled", 409)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert adapter.calls == 4
+
+
+@pytest.mark.asyncio
+async def test_async_a_cancel_confirmed_while_a_move_waits_forgets_that_move_too():
+    first_sent, release = asyncio.Event(), asyncio.Event()
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            first_sent.set()
+            await release.wait()
+            return httpx.Response(504)
+        if request.method == "POST":
+            return httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"})
+        return httpx.Response(409, json={"code": "canceled"})
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    mover = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=LATER))
+    await first_sent.wait()
+    assert (await emails.cancel(MESSAGE_ID)).status == "canceled"
+    queued = asyncio.ensure_future(emails.update(MESSAGE_ID, scheduled_at=SOONER))
+    for _ in range(5):  # It waits its turn behind the first move.
+        await asyncio.sleep(0)
+    release.set()
+    with pytest.raises(EmailError):
+        await mover
+    with pytest.raises(EmailError) as queued_error:
+        await queued
+
+    assert (queued_error.value.code, queued_error.value.status_code) == (
+        "canceled",
+        409,
+    )
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(seen) == 4
+
+
+def test_a_failed_cancel_keeps_the_unconfirmed_move():
+    emails, adapter = emails_with(
+        [requests.exceptions.ReadTimeout("slow"), rejected(409, "already_sending")],
+        max_retries=0,
+    )
+    with pytest.raises(EmailError):
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+    with pytest.raises(EmailError):
+        emails.cancel(MESSAGE_ID)
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(adapter.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_async_a_canceled_email_forgets_its_unconfirmed_move():
+    emails, seen = async_emails_with(
+        [
+            httpx.Response(504),
+            httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"}),
+            httpx.Response(409, json={"code": "canceled"}),
+        ]
+    )
+    emails.max_retries = 0
+    with pytest.raises(EmailError):
+        await emails.update(MESSAGE_ID, scheduled_at=LATER)
+    await emails.cancel(MESSAGE_ID)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert (raised.value.code, raised.value.status_code) == ("canceled", 409)
+    assert len(seen) == 3
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_a_gateway_timeout_is_refused():
+    emails, seen = async_emails_with([httpx.Response(504)])
+    emails.max_retries = 0
+    with pytest.raises(EmailError):
+        await emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+async def test_async_a_move_after_one_canceled_while_it_waited_is_refused():
+    # Such as under asyncio.wait_for: the canceled move may still reach PostHog.
+    seen: list[httpx.Request] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if len(seen) == 1:
+            await asyncio.Event().wait()
+        return httpx.Response(200, json=MOVED_LATER[1])
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(emails.update(MESSAGE_ID, scheduled_at=LATER), 0.05)
+
+    with pytest.raises(EmailError) as raised:
+        await emails.update(MESSAGE_ID, scheduled_at=SOONER)
+
+    assert_move_unconfirmed(raised.value)
+    assert len(seen) == 1
+
+
+@parameterized.expand(
+    [
+        ("service_unavailable", rejected(503, "delivery_unavailable")),
+        ("rate_limited", rejected(429, "throttled")),
+        ("connection_error", requests.exceptions.ConnectionError("down")),
+    ]
+)
+def test_list_never_retries(_name, first_reply):
+    emails, adapter = emails_with([first_reply, list_reply()])
+
+    with pytest.raises(EmailError):
+        emails.list()
+
+    assert len(adapter.requests) == 1
+
+
+@parameterized.expand(
+    [
+        (
+            "update",
+            lambda emails: emails.update(MESSAGE_ID, scheduled_at=LATER),
+            "missing_secret_key",
+        ),
+        ("cancel", lambda emails: emails.cancel(MESSAGE_ID), "missing_secret_key"),
+        ("list", lambda emails: emails.list(), "missing_secret_key"),
+    ]
+)
+def test_manage_calls_need_the_secret_key_and_an_enabled_client(_name, call, code):
+    adapter = FakeAdapter([])
+    session = requests.Session()
+    session.mount("https://", adapter)
+
+    with pytest.raises(EmailError) as missing:
+        call(Emails(None, session=session))
+    with pytest.raises(EmailError) as disabled:
+        call(Emails(SECRET_KEY, session=session, disabled=True))
+
+    assert (missing.value.code, disabled.value.code) == (code, "client_disabled")
+    assert adapter.requests == []
+
+
+@parameterized.expand(
+    [
+        *[
+            (
+                f"row_without_{field}",
+                {
+                    "results": [
+                        {
+                            key: value
+                            for key, value in list_reply()[1]["results"][0].items()
+                            if key != field
+                        }
+                    ],
+                    "next": None,
+                },
+            )
+            for field in ("id", "scheduled_at", "created_at")
+        ],
+        ("next_not_a_string", {**list_reply()[1], "next": 123}),
+        ("next_empty", {**list_reply()[1], "next": ""}),
+        ("next_left_out", {"results": list_reply()[1]["results"]}),
+        ("results_left_out", {"next": None}),
+        ("results_not_a_list", {"results": {}, "next": None}),
+    ]
+)
+def test_a_malformed_list_page_raises_instead_of_dropping_emails(_name, body):
+    # A page that loses its next cursor would end a caller's loop early and hide emails that still go out.
+    emails, _ = emails_with([(200, body, {})])
+
+    with pytest.raises(EmailError) as raised:
+        emails.list()
+
+    assert raised.value.code == "api_error"
+
+
+@parameterized.expand(
+    [
+        ("no_status", {"id": MESSAGE_ID}),
+        ("still_scheduled", {"id": MESSAGE_ID, "status": "scheduled"}),
+        ("no_id", {"status": "canceled"}),
+    ]
+)
+def test_a_cancel_reply_without_a_canceled_email_raises(_name, body):
+    emails, _ = emails_with([(200, body, {})])
+
+    with pytest.raises(EmailError) as raised:
+        emails.cancel(MESSAGE_ID)
+
+    assert raised.value.code == "api_error"
+
+
+MOVED = {
+    "id": MESSAGE_ID,
+    "status": "scheduled",
+    "scheduled_at": "2026-12-01T07:00:00Z",
+}
+
+
+@parameterized.expand(
+    [
+        *[
+            (
+                f"no_{field}",
+                {key: value for key, value in MOVED.items() if key != field},
+            )
+            for field in MOVED
+        ],
+        ("scheduled_at_not_a_time", {**MOVED, "scheduled_at": "tomorrow"}),
+    ]
+)
+def test_an_update_reply_without_the_moved_email_raises(_name, body):
+    # Returning a result without its send time would tell the caller the move landed when nobody knows when it goes out.
+    emails, _ = emails_with([(200, body, {})])
+
+    with pytest.raises(EmailError) as raised:
+        emails.update(MESSAGE_ID, scheduled_at=LATER)
+
+    assert raised.value.code == "api_error"
+
+
+def async_emails_with(replies: list[httpx.Response]):
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return replies.pop(0)
+
+    emails = AsyncEmails(
+        SECRET_KEY,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+    return emails, seen
+
+
+def unavailable() -> httpx.Response:
+    return httpx.Response(503, json={"code": "delivery_unavailable"})
+
+
+@pytest.mark.asyncio
+async def test_async_send_schedules_an_email():
+    emails, seen = async_emails_with(
+        [
+            httpx.Response(
+                202,
+                json={
+                    "message_id": MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-01T07:00:00Z",
+                },
+            )
+        ]
+    )
+
+    sent = await emails.send(
+        to="user@example.com", template_id=TEMPLATE_ID, scheduled_at=LATER
+    )
+
+    assert (sent.status, sent.scheduled_at, sent.warnings) == (
+        "scheduled",
+        datetime(2026, 12, 1, 7, tzinfo=timezone.utc),
+        (),
+    )
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("POST", SEND_URL)
+    ]
+    assert json.loads(seen[0].content)["scheduled_at"] == "2026-12-01T07:00:00Z"
+
+
+@pytest.mark.asyncio
+async def test_async_update_retries_an_unavailable_service_and_moves_the_email():
+    emails, seen = async_emails_with(
+        [
+            unavailable(),
+            httpx.Response(
+                200,
+                json={
+                    "id": MESSAGE_ID,
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-02T07:00:00Z",
+                },
+            ),
+        ]
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
+        moved = await emails.update(
+            MESSAGE_ID, scheduled_at="2026-12-02T09:00:00+02:00"
+        )
+
+    assert moved.scheduled_at == datetime(2026, 12, 2, 7, tzinfo=timezone.utc)
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("PATCH", STATUS_URL),
+        ("PATCH", STATUS_URL),
+    ]
+    assert json.loads(seen[0].content) == {"scheduled_at": "2026-12-02T09:00:00+02:00"}
+    assert "Idempotency-Key" not in seen[0].headers
+
+
+@pytest.mark.asyncio
+async def test_async_cancel_retries_an_unavailable_service_and_cancels_the_email():
+    emails, seen = async_emails_with(
+        [
+            unavailable(),
+            httpx.Response(200, json={"id": MESSAGE_ID, "status": "canceled"}),
+        ]
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
+        canceled = await emails.cancel(MESSAGE_ID)
+
+    assert canceled.status == "canceled"
+    assert [(request.method, str(request.url)) for request in seen] == [
+        ("POST", CANCEL_URL),
+        ("POST", CANCEL_URL),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_list_reads_a_page():
+    emails, seen = async_emails_with([httpx.Response(200, json=list_reply()[1])])
+
+    page = await emails.list(limit=10)
+
+    assert [email.id for email in page.results] == [MESSAGE_ID]
+    assert [str(request.url) for request in seen] == [
+        LIST_URL + "?status=scheduled&limit=10"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_async_list_never_retries():
+    emails, seen = async_emails_with(
+        [unavailable(), httpx.Response(200, json=list_reply()[1])]
+    )
+
+    with mock.patch("posthog.emails.asyncio.sleep"):
+        with pytest.raises(EmailError):
+            await emails.list()
+
+    assert len(seen) == 1
 
 
 @pytest.mark.parametrize("factory", [Emails, AsyncEmails])
