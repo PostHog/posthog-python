@@ -1141,7 +1141,8 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
     def _client(self, **kwargs):
         client = Client(
             FAKE_TEST_API_KEY,
-            secret_key="test",
+            # A key no other test uses, so a poller leaked by another module never matches it.
+            secret_key="test-unresolvable-flag-warning",
             enable_local_evaluation=False,
             send=False,
             **kwargs,
