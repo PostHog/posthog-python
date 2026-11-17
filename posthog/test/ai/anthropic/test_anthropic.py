@@ -2316,6 +2316,7 @@ def test_messages_stream_captures_initial_request_error(mock_client):
         messages=[{"role": "user", "content": "Foo"}],
         max_tokens=1,
         posthog_distinct_id="test-user",
+        posthog_options={"process_person_profile": False},
     )
     with pytest.raises(RuntimeError, match="401 unauthorized"):
         with manager:
@@ -2325,6 +2326,9 @@ def test_messages_stream_captures_initial_request_error(mock_client):
     props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "401 unauthorized"
+    assert mock_client.capture_ai.call_args.kwargs["options"] == {
+        "process_person_profile": False
+    }
 
 
 def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):
@@ -2379,6 +2383,7 @@ async def test_async_messages_stream_captures_initial_request_error(mock_client)
         messages=[{"role": "user", "content": "Foo"}],
         max_tokens=1,
         posthog_distinct_id="test-user",
+        posthog_options={"process_person_profile": False},
     )
     with pytest.raises(RuntimeError, match="401 unauthorized"):
         async with manager:
@@ -2388,6 +2393,9 @@ async def test_async_messages_stream_captures_initial_request_error(mock_client)
     props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "401 unauthorized"
+    assert mock_client.capture_ai.call_args.kwargs["options"] == {
+        "process_person_profile": False
+    }
 
 
 def test_async_messages_stream_tolerates_provider_manager_internals_changing(

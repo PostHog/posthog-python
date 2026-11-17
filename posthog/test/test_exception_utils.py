@@ -61,6 +61,23 @@ def test_source_context_falls_back_when_loader_cannot_read_source(tmp_path, fail
     ) == ([], "current", ["after"])
 
 
+def test_source_context_truncates_long_lines_to_strings(tmp_path):
+    long_line = "x" * 1100
+    source = tmp_path / "application.py"
+    source.write_text("\n".join([long_line, long_line, long_line]))
+
+    pre_context, context_line, post_context = exception_utils.get_lines_from_file(
+        str(source), 1
+    )
+
+    truncated = "x" * 1021 + "..."
+    assert (pre_context, context_line, post_context) == (
+        [truncated],
+        truncated,
+        [truncated],
+    )
+
+
 def test_source_context_handles_changed_files(tmp_path):
     source = tmp_path / "application.py"
     source.write_text("current\n")

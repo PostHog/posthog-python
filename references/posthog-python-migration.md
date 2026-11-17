@@ -239,7 +239,7 @@ These changes follow from this order:
 
 - **Call properties.** Properties passed to a call now override `super_properties`.
 - **SDK values.** A `$is_server`, `$geoip_disable`, `$lib`, `$lib_version`, or system property such as `$os` that you set in a call or a context tag now wins over the SDK's value. In 7.x.x the SDK overwrote it.
-- **SDK values and `super_properties`.** `super_properties` win over the SDK's value too. So `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`.
+- **SDK values and `super_properties`.** `super_properties` win over the SDK's value too. So `super_properties={"$geoip_disable": False}` turns GeoIP lookup on for events, even with `disable_geoip=True`. So does `None`, in the event's properties, a context tag or `super_properties`: a `None` property counts as set, so the SDK adds no `True`.
 - **Feature flag properties.** Feature flag properties from `flags` or `send_feature_flags` still lose to the same key in the call's `properties`, a context tag, or `super_properties`, as in 7.x.x.
 - **Trace IDs.** A `$trace_id` or `$span_id` in a context tag or `super_properties` now replaces the active OpenTelemetry span's IDs. In 7.x.x the span's IDs beat context tags.
 - **Trace ID pairs.** Setting either key in the call's `properties`, a context tag, or `super_properties` stops the SDK adding both. In 7.x.x the SDK still added the other key.

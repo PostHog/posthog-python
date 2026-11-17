@@ -194,6 +194,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     state,
                     time.time() - start_time,
                     error=exc,
+                    options=posthog_options,
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error, and the
@@ -464,6 +465,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     state,
                     time.time() - start_time,
                     error=exc,
+                    options=posthog_options,
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error, and the

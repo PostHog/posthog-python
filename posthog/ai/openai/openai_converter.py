@@ -692,6 +692,11 @@ def _read_openai_response_usage_fields(usage: Any, api_type: str) -> Dict[str, A
         )
         detail_fields = (
             ("cache_read_input_tokens", "input_tokens_details", "cached_tokens"),
+            (
+                "cache_creation_input_tokens",
+                "input_tokens_details",
+                "cache_write_tokens",
+            ),
             ("reasoning_tokens", "output_tokens_details", "reasoning_tokens"),
         )
     else:
@@ -701,6 +706,11 @@ def _read_openai_response_usage_fields(usage: Any, api_type: str) -> Dict[str, A
         )
         detail_fields = (
             ("cache_read_input_tokens", "prompt_tokens_details", "cached_tokens"),
+            (
+                "cache_creation_input_tokens",
+                "prompt_tokens_details",
+                "cache_write_tokens",
+            ),
             ("reasoning_tokens", "completion_tokens_details", "reasoning_tokens"),
         )
     counts = {}
@@ -716,7 +726,11 @@ def _read_openai_response_usage_fields(usage: Any, api_type: str) -> Dict[str, A
 def _add_openai_response_details(
     result: Dict[str, Any], counts: Dict[str, Any]
 ) -> None:
-    for field in ("cache_read_input_tokens", "reasoning_tokens"):
+    for field in (
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "reasoning_tokens",
+    ):
         value = counts.get(field)
         if value is not None and value > 0:
             result[field] = value
@@ -739,6 +753,7 @@ def _extract_openai_stream_token_usage(raw: Any, provider_type: str) -> TokenUsa
     # Unlike non-streaming usage, explicitly reported zero details are retained.
     for output, field, detail in (
         ("cache_read_input_tokens", input_details, "cached_tokens"),
+        ("cache_creation_input_tokens", input_details, "cache_write_tokens"),
         ("reasoning_tokens", output_details, "reasoning_tokens"),
     ):
         if hasattr(raw, field) and hasattr(getattr(raw, field), detail):

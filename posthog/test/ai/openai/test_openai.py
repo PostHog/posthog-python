@@ -25,6 +25,7 @@ try:
     from openai.types.responses import (
         ParsedResponse,
         Response,
+        ResponseCompletedEvent,
         ResponseFunctionToolCall,
         ResponseOutputMessage,
         ResponseOutputText,
@@ -639,6 +640,91 @@ def test_cached_tokens(mock_client, mock_openai_response_with_cached_tokens):
         assert props["$ai_http_status"] == 200
         assert props["foo"] == "bar"
         assert isinstance(props["$ai_latency"], float)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_responses_cache_write_tokens(
+    mock_client, mock_openai_response_with_responses_api, stream
+):
+    response = mock_openai_response_with_responses_api.model_copy(
+        update={
+            "usage": make_response_usage(
+                input_tokens=100,
+                output_tokens=10,
+                total_tokens=110,
+                cached_tokens=20,
+                cache_write_tokens=50,
+            )
+        }
+    )
+    provider_result = (
+        [
+            ResponseCompletedEvent(
+                type="response.completed", sequence_number=0, response=response
+            )
+        ]
+        if stream
+        else response
+    )
+    with patch(
+        "openai.resources.responses.Responses.create", return_value=provider_result
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        result = client.responses.create(
+            model="gpt-4o-mini",
+            input="Hello",
+            stream=stream,
+            posthog_distinct_id="test-id",
+        )
+        if stream:
+            list(result)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 100
+    assert props["$ai_cache_read_input_tokens"] == 20
+    assert props["$ai_cache_creation_input_tokens"] == 50
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_chat_cache_write_tokens(mock_client, mock_openai_response, stream):
+    usage = CompletionUsage(
+        prompt_tokens=100,
+        completion_tokens=10,
+        total_tokens=110,
+        prompt_tokens_details={"cached_tokens": 20, "cache_write_tokens": 50},
+    )
+    provider_result = (
+        [
+            ChatCompletionChunk(
+                id="chunk",
+                model="gpt-4",
+                object="chat.completion.chunk",
+                created=0,
+                choices=[],
+                usage=usage,
+            )
+        ]
+        if stream
+        else mock_openai_response.model_copy(update={"usage": usage})
+    )
+    with patch(
+        "openai.resources.chat.completions.Completions.create",
+        return_value=provider_result,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        result = client.chat.completions.create(
+            model="gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=stream,
+            posthog_distinct_id="test-id",
+        )
+        if stream:
+            list(result)
+
+    props = mock_client.capture.call_args[1]["properties"]
+    assert props["$ai_input_tokens"] == 100
+    assert props["$ai_cache_read_input_tokens"] == 20
+    assert props["$ai_cache_creation_input_tokens"] == 50
 
 
 def test_null_token_details_do_not_crash(

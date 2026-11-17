@@ -2925,6 +2925,10 @@ class Client(object):
                 self.log.warning("No exception information available")
                 return None
 
+            if exception is None and exception_is_already_captured(exc_info):
+                self.log.debug("Exception already captured, skipping")
+                return None
+
             # Format stack trace for cymbal
             capture_metadata_input = dict(kwargs).get("_capture_metadata")
             capture_metadata = (
@@ -3025,9 +3029,10 @@ class Client(object):
                 _capture_trace_context=True,
             )
 
-            # Mark the exception as captured to prevent duplicate captures
-            if exception is not None and res is not None:
-                mark_exception_as_captured(exception, res)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if res is not None:
+                mark_exception_as_captured(exc_info, res)
 
             return res
         except Exception as e:
