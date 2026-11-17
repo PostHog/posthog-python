@@ -7,6 +7,7 @@ def make_response_usage(
     total_tokens: int,
     cached_tokens: int = 0,
     reasoning_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ):
     """Build an ``openai.types.responses.ResponseUsage`` across SDK versions.
 
@@ -33,7 +34,8 @@ def make_response_usage(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         input_tokens_details=build(
-            InputTokensDetails, {"cached_tokens": cached_tokens}
+            InputTokensDetails,
+            {"cached_tokens": cached_tokens, "cache_write_tokens": cache_write_tokens},
         ),
         output_tokens_details=build(
             OutputTokensDetails, {"reasoning_tokens": reasoning_tokens}
