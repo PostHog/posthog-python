@@ -49,7 +49,7 @@ rendered_send: SendEmailResult = emails.send(to="user@example.com", template_key
 invite_send: SendEmailResult = emails.send(to="user@example.com", template_key="invite", subject="Invite", html="<p>Invite</p>", cc="team@example.com", bcc=["audit@example.com"], attachments=[{"filename": "invite.ics", "content": b"BEGIN:VCALENDAR", "content_type": "text/calendar"}, {"filename": "logo.png", "content": "iVBORw0KGgo=", "content_id": "logo"}])
 tracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking={"clicks": True, "engagement": False})
 untracked_send: SendEmailResult = emails.send(to="user@example.com", template_key="welcome", subject="Welcome", html="<p>Hi</p>", tracking=False)
-not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", template_key="newsletter", subject="News", html="<p>News</p>", sensitive=False)
+not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", template_key="newsletter", subject="News", html="<p>News</p>", sensitive=False, headers={"List-Unsubscribe": "<https://example.com/unsubscribe>"})
 _ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send)
 
 
@@ -112,6 +112,7 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", capture_engagement=False)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", tracking=False)  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", sensitive=False)  # expected-type-error
+Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", headers={"List-Unsubscribe": "<https://example.com/unsubscribe>"})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", tracking={"open": False})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": [104, 105]}])  # expected-type-error
