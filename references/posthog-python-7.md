@@ -963,7 +963,7 @@ Flat list of the lanes' consumers, analytics first (kept for backwards compatibi
 new_context(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
-Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python/reference#posthognew_context).
+Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#posthognew_context).
 
 **Parameters:**
 
