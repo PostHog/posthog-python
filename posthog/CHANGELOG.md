@@ -1,5 +1,17 @@
 # posthog
 
+## 7.91.4 — 2026-11-17
+
+### Patch changes
+
+- [8a88a289](https://github.com/posthog/posthog-python/commit/8a88a289fe530d9983ddc5531480e3c84490d1ae) Exception autocapture now sends a truncated string for source lines over 1024 bytes in a frame's `context_line`, `pre_context` and `post_context`. Before, those lines were sent as `null`. — Thanks @Toraastrta for your first contribution 🎉!
+
+## 7.91.3 — 2026-11-17
+
+### Patch changes
+
+- [5b7a91a3](https://github.com/posthog/posthog-python/commit/5b7a91a31f167090565c2934afa6c99a33207898) `capture_exception()` called without an exception now marks the exception it takes from `sys.exc_info()` as captured, so a later automatic capture of the same exception no longer sends a second `$exception` event. — Thanks @MaiAditya for your first contribution 🎉!
+
 ## 7.91.2 — 2026-11-16
 
 ### Patch changes

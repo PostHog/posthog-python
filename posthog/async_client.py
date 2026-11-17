@@ -1086,8 +1086,10 @@ class AsyncClient:
                 options=kwargs.get("options"),
                 _capture_trace_context=True,
             )
-            if exception is not None and result is not None:
-                mark_exception_as_captured(exception, result)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if result is not None:
+                mark_exception_as_captured(exc_info, result)
             return result
         except Exception as error:
             self.log.exception("Failed to capture exception: %s", error)
