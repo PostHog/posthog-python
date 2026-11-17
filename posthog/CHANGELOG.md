@@ -1,5 +1,11 @@
 # posthog
 
+## 7.91.3 — 2026-11-17
+
+### Patch changes
+
+- [5b7a91a3](https://github.com/posthog/posthog-python/commit/5b7a91a31f167090565c2934afa6c99a33207898) `capture_exception()` called without an exception now marks the exception it takes from `sys.exc_info()` as captured, so a later automatic capture of the same exception no longer sends a second `$exception` event. — Thanks @MaiAditya for your first contribution 🎉!
+
 ## 7.91.2 — 2026-11-16
 
 ### Patch changes
