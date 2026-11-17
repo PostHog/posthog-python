@@ -787,7 +787,7 @@ async def test_no_warning_when_session_is_anchored_by_conversation_id():
     is perfectly healthy."""
     with _captured_logs() as logs:
         data = _data()
-        session_id = await prepare_request(
+        session = await prepare_request(
             data,
             mcp_session_id=None,
             client_name=None,
@@ -797,7 +797,8 @@ async def test_no_warning_when_session_is_anchored_by_conversation_id():
             conversation_id="0199e0a1-0000-7000-8000-000000000000",
         )
 
-    assert session_id.startswith("ses_")
+    assert session.session_id.startswith("ses_")
+    assert session.source == "conversation"
     assert not [m for m in logs if _NO_SESSION in m]
 
 

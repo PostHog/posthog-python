@@ -136,7 +136,7 @@ def _wrap_resource_request(
         request = request_to_dict(req)
         extra = {"session_id": mcp_session_id, "ctx": _request_context(server)}
         try:
-            session_id = await prepare_request(
+            session = await prepare_request(
                 data,
                 mcp_session_id=mcp_session_id,
                 client_name=client_name,
@@ -156,7 +156,7 @@ def _wrap_resource_request(
         except Exception as error:
             await record_resource_request(
                 data,
-                session_id,
+                session,
                 event_type=event_type,
                 request=request,
                 error=error,
@@ -170,7 +170,7 @@ def _wrap_resource_request(
 
         await record_resource_request(
             data,
-            session_id,
+            session,
             event_type=event_type,
             request=request,
             response=resource_listing_response(event_type, result),
@@ -280,83 +280,94 @@ def _wrap_call_tool(
 
         # Settle the shared session before the tool body runs, so an in-tool
         # `analytics.capture()` is attributed to this caller and not the last one.
-        await lifecycle.prime_session()
-
-        start = time.monotonic()
+        session = await lifecycle.prime_session()
         try:
-            with raised_tool_error(
-                server if high_level is None else high_level
-            ) as raised:
-                result = await original(req)
-        except Exception as error:
-            if await lifecycle.record_if_unknown_tool(
-                await registered_tool_exists(high_level, name)
-            ):
+            start = time.monotonic()
+            try:
+                with (
+                    lifecycle.in_tool(session),
+                    raised_tool_error(
+                        server if high_level is None else high_level
+                    ) as raised,
+                ):
+                    result = await original(req)
+            except Exception as error:
+                if await lifecycle.record_if_unknown_tool(
+                    await registered_tool_exists(high_level, name)
+                ):
+                    raise
+                # The @server.call_tool() decorator converts raises into
+                # CallToolResult(isError=True), but a handler wired straight into
+                # request_handlers can raise — capture before re-raising so the failed
+                # call isn't silently dropped. A minted (undelivered) conversation_id is
+                # not stamped, matching the FastMCP path.
+                await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
                 raise
-            # The @server.call_tool() decorator converts raises into
-            # CallToolResult(isError=True), but a handler wired straight into
-            # request_handlers can raise — capture before re-raising so the failed
-            # call isn't silently dropped. A minted (undelivered) conversation_id is
-            # not stamped, matching the FastMCP path.
-            await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
-            raise
-        duration_ms = (time.monotonic() - start) * 1000
+            duration_ms = (time.monotonic() - start) * 1000
 
-        # The low-level handler already converted any exception to a
-        # CallToolResult(isError=True); record_tool_call detects that from the result.
-        call_result = getattr(result, "root", result)
+            # The low-level handler already converted any exception to a
+            # CallToolResult(isError=True); record_tool_call detects that from the result.
+            call_result = getattr(result, "root", result)
 
-        # Deliver the handle before capture, over both channels a result has:
-        # mirrored into structuredContent on every response (for tools whose
-        # output schema we declared the key on — clients that read
-        # structuredContent never see the text block), and the prompt-back text
-        # block on the minting response only. Only stamp a minted conversation_id
-        # when it actually reached the agent, so we don't record an orphan id.
-        # Errored results carry it on purpose: a first-call failure is exactly
-        # when the agent needs the handle, or the retry starts a fresh conversation.
-        delivered = False
-        if lifecycle.conversation_id:
-            if data.tool_output_instructions.get(name):
-                call_result, delivered = mirror_instructions_into_structured_content(
-                    call_result, lifecycle.conversation_id
-                )
-            if lifecycle.minted_conversation_id:
-                content = getattr(call_result, "content", None)
-                if isinstance(content, list):
-                    block = mcp_types.TextContent(
-                        type="text",
-                        text=build_prompt_back(lifecycle.conversation_id)["text"],
+            # Deliver the handle before capture, over both channels a result has:
+            # mirrored into structuredContent on every response (for tools whose
+            # output schema we declared the key on — clients that read
+            # structuredContent never see the text block), and the prompt-back text
+            # block on the minting response only. Only stamp a minted conversation_id
+            # when it actually reached the agent, so we don't record an orphan id.
+            # Errored results carry it on purpose: a first-call failure is exactly
+            # when the agent needs the handle, or the retry starts a fresh conversation.
+            delivered = False
+            if lifecycle.conversation_id:
+                if lifecycle.mirrors_output_instructions:
+                    call_result, delivered = (
+                        mirror_instructions_into_structured_content(
+                            call_result, lifecycle.conversation_id
+                        )
                     )
-                    # Copy rather than append in place — a shared or cached result
-                    # object would accumulate a block per conversation and leak
-                    # earlier callers' handles to later ones.
-                    copy_model = getattr(call_result, "model_copy", None)
-                    if callable(copy_model):
-                        call_result = copy_model(update={"content": [*content, block]})
-                    else:
-                        content.append(block)
-                    delivered = True
-            # Hand back whatever copy we made, rewrapped as the SDK expects.
-            if call_result is not getattr(result, "root", result):
-                result = (
-                    mcp_types.ServerResult(call_result)
-                    if hasattr(result, "root")
-                    else call_result
-                )
+                if lifecycle.minted_conversation_id:
+                    content = getattr(call_result, "content", None)
+                    if isinstance(content, list):
+                        block = mcp_types.TextContent(
+                            type="text",
+                            text=build_prompt_back(lifecycle.conversation_id)["text"],
+                        )
+                        # Copy rather than append in place — a shared or cached result
+                        # object would accumulate a block per conversation and leak
+                        # earlier callers' handles to later ones.
+                        copy_model = getattr(call_result, "model_copy", None)
+                        if callable(copy_model):
+                            call_result = copy_model(
+                                update={"content": [*content, block]}
+                            )
+                        else:
+                            content.append(block)
+                        delivered = True
+                # Hand back whatever copy we made, rewrapped as the SDK expects.
+                if call_result is not getattr(result, "root", result):
+                    result = (
+                        mcp_types.ServerResult(call_result)
+                        if hasattr(result, "root")
+                        else call_result
+                    )
 
-        if is_tool_result_error(call_result) and await lifecycle.record_if_unknown_tool(
-            await registered_tool_exists(high_level, name),
-            conversation_id_delivered=delivered,
-        ):
+            if is_tool_result_error(
+                call_result
+            ) and await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(high_level, name),
+                conversation_id_delivered=delivered,
+            ):
+                return result
+
+            await lifecycle.record_result(
+                call_result,
+                duration_ms,
+                conversation_id_delivered=delivered,
+                error=raised.error,
+            )
             return result
-
-        await lifecycle.record_result(
-            call_result,
-            duration_ms,
-            conversation_id_delivered=delivered,
-            error=raised.error,
-        )
-        return result
+        finally:
+            lifecycle.settle_left_over_custom_events(session)
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.CallToolRequest] = handler
@@ -369,6 +380,7 @@ def _inject_tool_schemas(
     *,
     context_required: bool,
     high_level: Any = None,
+    advertise_conversation_id: bool = True,
 ) -> None:
     """Advertise the analytics parameters on a listing's tools, in place.
 
@@ -391,6 +403,7 @@ def _inject_tool_schemas(
             context_required=context_required,
             is_sdk_virtual_tool=False,
             inject_model=inject_model,
+            advertise_conversation_id=advertise_conversation_id,
         )
         verdict = data.tool_model_parameter_injected.get(tool.name)
         if verdict is None:
@@ -531,10 +544,16 @@ def _wrap_list_tools(
             tools,
             context_required=context_required,
             high_level=high_level,
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         result = apply_virtual_tool_injection(
-            result, injection, names, data, schema_field="inputSchema"
+            result,
+            injection,
+            names,
+            data,
+            schema_field="inputSchema",
+            advertise_conversation_id=lifecycle.advertises_conversation_id,
         )
 
         await lifecycle.record_result(

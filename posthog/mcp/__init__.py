@@ -59,6 +59,8 @@ from .request_headers import get_request_headers
 from .session import (
     derive_session_id_from_conversation,
     derive_session_id_from_mcp_session,
+    current_session,
+    unsettled_custom_events,
     new_session_id,
 )
 from .session_token import (
@@ -161,16 +163,21 @@ class McpAnalytics:
         data = get_server_tracking_data(self._key)
         if data is None:
             return
-        coro = capture_event(
-            data,
-            {
-                "session_id": data.session_id,
-                "event_type": MCPAnalyticsEventType.CUSTOM,
-                "event_name": event,
-                "timestamp": datetime.now(timezone.utc),
-                "properties": properties,
-            },
-        )
+        session_id, session_source = current_session(data)
+        event_input = {
+            "session_id": session_id,
+            "session_source": session_source,
+            "event_type": MCPAnalyticsEventType.CUSTOM,
+            "event_name": event,
+            "timestamp": datetime.now(timezone.utc),
+            "properties": properties,
+        }
+        pending = unsettled_custom_events(data)
+        if pending is not None:
+            # Sent once the call settles; its duration is still the moment it was captured.
+            pending.events.append({**event_input, "duration": 0})
+            return
+        coro = capture_event(data, event_input)
         if coro is not None:
             await coro
 
