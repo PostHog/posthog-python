@@ -10,8 +10,9 @@ from posthog.args import (
     OptionalSetArgs,
 )
 from posthog.capture_compression import CaptureCompression as CaptureCompression
-from posthog.capture_mode import CaptureMode as CaptureMode
+from posthog.capture_send import CaptureError as CaptureError
 from posthog.client import Client
+from posthog.utils import _is_personal_api_key
 from posthog.tracing.span import Span as Span
 from posthog.async_client import AsyncClient as AsyncClient
 from posthog.async_client import AsyncPosthog as AsyncPosthog
@@ -51,6 +52,12 @@ from posthog.contexts import (
 )
 from posthog.contexts import (
     get_tags as inner_get_tags,
+)
+from posthog.contexts import (
+    set_context_option as inner_set_context_option,
+)
+from posthog.contexts import (
+    get_context_options as inner_get_context_options,
 )
 from posthog.exception_utils import (
     DEFAULT_CODE_VARIABLES_DETECT_SECRETS,
@@ -300,6 +307,47 @@ def get_tags() -> Dict[str, Any]:
     return inner_get_tags()
 
 
+def set_context_option(key: str, value: Any) -> None:
+    """
+    Set a capture option for every event captured within the current context.
+
+    Context options fill options an event leaves unset, before ``before_send``
+    runs, so the hook sees them. They override ``super_options``. An event's
+    own ``options`` override them, and ``before_send`` can change them. They
+    never set ``process_person_profile`` on identify-style events, such as
+    ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+    those default it to ``True``.
+
+    Args:
+        key: The option name, such as ``"process_person_profile"``
+        value: The option value, sent as given
+
+    Examples:
+        ```python
+        from posthog import new_context, set_context_option
+        with new_context():
+            set_context_option("process_person_profile", False)
+        ```
+
+    Category:
+        Contexts
+    """
+    return inner_set_context_option(key, value)
+
+
+def get_context_options() -> Dict[str, Any]:
+    """
+    Get all capture options from the current context.
+
+    Returns:
+        Dict of all capture options in the current context
+
+    Category:
+        Contexts
+    """
+    return inner_get_context_options()
+
+
 """Settings.
 
 These module-level settings configure the legacy global PostHog client used by
@@ -314,8 +362,11 @@ Attributes:
         disabled no-op global client.
     host: PostHog ingestion host. Defaults to the US ingestion endpoint when not
         set.
-    on_error: Optional callback invoked by background consumers when event upload
-        fails. Keep it short and non-blocking. Lifecycle methods can be called
+    on_error: Optional callback ``(error, batch)`` invoked when event upload
+        fails: by background consumers, or on the calling thread in ``sync_mode``.
+        Capture failures arrive as ``CaptureError``. Without it, each failed batch
+        logs one aggregate line. A capture that fails inside the callback logs that
+        line instead of calling it again. Keep it short and non-blocking. Lifecycle methods can be called
         directly and will be deferred, but the callback must not wait for another
         thread or task that calls ``flush()``, ``join()``, or ``shutdown()``.
     debug: Enable verbose SDK logging and re-raise errors from public APIs.
@@ -338,7 +389,18 @@ Attributes:
     feature_flags_request_max_retries: Number of retries for feature flag
         requests after network, transport, or timeout failures. Defaults to 1.
         Set to 0 to disable retries.
-    super_properties: Properties merged into every captured event.
+    super_properties: Properties for every captured event. They fill only
+        keys the event leaves unset, before ``before_send`` runs. ``$set``,
+        ``$set_once``, ``$groups`` and ``$group_set`` fill one level deep. An
+        event's own properties and context tags override them, and
+        ``before_send`` can change or remove them.
+    super_options: Capture options for every captured event, such as
+        ``{"cookieless_mode": True}``. They fill only options the event leaves
+        unset, before ``before_send`` runs. An event's own ``options`` and
+        context options override them, and ``before_send`` can change them.
+        They never set ``process_person_profile`` on identify-style events,
+        such as ``$identify`` or ``$set``, whose distinct ID the SDK did not
+        generate: those default it to ``True``.
     metrics: Config dict for the ``client.metrics`` API (``service_name``,
         ``service_version``, ``environment``, ``flush_interval``, ...). Applied
         when ``setup()`` builds the global client, or on a later ``setup()``
@@ -369,7 +431,9 @@ Attributes:
     project_root: Root path used to determine in-app exception stack frames.
     privacy_mode: Capture AI usage metadata without prompt inputs or outputs.
     before_send: Optional callback that can modify or drop events before upload.
-        Return ``None`` to drop an event.
+        Return ``None`` to drop an event. Context tags, context options,
+        ``super_properties`` and ``super_options`` fill in before it runs, so
+        it can change or remove them.
     enable_local_evaluation: Whether to poll feature flag definitions for local
         evaluation when a personal API key is configured.
     flag_definition_cache_provider: Optional external cache provider for sharing
@@ -379,9 +443,11 @@ Attributes:
     capture_trace_context: When OpenTelemetry is installed and a valid span is
         active at capture time, add its trace and span IDs as ``$trace_id`` and
         ``$span_id`` properties to events captured with ``capture()`` and
-        ``capture_ai()``. Explicit ``$trace_id``/``$span_id`` values passed in
-        ``properties`` win. Exception events always attach these IDs regardless
-        of this setting. Defaults to False.
+        ``capture_ai()``. They fill after context tags and ``super_properties``,
+        before ``before_send``. A ``$trace_id`` or ``$span_id`` from the event, a
+        context tag or ``super_properties`` stops the SDK adding either ID.
+        Exception events always attach these IDs regardless of this setting.
+        Defaults to False.
     code_variables_mask_patterns: Variable-name patterns to mask when capturing
         code variables.
     code_variables_ignore_patterns: Variable-name patterns to omit when capturing
@@ -419,6 +485,7 @@ is_server = True  # type: bool
 feature_flags_request_timeout_seconds = 3  # type: float
 feature_flags_request_max_retries = 1  # type: int
 super_properties = None  # type: Optional[Dict]
+super_options = None  # type: Optional[Dict]
 metrics = None  # type: Optional[Dict]
 traces = None  # type: Optional[Dict]
 enable_exception_autocapture = False  # type: bool
@@ -432,11 +499,8 @@ before_send = None  # type: Optional[BeforeSendCallback]
 # We recommend setting this to False if you are only using the personalApiKey for evaluating remote config payloads via `get_remote_config_payload` and not using local evaluation.
 enable_local_evaluation = True  # type: bool
 flag_definition_cache_provider = None  # type: Optional[FlagDefinitionCacheProvider]
-# Capture wire protocol for the global client. None defers to POSTHOG_CAPTURE_MODE
-# then CaptureMode.V0. See posthog.capture_mode.CaptureMode.
-capture_mode = None  # type: Optional[CaptureMode]
-# Routes AI SDK wrapper events through the dedicated AI capture lane, skips
-# truncation, and passes media unredacted. `privacy_mode` always wins.
+# Captures full AI content in AI SDK wrapper events: skips truncation and
+# passes media unredacted. `privacy_mode` always wins.
 enable_full_ai_capture = False  # type: bool
 # Deprecated aliases for `enable_full_ai_capture`.
 _use_ai_lane = False  # type: bool
@@ -646,6 +710,7 @@ def group_identify(
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
     distinct_id: Optional[ID_TYPES] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Set properties on a group.
@@ -661,6 +726,8 @@ def group_identify(
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
         distinct_id: Optional distinct ID of the user performing the action
+        options: Optional capture options for the event, sent as given.
+            ``process_person_profile`` is ``True`` unless this call sets it.
 
     Examples:
         ```python
@@ -684,6 +751,7 @@ def group_identify(
         uuid=uuid,
         disable_geoip=disable_geoip,
         distinct_id=distinct_id,
+        options=options,
     )
 
 
@@ -693,6 +761,7 @@ def alias(
     timestamp: Optional[Union[datetime.datetime, str]] = None,
     uuid: Optional[str] = None,
     disable_geoip: Optional[bool] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """
     Associate user behaviour before and after they e.g. register, login, or perform some other identifying action.
@@ -704,6 +773,8 @@ def alias(
             datetimes and parseable ISO timestamp strings are converted to UTC.
         uuid: Optional UUID for the event
         disable_geoip: Whether to disable GeoIP lookup
+        options: Optional capture options for the event, sent as given.
+            ``process_person_profile`` is ``True`` unless this call sets it.
 
     Details:
         To marry up whatever a user does before they sign up or log in with what they do after you need to make an alias call. This will allow you to answer questions like "Which marketing channels leads to users churning after a month?" or "What do users do on our website before signing up?". Particularly useful for associating user behaviour before and after they e.g. register, login, or perform some other identifying action.
@@ -725,11 +796,14 @@ def alias(
         timestamp=timestamp,
         uuid=uuid,
         disable_geoip=disable_geoip,
+        options=options,
     )
 
 
 def capture_exception(
     exception: Optional[ExceptionArg] = None,
+    *,
+    level: Optional[str] = None,
     **kwargs: Unpack[OptionalCaptureArgs],
 ) -> Optional[str]:
     """
@@ -737,10 +811,12 @@ def capture_exception(
 
     Args:
         exception: The exception to capture. If not provided, the current exception is captured via `sys.exc_info()`
+        level: The ``$exception_level``, such as ``"warning"`` or ``"fatal"``.
+            Defaults to ``"error"``. An unknown value counts as unset.
         **kwargs: Optional capture arguments including distinct_id, properties,
-            timestamp, uuid, groups, flags, send_feature_flags, and disable_geoip.
-            Overriding reserved exception properties through ``properties`` is
-            deprecated and will stop working in the next major version.
+            timestamp, uuid, groups, flags, send_feature_flags, disable_geoip, and options.
+            Reserved exception properties in ``properties``, such as
+            ``$exception_list`` and ``$exception_level``, are ignored.
 
     Details:
         Capture exception is idempotent - if it is called twice with the same exception instance, only a occurrence will be tracked in posthog. This is because, generally, contexts will cause exceptions to be captured automatically. However, to ensure you track an exception, if you catch and do not re-raise it, capturing it manually is recommended, unless you are certain it will have crossed a context boundary (e.g. by existing a `with posthog.new_context():` block already). If the passed exception was raised and caught, the captured stack trace will consist of every frame between where the exception was raised and the point at which it is captured (the "traceback"). If the passed exception was never raised, e.g. if you call `posthog.capture_exception(ValueError("Some Error"))`, the stack trace captured will be the full stack trace at the moment the exception was captured. Note that heavy use of contexts will lead to truncated stack traces, as the exception will be captured by the context entered most recently, which may not be the point you catch the exception for the final time in your code. It's recommended to use contexts sparingly, for this reason. `capture_exception` takes the same set of optional arguments as `capture`.
@@ -758,7 +834,7 @@ def capture_exception(
         Events
     """
 
-    return _proxy("capture_exception", exception=exception, **kwargs)
+    return _proxy("capture_exception", exception=exception, level=level, **kwargs)
 
 
 def feature_enabled(
@@ -1444,6 +1520,7 @@ def setup() -> Client:
             feature_flags_request_timeout_seconds=feature_flags_request_timeout_seconds,
             feature_flags_request_max_retries=feature_flags_request_max_retries,
             super_properties=super_properties,
+            super_options=super_options,
             metrics=metrics,
             traces=traces,
             # TODO: Currently this monitoring begins only when the Client is initialised (which happens when you do something with the SDK)
@@ -1467,12 +1544,15 @@ def setup() -> Client:
             exception_autocapture_bucket_size=exception_autocapture_bucket_size,
             exception_autocapture_refill_rate=exception_autocapture_refill_rate,
             exception_autocapture_refill_interval_seconds=exception_autocapture_refill_interval_seconds,
-            capture_mode=capture_mode,
         )
 
     # Always set in case user changes it. Preserve Client's auto-disabled state
-    # for API keys that become empty after trimming.
-    default_client.disabled = disabled or not default_client.api_key
+    # for API keys that are empty after trimming or personal (`phx_`).
+    default_client.disabled = (
+        disabled
+        or not default_client.api_key
+        or _is_personal_api_key(default_client.api_key)
+    )
     default_client.debug = debug
     default_client.privacy_mode = bool(privacy_mode)
     default_client._set_before_send(before_send)

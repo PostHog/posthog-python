@@ -71,7 +71,7 @@ def test_gemini_api_error_status_is_recorded(mock_client, cls_name, code):
             contents="hi",
         )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_is_error"] is True
     assert props["$ai_http_status"] == code
 
@@ -99,7 +99,7 @@ async def test_gemini_api_error_status_is_recorded_async(mock_client):
             contents="hi",
         )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_http_status"] == 429
 
 
@@ -121,7 +121,7 @@ def test_status_code_errors_keep_their_status(mock_client):
             model="m",
         )
 
-    assert mock_client.capture.call_args[1]["properties"]["$ai_http_status"] == 503
+    assert mock_client.capture_ai.call_args[1]["properties"]["$ai_http_status"] == 503
 
 
 def _anthropic_stream_error_event(error_type):

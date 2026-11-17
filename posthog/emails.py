@@ -154,7 +154,7 @@ from uuid import UUID, uuid4
 import requests
 from typing_extensions import NotRequired, Unpack
 
-from .capture_v1 import _parse_retry_after
+from .capture_send import _parse_retry_after
 from .request import (
     EU_APP_ENDPOINT,
     US_APP_ENDPOINT,

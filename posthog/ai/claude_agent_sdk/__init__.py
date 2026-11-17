@@ -34,6 +34,7 @@ def instrument(
     privacy_mode: bool = False,
     groups: Optional[Dict[str, Any]] = None,
     properties: Optional[Dict[str, Any]] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> PostHogClaudeAgentProcessor:
     """
     Create a PostHog-instrumented query wrapper for the Claude Agent SDK.
@@ -49,6 +50,10 @@ def instrument(
         privacy_mode: If True, redacts sensitive information in tracking.
         groups: Optional PostHog groups to associate with events.
         properties: Optional additional properties to include with all events.
+        options: Optional capture options for all events, such as
+            ``{"cookieless_mode": True}``. They win over context options and
+            ``super_options``. An event without a distinct ID always sends
+            ``process_person_profile: False``.
 
     Returns:
         PostHogClaudeAgentProcessor: A processor whose .query() method wraps claude_agent_sdk.query().
@@ -69,6 +74,7 @@ def instrument(
         privacy_mode=privacy_mode,
         groups=groups,
         properties=properties,
+        options=options,
     )
 
 
@@ -85,6 +91,7 @@ async def query(
     posthog_properties: Optional[Dict[str, Any]] = None,
     posthog_privacy_mode: bool = False,
     posthog_groups: Optional[Dict[str, Any]] = None,
+    posthog_options: Optional[Dict[str, Any]] = None,
 ):
     """
     Drop-in replacement for claude_agent_sdk.query() with PostHog instrumentation.
@@ -102,6 +109,11 @@ async def query(
         posthog_properties: Extra properties to include with all events.
         posthog_privacy_mode: If True, redacts sensitive content.
         posthog_groups: Optional PostHog groups.
+        posthog_options: Capture options for all events, such as
+            ``{"cookieless_mode": True}``. They win over context options and
+            ``super_options``. An event without a distinct ID always sends
+            ``process_person_profile: False``. Named so it does not clash with
+            ``options``, the Claude Agent SDK options.
 
     Example:
         ```python
@@ -147,5 +159,6 @@ async def query(
         posthog_properties=posthog_properties,
         posthog_privacy_mode=posthog_privacy_mode,
         posthog_groups=posthog_groups,
+        posthog_options=posthog_options,
     ):
         yield message

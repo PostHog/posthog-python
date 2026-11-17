@@ -17,9 +17,7 @@ import weakref
 from dataclasses import dataclass
 from typing import Any, Dict, List, Literal, Optional, Union, overload
 
-from requests import Response as _Response
-
-from posthog.capture_v1 import _parse_retry_after
+from posthog.capture_send import _parse_retry_after
 from posthog.request import USER_AGENT, _get_session
 from posthog.utils import remove_trailing_slash
 
@@ -464,42 +462,6 @@ class Prompts:
             self._maybe_capture_error(error, name="*", version=None, label=label)
             raise
 
-        resolved_rows, skipped = self._resolve_prompt_rows(rows, label)
-
-        now = time.time()
-        results: Dict[str, PromptResult] = {}
-        for row in resolved_rows:
-            config = _extract_config(row)
-            self._cache[_cache_key(row["name"], None, label)] = CachedPrompt(
-                prompt=row["prompt"],
-                fetched_at=now,
-                name=row["name"],
-                version=row["version"],
-                label=label,
-                config=config,
-            )
-            results[row["name"]] = PromptResult(
-                source="api",
-                prompt=row["prompt"],
-                name=row["name"],
-                version=row["version"],
-                label=label,
-                config=copy.deepcopy(config),
-            )
-
-        if skipped:
-            log.warning(
-                "[PostHog Prompts] Skipped %d prompt(s) that did not resolve label %r: %s",
-                len(skipped),
-                label,
-                ", ".join(skipped),
-            )
-
-        return results
-
-    def _resolve_prompt_rows(
-        self, rows: List[Dict[str, Any]], label: Optional[str]
-    ) -> tuple[List[Dict[str, Any]], List[str]]:
         reference = _prompt_list_reference(label)
 
         # Validate every row before caching any, so a rejected batch leaves
@@ -552,7 +514,36 @@ class Prompts:
             self._maybe_capture_error(compat_error, name="*", version=None, label=label)
             raise compat_error
 
-        return resolved_rows, skipped
+        now = time.time()
+        results: Dict[str, PromptResult] = {}
+        for row in resolved_rows:
+            config = _extract_config(row)
+            self._cache[_cache_key(row["name"], None, label)] = CachedPrompt(
+                prompt=row["prompt"],
+                fetched_at=now,
+                name=row["name"],
+                version=row["version"],
+                label=label,
+                config=config,
+            )
+            results[row["name"]] = PromptResult(
+                source="api",
+                prompt=row["prompt"],
+                name=row["name"],
+                version=row["version"],
+                label=label,
+                config=copy.deepcopy(config),
+            )
+
+        if skipped:
+            log.warning(
+                "[PostHog Prompts] Skipped %d prompt(s) that did not resolve label %r: %s",
+                len(skipped),
+                label,
+                ", ".join(skipped),
+            )
+
+        return results
 
     def _get_internal(
         self,
@@ -578,9 +569,38 @@ class Prompts:
         cached = self._cache.get(cache_key)
         now = time.time()
 
-        cached_result = _cached_prompt_result(cached, now, ttl)
-        if cached_result is not None:
-            return cached_result
+        if cached is not None:
+            is_fresh = (now - cached.fetched_at) < ttl
+
+            if is_fresh:
+                return PromptResult(
+                    source="cache",
+                    prompt=cached.prompt,
+                    name=cached.name,
+                    version=cached.version,
+                    label=cached.label,
+                    # Copied so a caller mutating result.config can't pollute the
+                    # cache entry that later cache hits are served from.
+                    config=copy.deepcopy(cached.config),
+                )
+
+            # A failed refetch left this entry in cooldown. Serving it keeps one
+            # throttled client from turning every later get() into another
+            # request, which is what holds it against the limit. A zero TTL is
+            # an explicit request to refetch on every read, so it opts out.
+            if (
+                ttl > 0
+                and cached.retry_not_before is not None
+                and now < cached.retry_not_before
+            ):
+                return PromptResult(
+                    source="stale_cache",
+                    prompt=cached.prompt,
+                    name=cached.name,
+                    version=cached.version,
+                    label=cached.label,
+                    config=copy.deepcopy(cached.config),
+                )
 
         # Try to fetch from API
         try:
@@ -649,7 +669,11 @@ class Prompts:
                 self._in_flight[cache_key] = pending
 
         if not is_leader:
-            return _wait_for_prompt(pending)
+            pending.done.wait()
+            if pending.error is not None:
+                raise pending.error
+            assert pending.result is not None
+            return pending.result
 
         try:
             data = self._fetch_prompt_from_api(name, version, label)
@@ -827,7 +851,17 @@ class Prompts:
 
             response = _get_session().get(url, headers=headers, timeout=10)
 
-            _raise_prompt_response_error(response, reference)
+            if not response.ok:
+                if response.status_code == 401:
+                    raise _authentication_error(reference)
+                if response.status_code == 403:
+                    raise _access_denied_error(reference)
+                raise PromptFetchError(
+                    f"[PostHog Prompts] Failed to fetch {reference}: HTTP {response.status_code}",
+                    _parse_retry_after_seconds(response.headers.get("Retry-After"))
+                    if response.status_code == 429
+                    else None,
+                )
 
             try:
                 data = response.json()
@@ -843,7 +877,18 @@ class Prompts:
 
             rows.extend(data["results"])
 
-            url = _prompt_next_url(data, self._host, reference)
+            # The Authorization header goes to every followed link, so a link
+            # off the configured host must never be requested.
+            next_url = data.get("next")
+            if next_url is not None and (
+                not isinstance(next_url, str)
+                or not _is_same_origin(next_url, self._host)
+            ):
+                raise Exception(
+                    f"[PostHog Prompts] Refusing to follow a pagination link off the "
+                    f"configured host while fetching {reference}."
+                )
+            url = next_url
             pages += 1
 
         return rows
@@ -909,91 +954,16 @@ class Prompts:
                 else None,
             )
 
-        return _prompt_response_data(response, prompt_title)
-
-
-def _cached_prompt_result(
-    cached: Optional[CachedPrompt], now: float, ttl: float
-) -> Optional[PromptResult]:
-    if cached is not None:
-        is_fresh = (now - cached.fetched_at) < ttl
-
-        if is_fresh:
-            return PromptResult(
-                source="cache",
-                prompt=cached.prompt,
-                name=cached.name,
-                version=cached.version,
-                label=cached.label,
-                # Copied so a caller mutating result.config can't pollute the
-                # cache entry that later cache hits are served from.
-                config=copy.deepcopy(cached.config),
+        try:
+            data = response.json()
+        except Exception:
+            raise Exception(
+                f"[PostHog Prompts] Invalid response format for {prompt_title}"
             )
 
-        # A failed refetch left this entry in cooldown. Serving it keeps one
-        # throttled client from turning every later get() into another
-        # request, which is what holds it against the limit. A zero TTL is
-        # an explicit request to refetch on every read, so it opts out.
-        if (
-            ttl > 0
-            and cached.retry_not_before is not None
-            and now < cached.retry_not_before
-        ):
-            return PromptResult(
-                source="stale_cache",
-                prompt=cached.prompt,
-                name=cached.name,
-                version=cached.version,
-                label=cached.label,
-                config=copy.deepcopy(cached.config),
+        if not _is_prompt_api_response(data):
+            raise Exception(
+                f"[PostHog Prompts] Invalid response format for {prompt_title}"
             )
 
-    return None
-
-
-def _wait_for_prompt(pending: _InFlightFetch) -> CachedPrompt:
-    pending.done.wait()
-    if pending.error is not None:
-        raise pending.error
-    assert pending.result is not None
-    return pending.result
-
-
-def _raise_prompt_response_error(response: _Response, reference: str) -> None:
-    if not response.ok:
-        if response.status_code == 401:
-            raise _authentication_error(reference)
-        if response.status_code == 403:
-            raise _access_denied_error(reference)
-        raise PromptFetchError(
-            f"[PostHog Prompts] Failed to fetch {reference}: HTTP {response.status_code}",
-            _parse_retry_after_seconds(response.headers.get("Retry-After"))
-            if response.status_code == 429
-            else None,
-        )
-
-
-def _prompt_response_data(response: _Response, prompt_title: str) -> Dict[str, Any]:
-    try:
-        data = response.json()
-    except Exception:
-        raise Exception(f"[PostHog Prompts] Invalid response format for {prompt_title}")
-
-    if not _is_prompt_api_response(data):
-        raise Exception(f"[PostHog Prompts] Invalid response format for {prompt_title}")
-
-    return data
-
-
-def _prompt_next_url(data: Dict[str, Any], host: str, reference: str) -> Optional[str]:
-    # The Authorization header goes to every followed link, so a link
-    # off the configured host must never be requested.
-    next_url = data.get("next")
-    if next_url is not None and (
-        not isinstance(next_url, str) or not _is_same_origin(next_url, host)
-    ):
-        raise Exception(
-            f"[PostHog Prompts] Refusing to follow a pagination link off the "
-            f"configured host while fetching {reference}."
-        )
-    return next_url
+        return data

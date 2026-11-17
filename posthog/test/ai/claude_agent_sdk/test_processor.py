@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
 from posthog.version import VERSION
 
 try:
@@ -173,7 +174,7 @@ class TestPostHogClaudeAgentProcessor:
         assert proc._properties == {"env": "test"}
 
     def test_initialization_defaults(self):
-        with patch("posthog.ai.claude_agent_sdk.processor.setup") as mock_setup:
+        with patch("posthog.ai.utils.setup") as mock_setup:
             mock_setup.return_value = MagicMock()
             proc = PostHogClaudeAgentProcessor()
             assert proc._distinct_id is None
@@ -202,7 +203,7 @@ class TestGenerationEmission:
                 collected.append(msg)
 
         # Should have captured $ai_generation + $ai_trace
-        calls = mock_client.capture.call_args_list
+        calls = mock_client.capture_ai.call_args_list
         events = [c.kwargs.get("event") or c[1].get("event") for c in calls]
         assert "$ai_generation" in events
         assert "$ai_trace" in events
@@ -257,7 +258,7 @@ class TestGenerationEmission:
 
         gen_call = next(
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         )
         props = gen_call.kwargs.get("properties") or gen_call[1].get("properties")
@@ -288,7 +289,7 @@ class TestGenerationEmission:
 
         gen_call = next(
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         )
         props = gen_call.kwargs.get("properties") or gen_call[1].get("properties")
@@ -322,7 +323,7 @@ class TestGenerationEmission:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         props = generation_call.kwargs.get("properties") or generation_call[1].get(
@@ -361,7 +362,7 @@ class TestGenerationEmission:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 2
@@ -393,7 +394,7 @@ class TestGenerationEmission:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 1
@@ -424,7 +425,7 @@ class TestGenerationEmission:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         props = generation_call.kwargs.get("properties") or generation_call[1].get(
@@ -466,7 +467,7 @@ class TestToolSpanEmission:
 
         span_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
@@ -497,7 +498,7 @@ class TestTraceEmission:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -524,7 +525,7 @@ class TestTraceEmission:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -548,7 +549,7 @@ class TestPrivacyMode:
             async for _ in proc.query(prompt="secret", options=ClaudeAgentOptions()):
                 pass
 
-        properties = mock_client.capture.call_args.kwargs["properties"]
+        properties = mock_client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] is None
 
     @pytest.mark.asyncio
@@ -577,12 +578,12 @@ class TestPrivacyMode:
             ):
                 pass
 
-        properties = mock_client.capture.call_args.kwargs["properties"]
+        properties = mock_client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] is None
 
     @pytest.mark.asyncio
     async def test_client_without_privacy_mode_captures_content(self):
-        client = SimpleNamespace(capture=MagicMock())
+        client = SimpleNamespace(capture_ai=MagicMock())
         proc = PostHogClaudeAgentProcessor(client=client, distinct_id="user")
         messages = [_make_message_start(), _make_message_stop()]
 
@@ -593,7 +594,7 @@ class TestPrivacyMode:
             async for _ in proc.query(prompt="visible", options=ClaudeAgentOptions()):
                 pass
 
-        properties = client.capture.call_args.kwargs["properties"]
+        properties = client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] == [{"role": "user", "content": "visible"}]
 
     @pytest.mark.asyncio
@@ -634,7 +635,7 @@ class TestPrivacyMode:
 
         span_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_span"
         ]
         assert len(span_calls) == 1
@@ -645,7 +646,7 @@ class TestPrivacyMode:
 
         generation_call = next(
             call
-            for call in mock_client.capture.call_args_list
+            for call in mock_client.capture_ai.call_args_list
             if (call.kwargs.get("event") or call[1].get("event")) == "$ai_generation"
         )
         generation_props = generation_call.kwargs.get("properties") or generation_call[
@@ -694,7 +695,7 @@ class TestMediaRedactionEndToEnd:
 
         gen_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_generation"
         ]
         assert len(gen_calls) == 2
@@ -719,7 +720,7 @@ class TestMediaRedactionEndToEnd:
 
 class TestPersonlessMode:
     @pytest.mark.asyncio
-    async def test_no_distinct_id_sets_process_person_profile_false(self, mock_client):
+    async def test_no_distinct_id_sets_personless_option(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
             distinct_id=None,
@@ -742,9 +743,8 @@ class TestPersonlessMode:
             ):
                 pass
 
-        for call in mock_client.capture.call_args_list:
-            props = call.kwargs.get("properties") or call[1].get("properties")
-            assert props.get("$process_person_profile") is False
+        for call in mock_client.capture_ai.call_args_list:
+            assert call.kwargs["options"] == {"process_person_profile": False}
             assert call.kwargs["distinct_id"] == "trace-fallback"
 
 
@@ -757,7 +757,7 @@ class TestCapturePolicy:
 
         proc._capture_event("$ai_trace", {}, groups={})
 
-        assert mock_client.capture.call_args.kwargs["groups"] == {}
+        assert mock_client.capture_ai.call_args.kwargs["groups"] == {}
 
     def test_default_properties_keep_existing_precedence(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
@@ -770,20 +770,22 @@ class TestCapturePolicy:
             {"environment": "event", "$ai_trace_id": "trace-id"},
         )
 
-        assert mock_client.capture.call_args.kwargs["properties"] == {
+        assert mock_client.capture_ai.call_args.kwargs["properties"] == {
             "$ai_lib": "posthog-ai",
             "$ai_lib_version": VERSION,
             "environment": "processor",
             "$ai_trace_id": "trace-id",
         }
 
-    def test_client_without_capture_capability_is_ignored(self):
-        proc = PostHogClaudeAgentProcessor(client=object())
+    def test_client_without_capture_ai_disables_capture_at_construction(self, caplog):
+        with caplog.at_level(logging.ERROR, logger="posthog"):
+            proc = PostHogClaudeAgentProcessor(client=object())
 
+        assert "capture_ai" in caplog.text
         proc._capture_event("$ai_trace", {})
 
     def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
-        mock_client.capture.side_effect = RuntimeError("capture failed")
+        mock_client.capture_ai.side_effect = RuntimeError("capture failed")
         proc = PostHogClaudeAgentProcessor(client=mock_client)
 
         with caplog.at_level(logging.DEBUG, logger="posthog"):
@@ -814,7 +816,7 @@ class TestCustomProperties:
             async for _ in proc.query(prompt="Hi", options=ClaudeAgentOptions()):
                 pass
 
-        for call in mock_client.capture.call_args_list:
+        for call in mock_client.capture_ai.call_args_list:
             props = call.kwargs.get("properties") or call[1].get("properties")
             assert props.get("app") == "stamphog"
             assert props.get("version") == "1.0"
@@ -839,7 +841,7 @@ class TestCustomProperties:
             ):
                 pass
 
-        for call in mock_client.capture.call_args_list:
+        for call in mock_client.capture_ai.call_args_list:
             props = call.kwargs.get("properties") or call[1].get("properties")
             assert props.get("pr_number") == 42
 
@@ -867,7 +869,7 @@ class TestCallableDistinctId:
 
         trace_calls = [
             c
-            for c in mock_client.capture.call_args_list
+            for c in mock_client.capture_ai.call_args_list
             if (c.kwargs.get("event") or c[1].get("event")) == "$ai_trace"
         ]
         assert len(trace_calls) == 1
@@ -972,11 +974,146 @@ class TestQueryGracefulFallback:
                     pass
 
 
-def test_ai_lane_client_routes_through_capture_ai(mock_client):
-    mock_client.enable_full_ai_capture = True
-    processor = PostHogClaudeAgentProcessor(client=mock_client, distinct_id="test-user")
-    processor._capture_event(event="$ai_trace", properties={}, distinct_id="d")
+def _streamed_messages():
+    return [
+        _make_message_start(),
+        _make_message_stop(),
+        _make_assistant_message(tool_uses=[{"id": "tu_1", "name": "Read"}]),
+        _make_result_message(),
+    ]
 
-    mock_client.capture.assert_not_called()
-    mock_client.capture_ai.assert_called_once()
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"
+
+def _result_only_messages():
+    return [_make_result_message()]
+
+
+# id, messages, the events they emit
+CLAUDE_MESSAGE_FLOWS = [
+    ("streamed", _streamed_messages, ["$ai_generation", "$ai_span", "$ai_trace"]),
+    ("result_only", _result_only_messages, ["$ai_generation", "$ai_trace"]),
+]
+
+
+def _claude_query(entry_point, client, distinct_id, options):
+    if entry_point == "module_query":
+        return posthog_query(
+            prompt="Hi",
+            options=ClaudeAgentOptions(),
+            posthog_client=client,
+            posthog_distinct_id=distinct_id,
+            posthog_options=options,
+        )
+    if entry_point == "processor_query":
+        proc = PostHogClaudeAgentProcessor(client=client, distinct_id=distinct_id)
+        return proc.query(
+            prompt="Hi", options=ClaudeAgentOptions(), posthog_options=options
+        )
+    proc = instrument(client=client, distinct_id=distinct_id, options=options)
+    return proc.query(prompt="Hi", options=ClaudeAgentOptions())
+
+
+class TestPostHogOptions:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "case",
+        POSTHOG_OPTIONS_CASES,
+        ids=[case[0] for case in POSTHOG_OPTIONS_CASES],
+    )
+    @pytest.mark.parametrize(
+        "flow", CLAUDE_MESSAGE_FLOWS, ids=[flow[0] for flow in CLAUDE_MESSAGE_FLOWS]
+    )
+    @pytest.mark.parametrize(
+        "entry_point", ["module_query", "processor_query", "instrument"]
+    )
+    async def test_options_reach_every_event_and_not_the_sdk(
+        self, mock_client, caplog, entry_point, flow, case
+    ):
+        _, make_messages, expected_events = flow
+        _, distinct_id, options, expected, warns = case
+        sdk_calls = []
+
+        def fake_sdk_query(**kwargs):
+            sdk_calls.append(kwargs)
+            return _fake_query(make_messages())
+
+        with caplog.at_level(logging.WARNING, logger="posthog"):
+            with patch(
+                "posthog.ai.claude_agent_sdk.processor.original_query",
+                side_effect=fake_sdk_query,
+            ):
+                async for _ in _claude_query(
+                    entry_point, mock_client, distinct_id, options
+                ):
+                    pass
+
+        assert [set(call) for call in sdk_calls] == [{"prompt", "options", "transport"}]
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == expected_events
+        for call in calls:
+            assert_captured_options(call.kwargs, expected, warns, caplog)
+
+    @pytest.mark.asyncio
+    async def test_processor_options_win_over_query_options(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client,
+            distinct_id="user",
+            options={"cookieless_mode": True},
+        )
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(_streamed_messages()),
+        ):
+            async for _ in proc.query(
+                prompt="Hi",
+                options=ClaudeAgentOptions(),
+                posthog_options={
+                    "cookieless_mode": False,
+                    "disable_skew_correction": True,
+                },
+            ):
+                pass
+
+        # Like properties, the processor's options win key by key.
+        for call in mock_client.capture_ai.call_args_list:
+            assert call.kwargs["options"] == {
+                "cookieless_mode": True,
+                "disable_skew_correction": True,
+            }
+
+    @pytest.mark.asyncio
+    async def test_sdk_client_options_reach_every_event(self, mock_client):
+        from posthog.ai.claude_agent_sdk import PostHogClaudeSDKClient
+
+        sdk_client = MagicMock()
+
+        async def noop(*args, **kwargs):
+            return None
+
+        sdk_client.connect = noop
+        sdk_client.query = noop
+        sdk_client.disconnect = noop
+        sdk_client.receive_response = lambda: _fake_query(_streamed_messages())
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.client.ClaudeSDKClient",
+            return_value=sdk_client,
+        ):
+            async with PostHogClaudeSDKClient(
+                ClaudeAgentOptions(),
+                posthog_client=mock_client,
+                posthog_distinct_id="user",
+                posthog_options={"cookieless_mode": True},
+            ) as client:
+                await client.query("Hi")
+                async for _ in client.receive_response():
+                    pass
+
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == [
+            "$ai_generation",
+            "$ai_span",
+            "$ai_trace",
+        ]
+        for call in calls:
+            assert call.kwargs["options"] == {"cookieless_mode": True}

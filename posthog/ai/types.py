@@ -144,3 +144,4 @@ class StreamingEventData(TypedDict):
     stop_reason: Optional[str]
     service_tier: NotRequired[Optional[str]]
     error: NotRequired[Optional[BaseException]]  # raised mid-stream, if any
+    options: NotRequired[Optional[Dict[str, Any]]]  # the caller's posthog_options

@@ -7,6 +7,7 @@ from parameterized import parameterized
 
 import posthog
 from posthog import Posthog
+from posthog.test.capture_helpers import patch_capture_send, sent_batch
 
 
 class TestModule(unittest.TestCase):
@@ -17,7 +18,7 @@ class TestModule(unittest.TestCase):
         self.assertTrue(result)
 
     def setUp(self):
-        patcher = mock.patch("posthog.consumer.batch_post")
+        patcher = patch_capture_send("consumer")
         self.transport = patcher.start()
         self.addCleanup(patcher.stop)
         self.on_error = mock.Mock()
@@ -32,7 +33,7 @@ class TestModule(unittest.TestCase):
         self._assert_enqueue_result(res)
         self.posthog.flush()
         self.transport.assert_called_once()
-        event = self.transport.call_args.kwargs["batch"][0]
+        event = sent_batch(self.transport)[0]
         self.assertEqual(event["event"], "python module event")
         self.assertEqual(event["distinct_id"], "distinct_id")
         self.assertEqual(event["uuid"], res)
@@ -42,7 +43,7 @@ class TestModule(unittest.TestCase):
         self._assert_enqueue_result(res)
         self.posthog.flush()
         self.transport.assert_called_once()
-        event = self.transport.call_args.kwargs["batch"][0]
+        event = sent_batch(self.transport)[0]
         self.assertEqual(event["event"], "$create_alias")
         self.assertEqual(event["distinct_id"], "previousId")
         self.assertEqual(event["properties"]["alias"], "distinct_id")
@@ -57,6 +58,15 @@ class TestModule(unittest.TestCase):
 
         proxy.assert_called_once_with("flush", timeout_seconds=1.5)
 
+    def test_module_capture_exception_forwards_level(self):
+        error = ValueError("boom")
+        with mock.patch.object(posthog, "_proxy") as proxy:
+            posthog.capture_exception(error, level="warning")
+
+        proxy.assert_called_once_with(
+            "capture_exception", exception=error, level="warning"
+        )
+
 
 class TestModuleLevelSetup(unittest.TestCase):
     def setUp(self):
@@ -64,6 +74,7 @@ class TestModuleLevelSetup(unittest.TestCase):
         self._original_api_key = posthog.api_key
         self._original_project_api_key = posthog.project_api_key
         self._original_project_root = posthog.project_root
+        self._original_super_options = posthog.super_options
         self._original_privacy_mode = posthog.privacy_mode
         self._original_disabled = posthog.disabled
         self._original_send = posthog.send
@@ -80,6 +91,7 @@ class TestModuleLevelSetup(unittest.TestCase):
         posthog.api_key = self._original_api_key
         posthog.project_api_key = self._original_project_api_key
         posthog.project_root = self._original_project_root
+        posthog.super_options = self._original_super_options
         posthog.privacy_mode = self._original_privacy_mode
         posthog.disabled = self._original_disabled
         posthog.send = self._original_send
@@ -102,6 +114,23 @@ class TestModuleLevelSetup(unittest.TestCase):
         self.assertEqual(client.api_key, "")
         self.assertTrue(client.disabled)
         self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+
+    @parameterized.expand(
+        [
+            ("api_key", "api_key"),
+            ("project_api_key", "project_api_key"),
+        ]
+    )
+    def test_setup_keeps_client_disabled_for_personal_api_key(self, _name, setting):
+        setattr(posthog, setting, " phx_not_a_real_key ")
+
+        client = posthog.setup()
+
+        # Module calls re-run setup(), which must not re-enable the client.
+        self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+        self.assertIsNone(posthog.capture("Module Python Event", distinct_id="john"))
+        self.assertIs(client, posthog.default_client)
+        self.assertTrue(client.disabled)
 
     def test_setup_uses_project_api_key_when_api_key_is_unset(self):
         posthog.project_api_key = " phc_project_key "
@@ -128,13 +157,19 @@ class TestModuleLevelSetup(unittest.TestCase):
         self.assertEqual(client.api_key, "phc_api_key")
         self.assertFalse(client.disabled)
 
-    def test_setup_propagates_project_root(self):
+    @parameterized.expand(
+        [
+            ("project_root", "/path/to/project"),
+            ("super_options", {"cookieless_mode": True}),
+        ]
+    )
+    def test_setup_propagates_config(self, setting, value):
         posthog.api_key = "phc_test"
-        posthog.project_root = "/path/to/project"
+        setattr(posthog, setting, value)
 
         client = posthog.setup()
 
-        self.assertEqual(client.project_root, "/path/to/project")
+        self.assertEqual(getattr(client, setting), value)
 
     def test_setup_propagates_and_updates_privacy_mode(self):
         posthog.api_key = "phc_test"
@@ -168,6 +203,7 @@ class TestModuleLevelWrappers(unittest.TestCase):
             "company_123",
             {"name": "Awesome Inc."},
             distinct_id="user_456",
+            options={"cookieless_mode": True},
         )
         self.mock_client.group_identify.assert_called_once_with(
             group_type="company",
@@ -177,6 +213,7 @@ class TestModuleLevelWrappers(unittest.TestCase):
             uuid=None,
             disable_geoip=None,
             distinct_id="user_456",
+            options={"cookieless_mode": True},
         )
 
     def test_group_identify_distinct_id_defaults_to_none(self):

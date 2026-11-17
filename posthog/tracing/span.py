@@ -89,6 +89,12 @@ class Span:
         ``with span:`` a raised ``Exception`` is recorded automatically, so
         this is for exceptions that are caught and handled.
 
+        The stack trace contains file paths from your server. Remove
+        ``exception.stacktrace`` in ``before_span_send`` to keep them in your
+        process. The ``exception`` event uses one of the span's event slots. A
+        span whose event slots are full keeps its ``error`` status and the
+        exception message, but loses the exception type and stack trace.
+
         Examples:
             ```python
             try:

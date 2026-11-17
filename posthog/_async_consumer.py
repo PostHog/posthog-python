@@ -9,11 +9,12 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from ._async_request import async_batch_post, async_send_v1_batch
+from ._async_request import async_send_v1_batch
 from .capture_compression import CaptureCompression
-from .capture_mode import CaptureMode
+from .capture_event import _EventDefaults
+from .capture_send import _CAPTURE_V1_PATH, _capture_loss_message
 from .consumer import BATCH_SIZE_LIMIT, MAX_MSG_SIZE
-from .request import APIError, DatetimeSerializer, EVENTS_ENDPOINT
+from .request import DatetimeSerializer
 
 _STOP = object()
 _PROCESSING_EVENT = contextvars.ContextVar(
@@ -37,6 +38,7 @@ async def _run_outside_processing_event(awaitable):
 class _QueuedEvent:
     event: dict[str, Any]
     context: contextvars.Context
+    defaults: Optional[_EventDefaults] = None
 
 
 async def _invoke_callback(callback, *args):
@@ -48,8 +50,37 @@ async def _invoke_callback(callback, *args):
     return result
 
 
+# True while an SDK-invoked `on_error` runs, so a capture that fails inside the
+# callback logs instead of re-entering it.
+_IN_ON_ERROR: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "posthog_in_on_error", default=False
+)
+
+
+async def _report_capture_failure(
+    on_error: Optional[Callable[..., Any]],
+    log: logging.Logger,
+    error: Exception,
+    batch: list[dict[str, Any]],
+    endpoint: str,
+) -> None:
+    """Hand a failed send to `on_error`, or log one aggregate line without one."""
+    if on_error is None or _IN_ON_ERROR.get():
+        log.error(_capture_loss_message(error, max(1, len(batch)), endpoint))
+        return
+    token = _IN_ON_ERROR.set(True)
+    try:
+        await _invoke_callback(on_error, error, batch)
+    except Exception as callback_error:
+        log.error("on_error handler failed (%s)", type(callback_error).__name__)
+    finally:
+        _IN_ON_ERROR.reset(token)
+
+
 async def _serialized_event_size(event: dict[str, Any]) -> int:
-    serialized = await asyncio.to_thread(json.dumps, event, cls=DatetimeSerializer)
+    serialized = await asyncio.to_thread(
+        json.dumps, event, cls=DatetimeSerializer, allow_nan=False
+    )
     return len(serialized.encode())
 
 
@@ -65,16 +96,18 @@ class _AsyncConsumer:
         *,
         host: Optional[str],
         on_error: Optional[Callable[[Exception, list[dict[str, Any]]], Any]],
-        process_event: Callable[[dict[str, Any]], Awaitable[Optional[dict[str, Any]]]],
+        process_event: Callable[
+            [dict[str, Any], Optional[_EventDefaults]],
+            Awaitable[Optional[dict[str, Any]]],
+        ],
         flush_at: int,
         flush_interval: float,
-        gzip: bool,
         retries: int,
         timeout: float,
         historical_migration: bool,
-        capture_mode: CaptureMode,
         capture_compression: CaptureCompression,
-        http_client: Optional[Any],
+        endpoint: str = _CAPTURE_V1_PATH,
+        max_msg_size: int = MAX_MSG_SIZE,
     ) -> None:
         self.queue = queue
         self.api_key = api_key
@@ -83,13 +116,12 @@ class _AsyncConsumer:
         self.process_event = process_event
         self.flush_at = flush_at
         self.flush_interval = flush_interval
-        self.gzip = gzip
         self.retries = max(0, retries)
         self.timeout = timeout
         self.historical_migration = historical_migration
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
-        self.http_client = http_client
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
         self._carryover: Optional[tuple[dict[str, Any], int]] = None
         self._flush_event = asyncio.Event()
 
@@ -137,11 +169,11 @@ class _AsyncConsumer:
         return None, False
 
     async def _process_queued_event(
-        self, event: dict[str, Any]
+        self, queued: _QueuedEvent
     ) -> Optional[dict[str, Any]]:
         token = _PROCESSING_EVENT.set(True)
         try:
-            return await self.process_event(event)
+            return await self.process_event(queued.event, queued.defaults)
         finally:
             _PROCESSING_EVENT.reset(token)
 
@@ -149,74 +181,24 @@ class _AsyncConsumer:
         try:
             await self.request(batch)
         except Exception as error:
-            self.log.error(
-                "async capture upload failed (%s, status=%s)",
-                type(error).__name__,
-                getattr(error, "status", None),
+            await _report_capture_failure(
+                self.on_error, self.log, error, batch, self.endpoint
             )
-            if self.on_error:
-                try:
-                    await _invoke_callback(self.on_error, error, batch)
-                except Exception as callback_error:
-                    self.log.error(
-                        "on_error handler failed (%s)", type(callback_error).__name__
-                    )
         finally:
             for _ in batch:
                 self.queue.task_done()
 
-    async def _prepare_queued_event(
-        self, queued: _QueuedEvent
-    ) -> Optional[tuple[dict[str, Any], int]]:
-        try:
-            process_task = queued.context.run(
-                asyncio.create_task, self._process_queued_event(queued.event)
-            )
-            item = await process_task
-        except Exception as error:
-            self.log.error(
-                "unable to process queued event, dropping (%s)",
-                type(error).__name__,
-            )
-            self.queue.task_done()
-            return None
+    async def next(self) -> tuple[list[dict[str, Any]], bool]:
+        items: list[dict[str, Any]] = []
+        total_size = 0
+        stop = False
+        started = asyncio.get_running_loop().time()
 
-        if item is None:
-            self.queue.task_done()
-            return None
-
-        try:
-            item_size = await _serialized_event_size(item)
-        except Exception:
-            self.log.error("unable to serialize queued event for sizing, dropping")
-            self.queue.task_done()
-            return None
-
-        if item_size > MAX_MSG_SIZE:
-            self.log.error(
-                "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
-                item.get("event"),
-                item_size,
-                MAX_MSG_SIZE // 1024,
-            )
-            self.queue.task_done()
-            return None
-        return item, item_size
-
-    def _take_carryover(self, items: list[dict[str, Any]]) -> int:
         if self._carryover is not None:
             carried_item, carried_size = self._carryover
             self._carryover = None
             items.append(carried_item)
-            return carried_size
-        return 0
-
-    async def next(self) -> tuple[list[dict[str, Any]], bool]:
-        items: list[dict[str, Any]] = []
-        stop = False
-        started = asyncio.get_running_loop().time()
-
-        total_size = self._take_carryover(items)
+            total_size = carried_size
 
         while len(items) < self.flush_at:
             remaining = self.flush_interval - (
@@ -234,10 +216,42 @@ class _AsyncConsumer:
                 stop = True
                 break
 
-            prepared = await self._prepare_queued_event(queued)
-            if prepared is None:
+            try:
+                process_task = queued.context.run(
+                    asyncio.create_task, self._process_queued_event(queued)
+                )
+                item = await process_task
+            except Exception as error:
+                self.log.error(
+                    "unable to process queued event, dropping (%s)",
+                    type(error).__name__,
+                )
+                self.queue.task_done()
                 continue
-            item, item_size = prepared
+
+            if item is None:
+                self.queue.task_done()
+                continue
+
+            try:
+                item_size = await _serialized_event_size(item)
+            except Exception:
+                self.log.error("unable to serialize queued event for sizing, dropping")
+                self.queue.task_done()
+                continue
+
+            if item_size > self.max_msg_size:
+                # Log only name and size: AI events may carry unredacted
+                # multimodal payloads that must not leak into logs.
+                self.log.error(
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                    item.get("event"),
+                    item_size,
+                    self.max_msg_size // 1024,
+                    self.endpoint,
+                )
+                self.queue.task_done()
+                continue
 
             if items and total_size + item_size > BATCH_SIZE_LIMIT:
                 self._carryover = (item, item_size)
@@ -250,50 +264,43 @@ class _AsyncConsumer:
         return items, stop
 
     async def request(self, batch: list[dict[str, Any]]) -> None:
-        if self.capture_mode == CaptureMode.V1:
-            await async_send_v1_batch(
-                self.api_key,
-                self.host,
-                batch,
-                compression=self.capture_compression,
-                timeout=self.timeout,
-                max_retries=self.retries,
-                historical_migration=self.historical_migration,
-            )
-            return
+        await async_send_v1_batch(
+            self.api_key,
+            self.host,
+            batch,
+            compression=self.capture_compression,
+            timeout=self.timeout,
+            max_retries=self.retries,
+            historical_migration=self.historical_migration,
+            path=self.endpoint,
+        )
 
-        last_error: Optional[Exception] = None
-        for attempt in range(self.retries + 1):
-            try:
-                await async_batch_post(
-                    self.api_key,
-                    self.host,
-                    batch=batch,
-                    path=EVENTS_ENDPOINT,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    historical_migration=self.historical_migration,
-                    client=self.http_client,
-                )
-                return
-            except Exception as error:
-                last_error = error
-                if not self._is_retryable(error) or attempt >= self.retries:
-                    raise
-                retry_after = getattr(error, "retry_after", None)
-                delay = max(
-                    min(2**attempt, 30),
-                    min(retry_after, 30) if retry_after and retry_after > 0 else 0,
-                )
-                await asyncio.sleep(delay)
 
-        if last_error is not None:  # pragma: no cover - loop always raises first
-            raise last_error
+class _AsyncLane:
+    """One capture queue, the consumer tasks that drain it, and the endpoint they post to.
 
-    @staticmethod
-    def _is_retryable(error: Exception) -> bool:
-        if not isinstance(error, APIError):
-            return True
-        if not isinstance(error.status, int):
-            return False
-        return not (400 <= error.status < 500 and error.status not in (408, 429))
+    The client owns one lane per traffic class (analytics, AI), so each gets
+    its own backpressure, timeout, size cap and compression.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        max_queue_size: int,
+        endpoint: str,
+        max_msg_size: int,
+        timeout: float,
+        capture_compression: CaptureCompression,
+    ) -> None:
+        self.name = name
+        self.queue: asyncio.Queue[Any] = asyncio.Queue(max_queue_size)
+        self.endpoint = endpoint
+        self.max_msg_size = max_msg_size
+        self.timeout = timeout
+        self.capture_compression = capture_compression
+        self.consumers: list[_AsyncConsumer] = []
+        self.worker_tasks: list[asyncio.Task[None]] = []
+
+    def pending_items(self) -> int:
+        return int(getattr(self.queue, "_unfinished_tasks", self.queue.qsize()))
