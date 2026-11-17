@@ -1,5 +1,12 @@
 # posthog
 
+## 8.0.1 — 2026-11-17
+
+### Patch changes
+
+- [2eb7b9fa](https://github.com/posthog/posthog-python/commit/2eb7b9fa450e3f99916b1b7ee35e933e92408af6) `PostHogSpanProcessor` no longer breaks export of spans started inside a PostHog context on opentelemetry-sdk 1.20 and 1.21. The span copy that carries the context's distinct ID, session ID and tags held plain dicts and tuples, but those SDK versions' OTLP encoder reads `.dropped` from its attributes, events and links and failed with `AttributeError`. The copy now also keeps the counts of attributes, events and links the SDK dropped under its span limits, which it previously reported as 0. — Thanks @fahad2932 for your first contribution 🎉!
+- [ac6a5df4](https://github.com/posthog/posthog-python/commit/ac6a5df465b2cef4999355f82e59b8f00d595325) `posthog.ai.openai`: report OpenAI cache-write tokens as `$ai_cache_creation_input_tokens`, for streaming and non-streaming calls. OpenAI reports them in `input_tokens_details.cache_write_tokens` (Responses) or `prompt_tokens_details.cache_write_tokens` (Chat Completions) and bills them above the input rate, but the wrapper read only `cached_tokens`, so cache writes were costed as plain input tokens. — Thanks @alexeichhorn for your first contribution 🎉!
+
 ## 8.0.0 — 2026-11-17
 
 ### Major changes
