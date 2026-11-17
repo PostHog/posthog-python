@@ -2907,7 +2907,7 @@ wheels = [
 
 [[package]]
 name = "openfeature-provider-posthog"
-version = "0.1.166"
+version = "0.1.167"
 source = { editable = "openfeature-provider" }
 dependencies = [
     { name = "openfeature-sdk" },
@@ -3464,7 +3464,7 @@ wheels = [
 
 [[package]]
 name = "posthog"
-version = "7.91.3"
+version = "7.91.4"
 source = { editable = "." }
 dependencies = [
     { name = "backoff" },
