@@ -103,7 +103,7 @@ _URL_CREDENTIALS_RE = re.compile(
 )
 
 
-def _get_current_otel_span_properties() -> Dict[str, str]:
+def _get_current_otel_span_properties() -> Dict[str, Any]:
     try:
         from opentelemetry import trace
     except ImportError:
@@ -113,9 +113,12 @@ def _get_current_otel_span_properties() -> Dict[str, str]:
         span_context = trace.get_current_span().get_span_context()
         if not span_context.is_valid:
             return {}
+        # An unsampled trace has a valid ID but is never exported, so readers need to
+        # know whether a stored trace can exist before they look one up.
         return {
             "$trace_id": f"{span_context.trace_id:032x}",
             "$span_id": f"{span_context.span_id:016x}",
+            "$trace_sampled": bool(int(span_context.trace_flags) & 0x01),
         }
     except Exception:
         return {}
