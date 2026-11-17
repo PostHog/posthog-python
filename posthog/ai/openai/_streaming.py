@@ -23,10 +23,20 @@ class _ResponsesStreamState:
     model: Optional[str] = None
     stop_reason: Optional[str] = None
     service_tier: Optional[str] = None
+    failure: Optional[RuntimeError] = None
 
     def process_chunk(self, chunk: Any) -> None:
         response = getattr(chunk, "response", None)
         self._record_response_metadata(response)
+
+        if getattr(chunk, "type", None) == "response.failed":
+            error = getattr(response, "error", None)
+            message = getattr(error, "message", None)
+            self.failure = RuntimeError(
+                message
+                if isinstance(message, str) and message
+                else "OpenAI response failed"
+            )
 
         chunk_usage = extract_openai_usage_from_chunk(chunk, "responses")
         if chunk_usage:

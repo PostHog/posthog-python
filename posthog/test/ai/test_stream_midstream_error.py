@@ -1,7 +1,9 @@
 """A stream that raises mid-flight must be captured as an error, not as a 200."""
 
+import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from posthog.ai.types import StreamingEventData
@@ -151,6 +153,86 @@ def test_openai_responses_stream_error(mock_client):
     props = _props(mock_client)
     assert props["$ai_is_error"] is True
     assert props["$ai_error"] == "connection reset"
+
+
+@pytest.fixture
+def failed_response_transport():
+    event = {
+        "type": "response.failed",
+        "sequence_number": 1,
+        "response": {
+            "id": "resp_failed",
+            "status": "failed",
+            "model": "gpt-4",
+            "output": [],
+            "error": {
+                "code": "server_error",
+                "message": "provider failed for this input",
+            },
+        },
+    }
+
+    def respond(request):
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            text=f"data: {json.dumps(event)}\n\ndata: [DONE]\n\n",
+        )
+
+    return httpx.MockTransport(respond)
+
+
+@pytest.mark.parametrize("privacy_mode", [False, True])
+def test_openai_responses_failed_event(
+    mock_client, failed_response_transport, privacy_mode
+):
+    from posthog.ai.openai import OpenAI
+
+    with OpenAI(
+        api_key="test",
+        posthog_client=mock_client,
+        http_client=httpx.Client(transport=failed_response_transport),
+    ) as client:
+        events = list(
+            client.responses.create(
+                model="gpt-4",
+                input="hi",
+                stream=True,
+                posthog_privacy_mode=privacy_mode,
+            )
+        )
+
+    assert [event.type for event in events] == ["response.failed"]
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 0
+    assert props["$ai_stop_reason"] == "failed"
+    if privacy_mode:
+        assert "provider failed for this input" not in props["$ai_error"]
+    else:
+        assert props["$ai_error"] == "provider failed for this input"
+
+
+@pytest.mark.asyncio
+async def test_openai_responses_failed_event_async(
+    mock_client, failed_response_transport
+):
+    from posthog.ai.openai import AsyncOpenAI
+
+    async with AsyncOpenAI(
+        api_key="test",
+        posthog_client=mock_client,
+        http_client=httpx.AsyncClient(transport=failed_response_transport),
+    ) as client:
+        stream = await client.responses.create(model="gpt-4", input="hi", stream=True)
+        events = [event async for event in stream]
+
+    assert [event.type for event in events] == ["response.failed"]
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 0
+    assert props["$ai_error"] == "provider failed for this input"
+    assert props["$ai_stop_reason"] == "failed"
 
 
 def test_anthropic_stream_error(mock_client):
