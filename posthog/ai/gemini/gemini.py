@@ -301,6 +301,7 @@ class Models(_GeminiModelsPolicy):
                     accumulated_content,
                     stop_reason=stop_reason,
                     error=exc,
+                    options=options,
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error, and the

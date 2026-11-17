@@ -169,6 +169,7 @@ class AsyncWrappedMessages(AsyncMessages):
                         accumulator.content_blocks,
                         accumulator.accumulated_content,
                         error=exc,
+                        options=posthog_options,
                     )
                 except Exception:
                     # Telemetry must never replace the provider's own error.
@@ -217,6 +218,7 @@ class AsyncWrappedMessages(AsyncMessages):
                     accumulator.content_blocks,
                     accumulator.accumulated_content,
                     error=exc,
+                    options=posthog_options,
                 )
             except Exception:
                 # Telemetry must never replace the provider's own error.
