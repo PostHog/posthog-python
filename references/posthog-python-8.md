@@ -3698,7 +3698,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = [CaptureDroppedEvent(*drop) for drop in drops or []]
+drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`
