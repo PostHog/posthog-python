@@ -432,6 +432,8 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         "$os_distro",
         "$python_runtime",
         "$python_version",
+        # Deploy identity: one value per process, set once at construction.
+        "$release_id",
     }
 )
 
