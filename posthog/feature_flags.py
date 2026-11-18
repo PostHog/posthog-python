@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import numbers
 import re
 import warnings
 from decimal import Decimal
@@ -1013,7 +1014,9 @@ def _json_object_to_string(value: dict, reason: UnresolvedFlagReason) -> str:
 def _group_key_to_string(value) -> str:
     if isinstance(value, str):
         return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if not isinstance(value, bool) and isinstance(value, numbers.Integral):
+        return str(int(value))
+    if isinstance(value, float):
         return _json_value_to_string(value, UnresolvedFlagReason.MISSING_CONTEXT)
     raise InconclusiveMatchError(
         "Group keys must be strings or finite numbers",

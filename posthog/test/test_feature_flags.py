@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import numbers
 import threading
 import unittest
 
@@ -122,6 +123,20 @@ class TestCohortMatching(unittest.TestCase):
                     )
 
 
+class _NumpyLikeInt:
+    def __init__(self, value):
+        self.value = value
+
+    def __int__(self):
+        return self.value
+
+    def __str__(self):
+        return f"np.int64({self.value})"
+
+
+numbers.Integral.register(_NumpyLikeInt)
+
+
 class TestGroupKeyBucketing(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY, send=False)
@@ -147,7 +162,7 @@ class TestGroupKeyBucketing(unittest.TestCase):
         self.set_group_flag(mixed)
         # For this flag, "0.00001" hashes below 50%, but Python's "1e-05"
         # hashes above it. Integer keys should keep their existing bucketing.
-        for group_key in (0.00001, "0.00001", 42, "42"):
+        for group_key in (0.00001, "0.00001", 42, "42", _NumpyLikeInt(42)):
             with self.subTest(group_key=group_key):
                 self.assertTrue(
                     self.client.get_feature_flag(
