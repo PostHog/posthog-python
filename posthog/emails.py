@@ -179,9 +179,9 @@ __all__ = [
 
 log = logging.getLogger("posthog")
 
-_SEND_PATH = "/api/projects/@current/messaging/send/email/"
-_UPLOADS_PATH = "/api/projects/@current/messaging/attachments/uploads/"
-_STATUS_PATH = "/api/projects/@current/messaging/emails/{message_id}/"
+_SEND_PATH = "/api/messaging/send/email/"
+_UPLOADS_PATH = "/api/messaging/attachments/uploads/"
+_STATUS_PATH = "/api/messaging/emails/{message_id}/"
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
