@@ -1236,11 +1236,10 @@ def _is_in_project_root(abs_path, project_root):
     if project_root is None:
         return False
 
-    # check if path is in the project root
-    if abs_path.startswith(project_root):
-        return True
-
-    return False
+    # check if path is in the project root, matching whole directory names so
+    # that sibling directories sharing a prefix (e.g. /app-shared) don't match
+    root = project_root.rstrip(os.sep)
+    return abs_path == root or abs_path.startswith(root + os.sep)
 
 
 def _truncate_by_bytes(string, max_bytes):
