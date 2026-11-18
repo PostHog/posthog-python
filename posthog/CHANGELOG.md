@@ -1,5 +1,13 @@
 # posthog
 
+## 8.0.2 — 2026-11-18
+
+### Patch changes
+
+- [f6e999cc](https://github.com/posthog/posthog-python/commit/f6e999cc967d51500169498cbf353a0607e066ee) Use canonical numeric group keys for local feature-flag bucketing and fall back to remote evaluation for unsupported key types. — Thanks @Kayvan-Zahiri for your first contribution 🎉!
+- [e555292f](https://github.com/posthog/posthog-python/commit/e555292f8b776085bc5e2fbaf15f585301a817ba) `posthog.emails` sends emails, uploads attachments and reads email statuses through `/api/messaging/...`, which takes the project from the project secret API key. It no longer calls `/api/projects/@current/messaging/...`, since PostHog is removing the `@current` alias. Needs PostHog Cloud, or a self-hosted PostHog from 2026-11-18 or later. Older self-hosted versions answer these calls with a 404. — Thanks @rafaeelaudibert!
+- [6ee3e333](https://github.com/posthog/posthog-python/commit/6ee3e333cf2fa774833793a076f48458dcce3332) `posthog.exception_utils`: only mark frames as `in_app` when their path is inside the project root directory, so sibling directories sharing the root's name as a prefix (e.g. `/work/app-shared` for root `/work/app`) are no longer treated as application code. — Thanks @MaiAditya!
+
 ## 8.0.1 — 2026-11-17
 
 ### Patch changes
