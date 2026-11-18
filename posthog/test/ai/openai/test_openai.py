@@ -679,7 +679,7 @@ def test_responses_cache_write_tokens(
         if stream:
             list(result)
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input_tokens"] == 100
     assert props["$ai_cache_read_input_tokens"] == 20
     assert props["$ai_cache_creation_input_tokens"] == 50
@@ -721,7 +721,7 @@ def test_chat_cache_write_tokens(mock_client, mock_openai_response, stream):
         if stream:
             list(result)
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input_tokens"] == 100
     assert props["$ai_cache_read_input_tokens"] == 20
     assert props["$ai_cache_creation_input_tokens"] == 50
