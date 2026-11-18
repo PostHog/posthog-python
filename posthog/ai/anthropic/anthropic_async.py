@@ -6,11 +6,11 @@ except ImportError:
         "Please install the Anthropic SDK to use this feature: 'pip install anthropic'"
     )
 
+import logging
 import time
 import uuid
 from typing import Any, Dict, List, Optional
 
-from posthog import setup
 from ..stream import AsyncStreamWrapper as AsyncStreamWrapper
 from ..types import (
     StreamingContentBlock as StreamingContentBlock,
@@ -18,6 +18,7 @@ from ..types import (
     ToolInProgress as ToolInProgress,
 )
 from ..utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage_async as call_llm_and_track_usage_async,
     merge_usage_stats as merge_usage_stats,
 )
@@ -30,6 +31,8 @@ from .anthropic_converter import (
     handle_anthropic_tool_delta as handle_anthropic_tool_delta,
 )
 from posthog.client import Client as PostHogClient
+
+_log = logging.getLogger("posthog")
 
 
 class AsyncAnthropic(anthropic.AsyncAnthropic):
@@ -46,7 +49,7 @@ class AsyncAnthropic(anthropic.AsyncAnthropic):
             **kwargs: Additional arguments passed to the Anthropic client
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = AsyncWrappedMessages(self)
 
 
@@ -60,6 +63,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -71,6 +75,10 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_properties: Optional dictionary of extra properties to include in the event
             posthog_privacy_mode: Whether to redact sensitive information in tracking
             posthog_groups: Optional group analytics properties
+            posthog_options: Optional capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Anthropic's messages.create
         """
 
@@ -84,6 +92,7 @@ class AsyncWrappedMessages(AsyncMessages):
                 posthog_properties,
                 posthog_privacy_mode,
                 posthog_groups,
+                posthog_options=posthog_options,
                 **kwargs,
             )
 
@@ -97,6 +106,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups,
             self._client.base_url,
             super().create,
+            posthog_options=posthog_options,
             **kwargs,
         )
 
@@ -107,6 +117,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -118,6 +129,10 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_properties: Additional properties to include with the usage event.
             posthog_privacy_mode: Whether to redact captured input and output.
             posthog_groups: Optional PostHog groups to associate with the event.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to Anthropic's async ``messages.create`` API.
 
         Returns:
@@ -137,7 +152,29 @@ class AsyncWrappedMessages(AsyncMessages):
 
         async def tracked_request():
             start_time = time.time()
-            response = await request
+            try:
+                response = await request
+            except Exception as exc:
+                accumulator = _AnthropicStreamAccumulator()
+                try:
+                    await self._capture_streaming_event(
+                        posthog_distinct_id,
+                        posthog_trace_id,
+                        posthog_properties,
+                        posthog_privacy_mode,
+                        posthog_groups,
+                        kwargs,
+                        accumulator.usage_stats,
+                        time.time() - start_time,
+                        accumulator.content_blocks,
+                        accumulator.accumulated_content,
+                        error=exc,
+                        options=posthog_options,
+                    )
+                except Exception:
+                    # Telemetry must never replace the provider's own error.
+                    _log.warning("[PostHog] Failed to capture streaming connect error")
+                raise
             return self._track_streaming_response(
                 response,
                 posthog_distinct_id,
@@ -147,6 +184,7 @@ class AsyncWrappedMessages(AsyncMessages):
                 posthog_groups,
                 kwargs,
                 start_time,
+                options=posthog_options,
             )
 
         setattr(manager, request_attribute, tracked_request())
@@ -159,10 +197,33 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         start_time = time.time()
-        response = await super().create(**kwargs)
+        try:
+            response = await super().create(**kwargs)
+        except Exception as exc:
+            accumulator = _AnthropicStreamAccumulator()
+            try:
+                await self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    accumulator.usage_stats,
+                    time.time() - start_time,
+                    accumulator.content_blocks,
+                    accumulator.accumulated_content,
+                    error=exc,
+                    options=posthog_options,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
         return self._track_streaming_response(
             response,
             posthog_distinct_id,
@@ -172,6 +233,7 @@ class AsyncWrappedMessages(AsyncMessages):
             posthog_groups,
             kwargs,
             start_time,
+            options=posthog_options,
         )
 
     def _track_streaming_response(
@@ -184,6 +246,7 @@ class AsyncWrappedMessages(AsyncMessages):
         posthog_groups: Optional[Dict[str, Any]],
         kwargs: Dict[str, Any],
         start_time: float,
+        options: Optional[Dict[str, Any]] = None,
     ):
         accumulator = _AnthropicStreamAccumulator()
 
@@ -213,6 +276,7 @@ class AsyncWrappedMessages(AsyncMessages):
                     accumulator.accumulated_content,
                     stop_reason=accumulator.stop_reason,
                     error=stream_error,
+                    options=options,
                 )
 
         return AsyncStreamWrapper(generator(), stream=response)
@@ -231,6 +295,7 @@ class AsyncWrappedMessages(AsyncMessages):
         accumulated_content: str,
         stop_reason: Optional[str] = None,
         error: Optional[BaseException] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         from posthog.ai.types import StreamingEventData
         from posthog.ai.anthropic.anthropic_converter import (
@@ -259,6 +324,7 @@ class AsyncWrappedMessages(AsyncMessages):
             groups=posthog_groups,
             stop_reason=stop_reason,
             error=error,
+            options=options,
         )
 
         # Use the common capture function

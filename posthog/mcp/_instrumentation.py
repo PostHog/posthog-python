@@ -30,7 +30,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from .feedback import (
     build_feedback_event_properties,
     build_feedback_intent,
@@ -41,7 +41,12 @@ from .feedback import (
     resolve_send_feedback_tool_name,
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
-from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._internal import (
+    MCPAnalyticsData,
+    handle_identify,
+    resolve_event_options,
+    resolve_event_properties,
+)
 from ._tool_input import get_tool_input_properties
 from ._model_parameters import (
     add_model_parameter_to_schema,
@@ -285,6 +290,7 @@ async def record_initialize(
         "timestamp": timestamp,
     }
     await _apply_event_properties(data, event, request, extra)
+    await _apply_event_options(data, event, request, extra)
     stamp_transport_identity(event, extra)
     fire_and_forget(capture_event(data, event), data)
 
@@ -341,9 +347,9 @@ async def _maybe_emit_initialize(
         "protocol_version": protocol_version,
         "timestamp": datetime.now(timezone.utc),
     }
-    await _apply_event_properties(
-        data, event, {"method": "initialize", "params": {}}, extra
-    )
+    request = {"method": "initialize", "params": {}}
+    await _apply_event_properties(data, event, request, extra)
+    await _apply_event_options(data, event, request, extra)
     stamp_transport_identity(event, extra)
     fire_and_forget(capture_event(data, event), data)
 
@@ -359,6 +365,19 @@ async def _apply_event_properties(
     props = await resolve_event_properties(data, request, extra)
     if props is not None:
         event["properties"] = props
+
+
+async def _apply_event_options(
+    data: MCPAnalyticsData,
+    event: Dict[str, Any],
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Resolve the customer's ``event_options`` callback onto the event, for the
+    same events as ``event_properties``."""
+    options = await resolve_event_options(data, request, extra)
+    if options is not None:
+        event["callback_event_options"] = options
 
 
 def resolve_session_and_client(
@@ -615,6 +634,32 @@ class ToolCallLifecycle:
         )
         return await handle_feedback(report, self.feedback_options)
 
+    async def record_if_unknown_tool(
+        self, tool_exists: Optional[bool], *, conversation_id_delivered: bool = False
+    ) -> bool:
+        """Record the failed call as ``$mcp_unknown_tool`` when ``tool_exists``
+        proves the server has no tool by that name, and say whether the call is
+        settled that way. A call naming no tool is settled with no event. The
+        adapter then re-raises or returns its response."""
+        if not self.name:
+            return True
+        if tool_exists is not False:
+            return False
+        conversation_id = self._anchored_conversation_id(conversation_id_delivered)
+        session_id = await self.prepare_session(conversation_id)
+        await record_unknown_tool(
+            self.data,
+            session_id,
+            conversation_id=conversation_id,
+            name=self.name,
+            arguments=self.arguments,
+            client_name=self.client_name,
+            client_version=self.client_version,
+            protocol_version=self.protocol_version,
+            extra=self.extra,
+        )
+        return True
+
     async def record_error(self, error: Any, duration_ms: float) -> None:
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
@@ -639,7 +684,12 @@ class ToolCallLifecycle:
         )
 
     async def record_result(
-        self, result: Any, duration_ms: float, *, conversation_id_delivered: bool
+        self,
+        result: Any,
+        duration_ms: float,
+        *,
+        conversation_id_delivered: bool,
+        error: Optional[BaseException] = None,
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
@@ -652,6 +702,7 @@ class ToolCallLifecycle:
             allow_self_reported_model=self.allow_self_reported_model,
             analytics_owned_parameters=self.analytics_owned_parameters,
             result=result,
+            error=error,
             duration_ms=duration_ms,
             client_name=self.client_name,
             client_version=self.client_version,
@@ -787,16 +838,17 @@ async def record_tool_call(
                 event["llm_model"] = model
                 event["llm_model_source"] = source
 
+        if result is not None:
+            event["response"] = _wrap_response(result)
+        if error is None and is_tool_result_error(result):
+            error = result
         if error is not None:
             event["is_error"] = True
             event["error"] = capture_exception(error)
-        elif result is not None:
-            event["response"] = _wrap_response(result)
-            if is_tool_result_error(result):
-                event["is_error"] = True
-                event["error"] = capture_exception(result)
+            event["error_status"] = http_status(error)
 
         props = await resolve_event_properties(data, request, extra)
+        await _apply_event_options(data, event, request, extra)
         input_aliases = None
         if data.options.resolve_input_aliases is not None:
             try:
@@ -1180,9 +1232,7 @@ def mutate_tool_schema(
             required=context_required,
         )
     if inject_model:
-        schema = _mutate_model_schema(
-            data, tool.name, schema, required=context_required
-        )
+        schema = _mutate_model_schema(data, tool.name, schema)
     else:
         # Discard any earlier registered-tool verdict: middleware may now
         # advertise or dispatch an application-owned field with the same name.
@@ -1202,9 +1252,7 @@ def mutate_tool_schema(
         )
 
 
-def _mutate_model_schema(
-    data: MCPAnalyticsData, name: str, schema: Any, *, required: bool
-) -> Any:
+def _mutate_model_schema(data: MCPAnalyticsData, name: str, schema: Any) -> Any:
     if not is_capture_model_enabled(data.options.capture_model):
         return schema
     model_was_injected = data.tool_model_parameter_injected.get(name, False)
@@ -1214,7 +1262,6 @@ def _mutate_model_schema(
             schema,
             name,
             get_model_description(data.options.capture_model),
-            required=required,
         )
     data.tool_model_parameter_injected[name] = not app_owns_model and schema_has_param(
         schema, "llm_model"
@@ -1373,10 +1420,44 @@ async def record_missing_capability(
                 event["llm_model"] = model
                 event["llm_model_source"] = source
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_missing_capability failed (event dropped): {err}")
+
+
+async def record_unknown_tool(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    conversation_id: Optional[str],
+    name: str,
+    arguments: Optional[Dict[str, Any]],
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Record a call naming a tool the server never registered as
+    ``$mcp_unknown_tool``. It is not a tool call, so it carries no outcome."""
+    try:
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_UNKNOWN_TOOL,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "resource_name": name,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+        }
+        await _apply_event_properties(
+            data, event, build_tool_call_request(name, arguments), extra
+        )
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_unknown_tool failed (event dropped): {err}")
 
 
 async def record_feedback(
@@ -1428,6 +1509,7 @@ async def record_feedback(
             **(props or {}),
             **build_feedback_event_properties(report),
         }
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
@@ -1468,6 +1550,7 @@ async def record_tools_list(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
@@ -1520,6 +1603,7 @@ async def record_resource_request(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the request path

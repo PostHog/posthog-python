@@ -10,6 +10,10 @@ from posthog import AsyncPosthog
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES, Client
 from posthog.release_id import RELEASE_ID_ENV_VAR, _resolve_release_id
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.capture_helpers import (
+    patch_async_capture_send,
+    record_sync_capture_sends,
+)
 
 # (name, call, expected event): one row per public event-producing method, shared
 # by the sync and async clients. Each call builds its own arguments, because a
@@ -79,17 +83,10 @@ class TestResolveReleaseId(unittest.TestCase):
 
 class TestClientReleaseId(unittest.TestCase):
     def _client(self, env_value, **kwargs):
-        """Build a client under `env_value` and collect the events it would send."""
-        events = []
-
-        def before_send(msg):
-            events.append(msg)
-            return msg
-
+        """Build a client under `env_value` and collect the events it sends."""
+        events = record_sync_capture_sends(self)
         with _release_id_env(env_value):
-            client = Client(
-                FAKE_TEST_API_KEY, send=False, before_send=before_send, **kwargs
-            )
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
         return client, events
 
     @parameterized.expand(EVENT_CALLS)
@@ -155,10 +152,10 @@ async def _async_events(env_value, send_events):
     """Build an async client under `env_value`, run `send_events`, return the batch."""
     batches = []
 
-    async def batch_post(*args, **kwargs):
-        batches.append(kwargs["batch"])
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
 
-    with mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post):
+    with patch_async_capture_send(side_effect=send_batch):
         with _release_id_env(env_value):
             client = AsyncPosthog("test-key", flush_interval=30)
         async with client:

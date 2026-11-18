@@ -86,21 +86,7 @@ def decode_session_id(value: Any) -> Optional[SessionTokenPayload]:
         return None
     if not isinstance(parsed, dict):
         return None
-    sid = parsed.get("sid")
-    if not isinstance(sid, str) or not sid or len(sid) > _MAX_SESSION_ID_LENGTH:
-        return None
-    payload = SessionTokenPayload(session_id=sid)
-    # A bad cn/cv/pv just means no client info -- it does not reject the token.
-    cn = parsed.get("cn")
-    if isinstance(cn, str) and cn:
-        payload.client_name = cn[:_MAX_CLIENT_FIELD_LENGTH]
-    cv = parsed.get("cv")
-    if isinstance(cv, str) and cv:
-        payload.client_version = cv[:_MAX_CLIENT_FIELD_LENGTH]
-    pv = parsed.get("pv")
-    if isinstance(pv, str) and pv:
-        payload.protocol_version = pv[:_MAX_CLIENT_FIELD_LENGTH]
-    return payload
+    return _decode_token_payload(parsed)
 
 
 def read_mcp_session_header(headers: Any) -> Optional[str]:
@@ -111,6 +97,33 @@ def read_mcp_session_header(headers: Any) -> Optional[str]:
     """
     if headers is None:
         return None
+    value = _session_header_value(headers)
+    first = value[0] if isinstance(value, (list, tuple)) and value else value
+    if not isinstance(first, str):
+        return None
+    trimmed = first.strip()
+    return trimmed or None
+
+
+def _base64url_to_bytes(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def _decode_client_fields(parsed: dict, payload: SessionTokenPayload) -> None:
+    # A bad cn/cv/pv just means no client info -- it does not reject the token.
+    cn = parsed.get("cn")
+    if isinstance(cn, str) and cn:
+        payload.client_name = cn[:_MAX_CLIENT_FIELD_LENGTH]
+    cv = parsed.get("cv")
+    if isinstance(cv, str) and cv:
+        payload.client_version = cv[:_MAX_CLIENT_FIELD_LENGTH]
+    pv = parsed.get("pv")
+    if isinstance(pv, str) and pv:
+        payload.protocol_version = pv[:_MAX_CLIENT_FIELD_LENGTH]
+
+
+def _session_header_value(headers: Any) -> Any:
     value: Any = None
     # Mapping-like: prefer a direct get, else scan case-insensitively.
     get = getattr(headers, "get", None)
@@ -125,13 +138,13 @@ def read_mcp_session_header(headers: Any) -> Optional[str]:
             if isinstance(key, str) and key.lower() == MCP_SESSION_HEADER:
                 value = candidate
                 break
-    first = value[0] if isinstance(value, (list, tuple)) and value else value
-    if not isinstance(first, str):
+    return value
+
+
+def _decode_token_payload(parsed: dict[str, Any]) -> Optional[SessionTokenPayload]:
+    sid = parsed.get("sid")
+    if not isinstance(sid, str) or not sid or len(sid) > _MAX_SESSION_ID_LENGTH:
         return None
-    trimmed = first.strip()
-    return trimmed or None
-
-
-def _base64url_to_bytes(value: str) -> bytes:
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
+    payload = SessionTokenPayload(session_id=sid)
+    _decode_client_fields(parsed, payload)
+    return payload

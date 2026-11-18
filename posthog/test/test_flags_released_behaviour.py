@@ -30,13 +30,62 @@ def results(request: Any) -> Dict[str, Any]:
     return scenarios.run_all(request.param)
 
 
-def test_every_legacy_getter_and_event_matches_7_82_1(results):
+def test_every_legacy_getter_and_event_matches_7_82_1(request, results):
     expected = copy.deepcopy(RELEASED["getters"])
     # A record without a flag ID or version reads them as absent (None), where 7.82.1
     # read 0. Events already left out both, so only the parsed record differs.
     sparse = expected["get_flags_decision"]["flags"]["sparse"]["metadata"]
     assert (sparse["id"], sparse["version"]) == (0, 0)
     sparse["id"] = sparse["version"] = None
+
+    # An explicit failed record has no evaluated value or payload. 7.82.1 treated
+    # it as disabled, included it in bulk results, and returned its payload.
+    failed = expected["get_flags_decision"]["flags"]["server-failed"]["metadata"]
+    assert failed["payload"] == '{"columns": 2}'
+    failed["payload"] = None
+    for read in ["get_feature_flag_payload", "snapshot.get_flag_payload"]:
+        assert expected[f"{read}:server-failed"] == {"columns": 2}
+        expected[f"{read}:server-failed"] = None
+    assert expected["get_feature_flag_result:server-failed"][2] == {"columns": 2}
+    expected["get_feature_flag_result:server-failed"] = None
+    for read in ["get_feature_flag", "feature_enabled", "snapshot.get_flag"]:
+        assert expected[f"{read}:server-failed"] is False
+        expected[f"{read}:server-failed"] = None
+    for read in ["get_feature_variants", "get_all_flags"]:
+        assert expected[read].pop("server-failed") is False
+    for read in ["get_feature_flags_and_payloads", "get_all_flags_and_payloads"]:
+        assert expected[read]["featureFlags"].pop("server-failed") is False
+    expected["snapshot.keys"].remove("server-failed")
+    failed_events = [
+        properties
+        for _, properties in expected["events"]
+        if properties.get("$feature_flag") == "server-failed"
+    ]
+    assert failed_events
+    for properties in failed_events:
+        assert properties.pop("$feature_flag_payload") == {"columns": 2}
+        assert properties["$feature_flag_response"] is False
+        properties["$feature_flag_response"] = None
+        properties["$feature/server-failed"] = None
+        properties["$feature_flag_error"] = "evaluation_failed"
+    for name, properties in expected["events"]:
+        if name in ["snapshot-event", "fetched-event"]:
+            assert properties.pop("$feature/server-failed") is False
+
+    if request.node.callspec.params["results"] == "v4":
+        # A $feature_flag_called for a config version 2 record carries its config
+        # version and reason code in place of the reason text. Only the v4 shape says
+        # a record is config version 2; config version 1 events are unchanged.
+        for name, properties in expected["events"]:
+            if name == "$feature_flag_called" and properties[
+                "$feature_flag"
+            ].startswith("v2-"):
+                assert (
+                    properties.pop("$feature_flag_reason")
+                    == scenarios.MATCHED["description"]
+                )
+                properties["$feature_flag_config_version"] = 2
+                properties["$feature_flag_reason_code"] = scenarios.MATCHED["code"]
 
     assert results["getters"] == expected
 
@@ -71,5 +120,18 @@ def test_fallback_cache_histories_match_7_82_1(results, name):
     # An unreadable record now fails only itself, but a single-flag read of it
     # still reports what 7.82.1 reported when the whole response failed: an
     # unknown_error, no request details, and the cached value.
-    expected = RELEASED["cache histories"][name]
+    expected = copy.deepcopy(RELEASED["cache histories"][name])
+    if name == "good, server failed, timeout":
+        # Explicit failure supplies no result and cannot poison the last good
+        # cache entry. The later timeout still returns that successful pair.
+        expected["results"][1] = None
+        expected["results"][2] = copy.deepcopy(expected["results"][0])
+        failed = expected["events"][1][1]
+        assert failed.pop("$feature_flag_payload") == {"theme": "dark"}
+        failed["$feature_flag_response"] = None
+        failed["$feature/cached"] = None
+        failed["$feature_flag_error"] = "evaluation_failed"
+        timeout = expected["events"][2][1]
+        timeout["$feature_flag_response"] = "blue"
+        timeout["$feature/cached"] = "blue"
     assert results["cache histories"][name] == expected

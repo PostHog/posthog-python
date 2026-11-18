@@ -74,7 +74,7 @@ jobs:
 
             - name: Check public API snapshot
               run: |
-                  python .github/scripts/test_check_public_api.py
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra dev --with pytest --with pytest-timeout python .github/scripts/test_check_public_api.py
                   make public_api_check
 
     strict-type-smoke:
@@ -87,7 +87,7 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python 3.11
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: 3.11
 
@@ -104,12 +104,12 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python 3.11
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: 3.11
 
             - name: Install uv
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true
@@ -132,12 +132,12 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install uv
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true
@@ -156,7 +156,9 @@ jobs:
         # the lockfile's mcp 1.x (also exercised incidentally by the `tests`
         # matrix — this leg exists as an explicit, named signal); the v2 leg
         # (spec 2026-07-28) swaps in mcp>=2 and standalone FastMCP 4, which uses
-        # the v2 registry. The v2-bare leg runs mcp>=2 without FastMCP: importing
+        # the v2 registry. The v1-fastmcp2 leg keeps mcp 1.x and swaps in
+        # standalone FastMCP 2, which dispatches tools without a public
+        # call_tool. The v2-bare leg runs mcp>=2 without FastMCP: importing
         # FastMCP 4 patches camelCase properties onto mcp_types models for the
         # whole process, which hides reads that plain mcp 2.x rejects.
         # posthog/test/mcp/conftest.py splits collection by major.
@@ -166,8 +168,10 @@ jobs:
         strategy:
             matrix:
                 python-version: ['3.10', '3.14']
-                mcp-major: ['v1', 'v2', 'v2-bare']
+                mcp-major: ['v1', 'v1-fastmcp2', 'v2', 'v2-bare']
                 include:
+                    - mcp-major: 'v1-fastmcp2'
+                      mcp-packages: "'mcp>=1.28.1,<2' 'fastmcp>=2,<3'"
                     - mcp-major: 'v2'
                       mcp-packages: "'mcp>=2,<3' 'fastmcp>=4,<5'"
                     - mcp-major: 'v2-bare'
@@ -179,12 +183,12 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install uv
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true
@@ -194,7 +198,7 @@ jobs:
               run: |
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv sync --extra test
 
-            - name: Swap in MCP SDK v2
+            - name: Swap in MCP packages
               if: matrix.mcp-major != 'v1'
               shell: bash
               run: |
@@ -205,8 +209,8 @@ jobs:
               run: |
                   pytest posthog/test/mcp --verbose --timeout=30
 
-    mutation-tests:
-        name: Targeted mutation tests
+    utils-quality:
+        name: Utils quality
         runs-on: ubuntu-latest
 
         steps:
@@ -214,7 +218,7 @@ jobs:
               with:
                   fetch-depth: 0
 
-            - name: Check targeted mutation inputs changed
+            - name: Check utils quality inputs changed
               id: changes
               shell: bash
               run: |
@@ -231,26 +235,31 @@ jobs:
                   changed_files="$(git diff --name-only "$base" "$head" -- \
                       posthog/utils.py \
                       posthog/test/test_utils.py \
-                      posthog/test/test_size_limited_dict.py)"
+                      posthog/test/test_size_limited_dict.py \
+                      .github/scripts/check_crap_threshold.py \
+                      .github/scripts/test_check_crap_threshold.py \
+                      .github/workflows/ci.yml \
+                      pyproject.toml \
+                      uv.lock)"
 
                   if [[ -n "$changed_files" ]]; then
                       echo "changed=true" >> "$GITHUB_OUTPUT"
-                      echo "Targeted mutation inputs changed:"
+                      echo "Utils quality inputs changed:"
                       echo "$changed_files"
                   else
                       echo "changed=false" >> "$GITHUB_OUTPUT"
-                      echo "Skipping targeted mutation tests: inputs unchanged."
+                      echo "Skipping utils quality check: inputs unchanged."
                   fi
 
             - name: Set up Python 3.11
               if: steps.changes.outputs.changed == 'true'
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: 3.11
 
             - name: Install uv
               if: steps.changes.outputs.changed == 'true'
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true
@@ -260,35 +269,9 @@ jobs:
               shell: bash
               run: |
                   set -euo pipefail
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest posthog/test/test_utils.py posthog/test/test_size_limited_dict.py --timeout=30 --cov=posthog.utils --crap --crap-threshold=10 --crap-top-n=40 -q
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest .github/scripts/test_check_crap_threshold.py --timeout=30 -q
+                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov pytest posthog/test/test_utils.py posthog/test/test_size_limited_dict.py --timeout=30 --cov=posthog.utils -q
                   UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with pytest-crap --with pytest-cov python .github/scripts/check_crap_threshold.py posthog/utils.py --max-crap 10
-
-            - name: Restore mutmut cache
-              id: mutmut-cache
-              if: steps.changes.outputs.changed == 'true'
-              uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-              with:
-                  path: mutants
-                  key: mutmut-${{ runner.os }}-py311-${{ hashFiles('posthog/utils.py', 'posthog/test/test_utils.py', 'posthog/test/test_size_limited_dict.py') }}
-                  restore-keys: |
-                      mutmut-${{ runner.os }}-py311-
-
-            - name: Skip mutation tests on exact cache hit
-              if: steps.changes.outputs.changed == 'true' && steps.mutmut-cache.outputs.cache-hit == 'true'
-              run: |
-                  echo "Skipping targeted mutation tests: exact mutmut cache hit."
-
-            - name: Run targeted mutation tests
-              if: steps.changes.outputs.changed == 'true' && steps.mutmut-cache.outputs.cache-hit != 'true'
-              shell: bash
-              run: |
-                  set -euo pipefail
-                  UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with mutmut mutmut run --max-children 1
-                  results="$(UV_PROJECT_ENVIRONMENT=$pythonLocation uv run --extra test --with mutmut mutmut results)"
-                  if [[ -n "$results" ]]; then
-                      echo "$results"
-                      exit 1
-                  fi
 
     import-check:
         name: Python ${{ matrix.python-version }} import check
@@ -303,7 +286,7 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: ${{ matrix.python-version }}
 
@@ -326,12 +309,12 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python ${{ matrix.python-version }}
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: ${{ matrix.python-version }}
 
             - name: Install uv
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true
@@ -381,12 +364,12 @@ jobs:
                   fetch-depth: 1
 
             - name: Set up Python 3.12
-              uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+              uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
               with:
                   python-version: 3.12
 
             - name: Install uv
-              uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+              uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
               with:
                   version: "0.13.4"
                   enable-cache: true

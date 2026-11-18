@@ -33,7 +33,7 @@ from ._conversation_id import (
     resolve_conversation_id,
 )
 from ._event_types import MCPAnalyticsEventType
-from ._exceptions import capture_exception
+from ._exceptions import capture_exception, http_status
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -42,7 +42,6 @@ from ._instrumentation import (
     fire_and_forget,
     virtual_tool_collision_message,
 )
-from ._lib_identity import apply_mcp_lib_identity
 from .logger import log, warn
 from ._model_parameters import (
     add_model_parameter_to_schema,
@@ -70,7 +69,7 @@ from .feedback import (
     resolve_collect_feedback_options,
     resolve_send_feedback_tool_name,
 )
-from .session import derive_session_id_from_conversation
+from .session import derive_session_id_from_conversation, new_session_id
 from .tools import build_report_missing_descriptor
 from .types import (
     CollectFeedbackOptions,
@@ -122,7 +121,6 @@ class PostHogMCP(Client):
     ) -> None:
         self._server_build = validate_server_build(server_build)
         super().__init__(api_key, **kwargs)
-        apply_mcp_lib_identity(self)
         self._mcp_sink = McpEventSink(self)
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME
@@ -177,7 +175,10 @@ class PostHogMCP(Client):
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Capture a custom event with the configured server build as a default."""
+        """Capture a custom event with the configured server build as a default.
+
+        This is the core ``Client.capture``, so it takes ``options=``. The MCP
+        ``capture_*`` methods take ``event_options=`` instead."""
         if self._server_build is not None:
             properties = dict(kwargs.get("properties") or {})
             if properties.get(PostHogMCPAnalyticsProperty.SERVER_BUILD) is None:
@@ -212,9 +213,14 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
-        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error)."""
+        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error).
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_TOOLS_CALL,
             distinct_id,
@@ -223,6 +229,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -242,6 +249,7 @@ class PostHogMCP(Client):
             event["error"] = capture_exception(
                 error if error is not None else f"Tool {tool_name} returned an error"
             )
+            event["error_status"] = http_status(error)
         self._emit(event)
 
     def capture_initialize(
@@ -260,9 +268,14 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
-        """Capture the connection handshake. Emits ``$mcp_initialize``."""
+        """Capture the connection handshake. Emits ``$mcp_initialize``.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_INITIALIZE,
             distinct_id,
@@ -271,6 +284,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -301,10 +315,15 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``tools/list`` response. Emits ``$mcp_tools_list`` with the
-        advertised tool names (``$mcp_listed_tool_names``)."""
+        advertised tool names (``$mcp_listed_tool_names``).
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_TOOLS_LIST,
             distinct_id,
@@ -313,6 +332,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -346,12 +366,17 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``get_more_tools`` call as a missing-capability report. Emits
         ``$mcp_missing_capability`` with the agent's description as ``$mcp_intent``.
         Reply to the agent with ``get_more_tools_result()`` after passing it
-        through :meth:`prepare_tool_result`."""
+        through :meth:`prepare_tool_result`.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             distinct_id,
@@ -360,6 +385,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -386,6 +412,7 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``send_feedback`` call as an agent-feedback report. Emits
@@ -393,7 +420,11 @@ class PostHogMCP(Client):
         summary/details as ``$mcp_intent``. Reply to the agent with
         ``send_feedback_result()`` (or a custom text) after routing the report to
         your own feedback backend and passing the reply through
-        :meth:`prepare_tool_result`."""
+        :meth:`prepare_tool_result`.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_FEEDBACK,
             distinct_id,
@@ -402,6 +433,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -469,39 +501,45 @@ class PostHogMCP(Client):
         # descriptor, which a host re-preparing an already-prepared list hands
         # straight back. Warning about that would be warning about ourselves.
         if report_missing:
-            name = self._missing_capability_tool_name
-            existing = _find_tool(prepared, name)
-            if existing is not None and not self._is_sdk_virtual_tool(existing):
-                self._warn_virtual_tool_collision(
-                    VIRTUAL_TOOL_MISSING_CAPABILITY,
-                    name,
-                    'PostHogMCP(missing_capability_tool_name="...")',
-                )
-            elif existing is None:
-                prepared.append(build_report_missing_descriptor(name))
+            self._append_missing_capability(prepared)
         if collect_feedback and self._collect_feedback is not None:
-            name = self._feedback_tool_name
-            existing = _find_tool(prepared, name)
-            # Both virtual tools under one name: missing-capability wins in
-            # `prepare_tool_call`, so advertising this one too would dead-letter
-            # the feedback path. Same precedence as `instrument()`.
-            duplicate = name == self._missing_capability_tool_name
-            if duplicate or (
-                existing is not None and not self._is_sdk_virtual_tool(existing)
-            ):
-                self._warn_virtual_tool_collision(
-                    VIRTUAL_TOOL_FEEDBACK,
-                    name,
-                    'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
-                    variant="duplicate" if duplicate else "blocked",
-                )
-            elif existing is None:
-                prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
+            self._append_feedback(prepared)
         # Read ownership before any analytics field lands on the schemas.
         conversation_ownership = _collect_conversation_ownership(prepared)
         prepared = self._inject_models(prepared)
         prepared = self._inject_conversation(prepared, conversation_ownership)
         return prepared
+
+    def _append_missing_capability(self, prepared: List[Any]) -> None:
+        name = self._missing_capability_tool_name
+        existing = _find_tool(prepared, name)
+        if existing is not None and not self._is_sdk_virtual_tool(existing):
+            self._warn_virtual_tool_collision(
+                VIRTUAL_TOOL_MISSING_CAPABILITY,
+                name,
+                'PostHogMCP(missing_capability_tool_name="...")',
+            )
+        elif existing is None:
+            prepared.append(build_report_missing_descriptor(name))
+
+    def _append_feedback(self, prepared: List[Any]) -> None:
+        name = self._feedback_tool_name
+        existing = _find_tool(prepared, name)
+        # Both virtual tools under one name: missing-capability wins in
+        # `prepare_tool_call`, so advertising this one too would dead-letter
+        # the feedback path. Same precedence as `instrument()`.
+        duplicate = name == self._missing_capability_tool_name
+        if duplicate or (
+            existing is not None and not self._is_sdk_virtual_tool(existing)
+        ):
+            self._warn_virtual_tool_collision(
+                VIRTUAL_TOOL_FEEDBACK,
+                name,
+                'PostHogMCP(collect_feedback=CollectFeedbackOptions(tool_name="..."))',
+                variant="duplicate" if duplicate else "blocked",
+            )
+        elif existing is None:
+            prepared.append(get_feedback_tool_descriptor(self._collect_feedback))
 
     def _warn_virtual_tool_collision(
         self,
@@ -571,47 +609,15 @@ class PostHogMCP(Client):
             if isinstance(raw_context, str) and raw_context.strip()
             else None
         )
-        analytics_owns_model = False
-        llm_model: Optional[str] = None
-        llm_model_source: Optional[MCPAnalyticsModelSource] = None
-        if is_capture_model_enabled(self._capture_model):
-            if original_tool is not None:
-                analytics_owns_model = can_inject_model_parameter(
-                    _tool_schema(original_tool)
-                )
-            else:
-                analytics_owns_model = self._model_parameter_injected.get(name, False)
-            llm_model, llm_model_source = resolve_model(
-                request_meta, args, allow_self_reported=analytics_owns_model
-            )
-        prepared_args = _strip_args(args, "context")
-        if analytics_owns_model:
-            prepared_args = _strip_args(prepared_args, "llm_model")
+        prepared_args, llm_model, llm_model_source = self._prepare_model(
+            name, args, request_meta, original_tool
+        )
 
-        ownership = (
-            _conversation_ownership_of(original_tool)
-            if original_tool is not None
-            else self._conversation_ownership.get(name)
+        prepared_args, session_id, conversation_id, conversation_state = (
+            self._prepare_conversation(
+                name, args, prepared_args, original_tool, session_id
+            )
         )
-        # Reads fail open on unknown ownership; strips need a positive answer.
-        can_read_conversation = self._enable_conversation_id and (
-            ownership is None or ownership.conversation_id
-        )
-        resolved_conversation_id, minted = resolve_conversation_id(
-            can_read_conversation, args
-        )
-        minted_conversation_id = (
-            resolved_conversation_id if minted and not session_id else None
-        )
-        conversation_id = None if minted else resolved_conversation_id
-        if conversation_id:
-            session_id = derive_session_id_from_conversation(conversation_id)
-        if (
-            self._enable_conversation_id
-            and ownership is not None
-            and ownership.conversation_id
-        ):
-            prepared_args = _strip_args(prepared_args, "conversation_id")
         # A supplied `original_tool` is a real application tool by this name (it
         # comes from the host's own list, which never holds a virtual tool), so
         # the real tool wins — the stateless twin of the ownership check
@@ -620,12 +626,7 @@ class PostHogMCP(Client):
         # The name check against missing-capability keeps one precedence when
         # both tools share a name: without it both flags are true, and a
         # dispatcher testing `is_feedback` first misroutes every call.
-        is_feedback = (
-            self._collect_feedback is not None
-            and name == self._feedback_tool_name
-            and name != self._missing_capability_tool_name
-            and original_tool is None
-        )
+        is_feedback = self._is_feedback_call(name, original_tool)
         # Same guard for the missing-capability tool. Unlike feedback it has no
         # constructor enable switch on this path (the name is always populated),
         # so `original_tool` is the only ownership signal available here.
@@ -647,12 +648,95 @@ class PostHogMCP(Client):
             ),
             session_id=session_id,
             conversation_id=conversation_id,
-            _conversation_state=PreparedConversationState(
-                minted_conversation_id=minted_conversation_id,
-                output_instructions=self._enable_conversation_id
-                and ownership is not None
-                and ownership.output_instructions,
-            ),
+            _conversation_state=conversation_state,
+        )
+
+    def _is_feedback_call(self, name: str, original_tool: Any) -> bool:
+        return (
+            self._collect_feedback is not None
+            and name == self._feedback_tool_name
+            and name != self._missing_capability_tool_name
+            and original_tool is None
+        )
+
+    def _prepare_model(
+        self,
+        name: str,
+        args: Optional[JsonRecord],
+        request_meta: Optional[JsonRecord],
+        original_tool: Any,
+    ) -> Tuple[Optional[JsonRecord], Optional[str], Optional[MCPAnalyticsModelSource]]:
+        analytics_owns_model = False
+        llm_model: Optional[str] = None
+        llm_model_source: Optional[MCPAnalyticsModelSource] = None
+        if is_capture_model_enabled(self._capture_model):
+            if original_tool is not None:
+                analytics_owns_model = can_inject_model_parameter(
+                    _tool_schema(original_tool)
+                )
+            else:
+                analytics_owns_model = self._model_parameter_injected.get(name, False)
+            llm_model, llm_model_source = resolve_model(
+                request_meta, args, allow_self_reported=analytics_owns_model
+            )
+        prepared_args = _strip_args(args, "context")
+        if analytics_owns_model:
+            prepared_args = _strip_args(prepared_args, "llm_model")
+
+        return prepared_args, llm_model, llm_model_source
+
+    def _owns_conversation_parameter(
+        self, ownership: Optional[_ConversationOwnership]
+    ) -> bool:
+        return (
+            self._enable_conversation_id
+            and ownership is not None
+            and ownership.conversation_id
+        )
+
+    def _prepare_conversation(
+        self,
+        name: str,
+        args: Optional[JsonRecord],
+        prepared_args: Optional[JsonRecord],
+        original_tool: Any,
+        session_id: Optional[str],
+    ) -> Tuple[
+        Optional[JsonRecord], Optional[str], Optional[str], PreparedConversationState
+    ]:
+        ownership = (
+            _conversation_ownership_of(original_tool)
+            if original_tool is not None
+            else self._conversation_ownership.get(name)
+        )
+        # Reads fail open on unknown ownership; strips need a positive answer.
+        can_read_conversation = self._enable_conversation_id and (
+            ownership is None or ownership.conversation_id
+        )
+        resolved_conversation_id, minted = resolve_conversation_id(
+            can_read_conversation, args
+        )
+        minted_conversation_id = (
+            resolved_conversation_id if minted and not session_id else None
+        )
+        conversation_id = None if minted else resolved_conversation_id
+        if conversation_id:
+            session_id = derive_session_id_from_conversation(conversation_id)
+        if self._owns_conversation_parameter(ownership):
+            prepared_args = _strip_args(prepared_args, "conversation_id")
+        state = self._prepared_conversation_state(ownership, minted_conversation_id)
+        return prepared_args, session_id, conversation_id, state
+
+    def _prepared_conversation_state(
+        self,
+        ownership: Optional[_ConversationOwnership],
+        minted_conversation_id: Optional[str],
+    ) -> PreparedConversationState:
+        return PreparedConversationState(
+            minted_conversation_id=minted_conversation_id,
+            output_instructions=self._enable_conversation_id
+            and ownership is not None
+            and ownership.output_instructions,
         )
 
     def prepare_tool_result(
@@ -682,10 +766,7 @@ class PostHogMCP(Client):
                 prepared, handle
             )
         if minted_conversation_id:
-            injected = inject_prompt_back(prepared, handle)
-            if injected is not prepared:
-                delivered = True
-            prepared = injected
+            prepared, delivered = _deliver_minted_handle(prepared, handle, delivered)
             if delivered:
                 conversation_id = handle
                 session_id = derive_session_id_from_conversation(handle)
@@ -706,16 +787,18 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord],
         groups: Optional[Dict[str, str]],
         properties: Optional[JsonRecord],
+        event_options: Optional[Dict[str, Any]],
         timestamp: Optional[datetime],
         client_user_agent: Optional[str] = None,
         vendor_client: Optional[str] = None,
     ) -> Dict[str, Any]:
         event: Dict[str, Any] = {
             "event_type": event_type,
-            "session_id": session_id,
+            "session_id": session_id or new_session_id(),
             "conversation_id": conversation_id,
             "timestamp": timestamp or datetime.now(timezone.utc),
             "properties": properties,
+            "event_options": event_options,
             "groups": groups,
             # Raw transport headers. A custom dispatcher holds its own request
             # object, so it passes these itself; instrumented servers read them
@@ -981,3 +1064,12 @@ def _tool_schema(tool: Any) -> Optional[Dict[str, Any]]:
         if schema is None:
             schema = getattr(tool, "inputSchema", None)
     return schema if isinstance(schema, dict) else None
+
+
+def _deliver_minted_handle(
+    prepared: Any, handle: str, delivered: bool
+) -> Tuple[Any, bool]:
+    injected = inject_prompt_back(prepared, handle)
+    if injected is not prepared:
+        delivered = True
+    return injected, delivered

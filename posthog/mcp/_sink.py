@@ -106,6 +106,7 @@ class McpEventSink:
                     capture_event["event"],
                     distinct_id=capture_event["distinct_id"],
                     properties=capture_event["properties"],
+                    options=capture_event.get("options"),
                     timestamp=capture_event.get("timestamp"),
                     uuid=_uuid7(),
                 )

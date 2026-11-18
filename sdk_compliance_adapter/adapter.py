@@ -5,6 +5,7 @@ This adapter implements the SDK Test Adapter Interface defined in the PostHog Ca
 It wraps the posthog-python SDK and exposes a REST API for the test harness to exercise.
 """
 
+import json
 import logging
 import os
 import threading
@@ -15,9 +16,9 @@ from flask import Flask, jsonify, request
 
 from posthog import Client
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_v1 import _post_v1 as original_post_v1
-from posthog.request import EVENTS_ENDPOINT, USER_AGENT
-from posthog.request import batch_post as original_batch_post
+from posthog.capture_send import _CAPTURE_V1_PATH
+from posthog.capture_send import _post_v1 as original_post_v1
+from posthog.request import USER_AGENT
 from posthog.version import VERSION
 
 # Configure logging
@@ -28,15 +29,18 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Selects which capture protocol this adapter process speaks. Baked at build
-# time via the CAPTURE_MODE env var ("v1" => capture-v1, anything else => legacy
-# v0), mirroring the v0/v1 Dockerfile split. One process speaks one mode and
-# advertises it via /health capabilities.
-CAPTURE_MODE = os.environ.get("CAPTURE_MODE", "")
+# The harness has one enable_compression flag but a test per codec, so each
+# adapter instance takes its codec from COMPRESSION and advertises only that
+# codec's encoding_<codec> capability. The SDK has no brotli support.
+COMPRESSION_CODECS = {
+    "gzip": CaptureCompression.GZIP,
+    "deflate": CaptureCompression.DEFLATE,
+    "zstd": CaptureCompression.ZSTD,
+}
 
 
-def is_v1() -> bool:
-    return CAPTURE_MODE == "v1"
+def compression_name() -> str:
+    return os.environ.get("COMPRESSION") or "gzip"
 
 
 class RequestInfo:
@@ -80,7 +84,8 @@ class SDKState:
         self.client: Optional[Client] = None
         self.remote_client: Client | None = None
         self.reload_thread: threading.Thread | None = None
-        self.retry_attempts: Dict[str, int] = {}  # Track retry attempts by batch ID
+        self.reported_drops: List[Dict[str, Any]] = []
+        self.log_lines: List[str] = []
 
     def reset(self):
         """Reset all state"""
@@ -99,51 +104,22 @@ class SDKState:
                 except Exception as e:
                     logger.warning(f"Error shutting down client: {e}")
 
+        # Cleared after shutdown, which can still report drops and log lines for the old client.
         with self.lock:
+            self.reported_drops = []
+            self.log_lines = []
             self.pending_events = 0
             self.total_events_captured = 0
             self.total_events_sent = 0
             self.total_retries = 0
             self.last_error = None
             self.requests_made = []
-            self.retry_attempts = {}
 
     def increment_captured(self):
         """Increment total events captured"""
         with self.lock:
             self.total_events_captured += 1
             self.pending_events += 1
-
-    def record_request(self, status_code: int, batch: List[Dict], batch_id: str):
-        """Record an HTTP request made by the SDK"""
-        with self.lock:
-            # Determine retry attempt for this batch
-            retry_attempt = self.retry_attempts.get(batch_id, 0)
-
-            # Extract UUIDs from batch
-            uuid_list = [event.get("uuid", "") for event in batch]
-
-            request_info = RequestInfo(
-                timestamp_ms=int(time.time() * 1000),
-                status_code=status_code,
-                retry_attempt=retry_attempt,
-                event_count=len(batch),
-                uuid_list=uuid_list,
-            )
-            self.requests_made.append(request_info)
-
-            # Update counters
-            if status_code == 200:
-                # Success - clear pending events
-                self.total_events_sent += len(batch)
-                self.pending_events = max(0, self.pending_events - len(batch))
-                # Remove batch from retry tracking
-                self.retry_attempts.pop(batch_id, None)
-            else:
-                # Failure - increment retry count
-                self.retry_attempts[batch_id] = retry_attempt + 1
-                if retry_attempt > 0:
-                    self.total_retries += 1
 
     def record_request_v1(
         self, status_code: int, batch: List[Dict], attempt: int, terminal_count: int
@@ -187,45 +163,75 @@ class SDKState:
                 "total_retries": self.total_retries,
                 "last_error": self.last_error,
                 "requests_made": [r.to_dict() for r in self.requests_made],
+                "reported_drops": list(self.reported_drops),
+                "log_lines": list(self.log_lines),
             }
+
+    def record_drops(self, error: Exception, batch: List[Dict[str, Any]]) -> None:
+        """on_error hook: record each event capture dropped, by uuid."""
+        # A duplicate uuid has several names in batch order; capture keeps the first copy.
+        names: Dict[Optional[str], List[Optional[str]]] = {}
+        for event in batch or []:
+            names.setdefault(event.get("uuid"), []).append(event.get("event"))
+        duplicates_seen: Dict[str, int] = {}
+        with self.lock:
+            for uuid, details in getattr(error, "drops", []):
+                copies = names.get(uuid, [])
+                index = 0
+                if details == "duplicate_event_uuid":
+                    index = duplicates_seen.get(uuid, 0) + 1
+                    duplicates_seen[uuid] = index
+                name = copies[min(index, len(copies) - 1)] if copies else None
+                self.reported_drops.append(
+                    {"uuid": uuid, "event": name, "details": details}
+                )
+
+    def record_log(self, line: str) -> None:
+        with self.lock:
+            self.log_lines.append(line)
 
 
 # Global state
 state = SDKState()
 
 
-def create_batch_id(batch: List[Dict]) -> str:
-    """Create a unique ID for a batch based on UUIDs"""
-    uuids = sorted([event.get("uuid", "") for event in batch])
-    return "-".join(uuids[:3])  # Use first 3 UUIDs as batch ID
+class _StateLogHandler(logging.Handler):
+    def emit(self, record: logging.LogRecord) -> None:
+        state.record_log(self.format(record))
 
 
-def patched_batch_post(
-    api_key: str,
-    host: Optional[str] = None,
-    gzip: bool = False,
-    timeout: float = 15,
-    path: str = EVENTS_ENDPOINT,
-    **kwargs,
-):
-    """Patched version of batch_post that tracks requests"""
-    batch = kwargs.get("batch", [])
-    batch_id = create_batch_id(batch)
+# The SDK logs under "posthog"; /state returns those lines (log_capture).
+_sdk_logger = logging.getLogger("posthog")
+_sdk_logger.addHandler(_StateLogHandler())
+_sdk_logger.setLevel(logging.DEBUG)
 
-    try:
-        # Call original batch_post
-        response = original_batch_post(api_key, host, gzip, timeout, path, **kwargs)
-        # Record successful request
-        state.record_request(200, batch, batch_id)
-        return response
-    except Exception as e:
-        # Record failed request
-        status_code = (
-            getattr(e, "status_code", 500) if hasattr(e, "status_code") else 500
+_PADDING_KEY = "$test_padding"
+
+
+def _padded_properties(
+    properties: Optional[Dict[str, Any]], size: int, marker: str
+) -> Dict[str, Any]:
+    """Add one ASCII padding property so the properties' compact JSON is exactly ``size`` bytes."""
+    padded = {**(properties or {}), _PADDING_KEY: ""}
+    fill = size - len(
+        json.dumps(padded, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    )
+    # The marker's bytes as written in JSON, escapes included, without its quotes.
+    marker_bytes = len(json.dumps(marker, ensure_ascii=False).encode("utf-8")) - 2
+    if fill < marker_bytes:
+        raise ValueError(
+            f"pad_properties_to_bytes {size} is smaller than the properties"
         )
-        state.record_request(status_code, batch, batch_id)
-        state.record_error(str(e))
-        raise
+    padded[_PADDING_KEY] = marker + "x" * (fill - marker_bytes)
+    return padded
+
+
+def _before_send(set_properties: Dict[str, Any]):
+    def hook(event: Dict[str, Any]) -> Dict[str, Any]:
+        event.setdefault("properties", {}).update(set_properties)
+        return event
+
+    return hook
 
 
 def patched_post_v1(
@@ -239,11 +245,12 @@ def patched_post_v1(
     timeout: float = 15,
     sdk_info: str = USER_AGENT,
     session: Any = None,
+    path: str = _CAPTURE_V1_PATH,
 ):
     """Patched version of _post_v1 that records requests for /state assertions.
 
-    Mirrors the legacy `patched_batch_post`, but reads the retry attempt from the
-    call (1-based) and counts only terminal per-event results as sent.
+    Reads the retry attempt from the call (1-based) and counts only terminal
+    per-event results as sent.
     """
     batch = batch_body.get("batch", [])
     try:
@@ -257,6 +264,7 @@ def patched_post_v1(
             timeout=timeout,
             sdk_info=sdk_info,
             session=session,
+            path=path,
         )
     except Exception as e:
         status_code = getattr(e, "status", 0)
@@ -284,35 +292,37 @@ def patched_post_v1(
     return response
 
 
-# Monkey-patch the batch_post function
-import posthog.request  # noqa: E402
-
-posthog.request.batch_post = patched_batch_post
-
-# Also patch in consumer module
-import posthog.consumer  # noqa: E402
-
-posthog.consumer.batch_post = patched_batch_post
-
 # Patch the capture-v1 submitter. `_send_v1_batch` resolves `_post_v1` as a module
 # global at call time, so patching it here covers both the async consumer and the
 # sync client paths.
-import posthog.capture_v1  # noqa: E402
+import posthog.capture_send  # noqa: E402
 
-posthog.capture_v1._post_v1 = patched_post_v1
+posthog.capture_send._post_v1 = patched_post_v1
 
 
 @app.route("/health", methods=["GET"])
 def health():
     """Health check endpoint"""
-    capabilities = (
-        ["capture_v1", "capture_ai_v0", "encoding_gzip"]
-        if is_v1()
-        else ["capture_v0", "capture_ai_v0", "encoding_gzip"]
-    )
-    capabilities.append("feature_flags_local_evaluation_v1")
-    # Remote /flags requests send ?v=4 and read the v4 flag record.
-    capabilities.append("flags_response_v4")
+    capabilities = [
+        "capture_v1",
+        "capture_ai_v1",
+        "event_options",
+        "event_uuid_override",
+        "bounded_retries",
+        "disable_geoip",
+        "historical_migration",
+        "reported_drops",
+        "log_capture",
+        "generated_payloads",
+        "property_layers",
+        "fail_open",
+        "encoding_" + compression_name(),
+        "feature_flags_local_evaluation_v1",
+        # Remote /flags requests send ?v=4 and read the v4 flag record.
+        "flags_response_v4",
+        # The legacy payload accessor is exposed on /get_feature_flag_payload.
+        "feature_flag_payloads",
+    ]
     return jsonify(
         {
             "sdk_name": "posthog-python",
@@ -345,7 +355,8 @@ def init():
         disable_geoip = data.get("disable_geoip", False)
         historical_migration = data.get("historical_migration", False)
 
-        if not api_key:
+        # An empty or personal key must reach the SDK, which disables itself (fail_open).
+        if api_key is None:
             return jsonify({"error": "api_key is required"}), 400
         if not host:
             return jsonify({"error": "host is required"}), 400
@@ -353,9 +364,11 @@ def init():
         # Convert flush_interval from ms to seconds
         flush_interval = flush_interval_ms / 1000.0
 
-        # One adapter process speaks one capture protocol, selected by CAPTURE_MODE.
-        capture_mode = "v1" if is_v1() else "v0"
-
+        compression = (
+            COMPRESSION_CODECS[compression_name()]
+            if enable_compression
+            else CaptureCompression.NONE
+        )
         # Explicit reloads exercise the real loader without background polling
         # racing the harness's per-test definition snapshots.
         client_options = {
@@ -363,14 +376,21 @@ def init():
             "host": host,
             "flush_at": flush_at,
             "flush_interval": flush_interval,
-            "gzip": enable_compression,
+            "capture_compression": compression,
+            "capture_ai_compression": compression,
             "max_retries": max_retries,
             "debug": False,
             "disable_geoip": disable_geoip,
             "historical_migration": historical_migration,
-            "capture_mode": capture_mode,
             "enable_local_evaluation": False,
+            "on_error": state.record_drops,
+            "super_properties": data.get("super_properties"),
         }
+        before_send = data.get("before_send")
+        if before_send:
+            client_options["before_send"] = _before_send(
+                before_send.get("set_properties", {})
+            )
         personal_api_key = data.get("personal_api_key")
         client = Client(**client_options, secret_key=personal_api_key)
         state.client = client
@@ -381,10 +401,10 @@ def init():
             state.remote_client = Client(**client_options)
 
         logger.info(
-            f"Initialized SDK with api_key={api_key[:10]}..., host={host}, "
+            f"Initialized SDK with api_key={api_key[:4]}..., host={host}, "
             f"flush_at={flush_at}, flush_interval={flush_interval}, "
-            f"max_retries={max_retries}, gzip={enable_compression}, "
-            f"capture_mode={capture_mode}, disable_geoip={disable_geoip}, "
+            f"max_retries={max_retries}, compression={enable_compression}, "
+            f"disable_geoip={disable_geoip}, "
             f"historical_migration={historical_migration}"
         )
 
@@ -394,57 +414,60 @@ def init():
         return jsonify({"error": str(e)}), 500
 
 
+def _capture_with(capture_method_name: str):
+    """Capture one event through the named SDK method.
+
+    Options pass through unchanged, and a supplied uuid stays on the wire. The
+    response carries the uuid the SDK actually sent, which differs from the
+    supplied one when the SDK canonicalizes or replaces it.
+    """
+    if not state.client:
+        return jsonify({"error": "SDK not initialized"}), 400
+
+    data = request.json or {}
+
+    distinct_id = data.get("distinct_id")
+    event = data.get("event")
+    timestamp = data.get("timestamp")
+
+    if not distinct_id:
+        return jsonify({"error": "distinct_id is required"}), 400
+    if not event:
+        return jsonify({"error": "event is required"}), 400
+
+    properties = data.get("properties")
+    if data.get("pad_properties_to_bytes") is not None:
+        properties = _padded_properties(
+            properties, data["pad_properties_to_bytes"], data.get("marker") or ""
+        )
+    kwargs = {
+        "distinct_id": distinct_id,
+        "properties": properties,
+        "options": data.get("options"),
+    }
+    if timestamp:
+        # Parse ISO8601 timestamp
+        from dateutil.parser import parse
+
+        kwargs["timestamp"] = parse(timestamp)
+    if data.get("uuid"):
+        kwargs["uuid"] = data["uuid"]
+
+    uuid = getattr(state.client, capture_method_name)(event, **kwargs)
+
+    # Track that we captured an event
+    state.increment_captured()
+
+    logger.info(f"Captured event: {event} for {distinct_id}, uuid={uuid}")
+
+    return jsonify({"success": True, "uuid": uuid})
+
+
 @app.route("/capture", methods=["POST"])
 def capture():
     """Capture a single event"""
     try:
-        if not state.client:
-            return jsonify({"error": "SDK not initialized"}), 400
-
-        data = request.json or {}
-
-        distinct_id = data.get("distinct_id")
-        event = data.get("event")
-        properties = data.get("properties")
-        timestamp = data.get("timestamp")
-        options = data.get("options")
-
-        if not distinct_id:
-            return jsonify({"error": "distinct_id is required"}), 400
-        if not event:
-            return jsonify({"error": "event is required"}), 400
-
-        # Fold capture-v1 options back into the magic `$`-prefixed properties the
-        # SDK lifts onto the wire `options` object. Renamed keys mirror the SDK's
-        # sentinel table; unknown keys get a bare `$` prefix. v0 has no wire
-        # options object, so this only applies in v1 mode.
-        if options and is_v1():
-            properties = dict(properties or {})
-            option_to_property = {
-                "cookieless_mode": "$cookieless_mode",
-                "disable_skew_correction": "$ignore_sent_at",
-                "process_person_profile": "$process_person_profile",
-                "product_tour_id": "$product_tour_id",
-            }
-            for key, value in options.items():
-                properties[option_to_property.get(key, "$" + key)] = value
-
-        # Capture event
-        kwargs = {"distinct_id": distinct_id, "properties": properties}
-        if timestamp:
-            # Parse ISO8601 timestamp
-            from dateutil.parser import parse
-
-            kwargs["timestamp"] = parse(timestamp)
-
-        uuid = state.client.capture(event, **kwargs)
-
-        # Track that we captured an event
-        state.increment_captured()
-
-        logger.info(f"Captured event: {event} for {distinct_id}, uuid={uuid}")
-
-        return jsonify({"success": True, "uuid": uuid})
+        return _capture_with("capture")
     except Exception as e:
         logger.exception("Error capturing event")
         state.record_error(str(e))
@@ -455,50 +478,7 @@ def capture():
 def capture_ai():
     """Capture a single AI event on the dedicated AI capture endpoint"""
     try:
-        if not state.client:
-            return jsonify({"error": "SDK not initialized"}), 400
-
-        data = request.json or {}
-
-        distinct_id = data.get("distinct_id")
-        event = data.get("event")
-        properties = data.get("properties")
-        timestamp = data.get("timestamp")
-        options = data.get("options")
-        supplied_uuid = data.get("uuid")
-
-        if not distinct_id:
-            return jsonify({"error": "distinct_id is required"}), 400
-        if not event:
-            return jsonify({"error": "event is required"}), 400
-
-        if options and is_v1():
-            properties = dict(properties or {})
-            option_to_property = {
-                "cookieless_mode": "$cookieless_mode",
-                "disable_skew_correction": "$ignore_sent_at",
-                "process_person_profile": "$process_person_profile",
-                "product_tour_id": "$product_tour_id",
-            }
-            for key, value in options.items():
-                properties[option_to_property.get(key, "$" + key)] = value
-
-        kwargs = {"distinct_id": distinct_id, "properties": properties}
-        if timestamp:
-            from dateutil.parser import parse
-
-            kwargs["timestamp"] = parse(timestamp)
-        # Unlike /capture, forward a supplied uuid so it's echoed back to the caller.
-        if supplied_uuid:
-            kwargs["uuid"] = supplied_uuid
-
-        uuid = state.client.capture_ai(event, **kwargs)
-
-        state.increment_captured()
-
-        logger.info(f"Captured AI event: {event} for {distinct_id}, uuid={uuid}")
-
-        return jsonify({"success": True, "uuid": uuid})
+        return _capture_with("capture_ai")
     except Exception as e:
         logger.exception("Error capturing AI event")
         state.record_error(str(e))
@@ -710,6 +690,41 @@ def get_feature_flag():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/get_feature_flag_payload", methods=["POST"])
+def get_feature_flag_payload():
+    """Read a flag's payload with the legacy payload accessor.
+
+    Takes the same evaluation modes as /get_feature_flag; remote by default.
+    """
+    try:
+        if not state.client:
+            return jsonify({"error": "SDK not initialized"}), 400
+        data = request.json or {}
+        only_evaluate_locally = data.get("only_evaluate_locally", False)
+        force_remote = data.get("force_remote", not only_evaluate_locally)
+        if only_evaluate_locally and force_remote:
+            return jsonify(
+                {"error": "only_evaluate_locally conflicts with force_remote"}
+            ), 400
+        if not data.get("key") or not data.get("distinct_id"):
+            return jsonify({"error": "key and distinct_id are required"}), 400
+        client = (state.remote_client or state.client) if force_remote else state.client
+        payload = client.get_feature_flag_payload(
+            data["key"],
+            data["distinct_id"],
+            person_properties=data.get("person_properties"),
+            groups=data.get("groups"),
+            group_properties=data.get("group_properties"),
+            disable_geoip=data.get("disable_geoip"),
+            only_evaluate_locally=not force_remote,
+        )
+        client.flush()
+        return jsonify({"success": True, "value": payload})
+    except Exception as e:
+        logger.exception("Error reading feature flag payload")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/reset", methods=["POST"])
 def reset():
     """Reset SDK state"""
@@ -725,7 +740,14 @@ def reset():
 def main():
     """Main entry point"""
     port = int(os.environ.get("PORT", 8080))
-    logger.info(f"Starting SDK Test Adapter on port {port}")
+    if compression_name() not in COMPRESSION_CODECS:
+        raise SystemExit(
+            f"unsupported COMPRESSION {compression_name()!r}: "
+            f"want one of {', '.join(COMPRESSION_CODECS)}"
+        )
+    logger.info(
+        f"Starting SDK Test Adapter on port {port} (compression={compression_name()})"
+    )
     app.run(host="0.0.0.0", port=port, debug=False)
 
 

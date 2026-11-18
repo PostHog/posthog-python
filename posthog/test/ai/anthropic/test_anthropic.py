@@ -29,7 +29,12 @@ try:
     from anthropic.types.raw_message_delta_event import Delta
 
     from posthog.ai.anthropic import Anthropic, AnthropicBedrock, AsyncAnthropic
-    from posthog.test.ai.utils import RecordingAsyncStream
+    from posthog.test.ai.utils import (
+        POSTHOG_OPTIONS_CASES,
+        RecordingAsyncStream,
+        assert_captured_options,
+        posthog_call_kwargs,
+    )
 
     ANTHROPIC_AVAILABLE = True
 except ImportError:
@@ -430,9 +435,9 @@ def test_basic_completion(mock_client, mock_anthropic_response):
         )
 
         assert response == mock_anthropic_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -476,7 +481,7 @@ def test_tokens_source_passthrough(mock_client, mock_anthropic_response):
             posthog_properties={"$ai_input_tokens": 99999},
         )
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_tokens_source"] == "passthrough"
         assert props["$ai_input_tokens"] == 99999
 
@@ -494,9 +499,9 @@ def test_groups(mock_client, mock_anthropic_response):
         )
 
         assert response == mock_anthropic_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         assert call_args["groups"] == {"company": "test_company"}
 
 
@@ -513,9 +518,9 @@ def test_privacy_mode_local(mock_client, mock_anthropic_response):
         )
 
         assert response == mock_anthropic_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
@@ -535,9 +540,9 @@ def test_privacy_mode_global(mock_client, mock_anthropic_response):
         )
 
         assert response == mock_anthropic_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_input"] is None
         assert props["$ai_output_choices"] is None
@@ -561,9 +566,9 @@ def test_basic_integration(mock_client):
             system="You must always answer with 'Bar'.",
         )
 
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
@@ -607,9 +612,9 @@ async def test_basic_async_integration(mock_client):
             posthog_properties={"foo": "bar"},
         )
 
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == "test-id"
@@ -669,9 +674,9 @@ async def test_async_streaming_system_prompt(mock_client):
         [c async for c in response]
 
         # Capture happens in the async finally block before generator completes
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-    call_args = mock_client.capture.call_args[1]
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert props["$ai_input"] == [
@@ -691,9 +696,9 @@ def test_error(mock_client, mock_anthropic_response):
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
         assert props["$ai_is_error"] is True
         assert props["$ai_error"] == "Test error"
@@ -713,9 +718,9 @@ def test_cached_tokens(mock_client, mock_anthropic_response_with_cached_tokens):
         )
 
         assert response == mock_anthropic_response_with_cached_tokens
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -754,7 +759,7 @@ def test_preserves_cache_creation_ttl_breakdown_non_streaming(
         )
 
     assert_cache_creation_ttl_breakdown_preserved(
-        mock_client.capture.call_args.kwargs["properties"]
+        mock_client.capture_ai.call_args.kwargs["properties"]
     )
 
 
@@ -776,7 +781,7 @@ async def test_preserves_cache_creation_ttl_breakdown_non_streaming_async(
         )
 
     assert_cache_creation_ttl_breakdown_preserved(
-        mock_client.capture.call_args.kwargs["properties"]
+        mock_client.capture_ai.call_args.kwargs["properties"]
     )
 
 
@@ -794,7 +799,7 @@ def test_preserves_cache_creation_ttl_breakdown_streaming(mock_client):
         list(response)
 
     assert_cache_creation_ttl_breakdown_preserved(
-        mock_client.capture.call_args.kwargs["properties"]
+        mock_client.capture_ai.call_args.kwargs["properties"]
     )
 
 
@@ -820,7 +825,7 @@ async def test_preserves_cache_creation_ttl_breakdown_streaming_async(mock_clien
         [event async for event in response]
 
     assert_cache_creation_ttl_breakdown_preserved(
-        mock_client.capture.call_args.kwargs["properties"]
+        mock_client.capture_ai.call_args.kwargs["properties"]
     )
 
 
@@ -880,7 +885,7 @@ def test_streaming_takes_cumulative_message_delta_usage(mock_client):
         )
         list(response)
 
-    assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs["properties"])
+    assert_cumulative_delta_usage(mock_client.capture_ai.call_args.kwargs["properties"])
 
 
 @pytest.mark.asyncio
@@ -904,7 +909,71 @@ async def test_streaming_takes_cumulative_message_delta_usage_async(mock_client)
         )
         [event async for event in response]
 
-    assert_cumulative_delta_usage(mock_client.capture.call_args.kwargs["properties"])
+    assert_cumulative_delta_usage(mock_client.capture_ai.call_args.kwargs["properties"])
+
+
+def anthropic_stream_with_thinking_tokens():
+    from types import SimpleNamespace
+
+    events = anthropic_stream_with_server_tool_usage()
+    events[1] = SimpleNamespace(
+        type="message_delta",
+        delta=events[1].delta,
+        usage=SimpleNamespace(
+            input_tokens=10,
+            output_tokens=110,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            server_tool_use=None,
+            output_tokens_details=SimpleNamespace(thinking_tokens=40),
+        ),
+    )
+    return events
+
+
+def test_streaming_reports_thinking_tokens_as_reasoning_tokens(mock_client):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=iter(anthropic_stream_with_thinking_tokens()),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        response = client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        list(response)
+
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
+    assert props["$ai_output_tokens"] == 110
+    assert props["$ai_reasoning_tokens"] == 40
+
+
+@pytest.mark.asyncio
+async def test_streaming_reports_thinking_tokens_as_reasoning_tokens_async(
+    mock_client,
+):
+    async def mock_async_stream():
+        for event in anthropic_stream_with_thinking_tokens():
+            yield event
+
+    async def mock_async_create(**kwargs):
+        return mock_async_stream()
+
+    with patch(
+        "anthropic.resources.messages.AsyncMessages.create",
+        side_effect=mock_async_create,
+    ):
+        client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+        response = await client.messages.create(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "Hello"}],
+            stream=True,
+        )
+        [event async for event in response]
+
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
+    assert props["$ai_reasoning_tokens"] == 40
 
 
 def anthropic_stream_with_two_cumulative_deltas():
@@ -957,7 +1026,7 @@ def test_streaming_multiple_message_deltas_do_not_stack_output_tokens(mock_clien
         )
         list(response)
 
-    props = mock_client.capture.call_args.kwargs["properties"]
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props["$ai_output_tokens"] == 110
 
 
@@ -984,7 +1053,7 @@ async def test_streaming_multiple_message_deltas_do_not_stack_output_tokens_asyn
         )
         [event async for event in response]
 
-    props = mock_client.capture.call_args.kwargs["properties"]
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props["$ai_output_tokens"] == 110
 
 
@@ -1007,7 +1076,7 @@ def test_anthropic_bedrock_preserves_cache_creation_ttl_breakdown(
         )
 
     assert_cache_creation_ttl_breakdown_preserved(
-        mock_client.capture.call_args.kwargs["properties"]
+        mock_client.capture_ai.call_args.kwargs["properties"]
     )
 
 
@@ -1046,9 +1115,9 @@ def test_tool_definition(mock_client, mock_anthropic_response):
         )
 
         assert response == mock_anthropic_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1100,9 +1169,9 @@ def test_tool_calls_in_output_choices(
         )
 
         assert response == mock_anthropic_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1163,9 +1232,9 @@ def test_tool_calls_only_no_content(
         )
 
         assert response == mock_anthropic_response_tool_calls_only
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1232,9 +1301,9 @@ def test_async_tool_calls_in_output_choices(
         response = asyncio.run(run_test())
 
         assert response == mock_anthropic_response_with_tool_calls
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1300,9 +1369,9 @@ def test_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with_tools
         list(response)
 
         # Capture happens synchronously when generator is exhausted
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1442,7 +1511,7 @@ def test_streaming_tool_call_after_server_tool_blocks(mock_client):
         )
         list(response)
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_output_choices"] == [
         {
             "role": "assistant",
@@ -1509,9 +1578,9 @@ def test_async_streaming_with_tool_calls(mock_client, mock_anthropic_stream_with
         asyncio.run(run_test())
 
         # Capture completes before asyncio.run() returns
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "test-id"
@@ -1591,9 +1660,9 @@ def test_streaming_with_thinking(mock_client, mock_anthropic_stream_with_thinkin
         # Consume the stream - this triggers the finally block synchronously
         list(response)
 
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         output_choices = props["$ai_output_choices"]
@@ -1643,9 +1712,9 @@ def test_async_streaming_with_thinking(
 
         asyncio.run(run_test())
 
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         output_choices = props["$ai_output_choices"]
@@ -1697,9 +1766,9 @@ def test_web_search_count(mock_client):
         )
 
         assert response == mock_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured
@@ -1779,9 +1848,9 @@ def test_streaming_with_web_search(mock_client, mock_anthropic_stream_with_web_s
         list(response)
 
         # Capture happens synchronously when generator is exhausted
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured
@@ -1836,9 +1905,9 @@ def test_async_with_web_search(mock_client):
         response = asyncio.run(run_test())
 
         assert response == mock_response
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured
@@ -1883,9 +1952,9 @@ def test_async_streaming_with_web_search(
         asyncio.run(run_test())
 
         # Capture completes before asyncio.run() returns
-        assert mock_client.capture.call_count == 1
+        assert mock_client.capture_ai.call_count == 1
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         # Verify web search count is captured
@@ -1899,25 +1968,57 @@ def test_async_streaming_with_web_search(
 # =======================
 
 
-def test_no_distinct_id_uses_trace_id_and_personless(
-    mock_client, mock_anthropic_response
+@pytest.mark.parametrize(
+    "distinct_id", [None, "", "  "], ids=["missing", "empty", "blank"]
+)
+@pytest.mark.parametrize("stream", [False, True], ids=["response", "stream"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_no_distinct_id_uses_trace_id_and_personless(
+    mock_client,
+    mock_anthropic_response,
+    mock_anthropic_stream_with_tools,
+    is_async,
+    stream,
+    distinct_id,
 ):
     """When no distinct_id is provided and no outer context, trace_id is used and event is personless."""
-    with patch(
-        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
-    ):
-        client = Anthropic(api_key="test-key", posthog_client=mock_client)
-        client.messages.create(
-            model="claude-3-opus-20240229",
-            messages=[{"role": "user", "content": "Hello"}],
-            posthog_trace_id="trace-123",
+    request = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "posthog_trace_id": "trace-123",
+        "posthog_properties": {"$process_person_profile": True},
+        **({"posthog_distinct_id": distinct_id} if distinct_id is not None else {}),
+        **({"stream": True} if stream else {}),
+    }
+    if is_async:
+
+        async def stream_events():
+            for event in mock_anthropic_stream_with_tools:
+                yield event
+
+        async def create(**kwargs):
+            return stream_events() if stream else mock_anthropic_response
+
+        with patch("anthropic.resources.AsyncMessages.create", side_effect=create):
+            client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+            response = await client.messages.create(**request)
+            if stream:
+                [event async for event in response]
+    else:
+        provider_response = (
+            mock_anthropic_stream_with_tools if stream else mock_anthropic_response
         )
+        with patch(
+            "anthropic.resources.Messages.create", return_value=provider_response
+        ):
+            client = Anthropic(api_key="test-key", posthog_client=mock_client)
+            response = client.messages.create(**request)
+            if stream:
+                list(response)
 
-        call_args = mock_client.capture.call_args[1]
-        props = call_args["properties"]
-
-        assert call_args["distinct_id"] == "trace-123"
-        assert props["$process_person_profile"] is False
+    call_args = mock_client.capture_ai.call_args[1]
+    assert call_args["distinct_id"] == "trace-123"
+    assert call_args["options"] == {"process_person_profile": False}
 
 
 def test_explicit_distinct_id_creates_person_profile(
@@ -1935,14 +2036,12 @@ def test_explicit_distinct_id_creates_person_profile(
             posthog_trace_id="trace-123",
         )
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "user-123"
-        assert (
-            "$process_person_profile" not in props
-            or props["$process_person_profile"] is not False
-        )
+        assert "options" not in call_args
+        assert "$process_person_profile" not in props
 
 
 def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response):
@@ -1959,14 +2058,12 @@ def test_outer_context_distinct_id_is_used(mock_client, mock_anthropic_response)
                 posthog_trace_id="trace-123",
             )
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         props = call_args["properties"]
 
         assert call_args["distinct_id"] == "outer-user-456"
-        assert (
-            "$process_person_profile" not in props
-            or props["$process_person_profile"] is not False
-        )
+        assert "options" not in call_args
+        assert "$process_person_profile" not in props
 
 
 def test_explicit_distinct_id_overrides_outer_context(
@@ -1986,7 +2083,7 @@ def test_explicit_distinct_id_overrides_outer_context(
                 posthog_trace_id="trace-123",
             )
 
-        call_args = mock_client.capture.call_args[1]
+        call_args = mock_client.capture_ai.call_args[1]
         assert call_args["distinct_id"] == "explicit-user-789"
 
 
@@ -2003,7 +2100,7 @@ def test_integration_stop_reason(mock_client):
         posthog_distinct_id="test-id",
     )
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_stop_reason"] in ("end_turn", "max_tokens")
     assert props["$ai_provider"] == "anthropic"
     assert props["$ai_input_tokens"] > 0
@@ -2104,9 +2201,9 @@ async def test_streaming_sync_async_accumulation_parity(mock_client):
         0,
     )
     list(sync_response)
-    sync_properties = mock_client.capture.call_args.kwargs["properties"]
+    sync_properties = mock_client.capture_ai.call_args.kwargs["properties"]
 
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
 
     async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
     async_response = async_client.messages._track_streaming_response(
@@ -2120,7 +2217,7 @@ async def test_streaming_sync_async_accumulation_parity(mock_client):
         0,
     )
     [event async for event in async_response]
-    async_properties = mock_client.capture.call_args.kwargs["properties"]
+    async_properties = mock_client.capture_ai.call_args.kwargs["properties"]
 
     parity_keys = (
         "$ai_input",
@@ -2160,9 +2257,9 @@ async def test_streaming_sync_async_exceptions_capture_and_close(mock_client):
             list(stream)
 
     assert sync_source.closed is True
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
-    mock_client.capture.reset_mock()
+    mock_client.capture_ai.reset_mock()
 
     async_source = FailingRecordingAsyncStream([])
     async_client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
@@ -2181,7 +2278,7 @@ async def test_streaming_sync_async_exceptions_capture_and_close(mock_client):
             [event async for event in stream]
 
     assert async_source.closed is True
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
 
 def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
@@ -2205,9 +2302,33 @@ def test_messages_stream_preserves_native_manager_helpers_close_and_tracking(
 
     assert text == ["Hi"]
     assert source.closed is True
-    assert mock_client.capture.call_count == 1
-    assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args.kwargs["distinct_id"] == "test-user"
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+def test_messages_stream_captures_initial_request_error(mock_client):
+    client = Anthropic(api_key="test-key", posthog_client=mock_client)
+    client.post = Mock(side_effect=RuntimeError("401 unauthorized"))
+
+    manager = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+        posthog_options={"process_person_profile": False},
+    )
+    with pytest.raises(RuntimeError, match="401 unauthorized"):
+        with manager:
+            pass
+
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "401 unauthorized"
+    assert mock_client.capture_ai.call_args.kwargs["options"] == {
+        "process_person_profile": False
+    }
 
 
 def test_messages_stream_tolerates_provider_manager_internals_changing(mock_client):
@@ -2247,9 +2368,34 @@ async def test_async_messages_stream_preserves_provider_contract_and_manager(
 
     assert text == ["Hi"]
     assert source.closed is True
-    assert mock_client.capture.call_count == 1
-    assert mock_client.capture.call_args.kwargs["distinct_id"] == "test-user"
+    assert mock_client.capture_ai.call_count == 1
+    assert mock_client.capture_ai.call_args.kwargs["distinct_id"] == "test-user"
     assert "posthog_distinct_id" not in client.post.call_args.kwargs
+
+
+@pytest.mark.asyncio
+async def test_async_messages_stream_captures_initial_request_error(mock_client):
+    client = AsyncAnthropic(api_key="test-key", posthog_client=mock_client)
+    client.post = AsyncMock(side_effect=RuntimeError("401 unauthorized"))
+
+    manager = client.messages.stream(
+        model="claude-haiku-4-5",
+        messages=[{"role": "user", "content": "Foo"}],
+        max_tokens=1,
+        posthog_distinct_id="test-user",
+        posthog_options={"process_person_profile": False},
+    )
+    with pytest.raises(RuntimeError, match="401 unauthorized"):
+        async with manager:
+            pass
+
+    assert mock_client.capture_ai.call_count == 1
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
+    assert props["$ai_is_error"] is True
+    assert props["$ai_error"] == "401 unauthorized"
+    assert mock_client.capture_ai.call_args.kwargs["options"] == {
+        "process_person_profile": False
+    }
 
 
 def test_async_messages_stream_tolerates_provider_manager_internals_changing(
@@ -2294,7 +2440,7 @@ async def test_async_messages_create_streaming_supports_async_with(mock_client):
             events = [event async for event in stream]
 
     assert len(events) == 3
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
 
 def test_messages_streaming_early_exit_closes_provider_stream(mock_client):
@@ -2317,7 +2463,7 @@ def test_messages_streaming_early_exit_closes_provider_stream(mock_client):
                 break
 
     assert source.closed is True
-    assert mock_client.capture.call_count == 1
+    assert mock_client.capture_ai.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -2346,24 +2492,7 @@ async def test_async_messages_streaming_early_exit_closes_provider_stream(mock_c
                 break
 
     assert source.closed is True
-    assert mock_client.capture.call_count == 1
-
-
-def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_anthropic_response):
-    mock_client.enable_full_ai_capture = True
-    with patch(
-        "anthropic.resources.Messages.create", return_value=mock_anthropic_response
-    ):
-        client = Anthropic(api_key="test-key", posthog_client=mock_client)
-        client.messages.create(
-            model="claude-3-opus-20240229",
-            messages=[{"role": "user", "content": "Hello"}],
-            posthog_distinct_id="test-id",
-        )
-
-    mock_client.capture.assert_not_called()
     assert mock_client.capture_ai.call_count == 1
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_generation"
 
 
 def test_multimodal_client_skips_media_redaction(mock_client, mock_anthropic_response):
@@ -2398,3 +2527,93 @@ def test_multimodal_client_skips_media_redaction(mock_client, mock_anthropic_res
     assert mock_client.capture_ai.call_count == 1
     props = mock_client.capture_ai.call_args[1]["properties"]
     assert props["$ai_input"][0]["content"][0]["source"]["data"] == image_data
+
+
+_OPTIONS_CALL_KWARGS = {
+    "model": "claude-haiku-4-5",
+    "messages": [{"role": "user", "content": "Foo"}],
+    "max_tokens": 1,
+}
+
+
+async def _call_anthropic_with_options(kind, is_async, mock_client, posthog_kwargs):
+    """Run one wrapper call and return the arguments the provider received."""
+    client_class = AsyncAnthropic if is_async else Anthropic
+    client = client_class(api_key="test-key", posthog_client=mock_client)
+
+    if kind == "stream_manager":
+        # messages.stream() builds the request itself, so record the HTTP call.
+        if is_async:
+            client.post = AsyncMock(
+                return_value=RecordingAsyncStream(_anthropic_raw_stream_events())
+            )
+            manager = client.messages.stream(**_OPTIONS_CALL_KWARGS, **posthog_kwargs)
+            async with manager as stream:
+                _ = [chunk async for chunk in stream.text_stream]
+        else:
+            client.post = Mock(
+                return_value=RecordingStream(_anthropic_raw_stream_events())
+            )
+            with client.messages.stream(
+                **_OPTIONS_CALL_KWARGS, **posthog_kwargs
+            ) as stream:
+                list(stream.text_stream)
+        return client.post.call_args
+
+    stream = kind == "create_stream"
+    provider_calls = []
+
+    def respond(kwargs):
+        provider_calls.append(kwargs)
+        if not stream:
+            return create_mock_response()
+        events = _anthropic_stream_events()
+        return RecordingAsyncStream(events) if is_async else RecordingStream(events)
+
+    async def async_create(self, **kwargs):
+        return respond(kwargs)
+
+    def sync_create(self, **kwargs):
+        return respond(kwargs)
+
+    target = "AsyncMessages" if is_async else "Messages"
+    with patch(
+        f"anthropic.resources.messages.{target}.create",
+        new=async_create if is_async else sync_create,
+    ):
+        call_kwargs = {**_OPTIONS_CALL_KWARGS, "stream": stream, **posthog_kwargs}
+        result = client.messages.create(**call_kwargs)
+        if is_async:
+            result = await result
+        if stream:
+            if is_async:
+                _ = [event async for event in result]
+            else:
+                list(result)
+    assert len(provider_calls) == 1
+    return provider_calls[0]
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+@pytest.mark.parametrize("kind", ["create", "create_stream", "stream_manager"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["sync", "async"])
+async def test_posthog_options_reach_capture_and_not_the_provider(
+    mock_client, caplog, is_async, kind, case
+):
+    _, distinct_id, posthog_options, expected, warns = case
+
+    with caplog.at_level("WARNING", logger="posthog"):
+        provider_call = await _call_anthropic_with_options(
+            kind,
+            is_async,
+            mock_client,
+            posthog_call_kwargs(distinct_id, posthog_options),
+        )
+
+    assert "posthog_" not in repr(provider_call)
+    assert mock_client.capture_ai.call_count == 1
+    assert_captured_options(
+        mock_client.capture_ai.call_args.kwargs, expected, warns, caplog
+    )

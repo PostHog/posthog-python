@@ -7,7 +7,7 @@ alias posthog.AsyncClient -> posthog.async_client.AsyncClient
 alias posthog.AsyncPosthog -> posthog.async_client.AsyncPosthog
 alias posthog.BeforeSendCallback -> posthog.types.BeforeSendCallback
 alias posthog.CaptureCompression -> posthog.capture_compression.CaptureCompression
-alias posthog.CaptureMode -> posthog.capture_mode.CaptureMode
+alias posthog.CaptureError -> posthog.capture_send.CaptureError
 alias posthog.Client -> posthog.client.Client
 alias posthog.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 alias posthog.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -52,7 +52,6 @@ alias posthog.ai.anthropic.anthropic.handle_anthropic_content_block_start -> pos
 alias posthog.ai.anthropic.anthropic.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
 alias posthog.ai.anthropic.anthropic_async.PostHogClient -> posthog.client.Client
 alias posthog.ai.anthropic.anthropic_async.StreamingContentBlock -> posthog.ai.types.StreamingContentBlock
@@ -65,7 +64,6 @@ alias posthog.ai.anthropic.anthropic_async.handle_anthropic_content_block_start 
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_text_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta
 alias posthog.ai.anthropic.anthropic_async.handle_anthropic_tool_delta -> posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta
 alias posthog.ai.anthropic.anthropic_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.anthropic.anthropic_async.setup -> posthog.setup
 alias posthog.ai.anthropic.anthropic_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.anthropic.anthropic_converter.FormattedFunctionCall -> posthog.ai.types.FormattedFunctionCall
 alias posthog.ai.anthropic.anthropic_converter.FormattedMessage -> posthog.ai.types.FormattedMessage
@@ -78,7 +76,6 @@ alias posthog.ai.anthropic.anthropic_converter.to_plain -> posthog.ai.media.to_p
 alias posthog.ai.anthropic.anthropic_providers.AsyncWrappedMessages -> posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages
 alias posthog.ai.anthropic.anthropic_providers.PostHogClient -> posthog.client.Client
 alias posthog.ai.anthropic.anthropic_providers.WrappedMessages -> posthog.ai.anthropic.anthropic.WrappedMessages
-alias posthog.ai.anthropic.anthropic_providers.setup -> posthog.setup
 alias posthog.ai.anthropic.extract_anthropic_tools -> posthog.ai.anthropic.anthropic_converter.extract_anthropic_tools
 alias posthog.ai.anthropic.format_anthropic_input -> posthog.ai.anthropic.anthropic_converter.format_anthropic_input
 alias posthog.ai.anthropic.format_anthropic_response -> posthog.ai.anthropic.anthropic_converter.format_anthropic_response
@@ -95,7 +92,6 @@ alias posthog.ai.claude_agent_sdk.processor.Client -> posthog.client.Client
 alias posthog.ai.claude_agent_sdk.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.claude_agent_sdk.processor.format_assistant_blocks -> posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks
 alias posthog.ai.claude_agent_sdk.processor.format_tool_result_content -> posthog.ai.claude_agent_sdk.formatting.format_tool_result_content
-alias posthog.ai.claude_agent_sdk.processor.setup -> posthog.setup
 alias posthog.ai.gemini.AsyncClient -> posthog.ai.gemini.gemini_async.AsyncClient
 alias posthog.ai.gemini.Client -> posthog.ai.gemini.gemini.Client
 alias posthog.ai.gemini.extract_gemini_tools -> posthog.ai.gemini.gemini_converter.extract_gemini_tools
@@ -146,7 +142,6 @@ alias posthog.ai.langchain.CallbackHandler -> posthog.ai.langchain.callbacks.Cal
 alias posthog.ai.langchain.callbacks.Client -> posthog.client.Client
 alias posthog.ai.langchain.callbacks.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.langchain.callbacks.get_model_params -> posthog.ai.utils.get_model_params
-alias posthog.ai.langchain.callbacks.setup -> posthog.setup
 alias posthog.ai.langchain.callbacks.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.ai.langchain.callbacks.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.AsyncAzureOpenAI -> posthog.ai.openai.openai_providers.AsyncAzureOpenAI
@@ -168,7 +163,6 @@ alias posthog.ai.openai.openai.extract_openai_usage_from_chunk -> posthog.ai.ope
 alias posthog.ai.openai.openai.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
 alias posthog.ai.openai.openai.merge_provider_override -> posthog.ai.openai.wrapper_utils.merge_provider_override
 alias posthog.ai.openai.openai.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai.setup -> posthog.setup
 alias posthog.ai.openai.openai.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_async.AsyncStreamWrapper -> posthog.ai.stream.AsyncStreamWrapper
 alias posthog.ai.openai.openai_async.PostHogClient -> posthog.client.Client
@@ -185,7 +179,6 @@ alias posthog.ai.openai.openai_async.format_openai_streaming_output -> posthog.a
 alias posthog.ai.openai.openai_async.get_model_params -> posthog.ai.utils.get_model_params
 alias posthog.ai.openai.openai_async.merge_provider_override -> posthog.ai.openai.wrapper_utils.merge_provider_override
 alias posthog.ai.openai.openai_async.merge_usage_stats -> posthog.ai.utils.merge_usage_stats
-alias posthog.ai.openai.openai_async.setup -> posthog.setup
 alias posthog.ai.openai.openai_async.with_privacy_mode -> posthog.ai.utils.with_privacy_mode
 alias posthog.ai.openai.openai_converter.FormattedContentItem -> posthog.ai.types.FormattedContentItem
 alias posthog.ai.openai.openai_converter.FormattedFunctionCall -> posthog.ai.types.FormattedFunctionCall
@@ -204,11 +197,9 @@ alias posthog.ai.openai.openai_providers.WrappedBeta -> posthog.ai.openai.openai
 alias posthog.ai.openai.openai_providers.WrappedChat -> posthog.ai.openai.openai.WrappedChat
 alias posthog.ai.openai.openai_providers.WrappedEmbeddings -> posthog.ai.openai.openai.WrappedEmbeddings
 alias posthog.ai.openai.openai_providers.WrappedResponses -> posthog.ai.openai.openai.WrappedResponses
-alias posthog.ai.openai.openai_providers.setup -> posthog.setup
 alias posthog.ai.openai_agents.PostHogTracingProcessor -> posthog.ai.openai_agents.processor.PostHogTracingProcessor
 alias posthog.ai.openai_agents.processor.Client -> posthog.client.Client
 alias posthog.ai.openai_agents.processor.finalize_ai_content -> posthog.ai.utils.finalize_ai_content
-alias posthog.ai.openai_agents.processor.setup -> posthog.setup
 alias posthog.ai.otel.PostHogSpanProcessor -> posthog.ai.otel.processor.PostHogSpanProcessor
 alias posthog.ai.otel.PostHogTraceExporter -> posthog.ai.otel.exporter.PostHogTraceExporter
 alias posthog.ai.otel.exporter.Client -> posthog.client.Client
@@ -233,21 +224,19 @@ alias posthog.ai.utils.identify_context -> posthog.identify_context
 alias posthog.ai.utils.new_context -> posthog.new_context
 alias posthog.ai.utils.redact_media -> posthog.ai.sanitization.redact_media
 alias posthog.ai.utils.sanitize_messages -> posthog.ai.sanitization.sanitize_messages
+alias posthog.ai.utils.setup -> posthog.setup
 alias posthog.ai.utils.tag -> posthog.tag
 alias posthog.ai.utils.warn_if_posthog_ai_gateway -> posthog.ai.gateway.warn_if_posthog_ai_gateway
 alias posthog.args.FeatureFlagEvaluations -> posthog.feature_flag_evaluations.FeatureFlagEvaluations
 alias posthog.args.SendFeatureFlagsOptions -> posthog.types.SendFeatureFlagsOptions
-alias posthog.client.AI_EVENTS_ENDPOINT -> posthog.request.AI_EVENTS_ENDPOINT
 alias posthog.client.AI_MAX_MSG_SIZE -> posthog.consumer.AI_MAX_MSG_SIZE
 alias posthog.client.APIError -> posthog.request.APIError
 alias posthog.client.CaptureCompression -> posthog.capture_compression.CaptureCompression
-alias posthog.client.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.client.Consumer -> posthog.consumer.Consumer
 alias posthog.client.DEFAULT_CODE_VARIABLES_DETECT_SECRETS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 alias posthog.client.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_PATTERNS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 alias posthog.client.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS -> posthog.exception_utils.DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
-alias posthog.client.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
 alias posthog.client.Emails -> posthog.emails.Emails
 alias posthog.client.ExceptionArg -> posthog.args.ExceptionArg
 alias posthog.client.ExceptionCapture -> posthog.exception_capture.ExceptionCapture
@@ -280,7 +269,6 @@ alias posthog.client.SizeLimitedDict -> posthog.utils.SizeLimitedDict
 alias posthog.client.Span -> posthog.tracing.span.Span
 alias posthog.client.UnresolvedFlagReason -> posthog.types.UnresolvedFlagReason
 alias posthog.client.VERSION -> posthog.version.VERSION
-alias posthog.client.batch_post -> posthog.request.batch_post
 alias posthog.client.clean -> posthog.utils.clean
 alias posthog.client.determine_server_host -> posthog.request.determine_server_host
 alias posthog.client.exc_info_from_error -> posthog.exception_utils.exc_info_from_error
@@ -311,12 +299,8 @@ alias posthog.client.to_flags_and_payloads -> posthog.types.to_flags_and_payload
 alias posthog.client.to_payloads -> posthog.types.to_payloads
 alias posthog.client.to_values -> posthog.types.to_values
 alias posthog.client.try_attach_code_variables_to_frames -> posthog.exception_utils.try_attach_code_variables_to_frames
-alias posthog.consumer.APIError -> posthog.request.APIError
 alias posthog.consumer.CaptureCompression -> posthog.capture_compression.CaptureCompression
-alias posthog.consumer.CaptureMode -> posthog.capture_mode.CaptureMode
 alias posthog.consumer.DatetimeSerializer -> posthog.request.DatetimeSerializer
-alias posthog.consumer.EVENTS_ENDPOINT -> posthog.request.EVENTS_ENDPOINT
-alias posthog.consumer.batch_post -> posthog.request.batch_post
 alias posthog.contexts.Client -> posthog.client.Client
 alias posthog.disable_connection_reuse -> posthog.request.disable_connection_reuse
 alias posthog.enable_keep_alive -> posthog.request.enable_keep_alive
@@ -331,6 +315,7 @@ alias posthog.feature_flags.UnresolvedFlagReason -> posthog.types.UnresolvedFlag
 alias posthog.feature_flags.convert_to_datetime_aware -> posthog.utils.convert_to_datetime_aware
 alias posthog.feature_flags.is_valid_regex -> posthog.utils.is_valid_regex
 alias posthog.feature_flags.utils -> posthog.utils
+alias posthog.inner_get_context_options -> posthog.contexts.get_context_options
 alias posthog.inner_get_tags -> posthog.contexts.get_tags
 alias posthog.inner_identify_context -> posthog.contexts.identify_context
 alias posthog.inner_new_context -> posthog.contexts.new_context
@@ -341,6 +326,7 @@ alias posthog.inner_set_code_variables_ignore_patterns_context -> posthog.contex
 alias posthog.inner_set_code_variables_mask_patterns_context -> posthog.contexts.set_code_variables_mask_patterns_context
 alias posthog.inner_set_code_variables_mask_url_credentials_context -> posthog.contexts.set_code_variables_mask_url_credentials_context
 alias posthog.inner_set_context_device_id -> posthog.contexts.set_context_device_id
+alias posthog.inner_set_context_option -> posthog.contexts.set_context_option
 alias posthog.inner_set_context_session -> posthog.contexts.set_context_session
 alias posthog.inner_tag -> posthog.contexts.tag
 alias posthog.integrations.asgi.Client -> posthog.client.Client
@@ -488,6 +474,7 @@ attribute posthog.ai.evaluations.EvaluationAPIError.retry_after = retry_after
 attribute posthog.ai.evaluations.EvaluationAPIError.status = status
 attribute posthog.ai.evaluations.EvaluationAPIError.submission = deepcopy(submission)
 attribute posthog.ai.evaluations.EvaluationItem.id: str
+attribute posthog.ai.evaluations.EvaluationResult.calculate: bool
 attribute posthog.ai.evaluations.EvaluationResult.item: EvaluationItem | str
 attribute posthog.ai.evaluations.EvaluationResult.item_id: str
 attribute posthog.ai.evaluations.EvaluationResult.scorer_version_id: str
@@ -529,6 +516,7 @@ attribute posthog.ai.evaluations.NumericScorerConfig.passing_rule: NumericPassin
 attribute posthog.ai.evaluations.NumericScorerConfig.step: float | None
 attribute posthog.ai.evaluations.OfflineEvaluations.datasets = Datasets(self._transport, project_id)
 attribute posthog.ai.evaluations.OfflineEvaluations.scorers = Scorers(self._transport, project_id)
+attribute posthog.ai.evaluations.ResultOptions.calculate: bool
 attribute posthog.ai.evaluations.ResultOptions.error_code: str | None
 attribute posthog.ai.evaluations.ResultOptions.error_message: str | None
 attribute posthog.ai.evaluations.ResultOptions.evaluated_at: datetime | str | None
@@ -538,25 +526,45 @@ attribute posthog.ai.evaluations.ResultOptions.payload: dict[str, JSONValue]
 attribute posthog.ai.evaluations.ResultOptions.reasoning: str | None
 attribute posthog.ai.evaluations.ResultOptions.status: ResultStatus
 attribute posthog.ai.evaluations.ResultOptions.value: ScoreValue | None
+attribute posthog.ai.evaluations.ResultReceipt.error_code: str | None = None
 attribute posthog.ai.evaluations.ResultReceipt.item_id: str
 attribute posthog.ai.evaluations.ResultReceipt.scorer_version_id: str
+attribute posthog.ai.evaluations.ResultReceipt.status: ResultStatus | None = None
 attribute posthog.ai.evaluations.ResultStatus = Literal['ok', 'error', 'skipped', 'not_applicable']
 attribute posthog.ai.evaluations.RunSource = Literal['ci', 'local', 'scheduled']
 attribute posthog.ai.evaluations.ScoreValue = bool | int | float | list[str]
 attribute posthog.ai.evaluations.Scorer.archived: bool
+attribute posthog.ai.evaluations.Scorer.calculation: ScorerCalculation = 'reported'
+attribute posthog.ai.evaluations.Scorer.composition: ScorerComposition | None = None
 attribute posthog.ai.evaluations.Scorer.config: _ConfigT
 attribute posthog.ai.evaluations.Scorer.created_at: datetime
 attribute posthog.ai.evaluations.Scorer.created_by: dict[str, Any] | None
 attribute posthog.ai.evaluations.Scorer.current_version: int
 attribute posthog.ai.evaluations.Scorer.current_version_id: str
+attribute posthog.ai.evaluations.Scorer.dependent_composite_count: int = 0
 attribute posthog.ai.evaluations.Scorer.description: str
 attribute posthog.ai.evaluations.Scorer.id: str
+attribute posthog.ai.evaluations.Scorer.input_scorers: tuple[ScorerInput, ...] = ()
 attribute posthog.ai.evaluations.Scorer.kind: ScorerKind
 attribute posthog.ai.evaluations.Scorer.name: str
 attribute posthog.ai.evaluations.Scorer.tags: tuple[str, ...] = ()
 attribute posthog.ai.evaluations.Scorer.team: int
 attribute posthog.ai.evaluations.Scorer.updated_at: datetime
+attribute posthog.ai.evaluations.ScorerCalculation = Literal['reported', 'composite']
+attribute posthog.ai.evaluations.ScorerComposition.expression: str
+attribute posthog.ai.evaluations.ScorerComposition.inputs: list[ScorerCompositionInput]
+attribute posthog.ai.evaluations.ScorerCompositionInput.alias: str
+attribute posthog.ai.evaluations.ScorerCompositionInput.scorer_version_id: str
 attribute posthog.ai.evaluations.ScorerConfig = BooleanScorerConfig | NumericScorerConfig | CategoricalScorerConfig
+attribute posthog.ai.evaluations.ScorerInput.alias: str
+attribute posthog.ai.evaluations.ScorerInput.config: ScorerConfig
+attribute posthog.ai.evaluations.ScorerInput.definition_id: str
+attribute posthog.ai.evaluations.ScorerInput.kind: ScorerKind
+attribute posthog.ai.evaluations.ScorerInput.latest_version: int | None
+attribute posthog.ai.evaluations.ScorerInput.latest_version_id: str | None
+attribute posthog.ai.evaluations.ScorerInput.name: str
+attribute posthog.ai.evaluations.ScorerInput.scorer_version_id: str
+attribute posthog.ai.evaluations.ScorerInput.version: int
 attribute posthog.ai.evaluations.ScorerKind = Literal['boolean', 'numeric', 'categorical']
 attribute posthog.ai.evaluations.ScorerOrder = Literal['name', '-name', 'kind', '-kind', 'created_at', '-created_at', 'updated_at', '-updated_at', 'current_version', '-current_version']
 attribute posthog.ai.evaluations.ScorerPage.count: int
@@ -564,6 +572,8 @@ attribute posthog.ai.evaluations.ScorerPage.next: str | None
 attribute posthog.ai.evaluations.ScorerPage.next_offset: int | None
 attribute posthog.ai.evaluations.ScorerPage.previous: str | None
 attribute posthog.ai.evaluations.ScorerPage.results: tuple[Scorer[ScorerConfig], ...]
+attribute posthog.ai.evaluations.ScorerVersion.calculation: ScorerCalculation = 'reported'
+attribute posthog.ai.evaluations.ScorerVersion.composition: ScorerComposition | None = None
 attribute posthog.ai.evaluations.ScorerVersion.config: _ConfigT
 attribute posthog.ai.evaluations.ScorerVersion.created_at: datetime
 attribute posthog.ai.evaluations.ScorerVersion.created_by: dict[str, Any] | None
@@ -578,12 +588,12 @@ attribute posthog.ai.evaluations.UploadReceipt.items: tuple[ItemReceipt, ...]
 attribute posthog.ai.evaluations.UploadReceipt.results: tuple[ResultReceipt, ...]
 attribute posthog.ai.gateway.POSTHOG_AI_GATEWAY_HOSTS = ['gateway.posthog.com', 'gateway.us.posthog.com', 'gateway.eu.posthog.com', 'ai-gateway.us.posthog.com', 'ai-gateway.eu.posthog.com']
 attribute posthog.ai.gateway.log = logging.getLogger('posthog')
-attribute posthog.ai.gemini.gemini.Client.aio = _GeminiAioNamespace(models=(AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)), files=(self._provider_client.aio.files))
+attribute posthog.ai.gemini.gemini.Client.aio = _GeminiAioNamespace(models=(AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, posthog_options=posthog_options, **kwargs)), files=(self._provider_client.aio.files))
 attribute posthog.ai.gemini.gemini.Client.files = self._provider_client.files
-attribute posthog.ai.gemini.gemini.Client.models = Models(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
+attribute posthog.ai.gemini.gemini.Client.models = Models(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, posthog_options=posthog_options, **kwargs)
 attribute posthog.ai.gemini.gemini_async.AsyncClient.aio = _GeminiAioNamespace(models=(self.models), files=(self.files))
 attribute posthog.ai.gemini.gemini_async.AsyncClient.files = self._provider_client.aio.files
-attribute posthog.ai.gemini.gemini_async.AsyncClient.models = AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, **kwargs)
+attribute posthog.ai.gemini.gemini_async.AsyncClient.models = AsyncModels(provider_client=(self._provider_client), posthog_client=(self._ph_client), posthog_distinct_id=posthog_distinct_id, posthog_properties=posthog_properties, posthog_privacy_mode=posthog_privacy_mode, posthog_groups=posthog_groups, posthog_options=posthog_options, **kwargs)
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.content: Union[str, List[Any]]
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.parts: List[Union[GeminiPart, Dict[str, Any]]]
 attribute posthog.ai.gemini.gemini_converter.GeminiMessage.role: str
@@ -593,6 +603,7 @@ attribute posthog.ai.gemini.genai = _GenAI()
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.base_url: Optional[str] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.model: Optional[str] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.model_params: Optional[Dict[str, Any]] = None
+attribute posthog.ai.langchain.callbacks.GenerationMetadata.posthog_options: Optional[Dict[str, Any]] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.posthog_properties: Optional[Dict[str, Any]] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.provider: Optional[str] = None
 attribute posthog.ai.langchain.callbacks.GenerationMetadata.tools: Optional[List[Dict[str, Any]]] = None
@@ -698,6 +709,7 @@ attribute posthog.ai.types.StreamingEventData.groups: Optional[Dict[str, Any]]
 attribute posthog.ai.types.StreamingEventData.kwargs: Dict[str, Any]
 attribute posthog.ai.types.StreamingEventData.latency: float
 attribute posthog.ai.types.StreamingEventData.model: str
+attribute posthog.ai.types.StreamingEventData.options: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.ai.types.StreamingEventData.privacy_mode: bool
 attribute posthog.ai.types.StreamingEventData.properties: Optional[Dict[str, Any]]
 attribute posthog.ai.types.StreamingEventData.provider: str
@@ -723,21 +735,23 @@ attribute posthog.args.OptionalCaptureArgs.disable_geoip: NotRequired[Optional[b
 attribute posthog.args.OptionalCaptureArgs.distinct_id: NotRequired[Optional[ID_TYPES]]
 attribute posthog.args.OptionalCaptureArgs.flags: NotRequired[Optional[FeatureFlagEvaluations]]
 attribute posthog.args.OptionalCaptureArgs.groups: NotRequired[Optional[Dict[str, str]]]
+attribute posthog.args.OptionalCaptureArgs.options: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalCaptureArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalCaptureArgs.send_feature_flags: NotRequired[Optional[Union[bool, SendFeatureFlagsOptions]]]
 attribute posthog.args.OptionalCaptureArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
 attribute posthog.args.OptionalCaptureArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.args.OptionalSetArgs.disable_geoip: NotRequired[Optional[bool]]
 attribute posthog.args.OptionalSetArgs.distinct_id: NotRequired[Optional[ID_TYPES]]
+attribute posthog.args.OptionalSetArgs.options: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.properties: NotRequired[Optional[Dict[str, Any]]]
 attribute posthog.args.OptionalSetArgs.timestamp: NotRequired[Optional[Union[datetime, str]]]
 attribute posthog.args.OptionalSetArgs.uuid: NotRequired[Optional[Union[str, UUID]]]
 attribute posthog.async_client.AsyncClient.api_key = (project_api_key or '').strip()
 attribute posthog.async_client.AsyncClient.app_host = app_host
 attribute posthog.async_client.AsyncClient.before_send = before_send
-attribute posthog.async_client.AsyncClient.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
+attribute posthog.async_client.AsyncClient.capture_ai_compression = _resolve_capture_ai_compression(capture_ai_compression)
+attribute posthog.async_client.AsyncClient.capture_compression = _resolve_capture_compression(capture_compression)
 attribute posthog.async_client.AsyncClient.capture_exception_code_variables = capture_exception_code_variables
-attribute posthog.async_client.AsyncClient.capture_mode = _resolve_capture_mode(capture_mode)
 attribute posthog.async_client.AsyncClient.capture_trace_context = capture_trace_context
 attribute posthog.async_client.AsyncClient.code_variables_detect_secrets = code_variables_detect_secrets if code_variables_detect_secrets is not None else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 attribute posthog.async_client.AsyncClient.code_variables_ignore_patterns = code_variables_ignore_patterns if code_variables_ignore_patterns is not None else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -745,14 +759,14 @@ attribute posthog.async_client.AsyncClient.code_variables_mask_patterns = code_v
 attribute posthog.async_client.AsyncClient.code_variables_mask_url_credentials = code_variables_mask_url_credentials if code_variables_mask_url_credentials is not None else DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
 attribute posthog.async_client.AsyncClient.debug = debug
 attribute posthog.async_client.AsyncClient.disable_geoip = disable_geoip
-attribute posthog.async_client.AsyncClient.disabled = disabled or not self.api_key
+attribute posthog.async_client.AsyncClient.disabled = disabled or not self.api_key or _is_personal_api_key(self.api_key)
 attribute posthog.async_client.AsyncClient.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
 attribute posthog.async_client.AsyncClient.email_request_max_retries = email_request_max_retries
 attribute posthog.async_client.AsyncClient.email_request_timeout_seconds = email_request_timeout_seconds
 attribute posthog.async_client.AsyncClient.emails: AsyncEmails
+attribute posthog.async_client.AsyncClient.enable_full_ai_capture = enable_full_ai_capture is True
 attribute posthog.async_client.AsyncClient.feature_flags_request_max_retries = max(0, feature_flags_request_max_retries)
 attribute posthog.async_client.AsyncClient.feature_flags_request_timeout_seconds = feature_flags_request_timeout_seconds
-attribute posthog.async_client.AsyncClient.gzip = gzip
 attribute posthog.async_client.AsyncClient.historical_migration = historical_migration
 attribute posthog.async_client.AsyncClient.host = determine_server_host(host)
 attribute posthog.async_client.AsyncClient.in_app_modules = in_app_modules
@@ -763,10 +777,12 @@ attribute posthog.async_client.AsyncClient.max_retries = max(0, max_retries)
 attribute posthog.async_client.AsyncClient.migrated_from = migrated_from
 attribute posthog.async_client.AsyncClient.on_error = on_error
 attribute posthog.async_client.AsyncClient.personal_api_key = self.secret_key
+attribute posthog.async_client.AsyncClient.privacy_mode = privacy_mode
 attribute posthog.async_client.AsyncClient.project_root = os.getcwd()
 attribute posthog.async_client.AsyncClient.raw_host = normalize_host(host)
 attribute posthog.async_client.AsyncClient.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.async_client.AsyncClient.send = send
+attribute posthog.async_client.AsyncClient.super_options = super_options
 attribute posthog.async_client.AsyncClient.super_properties = super_properties
 attribute posthog.async_client.AsyncClient.timeout = timeout
 attribute posthog.before_send = None
@@ -778,20 +794,25 @@ attribute posthog.capture_compression.CaptureCompression.DEFLATE = 'deflate'
 attribute posthog.capture_compression.CaptureCompression.GZIP = 'gzip'
 attribute posthog.capture_compression.CaptureCompression.NONE = 'none'
 attribute posthog.capture_compression.CaptureCompression.ZSTD = 'zstd'
+attribute posthog.capture_event.log = logging.getLogger('posthog')
 attribute posthog.capture_exception_code_variables = False
-attribute posthog.capture_mode.CAPTURE_MODE_ENV_VAR = 'POSTHOG_CAPTURE_MODE'
-attribute posthog.capture_mode.CaptureMode.V0 = 'v0'
-attribute posthog.capture_mode.CaptureMode.V1 = 'v1'
+attribute posthog.capture_send.CaptureDroppedEvent.details: Optional[str] = None
+attribute posthog.capture_send.CaptureDroppedEvent.uuid: str
+attribute posthog.capture_send.CaptureError.attempts = attempts
+attribute posthog.capture_send.CaptureError.drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
+attribute posthog.capture_send.CaptureError.endpoint = endpoint
+attribute posthog.capture_send.CaptureError.event_results = event_results or {}
+attribute posthog.capture_send.CaptureError.request_id = request_id
+attribute posthog.capture_send.CaptureError.retry_exhausted = retry_exhausted or []
+attribute posthog.capture_send.CaptureEventResult.details: Optional[str] = None
+attribute posthog.capture_send.CaptureEventResult.result: Optional[str]
 attribute posthog.capture_trace_context = False
-attribute posthog.capture_v1.CaptureV1Error.attempts = attempts
-attribute posthog.capture_v1.CaptureV1Error.drops = drops or []
-attribute posthog.capture_v1.CaptureV1Error.request_id = request_id
-attribute posthog.capture_v1.CaptureV1Error.retry_exhausted = retry_exhausted or []
 attribute posthog.client.Client.api_key = (project_api_key or '').strip()
 attribute posthog.client.Client.app_host = app_host
-attribute posthog.client.Client.capture_compression = _resolve_capture_compression(capture_compression, gzip_fallback=gzip)
+attribute posthog.client.Client.before_send = before_send
+attribute posthog.client.Client.capture_ai_compression = _resolve_capture_ai_compression(capture_ai_compression)
+attribute posthog.client.Client.capture_compression = _resolve_capture_compression(capture_compression)
 attribute posthog.client.Client.capture_exception_code_variables = capture_exception_code_variables
-attribute posthog.client.Client.capture_mode = _resolve_capture_mode(capture_mode)
 attribute posthog.client.Client.capture_trace_context = capture_trace_context
 attribute posthog.client.Client.code_variables_detect_secrets = code_variables_detect_secrets if code_variables_detect_secrets is not None else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
 attribute posthog.client.Client.code_variables_ignore_patterns = code_variables_ignore_patterns if code_variables_ignore_patterns is not None else DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
@@ -801,7 +822,7 @@ attribute posthog.client.Client.cohorts: Optional[dict[str, Any]] = None
 attribute posthog.client.Client.consumers: Optional[List[Consumer]]
 attribute posthog.client.Client.debug = debug
 attribute posthog.client.Client.disable_geoip = disable_geoip
-attribute posthog.client.Client.disabled = disabled or not self.api_key
+attribute posthog.client.Client.disabled = disabled or not self.api_key or _is_personal_api_key(self.api_key)
 attribute posthog.client.Client.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
 attribute posthog.client.Client.email_request_max_retries = email_request_max_retries
 attribute posthog.client.Client.email_request_timeout_seconds = email_request_timeout_seconds
@@ -822,7 +843,6 @@ attribute posthog.client.Client.flag_cache = self._initialize_flag_cache(flag_fa
 attribute posthog.client.Client.flag_definition_version = 0
 attribute posthog.client.Client.flag_fallback_cache_url = flag_fallback_cache_url
 attribute posthog.client.Client.group_type_mapping: Optional[dict[str, str]] = None
-attribute posthog.client.Client.gzip = gzip
 attribute posthog.client.Client.historical_migration = historical_migration
 attribute posthog.client.Client.host = determine_server_host(host)
 attribute posthog.client.Client.in_app_modules = in_app_modules
@@ -842,6 +862,7 @@ attribute posthog.client.Client.queue: Queue
 attribute posthog.client.Client.raw_host = normalize_host(host)
 attribute posthog.client.Client.secret_key = (resolved_secret_key.strip() if isinstance(resolved_secret_key, str) else resolved_secret_key) or None
 attribute posthog.client.Client.send = send
+attribute posthog.client.Client.super_options = super_options
 attribute posthog.client.Client.super_properties = super_properties
 attribute posthog.client.Client.sync_mode = sync_mode
 attribute posthog.client.Client.timeout = timeout
@@ -850,16 +871,16 @@ attribute posthog.code_variables_detect_secrets = DEFAULT_CODE_VARIABLES_DETECT_
 attribute posthog.code_variables_ignore_patterns = DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS
 attribute posthog.code_variables_mask_patterns = DEFAULT_CODE_VARIABLES_MASK_PATTERNS
 attribute posthog.code_variables_mask_url_credentials = DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS
-attribute posthog.consumer.AI_MAX_MSG_SIZE = 8 * 1024 * 1024
+attribute posthog.consumer.AI_ENVELOPE_HEADROOM = 64 * 1024
+attribute posthog.consumer.AI_MAX_MSG_SIZE = AI_MAX_PROPERTIES_SIZE + AI_ENVELOPE_HEADROOM
+attribute posthog.consumer.AI_MAX_PROPERTIES_SIZE = 8 * 1024 * 1024
 attribute posthog.consumer.BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 attribute posthog.consumer.Consumer.api_key = api_key
 attribute posthog.consumer.Consumer.capture_compression = capture_compression
-attribute posthog.consumer.Consumer.capture_mode = capture_mode
 attribute posthog.consumer.Consumer.daemon = True
 attribute posthog.consumer.Consumer.endpoint = endpoint
 attribute posthog.consumer.Consumer.flush_at = flush_at
 attribute posthog.consumer.Consumer.flush_interval = flush_interval
-attribute posthog.consumer.Consumer.gzip = gzip
 attribute posthog.consumer.Consumer.historical_migration = historical_migration
 attribute posthog.consumer.Consumer.host = host
 attribute posthog.consumer.Consumer.log = logging.getLogger('posthog')
@@ -869,7 +890,7 @@ attribute posthog.consumer.Consumer.queue = queue
 attribute posthog.consumer.Consumer.retries = max(0, retries)
 attribute posthog.consumer.Consumer.running = True
 attribute posthog.consumer.Consumer.timeout = timeout
-attribute posthog.consumer.MAX_MSG_SIZE = 900 * 1024
+attribute posthog.consumer.MAX_MSG_SIZE = 10 * 1024 * 1024
 attribute posthog.contexts.ContextScope.capture_exception_code_variables: Optional[bool] = None
 attribute posthog.contexts.ContextScope.capture_exceptions = capture_exceptions
 attribute posthog.contexts.ContextScope.client: Optional[Client] = client
@@ -880,6 +901,7 @@ attribute posthog.contexts.ContextScope.code_variables_mask_url_credentials: Opt
 attribute posthog.contexts.ContextScope.device_id: Optional[str] = None
 attribute posthog.contexts.ContextScope.distinct_id: Optional[str] = None
 attribute posthog.contexts.ContextScope.fresh = fresh
+attribute posthog.contexts.ContextScope.options: Dict[str, Any] = {}
 attribute posthog.contexts.ContextScope.parent = parent
 attribute posthog.contexts.ContextScope.session_id: Optional[str] = None
 attribute posthog.contexts.ContextScope.tags: Dict[str, Any] = {}
@@ -888,13 +910,22 @@ attribute posthog.debug = False
 attribute posthog.default_client = None
 attribute posthog.disable_geoip = True
 attribute posthog.disabled = False
+attribute posthog.emails.CodeEmailArgs.attachments: NotRequired[Optional[Sequence[EmailAttachment]]]
+attribute posthog.emails.CodeEmailArgs.bcc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.capture_engagement: NotRequired[Optional[bool]]
+attribute posthog.emails.CodeEmailArgs.cc: NotRequired[Optional[Union[str, Sequence[str]]]]
 attribute posthog.emails.CodeEmailArgs.from_: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.html: NotRequired[Optional[str]]
 attribute posthog.emails.CodeEmailArgs.reply_to: NotRequired[Optional[Union[str, Sequence[str]]]]
+attribute posthog.emails.CodeEmailArgs.sensitive: NotRequired[Optional[bool]]
 attribute posthog.emails.CodeEmailArgs.subject: str
 attribute posthog.emails.CodeEmailArgs.template_key: str
 attribute posthog.emails.CodeEmailArgs.text: NotRequired[Optional[str]]
+attribute posthog.emails.CodeEmailArgs.tracking: NotRequired[Optional[Union[bool, EmailTracking]]]
+attribute posthog.emails.EmailAttachment.content: Union[bytes, bytearray, memoryview, str]
+attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
+attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
+attribute posthog.emails.EmailAttachment.filename: str
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -909,6 +940,9 @@ attribute posthog.emails.EmailStatus.id: str
 attribute posthog.emails.EmailStatus.reason: Optional[str] = None
 attribute posthog.emails.EmailStatus.status: str
 attribute posthog.emails.EmailStatus.status_at: datetime
+attribute posthog.emails.EmailTracking.clicks: bool
+attribute posthog.emails.EmailTracking.engagement: bool
+attribute posthog.emails.EmailTracking.opens: bool
 attribute posthog.emails.EmailWarning.code: str
 attribute posthog.emails.EmailWarning.fix: Optional[str] = None
 attribute posthog.emails.EmailWarning.message: str
@@ -1029,6 +1063,7 @@ attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CLIENT_VERSION = '$m
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.CONVERSATION_ID = '$mcp_conversation_id'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.DURATION_MS = '$mcp_duration_ms'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_MESSAGE = '$mcp_error_message'
+attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_STATUS = '$mcp_error_status'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.ERROR_TYPE = '$mcp_error_type'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_DETAILS = '$mcp_feedback_details'
 attribute posthog.mcp.constants.PostHogMCPAnalyticsProperty.FEEDBACK_FRICTION_POINTS = '$mcp_feedback_friction_points'
@@ -1096,6 +1131,7 @@ attribute posthog.mcp.types.MCPAnalyticsOptions.collect_feedback: Union[bool, Co
 attribute posthog.mcp.types.MCPAnalyticsOptions.context: Union[bool, MCPAnalyticsContextOptions] = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.enable_conversation_id: bool = True
 attribute posthog.mcp.types.MCPAnalyticsOptions.enable_exception_autocapture: bool = True
+attribute posthog.mcp.types.MCPAnalyticsOptions.event_options: Optional[EventOptionsFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.event_properties: Optional[EventPropertiesFn] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.identify: Optional[Union[IdentifyFn, UserIdentity]] = None
 attribute posthog.mcp.types.MCPAnalyticsOptions.intent_fallback: Optional[IntentFallbackFn] = None
@@ -1142,14 +1178,12 @@ attribute posthog.privacy_mode = False
 attribute posthog.project_api_key = None
 attribute posthog.project_root = None
 attribute posthog.release_id.RELEASE_ID_ENV_VAR = 'POSTHOG_RELEASE_ID'
-attribute posthog.request.AI_EVENTS_ENDPOINT = '/i/v0/ai/batch/'
 attribute posthog.request.APIError.message = message
 attribute posthog.request.APIError.retry_after = retry_after
 attribute posthog.request.APIError.status = status
 attribute posthog.request.DEFAULT_HOST = US_INGESTION_ENDPOINT
 attribute posthog.request.EU_APP_ENDPOINT = 'https://eu.posthog.com'
 attribute posthog.request.EU_INGESTION_ENDPOINT = 'https://eu.i.posthog.com'
-attribute posthog.request.EVENTS_ENDPOINT = '/batch/'
 attribute posthog.request.GetResponse.data: Any
 attribute posthog.request.GetResponse.etag: Optional[str] = None
 attribute posthog.request.GetResponse.not_modified: bool = False
@@ -1166,6 +1200,7 @@ attribute posthog.request.US_APP_ENDPOINT = 'https://us.posthog.com'
 attribute posthog.request.US_INGESTION_ENDPOINT = 'https://us.i.posthog.com'
 attribute posthog.secret_key = None
 attribute posthog.send = True
+attribute posthog.super_options = None
 attribute posthog.super_properties = None
 attribute posthog.sync_mode = False
 attribute posthog.traces = None
@@ -1178,6 +1213,7 @@ attribute posthog.types.FeatureFlag.reason: Optional[FlagReason]
 attribute posthog.types.FeatureFlag.variant: Optional[str]
 attribute posthog.types.FeatureFlagError.CONNECTION_ERROR = 'connection_error'
 attribute posthog.types.FeatureFlagError.ERRORS_WHILE_COMPUTING = 'errors_while_computing_flags'
+attribute posthog.types.FeatureFlagError.EVALUATION_FAILED = 'evaluation_failed'
 attribute posthog.types.FeatureFlagError.FLAG_MISSING = 'flag_missing'
 attribute posthog.types.FeatureFlagError.LOCAL_EVALUATION_INCONCLUSIVE = 'local_evaluation_inconclusive'
 attribute posthog.types.FeatureFlagError.QUOTA_LIMITED = 'quota_limited'
@@ -1246,8 +1282,8 @@ class posthog.ai.anthropic.anthropic_providers.AnthropicBedrock(posthog_client: 
 class posthog.ai.anthropic.anthropic_providers.AnthropicVertex(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicBedrock(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.anthropic.anthropic_providers.AsyncAnthropicVertex(posthog_client: Optional[PostHogClient] = None, **kwargs)
-class posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient(options: Optional[ClaudeAgentOptions] = None, transport: Any = None, *, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
-class posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
+class posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient(options: Optional[ClaudeAgentOptions] = None, transport: Any = None, *, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None)
+class posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None)
 class posthog.ai.evaluations.AsyncDatasetSnapshot(dataset: Dataset, revision: int, revision_id: str, _datasets: AsyncDatasets)
 class posthog.ai.evaluations.AsyncDatasets(transport: AsyncTransport, project_id: int)
 class posthog.ai.evaluations.AsyncExperiment(transport: AsyncTransport, project_id: int, id: str, *, receipt: ExperimentReceipt | None = None, submission: bytes | None = None)
@@ -1269,7 +1305,7 @@ class posthog.ai.evaluations.DatasetSnapshot(dataset: Dataset, revision: int, re
 class posthog.ai.evaluations.Datasets(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.EvaluationAPIError(*, status: int | None = None, code: str | None = None, detail: Any = None, attr: str | None = None, errors: Any = None, response: dict[str, Any] | None = None, retry_after: float | None = None, persistence: Literal['rejected', 'unknown', 'not_sent'] = 'unknown', submission: dict[str, Any] | None = None)
 class posthog.ai.evaluations.EvaluationItem(*, id: str | UUID | None = None, input: JSONValue | _Unset = _UNSET, output: JSONValue | _Unset = _UNSET, expected_output: JSONValue | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, case_key: str | None = None, trial: str | None = None, dataset_item_identifier: str | None = None, dataset_item_version_identifier: str | None = None, dataset_item_version_id: str | UUID | None = None, application_trace_id: str | None = None, model_version: str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
-class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
+class posthog.ai.evaluations.EvaluationResult(*, item: EvaluationItem | str | UUID, scorer_version_id: str | UUID, calculate: bool = False, value: ScoreValue | None = None, status: ResultStatus = 'ok', error_code: str | None = None, reasoning: str | None | _Unset = _UNSET, error_message: str | None | _Unset = _UNSET, metadata: dict[str, JSONValue] | None | _Unset = _UNSET, evaluator_trace_id: str | None = None, evaluated_at: datetime | str | None = None, payload: dict[str, JSONValue] | _Unset = _UNSET)
 class posthog.ai.evaluations.Experiment(transport: SyncTransport, project_id: int, id: str, *, receipt: ExperimentReceipt | None = None, submission: bytes | None = None)
 class posthog.ai.evaluations.ExperimentOptions
 class posthog.ai.evaluations.ExperimentReceipt(id: str, status: Literal['uploading', 'completed', 'failed'], created: bool, started_at: datetime, created_at: datetime, finished_at: datetime | None, expected_item_count: int | None, expected_result_count: int | None, accepted_item_count: int, accepted_result_count: int)
@@ -1278,24 +1314,27 @@ class posthog.ai.evaluations.NumericPassingRule
 class posthog.ai.evaluations.NumericScorerConfig
 class posthog.ai.evaluations.OfflineEvaluations(*, project_id: int, secret_key: str, host: str | None = None, timeout: float = 15, max_retries: int = 3)
 class posthog.ai.evaluations.ResultOptions
-class posthog.ai.evaluations.ResultReceipt(id: str, created: bool, accepted_at: datetime, item_id: str, scorer_version_id: str)
-class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int, tags: tuple[str, ...] = ())
+class posthog.ai.evaluations.ResultReceipt(id: str, created: bool, accepted_at: datetime, item_id: str, scorer_version_id: str, status: ResultStatus | None = None, error_code: str | None = None)
+class posthog.ai.evaluations.Scorer(id: str, name: str, description: str, kind: ScorerKind, archived: bool, current_version: int, current_version_id: str, config: _ConfigT, created_at: datetime, updated_at: datetime, created_by: dict[str, Any] | None, team: int, tags: tuple[str, ...] = (), calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None, input_scorers: tuple[ScorerInput, ...] = (), dependent_composite_count: int = 0)
+class posthog.ai.evaluations.ScorerComposition
+class posthog.ai.evaluations.ScorerCompositionInput
+class posthog.ai.evaluations.ScorerInput(alias: str, scorer_version_id: str, definition_id: str, name: str, kind: ScorerKind, version: int, config: ScorerConfig, latest_version_id: str | None, latest_version: int | None)
 class posthog.ai.evaluations.ScorerPage(count: int, results: tuple[Scorer[ScorerConfig], ...], next: str | None, previous: str | None, next_offset: int | None)
-class posthog.ai.evaluations.ScorerVersion(id: str, definition_id: str, version: int, kind: ScorerKind, config: _ConfigT, created_at: datetime, created_by: dict[str, Any] | None)
+class posthog.ai.evaluations.ScorerVersion(id: str, definition_id: str, version: int, kind: ScorerKind, config: _ConfigT, created_at: datetime, created_by: dict[str, Any] | None, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
 class posthog.ai.evaluations.ScorerVersionPage(count: int, results: tuple[ScorerVersion[ScorerConfig], ...], next_cursor: str | None)
 class posthog.ai.evaluations.Scorers(transport: SyncTransport, project_id: int)
 class posthog.ai.evaluations.UploadReceipt(items: tuple[ItemReceipt, ...], results: tuple[ResultReceipt, ...])
-class posthog.ai.gemini.gemini.Client(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
-class posthog.ai.gemini.gemini.Models(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, **kwargs)
-class posthog.ai.gemini.gemini_async.AsyncClient(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs)
-class posthog.ai.gemini.gemini_async.AsyncModels(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, **kwargs)
+class posthog.ai.gemini.gemini.Client(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs)
+class posthog.ai.gemini.gemini.Models(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs)
+class posthog.ai.gemini.gemini_async.AsyncClient(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs)
+class posthog.ai.gemini.gemini_async.AsyncModels(api_key: Optional[str] = None, vertexai: Optional[bool] = None, credentials: Optional[Any] = None, project: Optional[str] = None, location: Optional[str] = None, debug_config: Optional[Any] = None, http_options: Optional[Any] = None, posthog_client: Optional[PostHogClient] = None, posthog_distinct_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, provider_client: Optional[Any] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs)
 class posthog.ai.gemini.gemini_converter.GeminiMessage 
 class posthog.ai.gemini.gemini_converter.GeminiPart 
-class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[Dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None)
-class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None)
+class posthog.ai.langchain.callbacks.CallbackHandler(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[Dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None)
+class posthog.ai.langchain.callbacks.GenerationMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any], provider: Optional[str] = None, model: Optional[str] = None, model_params: Optional[Dict[str, Any]] = None, base_url: Optional[str] = None, tools: Optional[List[Dict[str, Any]]] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None)
 class posthog.ai.langchain.callbacks.ModelUsage(input_tokens: Optional[int], output_tokens: Optional[int], cache_write_tokens: Optional[int], cache_read_tokens: Optional[int], reasoning_tokens: Optional[int], cache_write_5m_tokens: Optional[int] = None, cache_write_1h_tokens: Optional[int] = None, web_search_count: Optional[int] = None)
 class posthog.ai.langchain.callbacks.SpanMetadata(name: str, start_time: float, end_time: Optional[float], input: Optional[Any])
-class posthog.ai.langchain.middleware.PostHogMiddleware(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[dict[str, Any]] = None)
+class posthog.ai.langchain.middleware.PostHogMiddleware(client: Optional[Client] = None, *, distinct_id: Optional[Union[str, int, UUID]] = None, trace_id: Optional[Union[str, int, float, UUID]] = None, properties: Optional[dict[str, Any]] = None, privacy_mode: bool = False, groups: Optional[dict[str, Any]] = None, options: Optional[dict[str, Any]] = None)
 class posthog.ai.openai.openai.OpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai.WrappedBeta 
 class posthog.ai.openai.openai.WrappedBetaChat 
@@ -1314,7 +1353,7 @@ class posthog.ai.openai.openai_async.WrappedEmbeddings
 class posthog.ai.openai.openai_async.WrappedResponses 
 class posthog.ai.openai.openai_providers.AsyncAzureOpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
 class posthog.ai.openai.openai_providers.AzureOpenAI(posthog_client: Optional[PostHogClient] = None, **kwargs)
-class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None)
+class posthog.ai.openai_agents.processor.PostHogTracingProcessor(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None)
 class posthog.ai.otel.exporter.PostHogTraceExporter(api_key: str, host: str = DEFAULT_HOST, *, privacy_mode: bool = False, client: Optional[Client] = None)
 class posthog.ai.otel.processor.PostHogSpanProcessor(api_key: str, host: str = DEFAULT_HOST, *, privacy_mode: bool = False, client: Optional[Client] = None)
 class posthog.ai.prompts.CachedPrompt(prompt: str, fetched_at: float, name: str, version: int, label: Optional[str] = None, config: Optional[Dict[str, Any]] = None)
@@ -1333,19 +1372,22 @@ class posthog.ai.types.TokenUsage
 class posthog.ai.types.ToolInProgress 
 class posthog.args.OptionalCaptureArgs 
 class posthog.args.OptionalSetArgs 
-class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, gzip: bool = False, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
+class posthog.async_client.AsyncClient(project_api_key: str, host: Optional[str] = None, *, debug: bool = False, max_queue_size: int = 10000, send: bool = True, on_error=None, flush_at: int = 100, flush_interval: float = 5.0, max_retries: int = 3, timeout: float = 15, thread: int = 1, disabled: bool = False, disable_geoip: bool = True, is_server: bool = True, historical_migration: bool = False, super_properties: Optional[dict[str, Any]] = None, super_options: Optional[dict[str, Any]] = None, before_send=None, log_captured_exceptions: bool = False, project_root: Optional[str] = None, capture_exception_code_variables: bool = False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: Optional[list[str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, privacy_mode: bool = False, enable_full_ai_capture: bool = False, capture_trace_context: bool = False, secret_key: Optional[str] = None, personal_api_key: Optional[str] = None, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries: int = 1, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
 class posthog.async_client.AsyncPosthog 
 class posthog.bucketed_rate_limiter.BucketedRateLimiter(bucket_size: Number, refill_rate: Number, refill_interval_seconds: Number, on_bucket_rate_limited: Optional[Callable[[Hashable], None]] = None, clock: Callable[[], float] = time.monotonic)
 class posthog.capture_compression.CaptureCompression 
-class posthog.capture_mode.CaptureMode 
-class posthog.capture_v1.CaptureV1Error(status: int | str, message: str, *, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[list[tuple[str, Optional[str]]]] = None)
-class posthog.client.Client(project_api_key: str, host=None, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, gzip=False, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_mode: Optional[Union[CaptureMode, str]] = None, capture_compression: Optional[Union[CaptureCompression, str]] = None, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
-class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, gzip=False, retries=10, timeout: float = 15, historical_migration=False, endpoint=EVENTS_ENDPOINT, max_msg_size=MAX_MSG_SIZE, capture_mode=CaptureMode.V0, capture_compression=CaptureCompression.NONE)
+class posthog.capture_send.CaptureDroppedEvent 
+class posthog.capture_send.CaptureError(status: int | str, message: str, *, endpoint: str, retry_after: Optional[float] = None, request_id: Optional[str] = None, attempts: Optional[int] = None, retry_exhausted: Optional[list[str]] = None, drops: Optional[Sequence[tuple[str, Optional[str]]]] = None, event_results: Optional[dict[str, CaptureEventResult]] = None)
+class posthog.capture_send.CaptureEventResult(result: Optional[str], details: Optional[str] = None)
+class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max_queue_size=10000, send=True, on_error=None, flush_at=100, flush_interval=5.0, max_retries=3, sync_mode=False, timeout: float = 15, thread=1, poll_interval=30, personal_api_key=None, disabled=False, disable_geoip=True, is_server=True, historical_migration=False, feature_flags_request_timeout_seconds: float = 3, feature_flags_request_max_retries=1, super_properties=None, super_options=None, enable_exception_autocapture=False, log_captured_exceptions=False, project_root=None, privacy_mode=False, before_send=None, flag_fallback_cache_url=None, enable_local_evaluation=True, flag_definition_cache_provider: Optional[FlagDefinitionCacheProvider] = None, capture_exception_code_variables=False, code_variables_mask_patterns=None, code_variables_ignore_patterns=None, code_variables_mask_url_credentials=None, code_variables_detect_secrets=None, in_app_modules: list[str] | None = None, enable_exception_autocapture_rate_limiting=False, exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE, exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE, exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS, capture_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_compression: Optional[Union[CaptureCompression, str]] = None, capture_ai_max_queue_size: int = 1000, capture_ai_timeout: float = 30, capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE, secret_key=None, metrics: Optional[dict] = None, enable_full_ai_capture=False, capture_trace_context=False, _use_ai_lane=False, _enable_multimodal_capture=False, traces: Optional[dict] = None, app_host: Optional[str] = None, email_request_timeout_seconds: float = 15, email_request_max_retries: int = 2, migrated_from: Optional[str] = None)
+class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout: float = 15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
 class posthog.emails.CodeEmailArgs 
+class posthog.emails.EmailAttachment 
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
+class posthog.emails.EmailTracking 
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
 class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = ())
@@ -1375,7 +1417,7 @@ class posthog.mcp.types.CollectFeedbackOptions(tool_name: Optional[str] = None, 
 class posthog.mcp.types.FeedbackReport(feedback_type: str = 'other', summary: str = '', sentiment: Optional[str] = None, friction_points: Optional[str] = None, suggested_improvement: Optional[str] = None, details: Optional[str] = None, tool_name: Optional[str] = None, task_completed: Optional[bool] = None, extras: JsonRecord = dict(), raw: JsonRecord = dict())
 class posthog.mcp.types.MCPAnalyticsContextOptions(description: Optional[str] = None)
 class posthog.mcp.types.MCPAnalyticsModelOptions(description: Optional[str] = None)
-class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None, resolve_original_tool: Optional[Callable[[str], Any]] = None, send_initialize_event: bool = True, send_tools_list_event: bool = True)
+class posthog.mcp.types.MCPAnalyticsOptions(logger: Optional[LoggerFn] = None, report_missing: bool = False, missing_capability_tool_name: Optional[str] = None, enable_conversation_id: bool = True, enable_exception_autocapture: bool = True, context: Union[bool, MCPAnalyticsContextOptions] = True, identify: Optional[Union[IdentifyFn, UserIdentity]] = None, intent_fallback: Optional[IntentFallbackFn] = None, before_send: Optional[BeforeSendFn] = None, event_properties: Optional[EventPropertiesFn] = None, capture_model: Union[bool, MCPAnalyticsModelOptions] = True, collect_feedback: Union[bool, CollectFeedbackOptions] = False, server_build: Optional[str] = None, should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, resolve_input_aliases: Optional[ResolveInputAliasesFn] = None, resolve_original_tool: Optional[Callable[[str], Any]] = None, send_initialize_event: bool = True, send_tools_list_event: bool = True, event_options: Optional[EventOptionsFn] = None)
 class posthog.mcp.types.PreparedToolCall(args: Optional[JsonRecord] = None, intent: Optional[str] = None, intent_source: Optional[str] = None, is_missing_capability: bool = False, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, is_feedback: bool = False, feedback_report: Optional[FeedbackReport] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, _conversation_state: Optional[PreparedConversationState] = None)
 class posthog.mcp.types.ToolInputOptions(should_record_input_key: Optional[ShouldRecordInputKeyFn] = None, input_aliases: Optional[InputAliasMap] = None)
 class posthog.mcp.types.UserIdentity(distinct_id: str, properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None)
@@ -1418,8 +1460,8 @@ function posthog.ai.anthropic.anthropic_converter.handle_anthropic_text_delta(ev
 function posthog.ai.anthropic.anthropic_converter.handle_anthropic_tool_delta(event: Any, content_blocks: List[StreamingContentBlock], tools_in_progress: Dict[str, ToolInProgress]) -> None
 function posthog.ai.claude_agent_sdk.formatting.format_assistant_blocks(blocks: Any) -> List[Dict[str, Any]]
 function posthog.ai.claude_agent_sdk.formatting.format_tool_result_content(block: Any, ph_client: Any = None) -> Any
-function posthog.ai.claude_agent_sdk.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None) -> PostHogClaudeAgentProcessor
-function posthog.ai.claude_agent_sdk.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None)
+function posthog.ai.claude_agent_sdk.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None) -> PostHogClaudeAgentProcessor
+function posthog.ai.claude_agent_sdk.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_client: Optional[Client] = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None)
 function posthog.ai.gateway.is_posthog_ai_gateway_url(base_url: Any) -> bool
 function posthog.ai.gateway.warn_if_posthog_ai_gateway(base_url: Any) -> None
 function posthog.ai.gateway.warn_if_posthog_ai_gateway_otel_attributes(attributes: Optional[Mapping[str, Any]]) -> None
@@ -1457,7 +1499,7 @@ function posthog.ai.openai.openai_converter.format_openai_streaming_output(accum
 function posthog.ai.openai.wrapper_utils.merge_provider_override(posthog_properties: Optional[Dict[str, Any]], posthog_provider_override: Optional[str]) -> Optional[Dict[str, Any]]
 function posthog.ai.openai.wrapper_utils.reset_fallback_warnings() -> None
 function posthog.ai.openai.wrapper_utils.warn_on_fallback(wrapper_name: str, name: str) -> None
-function posthog.ai.openai_agents.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None) -> PostHogTracingProcessor
+function posthog.ai.openai_agents.instrument(client: Optional[Client] = None, distinct_id: Optional[Union[str, Callable[[Trace], Optional[str]]]] = None, privacy_mode: bool = False, groups: Optional[Dict[str, Any]] = None, properties: Optional[Dict[str, Any]] = None, options: Optional[Dict[str, Any]] = None) -> PostHogTracingProcessor
 function posthog.ai.otel.spans.is_ai_span(span: ReadableSpan) -> bool
 function posthog.ai.sanitization.redact_base64_data_url(value: Any) -> Any
 function posthog.ai.sanitization.redact_media(value: Any, max_string_len: Optional[int] = None, ph_client: Any = None) -> Any
@@ -1467,8 +1509,8 @@ function posthog.ai.sanitization.sanitize_langchain(data: Any, ph_client: Any = 
 function posthog.ai.sanitization.sanitize_messages(data: Any, provider: Optional[str] = None, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_openai(data: Any, ph_client: Any = None) -> Any
 function posthog.ai.sanitization.sanitize_openai_response(data: Any, ph_client: Any = None) -> Any
-function posthog.ai.utils.call_llm_and_track_usage(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_method: Callable[..., Any], **kwargs: Any) -> Any
-function posthog.ai.utils.call_llm_and_track_usage_async(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_async_method: Callable[..., Any], **kwargs: Any) -> Any
+function posthog.ai.utils.call_llm_and_track_usage(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_method: Callable[..., Any], *, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any
+function posthog.ai.utils.call_llm_and_track_usage_async(posthog_distinct_id: Optional[str], ph_client: PostHogClient, provider: str, posthog_trace_id: Optional[str], posthog_properties: Optional[Dict[str, Any]], posthog_privacy_mode: bool, posthog_groups: Optional[Dict[str, Any]], base_url: str, call_async_method: Callable[..., Any], *, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any) -> Any
 function posthog.ai.utils.capture_streaming_event(ph_client: PostHogClient, event_data: StreamingEventData)
 function posthog.ai.utils.extract_available_tool_calls(provider: str, kwargs: Dict[str, Any])
 function posthog.ai.utils.extract_stop_reason(response: Any, provider: str) -> Optional[str]
@@ -1480,10 +1522,10 @@ function posthog.ai.utils.merge_system_prompt(kwargs: Dict[str, Any], provider: 
 function posthog.ai.utils.merge_usage_stats(target: TokenUsage, source: TokenUsage, mode: str = 'incremental') -> None
 function posthog.ai.utils.serialize_raw_usage(raw_usage: Any) -> Optional[Dict[str, Any]]
 function posthog.ai.utils.with_privacy_mode(ph_client: PostHogClient, privacy_mode: bool, value: Any)
-function posthog.alias(previous_id: ID_TYPES, distinct_id: str, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
+function posthog.alias(previous_id: ID_TYPES, distinct_id: str, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 function posthog.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-function posthog.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+function posthog.capture_exception(exception: Optional[ExceptionArg] = None, *, level: Optional[str] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 function posthog.client.add_context_tags(properties)
 function posthog.client.get_identity_state(passed) -> tuple[str, bool]
 function posthog.client.no_throw(default_return=None)
@@ -1495,6 +1537,7 @@ function posthog.contexts.get_code_variables_mask_patterns_context() -> Optional
 function posthog.contexts.get_code_variables_mask_url_credentials_context() -> Optional[bool]
 function posthog.contexts.get_context_device_id() -> Optional[str]
 function posthog.contexts.get_context_distinct_id() -> Optional[str]
+function posthog.contexts.get_context_options() -> Dict[str, Any]
 function posthog.contexts.get_context_session_id() -> Optional[str]
 function posthog.contexts.get_tags() -> Dict[str, Any]
 function posthog.contexts.identify_context(distinct_id: str) -> None
@@ -1506,6 +1549,7 @@ function posthog.contexts.set_code_variables_ignore_patterns_context(ignore_patt
 function posthog.contexts.set_code_variables_mask_patterns_context(mask_patterns: list) -> None
 function posthog.contexts.set_code_variables_mask_url_credentials_context(enabled: bool) -> None
 function posthog.contexts.set_context_device_id(device_id: str) -> None
+function posthog.contexts.set_context_option(key: str, value: Any) -> None
 function posthog.contexts.set_context_session(session_id: str) -> None
 function posthog.contexts.tag(key: str, value: Any) -> None
 function posthog.evaluate_flags(distinct_id: Optional[ID_TYPES] = None, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
@@ -1560,6 +1604,7 @@ function posthog.flush(timeout_seconds: Optional[float] = 10) -> None
 function posthog.get_active_span() -> Optional[Span]
 function posthog.get_all_flags(distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> Optional[dict[str, FlagValue]]
 function posthog.get_all_flags_and_payloads(distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None, flag_keys_to_evaluate: Optional[list[str]] = None) -> FlagsAndPayloads
+function posthog.get_context_options() -> Dict[str, Any]
 function posthog.get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
 function posthog.get_feature_flag_evaluation_runtime(key: str) -> Optional[FeatureFlagEvaluationRuntime]
 function posthog.get_feature_flag_keys_by_evaluation_runtime(evaluation_runtime: Union[FeatureFlagEvaluationRuntime, str]) -> list[str]
@@ -1567,7 +1612,7 @@ function posthog.get_feature_flag_payload(key: str, distinct_id: ID_TYPES, match
 function posthog.get_feature_flag_result(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FeatureFlagResult]
 function posthog.get_remote_config_payload(key: str)
 function posthog.get_tags() -> Dict[str, Any]
-function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+function posthog.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime.datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 function posthog.identify_context(distinct_id: str)
 function posthog.integrations.django.markcoroutinefunction(func)
 function posthog.integrations.drf.create_exception_handler(handler: Optional[Callable[[Exception, Mapping[str, Any]], Any]] = None, *, client: Optional[Client] = None, capture_exceptions: Optional[bool] = None, capture_4xx: bool = False, exception_filter: Optional[Callable[[Exception, Any, Mapping[str, Any]], bool]] = None) -> Callable[[Exception, Mapping[str, Any]], Any]
@@ -1589,15 +1634,14 @@ function posthog.mcp.session_token.encode_session_id(payload: SessionTokenPayloa
 function posthog.mcp.session_token.read_mcp_session_header(headers: Any) -> Optional[str]
 function posthog.mcp.tools.get_more_tools_result() -> Dict[str, Any]
 function posthog.new_context(fresh: bool = False, capture_exceptions: Optional[bool] = None, client: Optional[Client] = None)
-function posthog.request.batch_post(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: float = 15, path: str = EVENTS_ENDPOINT, **kwargs) -> requests.Response
 function posthog.request.determine_app_host(host: Optional[str]) -> str
 function posthog.request.determine_server_host(host: Optional[str]) -> str
 function posthog.request.disable_connection_reuse() -> None
 function posthog.request.enable_keep_alive() -> None
-function posthog.request.flags(api_key: str, host: Optional[str] = None, gzip: bool = False, timeout: float = 15, max_retries: int = 1, **kwargs) -> Any
+function posthog.request.flags(api_key: str, host: Optional[str] = None, *, timeout: float = 15, max_retries: int = 1, **kwargs) -> Any
 function posthog.request.get(api_key: str, url: str, host: Optional[str] = None, timeout: Optional[float] = None, etag: Optional[str] = None) -> GetResponse
 function posthog.request.normalize_host(host: Optional[str]) -> str
-function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, gzip: bool = False, timeout: float = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
+function posthog.request.post(api_key: str, host: Optional[str] = None, path: Optional[str] = None, *, timeout: float = 15, session: Optional[requests.Session] = None, **kwargs) -> requests.Response
 function posthog.request.remote_config(personal_api_key: str, project_api_key: str, host: Optional[str] = None, key: str = '', timeout: float = 15) -> Any
 function posthog.request.reset_sessions() -> None
 function posthog.request.set_socket_options(socket_options: Optional[SocketOptions]) -> None
@@ -1609,6 +1653,7 @@ function posthog.set_code_variables_ignore_patterns_context(ignore_patterns: lis
 function posthog.set_code_variables_mask_patterns_context(mask_patterns: list[str])
 function posthog.set_code_variables_mask_url_credentials_context(enabled: bool)
 function posthog.set_context_device_id(device_id: str)
+function posthog.set_context_option(key: str, value: Any) -> None
 function posthog.set_context_session(session_id: str)
 function posthog.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 function posthog.setup() -> Client
@@ -1632,10 +1677,10 @@ function posthog.utils.str_iequals(value, comparand)
 function posthog.utils.str_istartswith(source, search)
 function posthog.utils.system_context() -> dict[str, Any]
 function posthog.utils.total_seconds(delta: timedelta) -> float
-method posthog.ai.anthropic.anthropic.WrappedMessages.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.anthropic.anthropic.WrappedMessages.stream(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages.stream(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.anthropic.anthropic.WrappedMessages.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.anthropic.anthropic.WrappedMessages.stream(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.anthropic.anthropic_async.AsyncWrappedMessages.stream(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.connect(prompt: Any = None) -> None
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.disconnect() -> None
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.interrupt() -> None
@@ -1643,7 +1688,7 @@ method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.query(prompt: s
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.receive_response()
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_model(model: Optional[str] = None) -> None
 method posthog.ai.claude_agent_sdk.client.PostHogClaudeSDKClient.set_permission_mode(mode: str) -> None
-method posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None)
+method posthog.ai.claude_agent_sdk.processor.PostHogClaudeAgentProcessor.query(*, prompt: Any, options: Optional[ClaudeAgentOptions] = None, transport: Any = None, posthog_distinct_id: Optional[Union[str, Callable[[ResultMessage], Optional[str]]]] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None)
 method posthog.ai.evaluations.AsyncDatasetSnapshot.iter_items(*, page_size: int = 25)
 method posthog.ai.evaluations.AsyncDatasets.archive(dataset_id: str | UUID)
 method posthog.ai.evaluations.AsyncDatasets.archive_item(item_id: str | UUID, *, base_version: int)
@@ -1669,13 +1714,14 @@ method posthog.ai.evaluations.AsyncExperiment.upload_results(results: Sequence[E
 method posthog.ai.evaluations.AsyncOfflineEvaluations.aclose()
 method posthog.ai.evaluations.AsyncOfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.AsyncOfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
-method posthog.ai.evaluations.AsyncScorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
+method posthog.ai.evaluations.AsyncScorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, composition: ScorerComposition | None = None)
 method posthog.ai.evaluations.AsyncScorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.AsyncScorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.AsyncScorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any', calculation: ScorerCalculation | None = None, input_definition_id: str | UUID | None = None)
 method posthog.ai.evaluations.AsyncScorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
 method posthog.ai.evaluations.AsyncScorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
+method posthog.ai.evaluations.AsyncScorers.validate_composition(*, kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None = None)
 method posthog.ai.evaluations.DatasetSnapshot.iter_items(*, page_size: int = 25)
 method posthog.ai.evaluations.Datasets.archive(dataset_id: str | UUID)
 method posthog.ai.evaluations.Datasets.archive_item(item_id: str | UUID, *, base_version: int)
@@ -1706,19 +1752,20 @@ method posthog.ai.evaluations.Experiment.upload_results(results: Sequence[Evalua
 method posthog.ai.evaluations.OfflineEvaluations.close()
 method posthog.ai.evaluations.OfflineEvaluations.create_experiment(*, name: str, **options: Unpack[ExperimentOptions])
 method posthog.ai.evaluations.OfflineEvaluations.resume_experiment(id: str | UUID)
-method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
-method posthog.ai.evaluations.Scorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED)
+method posthog.ai.evaluations.Scorers.create(*, name: str, kind: ScorerKind, config: ScorerConfig, description: str | None | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED, calculation: ScorerCalculation = 'reported', composition: ScorerComposition | None = None)
+method posthog.ai.evaluations.Scorers.create_version(scorer_id: str | UUID, *, config: _ConfigT, base_version: int | None = None, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, composition: ScorerComposition | None = None)
 method posthog.ai.evaluations.Scorers.get(scorer_id: str | UUID)
 method posthog.ai.evaluations.Scorers.get_version(scorer_id: str | UUID, version_id: str | UUID)
-method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any')
+method posthog.ai.evaluations.Scorers.list(*, limit: int = 100, offset: int = 0, search: str | None = None, kind: ScorerKind | None = None, archived: bool | None = None, order_by: ScorerOrder | None = None, tags: Sequence[str] | None = None, tag_match: Literal['any', 'all'] = 'any', calculation: ScorerCalculation | None = None, input_definition_id: str | UUID | None = None)
 method posthog.ai.evaluations.Scorers.list_versions(scorer_id: str | UUID, *, limit: int = 50, cursor: str | None = None)
 method posthog.ai.evaluations.Scorers.update(scorer_id: str | UUID, *, name: str | _Omitted = _OMITTED, description: str | None | _Omitted = _OMITTED, archived: bool | _Omitted = _OMITTED, tags: Sequence[str] | _Omitted = _OMITTED)
-method posthog.ai.gemini.gemini.Models.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.gemini.gemini.Models.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.gemini.gemini.Models.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.gemini.gemini_async.AsyncModels.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.gemini.gemini_async.AsyncModels.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
-method posthog.ai.gemini.gemini_async.AsyncModels.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.evaluations.Scorers.validate_composition(*, kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None = None)
+method posthog.ai.gemini.gemini.Models.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.gemini.gemini.Models.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.gemini.gemini.Models.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.gemini.gemini_async.AsyncModels.embed_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.gemini.gemini_async.AsyncModels.generate_content(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.gemini.gemini_async.AsyncModels.generate_content_stream(model: str, contents, posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: Optional[bool] = None, posthog_groups: Optional[Dict[str, Any]] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.langchain.callbacks.CallbackHandler.on_agent_action(action: AgentAction, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_agent_finish(finish: AgentFinish, *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any) -> Any
 method posthog.ai.langchain.callbacks.CallbackHandler.on_chain_end(outputs: Dict[str, Any], *, run_id: UUID, parent_run_id: Optional[UUID] = None, **kwargs: Any)
@@ -1743,18 +1790,18 @@ method posthog.ai.langchain.middleware.PostHogMiddleware.awrap_tool_call(request
 method posthog.ai.langchain.middleware.PostHogMiddleware.before_agent(state: _PostHogMiddlewareState, runtime: Any) -> dict[str, Any]
 method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_model_call(request: ModelRequest[Any], handler: Callable[[ModelRequest[Any]], ModelResponse[Any]]) -> ModelResponse[Any]
 method posthog.ai.langchain.middleware.PostHogMiddleware.wrap_tool_call(request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]) -> ToolMessage | Command[Any]
-method posthog.ai.openai.openai.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai.WrappedEmbeddings.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai.WrappedResponses.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai.WrappedResponses.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedEmbeddings.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedResponses.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
-method posthog.ai.openai.openai_async.WrappedResponses.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedEmbeddings.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedResponses.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai.WrappedResponses.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedBetaCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedCompletions.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedCompletions.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedEmbeddings.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedResponses.create(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
+method posthog.ai.openai.openai_async.WrappedResponses.parse(posthog_distinct_id: Optional[str] = None, posthog_trace_id: Optional[str] = None, posthog_properties: Optional[Dict[str, Any]] = None, posthog_privacy_mode: bool = False, posthog_groups: Optional[Dict[str, Any]] = None, posthog_provider_override: Optional[str] = None, posthog_options: Optional[Dict[str, Any]] = None, **kwargs: Any)
 method posthog.ai.openai_agents.processor.PostHogTracingProcessor.force_flush() -> None
 method posthog.ai.openai_agents.processor.PostHogTracingProcessor.on_span_end(span: Span[Any]) -> None
 method posthog.ai.openai_agents.processor.PostHogTracingProcessor.on_span_start(span: Span[Any]) -> None
@@ -1774,24 +1821,27 @@ method posthog.ai.prompts.Prompts.get(name: str, *, with_metadata: Optional[bool
 method posthog.ai.prompts.Prompts.get_all(*, label: Optional[str] = None) -> Dict[str, PromptResult]
 method posthog.ai.stream.AsyncStreamWrapper.aclose() -> None
 method posthog.ai.stream.AsyncStreamWrapper.close() -> None
-method posthog.async_client.AsyncClient.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
+method posthog.async_client.AsyncClient.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 method posthog.async_client.AsyncClient.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-method posthog.async_client.AsyncClient.capture_exception(exception: Optional[ExceptionArg] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.capture_ai_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.async_client.AsyncClient.capture_exception(exception: Optional[ExceptionArg] = None, *, level: Optional[str] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.capture_immediate(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys: Optional[list[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 method posthog.async_client.AsyncClient.flush(timeout_seconds: Optional[float] = 10) -> None
 method posthog.async_client.AsyncClient.get_remote_config_payload(key: str) -> Optional[Any]
-method posthog.async_client.AsyncClient.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.async_client.AsyncClient.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 method posthog.async_client.AsyncClient.join() -> None
 method posthog.async_client.AsyncClient.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.async_client.AsyncClient.shutdown() -> None
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.consume_rate_limit(key: Hashable) -> bool
 method posthog.bucketed_rate_limiter.BucketedRateLimiter.stop() -> None
-method posthog.client.Client.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None) -> Optional[str]
+method posthog.capture_send.CaptureError.verdict_summary() -> str
+method posthog.client.Client.alias(previous_id: ID_TYPES, distinct_id: Optional[str], timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[str] = None, disable_geoip: Optional[bool] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 method posthog.client.Client.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.client.Client.capture_ai(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-method posthog.client.Client.capture_exception(exception: Optional[ExceptionArg], **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
+method posthog.client.Client.capture_exception(exception: Optional[ExceptionArg], *, level: Optional[str] = None, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
 method posthog.client.Client.evaluate_flags(distinct_id: Optional[ID_TYPES] = None, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys: Optional[List[str]] = None, device_id: Optional[str] = None) -> FeatureFlagEvaluations
 method posthog.client.Client.feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[bool]
 method posthog.client.Client.feature_flag_definitions()
@@ -1799,6 +1849,7 @@ method posthog.client.Client.flush(timeout_seconds: Optional[float] = 10) -> Non
 method posthog.client.Client.get_active_span() -> Optional[Span]
 method posthog.client.Client.get_all_flags(distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> Optional[dict[str, Union[bool, str]]]
 method posthog.client.Client.get_all_flags_and_payloads(distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsAndPayloads
+method posthog.client.Client.get_context_options() -> Dict[str, Any]
 method posthog.client.Client.get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, only_evaluate_locally: bool = False, send_feature_flag_events: bool = True, disable_geoip: Optional[bool] = None, device_id: Optional[str] = None) -> Optional[FlagValue]
 method posthog.client.Client.get_feature_flag_evaluation_runtime(key: str) -> Optional[FeatureFlagEvaluationRuntime]
 method posthog.client.Client.get_feature_flag_keys_by_evaluation_runtime(evaluation_runtime: Union[FeatureFlagEvaluationRuntime, str]) -> list[str]
@@ -1810,7 +1861,7 @@ method posthog.client.Client.get_feature_variants(distinct_id: ID_TYPES, groups:
 method posthog.client.Client.get_flags_decision(distinct_id: Optional[ID_TYPES] = None, groups: Optional[Mapping[str, Union[str, int]]] = None, person_properties: Optional[Dict[str, Any]] = None, group_properties: Optional[Dict[str, Dict[str, Any]]] = None, disable_geoip: Optional[bool] = None, flag_keys_to_evaluate: Optional[list[str]] = None, device_id: Optional[str] = None) -> FlagsResponse
 method posthog.client.Client.get_remote_config_payload(key: str)
 method posthog.client.Client.get_tags() -> Dict[str, Any]
-method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None) -> Optional[str]
+method posthog.client.Client.group_identify(group_type: str, group_key: str, properties: Optional[Dict[str, Any]] = None, timestamp: Optional[Union[datetime, str]] = None, uuid: Optional[Union[str, UUID]] = None, disable_geoip: Optional[bool] = None, distinct_id: Optional[ID_TYPES] = None, options: Optional[Dict[str, Any]] = None) -> Optional[str]
 method posthog.client.Client.identify_context(distinct_id: str) -> None
 method posthog.client.Client.join() -> None
 method posthog.client.Client.load_feature_flags()
@@ -1818,6 +1869,7 @@ method posthog.client.Client.new_context(fresh=False, capture_exceptions: Option
 method posthog.client.Client.scoped(fresh=False, capture_exceptions: Optional[bool] = None)
 method posthog.client.Client.set(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.set_context_device_id(device_id: str) -> None
+method posthog.client.Client.set_context_option(key: str, value: Any) -> None
 method posthog.client.Client.set_context_session(session_id: str) -> None
 method posthog.client.Client.set_once(**kwargs: Unpack[OptionalSetArgs]) -> Optional[str]
 method posthog.client.Client.shutdown() -> None
@@ -1828,7 +1880,9 @@ method posthog.consumer.Consumer.pause()
 method posthog.consumer.Consumer.request(batch)
 method posthog.consumer.Consumer.run()
 method posthog.consumer.Consumer.upload()
+method posthog.contexts.ContextScope.add_option(key: str, value: Any)
 method posthog.contexts.ContextScope.add_tag(key: str, value: Any)
+method posthog.contexts.ContextScope.collect_options() -> Dict[str, Any]
 method posthog.contexts.ContextScope.collect_tags() -> Dict[str, Any]
 method posthog.contexts.ContextScope.get_capture_exception_code_variables() -> Optional[bool]
 method posthog.contexts.ContextScope.get_code_variables_detect_secrets() -> Optional[bool]
@@ -1885,14 +1939,14 @@ method posthog.integrations.django.PosthogContextMiddleware.extract_tags(request
 method posthog.integrations.django.PosthogContextMiddleware.process_exception(request, exception)
 method posthog.integrations.flask.PosthogFlaskIntegration.init_app(app: Flask) -> None
 method posthog.integrations.otel.PostHogContextSpanProcessor.on_start(span: Span, parent_context: Optional[Context] = None) -> None
-method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None) -> None
+method posthog.mcp.McpAnalytics.capture(event: str, properties: Optional[dict] = None, *, event_options: Optional[Dict[str, Any]] = None) -> None
 method posthog.mcp.McpAnalytics.flush() -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.capture(event: str, **kwargs: Unpack[OptionalCaptureArgs]) -> Optional[str]
-method posthog.mcp.posthog_mcp.PostHogMCP.capture_feedback(*, report: FeedbackReport, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
-method posthog.mcp.posthog_mcp.PostHogMCP.capture_initialize(*, client_name: Optional[str] = None, client_version: Optional[str] = None, protocol_version: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
-method posthog.mcp.posthog_mcp.PostHogMCP.capture_missing_capability(*, context: Optional[str] = None, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, parameters: Any = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
-method posthog.mcp.posthog_mcp.PostHogMCP.capture_tool_call(tool_name: str, *, intent: Optional[str] = None, intent_source: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, error_type: Optional[str] = None, category: Optional[str] = None, tool_description: Optional[str] = None, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
-method posthog.mcp.posthog_mcp.PostHogMCP.capture_tools_list(*, tool_names: Optional[List[str]] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, error_type: Optional[str] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_feedback(*, report: FeedbackReport, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, event_options: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_initialize(*, client_name: Optional[str] = None, client_version: Optional[str] = None, protocol_version: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, event_options: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_missing_capability(*, context: Optional[str] = None, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, parameters: Any = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, event_options: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_tool_call(tool_name: str, *, intent: Optional[str] = None, intent_source: Optional[str] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, error_type: Optional[str] = None, category: Optional[str] = None, tool_description: Optional[str] = None, llm_model: Optional[str] = None, llm_model_source: Optional[MCPAnalyticsModelSource] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, conversation_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, event_options: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime] = None) -> None
+method posthog.mcp.posthog_mcp.PostHogMCP.capture_tools_list(*, tool_names: Optional[List[str]] = None, parameters: Any = None, response: Any = None, duration_ms: Optional[float] = None, is_error: bool = False, error: Any = None, error_type: Optional[str] = None, protocol_version: Optional[str] = None, distinct_id: Optional[str] = None, session_id: Optional[str] = None, client_user_agent: Optional[str] = None, vendor_client: Optional[str] = None, set_properties: Optional[JsonRecord] = None, groups: Optional[Dict[str, str]] = None, properties: Optional[JsonRecord] = None, event_options: Optional[Dict[str, Any]] = None, timestamp: Optional[datetime] = None) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.flush(timeout_seconds: Optional[float] = 10) -> None
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_call(name: str, args: Optional[JsonRecord] = None, *, request_meta: Optional[JsonRecord] = None, original_tool: Any = None, session_id: Optional[str] = None) -> PreparedToolCall
 method posthog.mcp.posthog_mcp.PostHogMCP.prepare_tool_list(tools: List[Any], context: Union[bool, MCPAnalyticsContextOptions] = True, report_missing: bool = False, collect_feedback: bool = False) -> List[Any]
@@ -1982,8 +2036,8 @@ module posthog.args
 module posthog.async_client
 module posthog.bucketed_rate_limiter
 module posthog.capture_compression
-module posthog.capture_mode
-module posthog.capture_v1
+module posthog.capture_event
+module posthog.capture_send
 module posthog.client
 module posthog.consumer
 module posthog.contexts

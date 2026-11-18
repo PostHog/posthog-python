@@ -235,7 +235,7 @@ def test_add_conversation_id_adds_property():
     assert out["properties"]["conversation_id"]["type"] == "string"
     # Without this clause, ChatGPT drops the handle on each new user message and every message becomes its own session.
     assert (
-        "rest of the conversation, including after later user messages"
+        "including after later user messages"
         in out["properties"]["conversation_id"]["description"]
     )
 

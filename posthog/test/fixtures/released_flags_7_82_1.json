@@ -990,6 +990,9 @@
             "$feature_flag_evaluated_at": 1800000000000,
             "$feature_flag_has_experiment": false,
             "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
             "$feature_flag_reason": "Matched condition set 1",
             "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
             "$feature_flag_response": false,
@@ -1005,6 +1008,9 @@
             "$feature_flag_evaluated_at": 1800000000000,
             "$feature_flag_has_experiment": false,
             "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
             "$feature_flag_reason": "Matched condition set 1",
             "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
             "$feature_flag_response": false,
@@ -1020,6 +1026,9 @@
             "$feature_flag_evaluated_at": 1800000000000,
             "$feature_flag_has_experiment": false,
             "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
             "$feature_flag_reason": "Matched condition set 1",
             "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
             "$feature_flag_response": false,
@@ -1232,6 +1241,9 @@
             "$feature_flag_evaluated_at": 1800000000000,
             "$feature_flag_has_experiment": false,
             "$feature_flag_id": 700,
+            "$feature_flag_payload": {
+              "columns": 2
+            },
             "$feature_flag_reason": "Matched condition set 1",
             "$feature_flag_request_id": "60000000-0000-4000-8000-000000000000",
             "$feature_flag_response": false,
@@ -1366,7 +1378,9 @@
       "get_feature_flag_payload:bool-off": null,
       "get_feature_flag_payload:bool-on": null,
       "get_feature_flag_payload:missing": null,
-      "get_feature_flag_payload:server-failed": null,
+      "get_feature_flag_payload:server-failed": {
+        "columns": 2
+      },
       "get_feature_flag_payload:sparse": null,
       "get_feature_flag_payload:v1-bool-payload": {
         "cta": "Try it",
@@ -1402,7 +1416,9 @@
       "get_feature_flag_result:server-failed": [
         false,
         null,
-        null,
+        {
+          "columns": 2
+        },
         "Matched condition set 1"
       ],
       "get_feature_flag_result:sparse": [
@@ -1559,7 +1575,7 @@
               "description": null,
               "has_experiment": false,
               "id": 700,
-              "payload": null,
+              "payload": "{\"columns\": 2}",
               "version": 3
             },
             "reason": {
@@ -1743,7 +1759,9 @@
       "snapshot.get_flag_payload:bool-off": null,
       "snapshot.get_flag_payload:bool-on": null,
       "snapshot.get_flag_payload:missing": null,
-      "snapshot.get_flag_payload:server-failed": null,
+      "snapshot.get_flag_payload:server-failed": {
+        "columns": 2
+      },
       "snapshot.get_flag_payload:sparse": null,
       "snapshot.get_flag_payload:v1-bool-payload": {
         "cta": "Try it",

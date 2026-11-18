@@ -140,10 +140,7 @@ class PostHogTraces:
         if self._closed or getattr(self._client, "disabled", False):
             return inert_span(parent, tracestate, self._active_var)
 
-        parent = traceparent_header(parent)
-        if isinstance(parent, str) and not parent.strip():
-            # `headers.get("traceparent", "")` with no header: the default applies.
-            parent = None
+        parent = _normalize_parent(parent)
         if parent is not None and not isinstance(parent, (str, RecordingSpan)):
             if isinstance(parent, Span):
                 # A child of an inert handle is inert too, still forwarding any
@@ -156,10 +153,26 @@ class PostHogTraces:
         else:
             parent_context = self._resolve_parent(parent, tracestate)
 
+        span_id = self._reserve_span()
+        if span_id is None:
+            return inert_span(parent, tracestate, self._active_var)
+
+        try:
+            return self._build_span(
+                span_id, name, kind, attributes, parent_context, start_time
+            )
+        except Exception:
+            # The reservation would otherwise hold its slot until age eviction.
+            with self._lock:
+                self._live_spans.pop(span_id, None)
+            raise
+
+    def _reserve_span(self) -> Optional[str]:
+        """Reserve a live-span slot, reporting evictions outside the lock."""
         with self._lock:
             if self._is_closed():
                 # close() may have run since the check above.
-                return inert_span(parent, tracestate, self._active_var)
+                return None
             # Swept only at the bound, so a long span that does end is still
             # exported, while a process that leaked its way there recovers.
             aged = 0
@@ -181,17 +194,9 @@ class PostHogTraces:
                 "the live-span limit ({}) was reached; spans are being started "
                 "and never ended".format(self._config.max_live_spans),
             )
-            return inert_span(parent, tracestate, self._active_var)
+            return None
 
-        try:
-            return self._build_span(
-                span_id, name, kind, attributes, parent_context, start_time
-            )
-        except Exception:
-            # The reservation would otherwise hold its slot until age eviction.
-            with self._lock:
-                self._live_spans.pop(span_id, None)
-            raise
+        return span_id
 
     def _build_span(
         self,
@@ -215,7 +220,7 @@ class PostHogTraces:
             start_ns=start_ns,
             backdated=start_ns != now_ns,
             on_end=self._on_span_end,
-            kind=kind if isinstance(kind, str) and kind else "internal",
+            kind=_recording_kind(kind),
             attributes=span_attributes,
             parent_span_id=parent_context.parent_span_id if parent_context else None,
             trace_state=parent_context.trace_state if parent_context else None,
@@ -331,3 +336,15 @@ def _report_limit_drops(record: SpanRecord) -> None:
             record.dropped_events_count,
             event_attributes,
         )
+
+
+def _recording_kind(kind: Any) -> str:
+    return kind if isinstance(kind, str) and kind else "internal"
+
+
+def _normalize_parent(parent: Any) -> Any:
+    parent = traceparent_header(parent)
+    if isinstance(parent, str) and not parent.strip():
+        # `headers.get("traceparent", "")` with no header: the default applies.
+        return None
+    return parent

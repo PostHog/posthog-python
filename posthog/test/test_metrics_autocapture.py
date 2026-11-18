@@ -443,6 +443,60 @@ class TestStartMetricsAutocapture:
         assert len(attributes) == 2
         assert {"otel.metric.overflow": True} in attributes
 
+    def test_fork_reset_replaces_held_collection_locks_without_acquiring_them(
+        self, posthog_host, started
+    ):
+        # Exercise the reset callback in-process: child coverage is not recorded,
+        # and a held inherited lock must never be acquired by the reset itself.
+        handle = _start(
+            posthog_host,
+            started,
+            export_interval_seconds=3600,
+            areas={"runtime": True},
+        )
+        meter = handle._meter_provider.get_meter("fork-reset-test")
+        histogram = meter.create_histogram("fork.reset.duration")
+        histogram.record(1)
+        consumer = handle._meter_provider._measurement_consumer
+        owners = [(meter, "_instrument_registration_lock"), (consumer, "_lock")]
+        for storage in consumer._reader_storages.values():
+            owners.append((storage, "_lock"))
+            for matches in storage._instrument_view_instrument_matches.values():
+                for match in matches:
+                    owners.append((match, "_lock"))
+                    for aggregation in match._attributes_aggregation.values():
+                        owners.append((aggregation, "_lock"))
+                        reservoir = getattr(aggregation, "_reservoir", None)
+                        if getattr(reservoir, "_lock", None) is not None:
+                            owners.append((reservoir, "_lock"))
+        owners.extend(
+            [(handle._reader, "_export_lock"), (metrics_autocapture, "_lock")]
+        )
+        original_locks = [getattr(owner, name) for owner, name in owners]
+        runtime = next(i for i in handle._instrumentors if hasattr(i, "_proc"))
+        original_process = runtime._proc
+        handle._flush_requested = 8
+        handle._flush_exported = 5
+
+        with ExitStack() as stack:
+            for lock in original_locks:
+                stack.enter_context(_held_by_another_thread(lock))
+            metrics_autocapture._reinit_after_fork()
+            for (owner, name), original in zip(owners, original_locks):
+                replacement = getattr(owner, name)
+                assert replacement is not original
+                assert type(replacement) is type(original)
+                assert replacement.acquire(blocking=False)
+                replacement.release()
+            histogram.record(2)
+            handle.force_flush()
+
+        assert runtime._proc is not original_process
+        assert runtime._proc.pid == os.getpid()
+        assert handle._flush_thread is None
+        assert handle._flush_requested == handle._flush_exported == 0
+        assert _metrics_exports(posthog_host)
+
     @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
     @pytest.mark.filterwarnings("ignore:This process .* is multi-threaded")
     def test_keeps_working_in_a_forked_child(self, posthog_host, app_server, started):

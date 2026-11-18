@@ -439,15 +439,32 @@ async def test_lifespan_scope_passes_through_without_context():
 
 
 @pytest.mark.asyncio
-async def test_builds_url_from_server_when_host_header_is_absent():
+@pytest.mark.parametrize(
+    "scheme,server,expected_url",
+    [
+        ("http", ("2001:db8::1", 8080), "http://[2001:db8::1]:8080/health"),
+        ("https", ("2001:db8::1", 443), "https://[2001:db8::1]/health"),
+        ("http", ("[2001:db8::1]", 80), "http://[2001:db8::1]/health"),
+        ("http", ("example.com", 80), "http://example.com/health"),
+        ("https", ("example.com", 443), "https://example.com/health"),
+        ("wss", ("example.com", 443), "wss://example.com:443/health"),
+        ("https", ("example.com", "443"), None),
+        ("https", (None, 443), None),
+        ("https", (" \r\n ", 443), None),
+        ("https", ("example.com",), None),
+        ("https", None, None),
+    ],
+)
+async def test_builds_url_from_server_when_host_header_is_absent(
+    scheme, server, expected_url
+):
     observed = {}
 
     async def app(scope, receive, send):
         observed.update(contexts.get_tags())
 
-    scope = http_scope(
-        headers=[], scheme="http", server=("2001:db8::1", 8080), path="/health"
-    )
+    scope = http_scope(headers=[], scheme=scheme, server=server, path="/health")
     await PosthogASGIMiddleware(app)(scope, noop_receive, noop_send)
 
-    assert observed["$current_url"] == "http://[2001:db8::1]:8080/health"
+    assert observed.get("$current_url") == expected_url
+    assert observed["$request_path"] == "/health"

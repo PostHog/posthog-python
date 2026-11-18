@@ -53,6 +53,7 @@ from ._instrumentation import (
     _to_jsonable,
     copy_tools_list_result,
     is_first_listing_page,
+    is_tool_result_error,
     mutate_tool_schema,
     params_to_request_dict,
     prepare_request,
@@ -66,6 +67,7 @@ from ._instrumentation import (
     start_tools_list_lifecycle,
     warn_ownership_lookup_failed,
 )
+from ._instrument_lowlevel import registered_tool_exists
 from ._internal import MCPAnalyticsData
 from ._model_parameters import (
     can_inject_model_parameter,
@@ -73,6 +75,7 @@ from ._model_parameters import (
     request_meta_from_context,
 )
 from ._output_instructions import mirror_instructions_into_structured_content
+from ._raised_tool_error import raised_tool_error
 from ._tool_input import get_registered_tool_input_schema
 from .asgi import get_mcp_session
 from .logger import log
@@ -450,6 +453,10 @@ def _wrap_tool_manager_call_v2(server: Any, data: MCPAnalyticsData) -> None:
                 name, call_arguments, context=context, convert_result=convert_result
             )
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                _name_owned_by_real_tool_v2(server, name)
+            ):
+                raise
             # The outer MCPServer layer converts the raise after this seam; no
             # freshly minted handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
@@ -548,24 +555,7 @@ async def _standalone_injected_parameters(
     Listings from other requests can have different application-owned parameters.
     Without a schema, stripping could delete application arguments.
     """
-    try:
-        from fastmcp.utilities.versions import VersionSpec, version_sort_key
-
-        version_spec = VersionSpec(eq=version) if version else None
-        # Middleware can shadow registered tools, so resolve the effective listing.
-        candidates = [
-            tool
-            for tool in await server.list_tools()
-            if tool.name == name
-            and (version_spec is None or version_spec.matches(tool.version))
-        ]
-        tool = max(candidates, key=version_sort_key, default=None)
-        if tool is None:
-            tool = await server.get_tool(name, version=version_spec)
-        schema = getattr(tool, "parameters", None)
-    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
-        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
-        return None, None
+    schema = await _standalone_input_schema(server, name, version)
     if not isinstance(schema, dict):
         return None, None
     injected = set()
@@ -667,8 +657,13 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
 
         start = time.monotonic()
         try:
-            result = await original(ctx, params)
+            with raised_tool_error(standalone) as raised:
+                result = await original(ctx, params)
         except Exception as error:
+            if await lifecycle.record_if_unknown_tool(
+                await registered_tool_exists(standalone, name)
+            ):
+                raise
             # Raw v2 handlers raise through to JSON-RPC errors; no freshly minted
             # handle could have been delivered yet.
             await lifecycle.record_error(error, (time.monotonic() - start) * 1000)
@@ -685,8 +680,17 @@ def _wrap_v2_call_tool(server: Any, data: MCPAnalyticsData) -> None:
                 lifecycle.minted_conversation_id,
             )
 
+        if is_tool_result_error(result) and await lifecycle.record_if_unknown_tool(
+            await registered_tool_exists(standalone, name),
+            conversation_id_delivered=delivered,
+        ):
+            return result
+
         await lifecycle.record_result(
-            result, duration_ms, conversation_id_delivered=delivered
+            result,
+            duration_ms,
+            conversation_id_delivered=delivered,
+            error=raised.error,
         )
         return result
 
@@ -858,3 +862,27 @@ def _name_owned_by_real_tool_v2(high_level: Any, name: str) -> Optional[bool]:
     except Exception as err:  # noqa: BLE001 - analytics must not break the call
         warn_ownership_lookup_failed(name, err)
         return None
+
+
+async def _standalone_input_schema(
+    server: Any, name: str, version: Optional[str]
+) -> Any:
+    try:
+        from fastmcp.utilities.versions import VersionSpec, version_sort_key
+
+        version_spec = VersionSpec(eq=version) if version else None
+        # Middleware can shadow registered tools, so resolve the effective listing.
+        candidates = [
+            tool
+            for tool in await server.list_tools()
+            if tool.name == name
+            and (version_spec is None or version_spec.matches(tool.version))
+        ]
+        tool = max(candidates, key=version_sort_key, default=None)
+        if tool is None:
+            tool = await server.get_tool(name, version=version_spec)
+        schema = getattr(tool, "parameters", None)
+    except Exception as error:  # noqa: BLE001 - schema lookup must not prevent dispatch
+        log(f"PostHog MCP: could not resolve schema for tool {name!r} - {error}")
+        return None
+    return schema

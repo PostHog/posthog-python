@@ -420,3 +420,129 @@ def test_indexless_calls_keep_their_order_around_indexed_ones():
         ("call_b", "b", "{}"),
         ("call_c", "c", "{}"),
     ]
+
+
+@pytest.mark.parametrize(
+    "text, tool_calls, expected",
+    [
+        ("", None, []),
+        ("hello", None, [{"type": "text", "text": "hello"}]),
+        ("", [{}], [{"type": "function", "id": None, "function": {}}]),
+        (
+            "hello",
+            [{"id": "call-1", "function": {"name": "f", "arguments": "{}"}}],
+            [
+                {"type": "text", "text": "hello"},
+                {
+                    "type": "function",
+                    "id": "call-1",
+                    "function": {"name": "f", "arguments": "{}"},
+                },
+            ],
+        ),
+    ],
+)
+def test_legacy_streaming_content_preserves_text_then_tools(text, tool_calls, expected):
+    from copy import deepcopy
+
+    from posthog.ai.openai.openai_converter import format_openai_streaming_content
+
+    original = deepcopy(tool_calls)
+    assert format_openai_streaming_content(text, tool_calls) == expected
+    assert tool_calls == original
+
+
+def test_responses_content_preserves_empty_values_and_field_precedence():
+    from posthog.ai.openai.openai_converter import format_openai_response
+
+    response = types.SimpleNamespace(
+        output=[
+            {
+                "type": "message",
+                "role": "developer",
+                "content": [
+                    {"type": "output_text", "text": ""},
+                    {"type": "refusal", "refusal": "", "text": "ignored"},
+                    types.SimpleNamespace(type="unknown", text="fallback"),
+                    {"type": "input_image", "image_url": "https://image"},
+                    {
+                        "type": "input_image",
+                        "image_url": "ignored",
+                        "text": "text wins",
+                    },
+                    {"type": "unknown"},
+                ],
+            },
+            {"type": "message", "content": 0},
+            {"type": "message", "content": None},
+        ]
+    )
+    assert format_openai_response(response) == [
+        {
+            "role": "developer",
+            "content": [
+                {"type": "text", "text": ""},
+                {"type": "refusal", "refusal": ""},
+                {"type": "text", "text": "fallback"},
+                {"type": "image", "image": "https://image"},
+                {"type": "text", "text": "text wins"},
+                {"type": "text", "text": "0"},
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "item, expected",
+    [
+        (42, {"role": "user", "content": "42"}),
+        (None, {"role": "user", "content": "None"}),
+        ("prompt", {"role": "user", "content": "prompt"}),
+        (
+            {"type": "function_call_output", "output": "ok"},
+            {"type": "function_call_output", "output": "ok"},
+        ),
+        ({"type": "message", "role": "system"}, {"role": "system", "content": ""}),
+        ({"type": "message", "content": None}, {"role": "user", "content": None}),
+        (
+            types.SimpleNamespace(role="assistant", content="typed"),
+            {"role": "user", "content": "namespace(role='assistant', content='typed')"},
+        ),
+    ],
+)
+def test_responses_input_distinguishes_messages_from_typed_items(item, expected):
+    assert format_openai_input(input_data=[item]) == [expected]
+
+
+def test_usage_chat_fields_override_responses_even_when_null_or_zero():
+    from posthog.ai.openai.openai_converter import (
+        extract_openai_usage_from_chunk,
+        extract_openai_usage_from_response,
+    )
+
+    usage = types.SimpleNamespace(
+        input_tokens=100,
+        output_tokens=50,
+        input_tokens_details=types.SimpleNamespace(cached_tokens=9),
+        output_tokens_details=types.SimpleNamespace(reasoning_tokens=7),
+        prompt_tokens=None,
+        completion_tokens=0,
+        prompt_tokens_details=types.SimpleNamespace(cached_tokens=None),
+        completion_tokens_details=types.SimpleNamespace(reasoning_tokens=0),
+    )
+    response = types.SimpleNamespace(usage=usage)
+    non_streamed = extract_openai_usage_from_response(response)
+    assert set(non_streamed) == {"output_tokens", "raw_usage"}
+    assert non_streamed["output_tokens"] == 0
+    assert non_streamed["raw_usage"]["prompt_tokens"] is None
+
+    streamed = extract_openai_usage_from_chunk(response, "chat")
+    assert set(streamed) == {
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "raw_usage",
+    }
+    assert streamed["input_tokens"] is None
+    assert streamed["output_tokens"] == streamed["reasoning_tokens"] == 0
+    assert streamed["raw_usage"] == non_streamed["raw_usage"]

@@ -5,6 +5,9 @@ from typing import (
     Any,
     Dict,
     FrozenSet,
+    List,
+    Mapping,
+    NamedTuple,
     Union,
     Tuple,
     Type,
@@ -48,12 +51,19 @@ class OptionalCaptureArgs(TypedDict):
             hidden ``/flags`` request on capture and may return different values than the ones
             the code branched on.
         disable_geoip: Whether to disable GeoIP lookup for this event. Defaults to False.
+        options: Capture options for this event, such as ``{"process_person_profile": False}``.
+            Sent as given, for PostHog to validate. An option wins over its legacy ``$`` property,
+            such as ``$process_person_profile``. A value that is not a dict is logged and ignored.
+            An identify-style event, such as ``$identify`` or ``$set``, gets
+            ``process_person_profile: True`` when this call leaves it unset, unless the SDK
+            generated its distinct ID.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]
     properties: NotRequired[Optional[Dict[str, Any]]]
     timestamp: NotRequired[Optional[Union[datetime, str]]]
     uuid: NotRequired[Optional[Union[str, UUID]]]
+    options: NotRequired[Optional[Dict[str, Any]]]
     groups: NotRequired[Optional[Dict[str, str]]]
     flags: NotRequired[Optional["FeatureFlagEvaluations"]]
     send_feature_flags: NotRequired[
@@ -65,6 +75,30 @@ class OptionalCaptureArgs(TypedDict):
     _property_allowlist: NotRequired[
         Optional[FrozenSet[str]]
     ]  # Internal: strict allowlist applied to the fully-enriched event properties. Used by minimal $feature_flag_called events.
+    _capture_trace_context: NotRequired[
+        bool
+    ]  # Internal: add the active OpenTelemetry span's ids even when capture_trace_context is off. Used by capture_exception.
+    _pinned_properties: NotRequired[
+        Optional["_PinnedProperties"]
+    ]  # Internal: properties fixed after super properties are merged. Used by config version 2 flag events.
+    _before_send_drops: NotRequired[
+        Optional[List[str]]
+    ]  # Internal: gets the event name when before_send drops the event. Used by flag event dedupe.
+
+
+class _PinnedProperties(NamedTuple):
+    """Internal: event properties that super properties cannot change.
+
+    Applied to the fully-enriched properties, after super properties are merged and
+    before any allowlist: ``removed`` names are dropped, then ``values`` are set.
+    """
+
+    removed: FrozenSet[str]
+    values: Mapping[str, Any]
+
+    def apply(self, properties: Dict[str, Any]) -> Dict[str, Any]:
+        kept = {k: v for k, v in properties.items() if k not in self.removed}
+        return {**kept, **self.values}
 
 
 class OptionalSetArgs(TypedDict):
@@ -83,6 +117,8 @@ class OptionalSetArgs(TypedDict):
             it must be a valid UUID string or uuid.UUID instance; invalid values are ignored
             and replaced with a newly generated UUID.
         disable_geoip: Whether to disable GeoIP lookup for this operation. Defaults to False.
+        options: Capture options for this event, sent as given. See ``OptionalCaptureArgs``.
+            ``process_person_profile`` is ``True`` unless this call sets it.
     """
 
     distinct_id: NotRequired[Optional[ID_TYPES]]
@@ -90,6 +126,7 @@ class OptionalSetArgs(TypedDict):
     timestamp: NotRequired[Optional[Union[datetime, str]]]
     uuid: NotRequired[Optional[Union[str, UUID]]]
     disable_geoip: NotRequired[Optional[bool]]
+    options: NotRequired[Optional[Dict[str, Any]]]
 
 
 ExcInfo = Union[

@@ -22,4 +22,3 @@ pyrightconfig.json
 .DS_Store
 posthog-python-references.json
 .claude/settings.local.json
-mutants/

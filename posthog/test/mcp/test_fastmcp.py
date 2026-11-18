@@ -82,7 +82,7 @@ async def test_list_tools_injects_model_into_real_and_virtual_tools():
 
     for name in ("add", "boom", "get_more_tools"):
         assert "llm_model" in tools[name].inputSchema["properties"]
-        assert "llm_model" in tools[name].inputSchema["required"]
+        assert "llm_model" not in tools[name].inputSchema.get("required", [])
 
 
 async def test_virtual_tool_uses_conversation_id():
@@ -255,7 +255,7 @@ async def test_identify_sets_distinct_id_and_groups():
     calls = _events(client, "$mcp_tool_call")
     assert calls[0]["distinct_id"] == "user_42"
     assert calls[0]["properties"]["$groups"] == {"organization": "org_7"}
-    assert "$process_person_profile" not in calls[0]["properties"]
+    assert calls[0]["options"] == {}
     assert not _events(client, "$identify")
 
 

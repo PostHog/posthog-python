@@ -25,12 +25,13 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 - `POST /flush` - Flush pending events
 - `GET /state` - Return internal state
 - `POST /get_feature_flag` - Evaluate a flag locally or remotely
+- `POST /get_feature_flag_payload` - Read a flag payload locally or remotely with the legacy payload accessor
 - `POST /reload_feature_flag_definitions` - Fresh, bounded definitions readiness barrier
 - `POST /reset` - Reset SDK state
 
 ### Key Implementation Details
 
-**Request Tracking**: The adapter monkey-patches `batch_post` to track all HTTP requests made by the SDK, including retries.
+**Request Tracking**: The adapter monkey-patches the capture v1 `_post_v1` to track all HTTP requests made by the SDK, including retries.
 
 **State Management**: Thread-safe state tracking for events captured vs sent, retry attempts, and errors.
 
@@ -38,8 +39,8 @@ The adapter implements the standard SDK adapter interface defined in the [test h
 
 ### Local feature flag evaluation
 
-Both capture adapters advertise `feature_flags_local_evaluation_v1` for harness
-**1.1.1**. The capability versions the adapter protocol and tests both legacy and
+The adapter advertises `feature_flags_local_evaluation_v1` for harness
+**1.25.0**. The capability versions the adapter protocol and tests both legacy and
 explicit property matching; it does not change the SDK's default matching mode.
 
 - `/init` maps optional `personal_api_key` to the SDK's `secret_key`. Ordinary

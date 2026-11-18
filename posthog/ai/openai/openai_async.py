@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from typing import TYPE_CHECKING as _TYPE_CHECKING, Any, Dict, Optional
@@ -12,8 +13,8 @@ except ImportError:
         "Please install the OpenAI SDK to use this feature: 'pip install openai'"
     )
 
-from posthog import setup
 from posthog.ai.utils import (
+    _resolve_ai_client,
     call_llm_and_track_usage_async,
     extract_available_tool_calls as extract_available_tool_calls,
     finalize_ai_content as finalize_ai_content,
@@ -42,6 +43,8 @@ from .wrapper_utils import (
     merge_provider_override,
 )
 
+_log = logging.getLogger("posthog")
+
 
 class AsyncOpenAI(openai.AsyncOpenAI):
     """
@@ -66,7 +69,7 @@ class AsyncOpenAI(openai.AsyncOpenAI):
         """
 
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)
 
@@ -79,6 +82,7 @@ async def _parse_and_track(
     posthog_privacy_mode: bool,
     posthog_groups: Optional[Dict[str, Any]],
     posthog_provider_override: Optional[str] = None,
+    posthog_options: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ):
     return await call_llm_and_track_usage_async(
@@ -91,6 +95,7 @@ async def _parse_and_track(
         posthog_groups,
         wrapper._client.base_url,
         wrapper._original.parse,
+        posthog_options=posthog_options,
         **kwargs,
     )
 
@@ -106,6 +111,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -122,6 +128,10 @@ class WrappedResponses(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to OpenAI's async ``responses.create`` API.
 
         Returns:
@@ -141,6 +151,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                 posthog_properties,
                 posthog_privacy_mode,
                 posthog_groups,
+                posthog_options=posthog_options,
                 **kwargs,
             )
 
@@ -154,6 +165,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_groups,
             self._client.base_url,
             self._original.create,
+            posthog_options=posthog_options,
             **kwargs,
         )
 
@@ -164,11 +176,32 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         start_time = time.time()
         state = _ResponsesStreamState()
-        response = await self._original.create(**kwargs)
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as exc:
+            try:
+                await self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    state,
+                    time.time() - start_time,
+                    error=exc,
+                    options=posthog_options,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error, and the
+                # fixed text avoids echoing prompt or error content into logs.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
 
         async def async_generator():
             stream_error: Optional[BaseException] = None
@@ -190,6 +223,7 @@ class WrappedResponses(_OpenAIWrapperResource):
                     state,
                     time.time() - start_time,
                     error=stream_error,
+                    options=posthog_options,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -205,6 +239,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         state: _ResponsesStreamState,
         latency: float,
         error: Optional[BaseException] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         from posthog.ai.utils import capture_streaming_event
 
@@ -224,6 +259,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             stop_reason=state.stop_reason,
             service_tier=state.service_tier,
             error=error,
+            options=options,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 
@@ -235,6 +271,7 @@ class WrappedResponses(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -251,6 +288,10 @@ class WrappedResponses(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Any additional parameters for the OpenAI Responses Parse API.
 
         Returns:
@@ -264,6 +305,7 @@ class WrappedResponses(_OpenAIWrapperResource):
             posthog_privacy_mode,
             posthog_groups,
             posthog_provider_override,
+            posthog_options=posthog_options,
             **kwargs,
         )
 
@@ -288,6 +330,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -304,6 +347,10 @@ class WrappedCompletions(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to OpenAI's async ``chat.completions.parse`` API.
 
         Returns:
@@ -317,6 +364,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_privacy_mode,
             posthog_groups,
             posthog_provider_override,
+            posthog_options=posthog_options,
             **kwargs,
         )
 
@@ -328,6 +376,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -344,6 +393,10 @@ class WrappedCompletions(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to OpenAI's async ``chat.completions.create`` API.
 
         Returns:
@@ -364,6 +417,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                 posthog_properties,
                 posthog_privacy_mode,
                 posthog_groups,
+                posthog_options=posthog_options,
                 **kwargs,
             )
 
@@ -377,6 +431,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             posthog_groups,
             self._client.base_url,
             self._original.create,
+            posthog_options=posthog_options,
             **kwargs,
         )
         return response
@@ -388,6 +443,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         posthog_properties: Optional[Dict[str, Any]],
         posthog_privacy_mode: bool,
         posthog_groups: Optional[Dict[str, Any]],
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         start_time = time.time()
@@ -399,7 +455,27 @@ class WrappedCompletions(_OpenAIWrapperResource):
             **(stream_options if isinstance(stream_options, dict) else {}),
             "include_usage": True,
         }
-        response = await self._original.create(**kwargs)
+        try:
+            response = await self._original.create(**kwargs)
+        except Exception as exc:
+            try:
+                await self._capture_streaming_event(
+                    posthog_distinct_id,
+                    posthog_trace_id,
+                    posthog_properties,
+                    posthog_privacy_mode,
+                    posthog_groups,
+                    kwargs,
+                    state,
+                    time.time() - start_time,
+                    error=exc,
+                    options=posthog_options,
+                )
+            except Exception:
+                # Telemetry must never replace the provider's own error, and the
+                # fixed text avoids echoing prompt or error content into logs.
+                _log.warning("[PostHog] Failed to capture streaming connect error")
+            raise
 
         async def async_generator():
             stream_error: Optional[BaseException] = None
@@ -421,6 +497,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
                     state,
                     time.time() - start_time,
                     error=stream_error,
+                    options=posthog_options,
                 )
 
         return AsyncStreamWrapper(async_generator(), stream=response)
@@ -436,6 +513,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
         state: _ChatCompletionsStreamState,
         latency: float,
         error: Optional[BaseException] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         from posthog.ai.utils import capture_streaming_event
 
@@ -455,6 +533,7 @@ class WrappedCompletions(_OpenAIWrapperResource):
             stop_reason=state.stop_reason,
             service_tier=state.service_tier,
             error=error,
+            options=options,
         )
         capture_streaming_event(self._client._ph_client, event_data)
 
@@ -470,6 +549,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -486,6 +566,10 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Any additional parameters for the OpenAI Embeddings API.
 
         Returns:
@@ -515,6 +599,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
                 privacy_mode=posthog_privacy_mode,
                 groups=posthog_groups,
                 error=exc,
+                options=posthog_options,
             )
             raise
         end_time = time.time()
@@ -530,6 +615,7 @@ class WrappedEmbeddings(_OpenAIWrapperResource):
             properties=posthog_properties,
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
+            options=posthog_options,
         )
         return response
 
@@ -563,6 +649,7 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
         posthog_provider_override: Optional[str] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
         **kwargs: Any,
     ):
         """
@@ -579,6 +666,10 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
                 an OpenAI-compatible endpoint (e.g. DeepSeek, Groq) via a custom
                 ``base_url``, so cost attribution matches the real provider.
                 Defaults to ``"openai"`` when omitted.
+            posthog_options: Capture options for the event, such as
+                ``{"cookieless_mode": True}``. They win over context options
+                and ``super_options``. An event without a distinct ID always
+                sends ``process_person_profile: False``.
             **kwargs: Arguments passed to OpenAI's async beta ``chat.completions.parse`` API.
 
         Returns:
@@ -592,6 +683,7 @@ class WrappedBetaCompletions(_OpenAIWrapperResource):
             posthog_privacy_mode,
             posthog_groups,
             posthog_provider_override,
+            posthog_options=posthog_options,
             **kwargs,
         )
 

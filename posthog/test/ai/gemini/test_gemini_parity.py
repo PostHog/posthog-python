@@ -11,16 +11,56 @@ except ImportError:
 
 
 @pytest.mark.parametrize("client_class", [Client, AsyncClient])
-def test_sync_and_async_clients_share_api_key_environment_precedence(
+def test_clients_initialize_with_gemini_api_key_without_network(
     client_class, monkeypatch
 ):
-    monkeypatch.setenv("GOOGLE_API_KEY", "google-key")
-    monkeypatch.setenv("API_KEY", "legacy-key")
+    for name in ("GOOGLE_API_KEY", "API_KEY", "GOOGLE_GENAI_USE_VERTEXAI"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-gemini-key")
+
+    client = client_class(posthog_client=MagicMock())
+    try:
+        assert client.models is not None
+        assert isinstance(client._provider_client, google_genai.Client)
+    finally:
+        client._provider_client.close()
+
+
+@pytest.mark.parametrize("client_class", [Client, AsyncClient])
+@pytest.mark.parametrize(
+    "environment, explicit_key, expected_key",
+    [
+        ({"GEMINI_API_KEY": "gemini-key"}, None, "gemini-key"),
+        ({"API_KEY": "legacy-key"}, None, "legacy-key"),
+        (
+            {"GEMINI_API_KEY": "gemini-key", "API_KEY": "legacy-key"},
+            None,
+            "gemini-key",
+        ),
+        (
+            {
+                "GOOGLE_API_KEY": "google-key",
+                "GEMINI_API_KEY": "gemini-key",
+                "API_KEY": "legacy-key",
+            },
+            None,
+            "google-key",
+        ),
+        ({"GEMINI_API_KEY": "gemini-key"}, "explicit-key", "explicit-key"),
+    ],
+)
+def test_sync_and_async_clients_share_api_key_environment_precedence(
+    client_class, monkeypatch, environment, explicit_key, expected_key
+):
+    for name in ("GOOGLE_API_KEY", "GEMINI_API_KEY", "API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
 
     with patch.object(google_genai, "Client") as provider_client:
-        client_class(posthog_client=MagicMock())
+        client_class(api_key=explicit_key, posthog_client=MagicMock())
 
-    provider_client.assert_called_once_with(api_key="google-key")
+    provider_client.assert_called_once_with(api_key=expected_key)
 
 
 @pytest.mark.parametrize("client_class", [Client, AsyncClient])
@@ -190,8 +230,8 @@ async def test_sync_client_aio_models_tracks_generations(
     assert response is gemini_response
     provider_client.aio.models.generate_content.assert_awaited_once()
 
-    assert posthog_client.capture.call_count == 1
-    call_args = posthog_client.capture.call_args[1]
+    assert posthog_client.capture_ai.call_count == 1
+    call_args = posthog_client.capture_ai.call_args[1]
     assert call_args["distinct_id"] == "test-id"
     assert call_args["event"] == "$ai_generation"
     assert call_args["properties"]["$ai_model"] == "gemini-2.0-flash"

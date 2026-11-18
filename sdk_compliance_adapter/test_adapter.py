@@ -8,7 +8,7 @@ from unittest.mock import Mock
 
 import pytest
 
-import posthog.capture_v1
+import posthog.capture_send
 import posthog.client
 import posthog.consumer
 import posthog.request
@@ -20,9 +20,7 @@ def adapter(monkeypatch):
     # Importing the adapter installs transport instrumentation. Restore it after
     # every test so collecting these tests alongside SDK tests is safe.
     for module, name in [
-        (posthog.request, "batch_post"),
-        (posthog.consumer, "batch_post"),
-        (posthog.capture_v1, "_post_v1"),
+        (posthog.capture_send, "_post_v1"),
     ]:
         monkeypatch.setattr(module, name, getattr(module, name))
     spec = importlib.util.spec_from_file_location(
@@ -79,16 +77,70 @@ def initialize(adapter, **overrides):
     return adapter.app.test_client()
 
 
-@pytest.mark.parametrize("mode,capability", [("", "capture_v0"), ("v1", "capture_v1")])
-def test_health_opts_into_local_evaluation_without_losing_capture(
-    adapter, monkeypatch, mode, capability
-):
-    monkeypatch.setattr(adapter, "CAPTURE_MODE", mode)
+@pytest.mark.parametrize(
+    "env_value,codec",
+    [(None, "gzip"), ("gzip", "gzip"), ("deflate", "deflate"), ("zstd", "zstd")],
+)
+def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
+    if env_value is None:
+        monkeypatch.delenv("COMPRESSION", raising=False)
+    else:
+        monkeypatch.setenv("COMPRESSION", env_value)
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
+    assert {
+        "capture_v1",
+        "capture_ai_v1",
+        "event_options",
+        "event_uuid_override",
+        "bounded_retries",
+        "disable_geoip",
+        "historical_migration",
+    } <= set(capabilities)
     assert "flags_response_v4" in capabilities
-    assert capability in capabilities
-    assert "capture_ai_v0" in capabilities
+    assert "feature_flag_payloads" in capabilities
+    assert "capture_v0" not in capabilities
+    assert "capture_ai_v0" not in capabilities
+    assert [c for c in capabilities if c.startswith("encoding_")] == [
+        f"encoding_{codec}"
+    ]
+
+    initialize(adapter, enable_compression=True)
+    assert adapter.state.client.capture_compression.value == codec
+    assert adapter.state.client.capture_ai_compression.value == codec
+
+
+@pytest.mark.parametrize(
+    "route,method", [("/capture", "capture"), ("/capture_ai", "capture_ai")]
+)
+def test_capture_passes_options_and_uuid_unchanged(adapter, monkeypatch, route, method):
+    client = initialize(adapter, personal_api_key=None)
+    sent = Mock(return_value="0190a5a8-0000-7000-8000-000000000001")
+    monkeypatch.setattr(adapter.state.client, method, sent)
+    options = {"cookieless_mode": "no", "process_person_profile": 0.0, "custom": [1]}
+
+    response = client.post(
+        route,
+        json={
+            "distinct_id": "user",
+            "event": "$ai_generation",
+            "properties": {"$ignore_sent_at": "maybe"},
+            "options": options,
+            "uuid": "0190A5A8-0000-7000-8000-000000000001",
+        },
+    )
+
+    assert response.json == {
+        "success": True,
+        "uuid": "0190a5a8-0000-7000-8000-000000000001",
+    }
+    sent.assert_called_once_with(
+        "$ai_generation",
+        distinct_id="user",
+        properties={"$ignore_sent_at": "maybe"},
+        options=options,
+        uuid="0190A5A8-0000-7000-8000-000000000001",
+    )
 
 
 def test_init_enables_explicit_definitions_loading_without_polling(adapter):
@@ -181,10 +233,59 @@ def test_force_remote_bypasses_loaded_local_definitions(adapter, monkeypatch):
     remote.assert_called_once()
 
 
-def test_rejects_conflicting_evaluation_modes(adapter):
+def test_payload_route_reads_remotely_and_returns_the_parsed_payload(
+    adapter, monkeypatch
+):
+    client = initialize(adapter)
+    remote = Mock(
+        return_value=posthog.client.normalize_flags_response(
+            {
+                "featureFlags": {"flag": True},
+                "featureFlagPayloads": {"flag": '{"columns": 2}'},
+            }
+        )
+    )
+    monkeypatch.setattr(adapter.state.remote_client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag_payload", json={"key": "flag", "distinct_id": "user"}
+    )
+    assert response.json == {"success": True, "value": {"columns": 2}}
+    remote.assert_called_once()
+    assert (
+        client.post("/get_feature_flag_payload", json={"key": "flag"}).status_code
+        == 400
+    )
+
+
+def test_payload_route_honors_local_only_evaluation(adapter, monkeypatch):
+    client = initialize(adapter)
+    local = definitions()
+    local["flags"][0]["filters"]["payloads"] = {"true": '{"columns": 2}'}
+    monkeypatch.setattr(
+        posthog.client, "get", Mock(return_value=GetResponse(data=local))
+    )
+    client.post("/reload_feature_flag_definitions", json={})
+    remote = Mock(side_effect=AssertionError("Local-only must never request /flags"))
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    monkeypatch.setattr(adapter.state.remote_client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag_payload",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_properties": {"plan": "banana"},
+            "only_evaluate_locally": True,
+        },
+    )
+    assert response.json == {"success": True, "value": {"columns": 2}}
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["/get_feature_flag", "/get_feature_flag_payload"])
+def test_rejects_conflicting_evaluation_modes(adapter, route):
     client = initialize(adapter)
     response = client.post(
-        "/get_feature_flag",
+        route,
         json={
             "key": "flag",
             "distinct_id": "user",

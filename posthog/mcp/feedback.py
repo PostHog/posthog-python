@@ -11,8 +11,10 @@ from typing import Any, Dict, Optional, Union
 
 from ._internal import _maybe_await
 from ._sanitization import sanitize_free_text, sanitize_free_text_value
+from ._truncation import truncate_text
 from .constants import PostHogMCPAnalyticsProperty
 from .logger import log
+from .tools import VIRTUAL_TOOL_HINTS
 from .types import CollectFeedbackOptions, FeedbackReport, JsonRecord
 
 __all__ = ["SEND_FEEDBACK_TOOL_NAME", "send_feedback_result"]
@@ -25,14 +27,11 @@ _SENTIMENTS = ("positive", "neutral", "negative", "mixed")
 # Free-text fields are agent-narrated, like `$mcp_intent`; bound them the same way.
 _MAX_FEEDBACK_TEXT_LENGTH = 2048
 _MAX_FEEDBACK_TOOL_NAME_LENGTH = 256
-_TRUNCATION_SUFFIX = "..."
 
 _DEFAULT_FEEDBACK_DESCRIPTION = (
-    "Send feedback about this server to its developers. Most important: report a missing "
-    "capability whenever no available tool fits your task, even if you can work around it "
-    '(feedback_type "missing_capability"). Also welcome: a tool that failed or confused you, '
-    "an unhelpful error, or something that worked well. This records the feedback; it does "
-    "not add or change tools. Do not include user PII or sensitive content."
+    "Send feedback about this server to its developers: a capability you needed that no tool "
+    "provides, a tool that failed or misled you, or something that worked well. Records the "
+    "feedback; it does not add or change tools. Leave out personal or sensitive details."
 )
 
 _SEND_FEEDBACK_RESULT_TEXT = (
@@ -47,8 +46,7 @@ _CORE_FEEDBACK_SCHEMA_PROPERTIES: Dict[str, Dict[str, Any]] = {
         "description": (
             "What kind of feedback this is. Use 'missing_capability' when the tool you "
             "needed does not exist in the tool list - nothing failed, the capability is "
-            "absent (this is the most valuable report; send it even if you found a "
-            "workaround). Use 'issue' when an existing tool behaved badly: it failed, "
+            "absent. Use 'issue' when an existing tool behaved badly: it failed, "
             "returned a confusing error, or its description or schema misled you. Use "
             "'praise' when something worked notably well. Use 'other' for anything else."
         ),
@@ -145,17 +143,7 @@ def get_feedback_tool_descriptor(
     extra_properties = options.extra_properties or {}
     extra_required = options.extra_required or []
 
-    for key in extra_properties:
-        if key in _RESERVED_EXTRA_PROPERTY_KEYS:
-            raise ValueError(
-                f'collect_feedback extra_properties key "{key}" collides with a core or '
-                "SDK-reserved send_feedback field. Rename it."
-            )
-    for key in extra_required:
-        if key not in extra_properties:
-            raise ValueError(
-                f'collect_feedback extra_required key "{key}" is not declared in extra_properties.'
-            )
+    _validate_feedback_extras(extra_properties, extra_required)
 
     # Deep copies: the host may reuse or mutate the fragments it handed us, and
     # schema injection mutates the advertised descriptor.
@@ -171,17 +159,7 @@ def get_feedback_tool_descriptor(
             "properties": properties,
             "required": ["feedback_type", "summary", *extra_required],
         },
-        "annotations": {
-            "title": "Send feedback",
-            "readOnlyHint": True,
-            # Interacts with an external entity: the report lands in analytics.
-            "openWorldHint": True,
-            # Only records the feedback, so repeat calls are harmless — and
-            # advertising it as idempotent makes agents more willing to call it
-            # proactively.
-            "idempotentHint": True,
-            "destructiveHint": False,
-        },
+        "annotations": dict(VIRTUAL_TOOL_HINTS),
     }
 
 
@@ -194,18 +172,7 @@ def _matches_extra_schema(value: Any, schema: Dict[str, Any]) -> bool:
     ``enum`` — the same advisory-schema enforcement the core fields get, so
     ``extras`` only ever holds schema-conforming values and a misbehaving agent
     shows up as absence rather than as an unexpected shape in the host's handler."""
-    if isinstance(value, list):
-        actual = "array"
-    elif value is None:
-        actual = "null"
-    elif isinstance(value, bool):
-        actual = "boolean"
-    elif isinstance(value, (int, float)):
-        actual = "number"
-    elif isinstance(value, str):
-        actual = "string"
-    else:
-        actual = "object"
+    actual = _json_type(value)
     declared = schema.get("type")
     if declared == "integer" and actual == "number":
         # A JSON Schema `integer` also accepts a whole-valued float (`3.0`), but
@@ -231,12 +198,7 @@ def parse_feedback_report(
     ``type``/``enum`` are lifted into ``extras`` — mismatches and anything the
     agent invented reach the handler via ``raw`` only and are never captured."""
     raw = args or {}
-    declared = (options.extra_properties if options is not None else None) or {}
-    extras = {
-        key: raw[key]
-        for key, schema in declared.items()
-        if raw.get(key) is not None and _matches_extra_schema(raw[key], schema)
-    }
+    extras = _parse_feedback_extras(raw, options)
     feedback_type = raw.get("feedback_type")
     sentiment = raw.get("sentiment")
     task_completed = raw.get("task_completed")
@@ -259,10 +221,6 @@ def build_feedback_intent(report: FeedbackReport) -> str:
     return "\n\n".join(part for part in (report.summary, report.details) if part)
 
 
-def _truncate_feedback_text(value: str, max_length: int) -> str:
-    return value[:max_length] + _TRUNCATION_SUFFIX if len(value) > max_length else value
-
-
 def _capture_free_text(value: str) -> str:
     """Agent-narrated free text can contain a secret the LLM read aloud or personal
     data it narrated, so it gets exactly the ``$mcp_intent`` pass
@@ -270,7 +228,7 @@ def _capture_free_text(value: str) -> str:
     load-bearing, the URL rewrite would percent-encode the ``@`` the email pattern
     anchors on), then a length bound. The event pipeline does not process
     ``event["properties"]``, so this happens here."""
-    return _truncate_feedback_text(sanitize_free_text(value), _MAX_FEEDBACK_TEXT_LENGTH)
+    return truncate_text(sanitize_free_text(value), _MAX_FEEDBACK_TEXT_LENGTH)
 
 
 def _capture_extra_value(value: Any) -> Any:
@@ -280,11 +238,11 @@ def _capture_extra_value(value: Any) -> Any:
     JSON-stringified and everything is bounded. Unserializable values are dropped."""
     sanitized = sanitize_free_text_value(value)
     if isinstance(sanitized, str):
-        return _truncate_feedback_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
+        return truncate_text(sanitized, _MAX_FEEDBACK_TEXT_LENGTH)
     if sanitized is None or isinstance(sanitized, (bool, int, float)):
         return sanitized
     try:
-        return _truncate_feedback_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
+        return truncate_text(json.dumps(sanitized), _MAX_FEEDBACK_TEXT_LENGTH)
     except Exception:  # noqa: BLE001 - capture must never raise into the tool path
         return None
 
@@ -317,7 +275,7 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
         # Nominally an identifier, but the schema can't stop an agent from
         # writing prose into it — so it gets the same free-text pass as the
         # other fields.
-        properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = _truncate_feedback_text(
+        properties[PostHogMCPAnalyticsProperty.FEEDBACK_TOOL] = truncate_text(
             sanitize_free_text(report.tool_name),
             _MAX_FEEDBACK_TOOL_NAME_LENGTH,
         )
@@ -325,10 +283,7 @@ def build_feedback_event_properties(report: FeedbackReport) -> JsonRecord:
         properties[PostHogMCPAnalyticsProperty.FEEDBACK_TASK_COMPLETED] = (
             report.task_completed
         )
-    for key, value in report.extras.items():
-        captured = _capture_extra_value(value)
-        if captured is not None:
-            properties[f"$mcp_feedback_{key}"] = captured
+    _add_feedback_extras(report, properties)
     return properties
 
 
@@ -370,3 +325,54 @@ async def handle_feedback(
                 f"({type(error).__name__}); returning the default acknowledgement"
             )
     return _SEND_FEEDBACK_RESULT_TEXT
+
+
+def _validate_feedback_extras(
+    extra_properties: Dict[str, Any], extra_required: list[str]
+) -> None:
+    for key in extra_properties:
+        if key in _RESERVED_EXTRA_PROPERTY_KEYS:
+            raise ValueError(
+                f'collect_feedback extra_properties key "{key}" collides with a core or '
+                "SDK-reserved send_feedback field. Rename it."
+            )
+    for key in extra_required:
+        if key not in extra_properties:
+            raise ValueError(
+                f'collect_feedback extra_required key "{key}" is not declared in extra_properties.'
+            )
+
+
+def _json_type(value: Any) -> str:
+    if isinstance(value, list):
+        actual = "array"
+    elif value is None:
+        actual = "null"
+    elif isinstance(value, bool):
+        actual = "boolean"
+    elif isinstance(value, (int, float)):
+        actual = "number"
+    elif isinstance(value, str):
+        actual = "string"
+    else:
+        actual = "object"
+    return actual
+
+
+def _parse_feedback_extras(
+    raw: JsonRecord, options: Optional[CollectFeedbackOptions]
+) -> JsonRecord:
+    declared = (options.extra_properties if options is not None else None) or {}
+    extras = {
+        key: raw[key]
+        for key, schema in declared.items()
+        if raw.get(key) is not None and _matches_extra_schema(raw[key], schema)
+    }
+    return extras
+
+
+def _add_feedback_extras(report: FeedbackReport, properties: JsonRecord) -> None:
+    for key, value in report.extras.items():
+        captured = _capture_extra_value(value)
+        if captured is not None:
+            properties[f"$mcp_feedback_{key}"] = captured

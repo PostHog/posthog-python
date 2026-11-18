@@ -89,6 +89,54 @@ async def test_both_virtual_tools_are_appended_to_the_first_page_only():
     assert _names(await _list_page(server, cursor="1")) == ["echo"]
 
 
+# --- annotations ---------------------------------------------------------------
+
+# The spec's annotations JSON, pinned on purpose: importing VIRTUAL_TOOL_HINTS
+# would make this test agree with any change to it.
+_RECORDS_DATA = {
+    "readOnlyHint": False,
+    "destructiveHint": False,
+    "idempotentHint": False,
+    "openWorldHint": False,
+}
+
+
+@pytest.mark.parametrize(
+    "options, advertised_name",
+    [
+        (MCPAnalyticsOptions(report_missing=True), "get_more_tools"),
+        (MCPAnalyticsOptions(collect_feedback=True), "send_feedback"),
+        (
+            MCPAnalyticsOptions(
+                report_missing=True, missing_capability_tool_name="request_tool"
+            ),
+            "request_tool",
+        ),
+        (
+            MCPAnalyticsOptions(
+                collect_feedback=CollectFeedbackOptions(
+                    tool_name="rate_server", description="Tell us how it went."
+                )
+            ),
+            "rate_server",
+        ),
+    ],
+)
+async def test_virtual_tools_declare_that_they_record_data(options, advertised_name):
+    server = FastMCP("annotations")
+
+    @server.tool()
+    def add(a: int, b: int) -> int:
+        return a + b
+
+    instrument(server, FakeClient(), options)
+    handler = server._mcp_server.request_handlers[mcp_types.ListToolsRequest]
+    result = await handler(mcp_types.ListToolsRequest(method="tools/list"))
+    tool = {t.name: t for t in result.root.tools}[advertised_name]
+
+    assert tool.annotations.model_dump(exclude_none=True) == (_RECORDS_DATA)
+
+
 # --- name collisions -----------------------------------------------------------
 
 

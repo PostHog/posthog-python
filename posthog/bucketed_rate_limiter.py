@@ -3,6 +3,7 @@
 # Kept behaviorally identical so rate limiting is consistent across SDKs.
 
 import logging
+import math
 import threading
 import time
 from typing import Callable, Dict, Hashable, Optional, Union
@@ -15,7 +16,11 @@ Number = Union[int, float]
 
 
 def _clamp_to_range(value, min_value: Number, max_value: Number, label: str) -> Number:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or (isinstance(value, float) and math.isnan(value))
+    ):
         log.warning(f"{label} must be a number. Using max value {max_value}.")
         return max_value
     if value > max_value:

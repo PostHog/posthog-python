@@ -41,17 +41,20 @@ from langchain_core.messages import (
 from langchain_core.outputs import ChatGeneration, LLMResult
 from pydantic import BaseModel
 
-from posthog import setup
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.utils import (
+    _ai_event_options,
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
+    _resolve_ai_client,
+    _user_distinct_id,
     finalize_ai_content,
     _format_ai_error,
     get_model_params,
     _privacy_mode_enabled,
     _redact_mcp_tool_credentials,
     _responses_stop_reason,
+    _stream_error_event_status,
     with_privacy_mode,
 )
 from posthog.client import Client
@@ -91,6 +94,8 @@ class GenerationMetadata(SpanMetadata):
     """Tools provided to the model."""
     posthog_properties: Optional[Dict[str, Any]] = None
     """PostHog properties of the run."""
+    posthog_options: Optional[Dict[str, Any]] = None
+    """PostHog capture options of the run."""
 
 
 RunMetadata = Union[SpanMetadata, GenerationMetadata]
@@ -120,6 +125,9 @@ class CallbackHandler(BaseCallbackHandler):
     _properties: Optional[Dict[str, Any]]
     """Global properties to be sent with every event."""
 
+    _options: Dict[str, Any]
+    """Global capture options to be sent with every event."""
+
     _runs: RunMetadataStorage
     """Mapping of run IDs to run metadata as run metadata is only available on the start of generation."""
 
@@ -138,6 +146,7 @@ class CallbackHandler(BaseCallbackHandler):
         properties: Optional[Dict[str, Any]] = None,
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         """
         Args:
@@ -147,13 +156,19 @@ class CallbackHandler(BaseCallbackHandler):
             properties: Optional additional metadata to use for the trace.
             privacy_mode: Whether to redact the input and output of the trace.
             groups: Optional additional PostHog groups to use for the trace.
+            options: Optional capture options for every event of the trace, such
+                as ``{"cookieless_mode": True}``. They win over a run's
+                ``posthog_options`` metadata, context options and
+                ``super_options``. An event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
-        self._ph_client = client or setup()
+        self._ph_client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._trace_id = trace_id
         self._properties = properties or {}
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
+        self._options = _ai_event_options(options)
         self._runs = {}
         self._parent_tree = {}
 
@@ -478,6 +493,7 @@ class CallbackHandler(BaseCallbackHandler):
                 generation.provider = provider
 
             generation.posthog_properties = metadata.get("posthog_properties")
+            generation.posthog_options = metadata.get("posthog_options")
         try:
             base_url = serialized["kwargs"]["openai_api_base"]
             if base_url is not None:
@@ -568,7 +584,7 @@ class CallbackHandler(BaseCallbackHandler):
             )
             event_properties["$ai_is_error"] = True
             event_properties = self._capture_exception_and_update_properties(
-                outputs, event_properties
+                outputs, event_properties, self._options
             )
 
         elif outputs is not None:
@@ -578,31 +594,38 @@ class CallbackHandler(BaseCallbackHandler):
                 finalize_ai_content(outputs, self._ph_client),
             )
 
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
         _capture_ai_event(
             self._ph_client,
             event_name,
-            distinct_id=self._distinct_id or run_id,
+            distinct_id=_user_distinct_id(self._distinct_id) or run_id,
             properties=event_properties,
             groups=self._groups,
+            personless=_user_distinct_id(self._distinct_id) is None,
+            options=self._options,
         )
 
     def _capture_exception_and_update_properties(
-        self, exception: BaseException, event_properties: Dict[str, Any]
+        self,
+        exception: BaseException,
+        event_properties: Dict[str, Any],
+        options: Dict[str, Any],
     ) -> Dict[str, Any]:
         # An `$exception` event carries the message and stack, which echo prompts and output.
-        if not self._ph_client.enable_exception_autocapture or _privacy_mode_enabled(
-            self._ph_client, self._privacy_mode
-        ):
+        if not getattr(
+            self._ph_client, "enable_exception_autocapture", False
+        ) or _privacy_mode_enabled(self._ph_client, self._privacy_mode):
             return event_properties
 
+        exception_options = dict(options)
+        if _user_distinct_id(self._distinct_id) is None:
+            # Matches the AI event: without a user, person processing stays off.
+            exception_options["process_person_profile"] = False
         exception_id = self._ph_client.capture_exception(
             exception,
             distinct_id=self._distinct_id,
             groups=self._groups,
             properties=event_properties,
+            options=exception_options or None,
         )
         if exception_id:
             event_properties["$exception_event_id"] = exception_id
@@ -682,9 +705,6 @@ class CallbackHandler(BaseCallbackHandler):
         if self._properties:
             event_properties.update(self._properties)
 
-        if self._distinct_id is None:
-            event_properties["$process_person_profile"] = False
-
         if isinstance(output, BaseException):
             event_properties["$ai_http_status"] = _get_http_status(output)
             event_properties["$ai_error"] = _format_ai_error(
@@ -693,7 +713,10 @@ class CallbackHandler(BaseCallbackHandler):
             event_properties["$ai_is_error"] = True
 
             event_properties = self._capture_exception_and_update_properties(
-                output, event_properties
+                output,
+                event_properties,
+                # The handler's options win over the run's, like its properties.
+                {**_ai_event_options(run.posthog_options), **self._options},
             )
         else:
             # Add usage
@@ -754,9 +777,12 @@ class CallbackHandler(BaseCallbackHandler):
         _capture_ai_event(
             self._ph_client,
             "$ai_generation",
-            distinct_id=self._distinct_id or trace_id,
+            distinct_id=_user_distinct_id(self._distinct_id) or trace_id,
             properties=event_properties,
             groups=self._groups,
+            personless=_user_distinct_id(self._distinct_id) is None,
+            # The handler's options win over the run's, like its properties.
+            options={**_ai_event_options(run.posthog_options), **self._options},
         )
 
     def _log_debug_event(
@@ -1076,6 +1102,8 @@ def _get_http_status(error: BaseException) -> int:
     for attribute in ("status_code", "code"):
         value = getattr(error, attribute, None)
         if isinstance(value, int) and not isinstance(value, bool):
+            if attribute == "status_code":
+                return _stream_error_event_status(error, value)
             return value
     return 0
 

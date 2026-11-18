@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "posthog"
-version = "7.84.0"
+version = "8.0.1"
 description = "Integrate PostHog into any python application."
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
 maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -24,7 +24,6 @@ classifiers = [
 ]
 dependencies = [
     "requests>=2.7,<3.0",
-    "backoff>=1.10.0",
     "distro>=1.5.0",
     "typing-extensions>=4.2.0",
 ]
@@ -64,6 +63,7 @@ metrics = [
 dev = [
     "django-stubs",
     "griffe",
+    "griffe2md",
     "lxml",
     "mypy",
     "mypy-baseline",
@@ -123,6 +123,9 @@ test = [
     "opentelemetry-instrumentation-django>=0.60b0",
     "pytest-bdd>=8.1.0",
     "zstandard>=0.23.0",
+    # posthog/test/test_reference_markdown.py checks the reference generator's output.
+    "griffe",
+    "griffe2md",
     # gevent 25.4.1+ replaces queue.Queue, exercising the compatibility path.
     "gevent>=25.4.1; implementation_name == 'cpython'",
 ]
@@ -168,13 +171,6 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["posthog/test"]
 norecursedirs = ["integration_tests"]
-
-[tool.mutmut]
-paths_to_mutate = ["posthog/utils.py"]
-do_not_mutate = ["posthog/test/*"]
-tests_dir = ["posthog/test/test_utils.py", "posthog/test/test_size_limited_dict.py"]
-also_copy = ["posthog"]
-pytest_add_cli_args = ["--timeout=30"]
 
 [dependency-groups]
 dev = [

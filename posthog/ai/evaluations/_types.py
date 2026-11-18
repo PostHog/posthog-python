@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Literal, Mapping
+from typing import Any, Literal, Mapping, cast
 from uuid import UUID, uuid4
 
 from typing_extensions import TypedDict
@@ -59,11 +59,13 @@ class ExperimentOptions(TypedDict, total=False):
 class ResultOptions(TypedDict, total=False):
     """Score outcome, trace references, and optional result payload fields.
 
-    ``value`` is required for ``ok`` (the default). ``error_code`` and
+    ``calculate=True`` requests a composite with no value or result metadata.
+    Otherwise ``value`` is required for ``ok`` (the default). ``error_code`` and
     ``error_message`` are permitted only for ``error``. Use either ``payload``
     or individual payload fields; omitted values differ from explicit None.
     """
 
+    calculate: bool
     value: ScoreValue | None
     status: ResultStatus
     error_code: str | None
@@ -191,6 +193,70 @@ class EvaluationItem:
         return cls(**dict(data))
 
 
+def _has_calculation_metadata(
+    value: ScoreValue | None,
+    status: ResultStatus,
+    error_code: str | None,
+    evaluator_trace_id: str | None,
+    evaluated_at: datetime | str | None,
+    fields: tuple[Any, ...],
+) -> bool:
+    return (
+        value is not None
+        or status != "ok"
+        or error_code is not None
+        or evaluator_trace_id is not None
+        or evaluated_at is not None
+        or any(not isinstance(field, _Unset) for field in fields)
+    )
+
+
+def _validate_calculation(
+    calculate: bool,
+    value: ScoreValue | None,
+    status: ResultStatus,
+    error_code: str | None,
+    evaluator_trace_id: str | None,
+    evaluated_at: datetime | str | None,
+    fields: tuple[Any, ...],
+) -> None:
+    if not isinstance(calculate, bool):
+        raise ValueError("calculate must be a boolean.")
+    if calculate and _has_calculation_metadata(
+        value, status, error_code, evaluator_trace_id, evaluated_at, fields
+    ):
+        raise ValueError(
+            "A calculation accepts only item, scorer_version_id, and calculate=True."
+        )
+
+
+def _add_result_metadata(
+    data: dict[str, Any],
+    error_code: str | None,
+    evaluator_trace_id: str | None,
+    evaluated_at: datetime | str | None,
+) -> None:
+    if error_code is not None:
+        data["error_code"] = _identifier(error_code, "error_code", 128)
+    if evaluator_trace_id is not None:
+        data["evaluator_trace_id"] = _identifier(
+            evaluator_trace_id, "evaluator_trace_id"
+        )
+    if evaluated_at is not None:
+        data["evaluated_at"] = _timestamp(evaluated_at)
+
+
+def _validate_result_status(
+    status: ResultStatus, value: ScoreValue | None, error_code: str | None
+) -> None:
+    if status not in ("ok", "error", "skipped", "not_applicable"):
+        raise ValueError("Unsupported result status.")
+    if status != "ok" and value is not None:
+        raise ValueError("Only an ok result may contain a score.")
+    if status != "error" and error_code is not None:
+        raise ValueError("Only an error result may contain an error_code.")
+
+
 @dataclass(frozen=True, init=False)
 class EvaluationResult:
     """One scorer outcome for an item and an exact scorer-version UUID.
@@ -199,10 +265,14 @@ class EvaluationResult:
     determines whether the value passes. Other statuses contain no score.
     Pass an item object to declare it, or an item UUID already accepted by the
     experiment. Payloads and values are snapshotted during construction.
+    Set ``calculate=True`` to request a composite with no value or metadata.
+    Include its pinned reported inputs in the same upload unless the caller
+    has result-read access to reuse stored inputs.
     """
 
     item: EvaluationItem | str
     scorer_version_id: str
+    calculate: bool
     _json: bytes = field(repr=False)
 
     def __init__(
@@ -210,6 +280,7 @@ class EvaluationResult:
         *,
         item: EvaluationItem | str | UUID,
         scorer_version_id: str | UUID,
+        calculate: bool = False,
         value: ScoreValue | None = None,
         status: ResultStatus = "ok",
         error_code: str | None = None,
@@ -222,27 +293,27 @@ class EvaluationResult:
     ) -> None:
         item_id = item.id if isinstance(item, EvaluationItem) else _uuid(item)
         version_id = _uuid(scorer_version_id)
-        if status not in ("ok", "error", "skipped", "not_applicable"):
-            raise ValueError("Unsupported result status.")
-        if status != "ok" and value is not None:
-            raise ValueError("Only an ok result may contain a score.")
-        if status != "error" and error_code is not None:
-            raise ValueError("Only an error result may contain an error_code.")
+        _validate_calculation(
+            calculate,
+            value,
+            status,
+            error_code,
+            evaluator_trace_id,
+            evaluated_at,
+            (reasoning, error_message, metadata, payload),
+        )
+        _validate_result_status(status, value, error_code)
         data: dict[str, Any] = {
             "item_id": item_id,
             "scorer_version_id": version_id,
-            "status": status,
         }
-        if status == "ok":
+        if calculate:
+            data["calculate"] = True
+        else:
+            data["status"] = status
+        if status == "ok" and not calculate:
             data["value"] = _score(value)
-        if error_code is not None:
-            data["error_code"] = _identifier(error_code, "error_code", 128)
-        if evaluator_trace_id is not None:
-            data["evaluator_trace_id"] = _identifier(
-                evaluator_trace_id, "evaluator_trace_id"
-            )
-        if evaluated_at is not None:
-            data["evaluated_at"] = _timestamp(evaluated_at)
+        _add_result_metadata(data, error_code, evaluator_trace_id, evaluated_at)
         prepared = _payload(
             payload,
             {
@@ -253,13 +324,13 @@ class EvaluationResult:
             _MAX_RESULT_BYTES,
         )
         if not isinstance(prepared, _Unset):
-            if status != "error" and prepared.get("error_message") is not None:
-                raise ValueError("Only an error result may contain an error_message.")
+            _validate_result_payload(status, prepared)
             data["payload"] = prepared
         object.__setattr__(
             self, "item", item if isinstance(item, EvaluationItem) else item_id
         )
         object.__setattr__(self, "scorer_version_id", version_id)
+        object.__setattr__(self, "calculate", calculate)
         object.__setattr__(self, "_json", _encode(data))
 
     @property
@@ -310,10 +381,16 @@ class ItemReceipt:
 
 @dataclass(frozen=True)
 class ResultReceipt(ItemReceipt):
-    """Persisted result UUID and the item/scorer-version pair it acknowledges."""
+    """Persisted result identity and stored outcome, including formula errors.
+
+    ``status=None`` means an older backend omitted the outcome of a reported
+    result. Composite acknowledgments always require a server outcome.
+    """
 
     item_id: str
     scorer_version_id: str
+    status: ResultStatus | None = None
+    error_code: str | None = None
 
 
 @dataclass(frozen=True)
@@ -401,6 +478,30 @@ def _experiment_receipt(data: dict[str, Any], identity: str) -> ExperimentReceip
         ) from None
 
 
+def _result_receipt(data: dict[str, Any]) -> ResultReceipt:
+    status = data.get("status")
+    error_code = data.get("error_code")
+    if "status" in data or "error_code" in data:
+        if (
+            status not in ("ok", "error", "skipped", "not_applicable")
+            or "error_code" not in data
+        ):
+            raise ValueError("Invalid stored result outcome.")
+        if error_code is not None:
+            if status != "error":
+                raise ValueError("Only an error outcome may contain an error code.")
+            error_code = _identifier(error_code, "error_code", 128)
+    return ResultReceipt(
+        id=_uuid(data["id"]),
+        created=_boolean(data["created"]),
+        accepted_at=_date(data["accepted_at"]),
+        item_id=_uuid(data["item_id"]),
+        scorer_version_id=_uuid(data["scorer_version_id"]),
+        status=cast(ResultStatus | None, status),
+        error_code=error_code,
+    )
+
+
 def _upload_receipt(
     data: dict[str, Any], results: tuple[EvaluationResult, ...]
 ) -> UploadReceipt:
@@ -415,28 +516,47 @@ def _upload_receipt(
             )
             for row in data["items"]
         )
-        outcomes = tuple(
-            ResultReceipt(
-                id=_uuid(_object(row)["id"]),
-                created=_boolean(row["created"]),
-                accepted_at=_date(row["accepted_at"]),
-                item_id=_uuid(row["item_id"]),
-                scorer_version_id=_uuid(row["scorer_version_id"]),
+        outcomes = tuple(_result_receipt(_object(row)) for row in data["results"])
+        _validate_upload_identities(items, outcomes, results)
+        if any(
+            result.calculate and outcome.status is None
+            for result, outcome in zip(results, outcomes)
+        ):
+            raise ValueError(
+                "A composite acknowledgment must include its stored outcome."
             )
-            for row in data["results"]
-        )
-        if len(items) != len({item.id for item in items}) or {
-            item.id for item in items
-        } != {result.item_id for result in results}:
-            raise ValueError("Incomplete item acknowledgments.")
-        if [(result.item_id, result.scorer_version_id) for result in outcomes] != [
-            (result.item_id, result.scorer_version_id) for result in results
-        ]:
-            raise ValueError("Incomplete result acknowledgments.")
-        if len({result.id for result in outcomes}) != len(outcomes):
-            raise ValueError("Duplicate result identities in acknowledgment.")
         return UploadReceipt(items=items, results=outcomes)
     except (KeyError, TypeError, ValueError):
         raise EvaluationAPIError(
             code="invalid_response", persistence="unknown"
         ) from None
+
+
+def _validate_upload_identities(
+    items: tuple[ItemReceipt, ...],
+    outcomes: tuple[ResultReceipt, ...],
+    results: tuple[EvaluationResult, ...],
+) -> None:
+    _validate_item_acknowledgments(items, results)
+    if [(result.item_id, result.scorer_version_id) for result in outcomes] != [
+        (result.item_id, result.scorer_version_id) for result in results
+    ]:
+        raise ValueError("Incomplete result acknowledgments.")
+    if len({result.id for result in outcomes}) != len(outcomes):
+        raise ValueError("Duplicate result identities in acknowledgment.")
+
+
+def _validate_result_payload(
+    status: ResultStatus, payload: dict[str, JSONValue]
+) -> None:
+    if status != "error" and payload.get("error_message") is not None:
+        raise ValueError("Only an error result may contain an error_message.")
+
+
+def _validate_item_acknowledgments(
+    items: tuple[ItemReceipt, ...], results: tuple[EvaluationResult, ...]
+) -> None:
+    if len(items) != len({item.id for item in items}) or {
+        item.id for item in items
+    } != {result.item_id for result in results}:
+        raise ValueError("Incomplete item acknowledgments.")
