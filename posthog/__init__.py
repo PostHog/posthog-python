@@ -851,6 +851,10 @@ def feature_enabled(
     """
     Use feature flags to enable or disable features for users.
 
+    `feature_enabled` is deprecated and will be removed in a future major version. Use
+    `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
+    consolidates flag evaluation into a single `/flags` request per incoming request.
+
     Args:
         key: The feature flag key
         distinct_id: The user's distinct ID
@@ -903,6 +907,10 @@ def get_feature_flag(
 ) -> Optional[FlagValue]:
     """
     Get feature flag variant for users. Used with experiments.
+
+    `get_feature_flag` is deprecated and will be removed in a future major version. Use
+    `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
+    consolidates flag evaluation into a single `/flags` request per incoming request.
 
     Args:
         key: The feature flag key

@@ -553,6 +553,10 @@ get_feature_flag(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[st
 
 Get multivariate feature flag value for a user.
 
+`get_feature_flag` is deprecated and will be removed in a future major version. Use
+`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
+consolidates flag evaluation into a single `/flags` request per incoming request.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -587,6 +591,10 @@ get_feature_flag_payload(key: str, distinct_id: ID_TYPES, *, match_value: Option
 
 Get the payload for a feature flag.
 
+`get_feature_flag_payload` is deprecated and will be removed in a future major version. Use
+`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead. This
+consolidates flag evaluation into a single `/flags` request per incoming request.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -611,12 +619,12 @@ Type | Description
 **Examples:**
 
 ```python
-is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
+flags = posthog.evaluate_flags('distinct_id_of_your_user')
 
-if is_my_flag_enabled:
+if flags.is_enabled('flag-key'):
     # Do something differently for this user
     # Optional: fetch the payload
-    matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+    matched_flag_payload = flags.get_flag_payload('flag-key')
 ```
 
 ## Get feature flag result
@@ -863,6 +871,10 @@ feature_enabled(key: str, distinct_id: ID_TYPES, *, groups: Optional[Mapping[str
 ```
 
 Check if a feature flag is enabled for a user.
+
+`feature_enabled` is deprecated and will be removed in a future major version. Use
+`posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
+consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
@@ -2538,6 +2550,10 @@ feature_enabled(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, U
 
 Use feature flags to enable or disable features for users.
 
+`feature_enabled` is deprecated and will be removed in a future major version. Use
+`posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
+consolidates flag evaluation into a single `/flags` request per incoming request.
+
 **Parameters:**
 
 Name | Type | Description | Default
@@ -2576,6 +2592,10 @@ get_feature_flag(key: str, distinct_id: ID_TYPES, groups: Optional[Mapping[str, 
 ```
 
 Get feature flag variant for users. Used with experiments.
+
+`get_feature_flag` is deprecated and will be removed in a future major version. Use
+`posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
+consolidates flag evaluation into a single `/flags` request per incoming request.
 
 **Parameters:**
 
@@ -3678,7 +3698,7 @@ attempts = attempts
 #### `posthog.capture_send.CaptureError.drops`
 
 ```python
-drops = [(CaptureDroppedEvent(*drop)) for drop in (drops or [])]
+drops = [CaptureDroppedEvent(*drop) for drop in drops or []]
 ```
 
 #### `posthog.capture_send.CaptureError.endpoint`

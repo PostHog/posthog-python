@@ -4702,6 +4702,10 @@ class Client(object):
         """
         Check if a feature flag is enabled for a user.
 
+        `feature_enabled` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
+
         Args:
             key: The feature flag key.
             distinct_id: The distinct ID of the user.
@@ -5059,6 +5063,10 @@ class Client(object):
         """
         Get multivariate feature flag value for a user.
 
+        `get_feature_flag` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
+
         Args:
             key: The feature flag key.
             distinct_id: The distinct ID of the user.
@@ -5161,6 +5169,10 @@ class Client(object):
         """
         Get the payload for a feature flag.
 
+        `get_feature_flag_payload` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
+
         Args:
             key: The feature flag key.
             distinct_id: The distinct ID of the user.
@@ -5180,12 +5192,12 @@ class Client(object):
 
         Examples:
             ```python
-            is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
+            flags = posthog.evaluate_flags('distinct_id_of_your_user')
 
-            if is_my_flag_enabled:
+            if flags.is_enabled('flag-key'):
                 # Do something differently for this user
                 # Optional: fetch the payload
-                matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+                matched_flag_payload = flags.get_flag_payload('flag-key')
             ```
 
         Category:
