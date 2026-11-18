@@ -178,6 +178,25 @@ def test_frame_classification_preserves_overrides_and_module_boundaries(
     assert frame.get("in_app") is expected
 
 
+@pytest.mark.parametrize(
+    "project_root, abs_path, expected",
+    [
+        ("/work/app", "/work/app/lib.py", True),
+        ("/work/app", "/work/app/pkg/mod.py", True),
+        ("/work/app/", "/work/app/lib.py", True),
+        ("/work/app", "/work/app-shared/lib.py", None),
+        ("/work/app", "/work/application/x.py", None),
+        ("/work/app/", "/work/app-shared/lib.py", None),
+    ],
+)
+def test_project_root_match_respects_directory_boundaries(
+    project_root, abs_path, expected
+):
+    frame = {"abs_path": abs_path}
+    exception_utils.set_in_app_in_frames([frame], None, None, project_root)
+    assert frame.get("in_app") is expected
+
+
 def test_frame_classification_accepts_missing_options_and_empty_frames():
     frame = {"module": "app", "abs_path": "/project/app.py"}
     exception_utils.set_in_app_in_frames([frame], None, None)
