@@ -393,6 +393,21 @@ class TestKnownAbsentRemoteBody(unittest.TestCase):
             )
         self.flags.assert_not_called()
 
+    def test_send_feature_flags_over_limit_drops_event_with_default_settings(self):
+        client = Client(FAKE_TEST_API_KEY)
+        with mock.patch.object(client, "_enqueue") as enqueue:
+            result = client.capture(
+                "event",
+                distinct_id="user-1",
+                send_feature_flags={
+                    "only_evaluate_locally": False,
+                    "person_property_keys_known_absent": ["plan"] * 1001,
+                },
+            )
+        self.assertIsNone(result)
+        enqueue.assert_not_called()
+        self.flags.assert_not_called()
+
     def test_unbounded_iterable_raises_without_a_request(self):
         with self.assertRaisesRegex(ValueError, "at most 1000 keys"):
             self.client.get_flags_decision(

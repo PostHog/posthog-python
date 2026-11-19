@@ -2660,8 +2660,8 @@ class Client(object):
                 "group_properties": send_feature_flags.get("group_properties"),
                 "flag_keys_filter": send_feature_flags.get("flag_keys_filter"),
             }
-            # Validate here so invalid keys raise to the caller instead of being
-            # logged as a flag enrichment failure.
+            # Validate here so invalid keys fail the whole capture call instead of
+            # being swallowed as a flag enrichment failure.
             person_keys_known_absent, group_keys_known_absent = (
                 _validate_known_absent_keys(
                     send_feature_flags.get("person_property_keys_known_absent"),
