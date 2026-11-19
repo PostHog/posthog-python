@@ -1530,7 +1530,7 @@ def setup() -> Client:
     global default_client
     if not default_client:
         configured_api_key = (project_api_key or "").strip() or (api_key or "").strip()
-        capture_settings = {
+        capture_settings: Dict[str, Any] = {
             "max_queue_size": max_queue_size,
             "max_retries": max_retries,
             "timeout": timeout,
