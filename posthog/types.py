@@ -68,6 +68,10 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
         group_properties: Group properties to use for feature flag evaluation
             specific to this event. Format: { group_type_name: { group_properties } }
         flag_keys_filter: Optional list of flag keys to evaluate and attach.
+        person_property_keys_known_absent: Person property keys known to be
+            absent. See ``Client.evaluate_flags``.
+        group_property_keys_known_absent: Group property keys known to be
+            absent, keyed by group type. See ``Client.evaluate_flags``.
     """
 
     should_send: bool
@@ -75,6 +79,8 @@ class SendFeatureFlagsOptions(TypedDict, total=False):
     person_properties: Optional[dict[str, Any]]
     group_properties: Optional[dict[str, dict[str, Any]]]
     flag_keys_filter: Optional[list[str]]
+    person_property_keys_known_absent: Optional[list[str]]
+    group_property_keys_known_absent: Optional[dict[str, list[str]]]
 
 
 class FeatureFlagEvaluationRuntime(str, Enum):

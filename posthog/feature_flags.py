@@ -7,10 +7,11 @@ import math
 import numbers
 import re
 import warnings
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 from enum import Enum
 from functools import lru_cache as _lru_cache
-from typing import NamedTuple, NoReturn, Optional
+from typing import Any, NamedTuple, NoReturn, Optional
 
 from posthog import utils as utils
 from posthog.types import FlagValue, UnresolvedFlagReason
@@ -28,6 +29,103 @@ log = logging.getLogger("posthog")
 _warned_malformed_flag_dependencies: set = set()
 
 NONE_VALUES_ALLOWED_OPERATORS = ["is_not"]
+
+# The flags service rejects longer known-absent key lists with HTTP 400.
+_MAX_KNOWN_ABSENT_KEYS = 1000
+_PERSON_METADATA_KEY_PREFIX = "__posthog_person_metadata__"
+
+# For a known-absent key these operators match, and every other operator does not.
+_KNOWN_ABSENT_MATCHING_OPERATORS = frozenset(
+    (
+        "is_not_set",
+        "is_not",
+        "not_icontains",
+        "not_starts_with",
+        "not_ends_with",
+        "not_regex",
+    )
+)
+
+
+class _KnownAbsent:
+    """Value of a property the caller listed as known absent, in the property maps
+    used for local evaluation. It replaces any value supplied for the same key."""
+
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "<known absent>"
+
+
+_KNOWN_ABSENT = _KnownAbsent()
+
+
+def _known_absent_key_list(keys, field: str) -> Optional[list[str]]:
+    if keys is None:
+        return None
+    if isinstance(keys, (str, bytes)) or not isinstance(keys, Iterable):
+        raise TypeError(f"{field} must be a collection of strings")
+    key_list = list(keys)
+    if not all(isinstance(key, str) for key in key_list):
+        raise TypeError(f"{field} must contain only strings")
+    if len(key_list) > _MAX_KNOWN_ABSENT_KEYS:
+        raise ValueError(
+            f"{field} allows at most {_MAX_KNOWN_ABSENT_KEYS} keys, got {len(key_list)}"
+        )
+    return key_list or None
+
+
+def _validate_known_absent_keys(
+    person_property_keys_known_absent: Optional[Iterable[str]],
+    group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]],
+) -> tuple[Optional[list[str]], Optional[dict[str, list[str]]]]:
+    """Check the caller's known-absent keys against the flags service limits.
+
+    Returns them as lists, with ``None`` for anything empty. Raises ``TypeError``
+    for a wrong type and ``ValueError`` for a list over the limit, so nothing is
+    evaluated or sent. Lists are never truncated.
+    """
+    person_keys = _known_absent_key_list(
+        person_property_keys_known_absent, "person_property_keys_known_absent"
+    )
+    if group_property_keys_known_absent is None:
+        return person_keys, None
+    if not isinstance(group_property_keys_known_absent, Mapping):
+        raise TypeError(
+            "group_property_keys_known_absent must map group types to collections of strings"
+        )
+    group_keys: dict[str, list[str]] = {}
+    for group_type, keys in group_property_keys_known_absent.items():
+        key_list = _known_absent_key_list(
+            keys, f"group_property_keys_known_absent[{group_type!r}]"
+        )
+        if key_list:
+            group_keys[group_type] = key_list
+    return person_keys, group_keys or None
+
+
+def _mark_known_absent_properties(
+    person_properties: dict[str, Any],
+    group_properties: dict[str, dict[str, Any]],
+    person_property_keys_known_absent: Optional[list[str]],
+    group_property_keys_known_absent: Optional[dict[str, list[str]]],
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Return copies of the local evaluation property maps with each listed key
+    set to the known-absent value, replacing supplied and SDK-added values."""
+    if person_property_keys_known_absent:
+        person_properties = dict(person_properties)
+        for key in person_property_keys_known_absent:
+            # Known absence never hides a persons-table field.
+            if not key.startswith(_PERSON_METADATA_KEY_PREFIX):
+                person_properties[key] = _KNOWN_ABSENT
+    if group_property_keys_known_absent:
+        group_properties = dict(group_properties)
+        for group_type, keys in group_property_keys_known_absent.items():
+            group_properties[group_type] = {
+                **(group_properties.get(group_type) or {}),
+                **{key: _KNOWN_ABSENT for key in keys},
+            }
+    return person_properties, group_properties
 
 
 def _warn_malformed_flag_dependency_once(flag_key, reason):
@@ -556,7 +654,9 @@ def match_feature_flag_properties(
     flag_filters = flag.get("filters") or {}
 
     if flag_filters.get("feature_enrollment") is True:
-        return _match_feature_enrollment(flag, flag_filters, properties)
+        enrolled = _match_feature_enrollment(flag, flag_filters, properties)
+        if enrolled is not None:
+            return enrolled
 
     # Holdouts are evaluated before release conditions, so a held-out value is excluded
     # from the flag's targeting entirely rather than being bucketed into a variant.
@@ -779,13 +879,17 @@ def _get_valid_variant_keys(flag_filters):
     return [variant["key"] for variant in flag_variants]
 
 
-def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
+def _match_feature_enrollment(flag, flag_filters, properties) -> Optional[bool]:
+    """Return the enrollment value, or None when the person is known not to be
+    enrolled and evaluation continues to holdouts and release conditions."""
     enrollment_key = f"$feature_enrollment/{flag.get('key')}"
     if flag_filters.get("aggregation_group_type_index") is not None:
         raise InconclusiveMatchError(
             "Group flag has feature enrollment, which reads person properties",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
+    if properties.get(enrollment_key) is _KNOWN_ABSENT:
+        return None
     if enrollment_key not in properties:
         raise InconclusiveMatchError(
             f"Flag has feature enrollment and '{enrollment_key}' was not passed",
@@ -1464,6 +1568,11 @@ def _match_property_value(
             f"Unknown operator {operator}",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
+
+    if key in property_values and property_values[key] is _KNOWN_ABSENT:
+        # An unusable filter stays inconclusive even for a known-absent key.
+        _assert_filter_supported(property)
+        return operator in _KNOWN_ABSENT_MATCHING_OPERATORS
 
     if key not in property_values:
         raise InconclusiveMatchError(

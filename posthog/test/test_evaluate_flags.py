@@ -68,7 +68,7 @@ class TestEvaluateFlagsRemote(unittest.TestCase):
                 self.client, "_add_local_person_and_group_properties"
             ) as add_local_properties,
             mock.patch.object(
-                self.client, "_person_properties_for_local_evaluation"
+                self.client, "_properties_for_local_evaluation"
             ) as local_person_properties,
             mock.patch.object(
                 self.client, "_get_all_flags_and_payloads_locally"

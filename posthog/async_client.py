@@ -11,7 +11,7 @@ import warnings
 import weakref
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 from uuid import UUID
 
 from typing_extensions import Unpack
@@ -94,6 +94,7 @@ from .exception_utils import (
 )
 from .consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from .emails import AsyncEmails, _client_emails, _validate_options
+from .feature_flags import _validate_known_absent_keys
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
     _EvaluatedFlagRecord,
@@ -1117,6 +1118,8 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         flag_keys: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[list[str]] = None,
+        group_property_keys_known_absent: Optional[dict[str, list[str]]] = None,
     ):
         if disable_geoip is None:
             disable_geoip = self.disable_geoip
@@ -1130,6 +1133,14 @@ class AsyncClient:
         }
         if flag_keys:
             request_data["flag_keys_to_evaluate"] = flag_keys
+        if person_property_keys_known_absent:
+            request_data["person_property_keys_known_absent"] = (
+                person_property_keys_known_absent
+            )
+        if group_property_keys_known_absent:
+            request_data["group_property_keys_known_absent"] = (
+                group_property_keys_known_absent
+            )
         response = await _async_flags(
             self.api_key,
             self.host,
@@ -1155,6 +1166,8 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         flag_keys: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FeatureFlagEvaluations:
         """Evaluate flags remotely without blocking the event loop.
 
@@ -1162,8 +1175,17 @@ class AsyncClient:
         ``capture(flags=...)`` to attach the exact values used for branching.
         This client does not evaluate flags locally, so the snapshot's
         ``unresolved_flags`` is always empty.
+
+        ``person_property_keys_known_absent`` and ``group_property_keys_known_absent``
+        (keyed by group type) list property keys the caller knows are absent. They
+        are sent to ``/flags``, which treats each listed key as absent even when a
+        value is supplied for it. Each list holds at most 1000 keys, counting
+        duplicates; a longer list raises ``ValueError`` and no request is sent.
         """
         host = self._get_feature_flag_evaluations_host()
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
         if distinct_id is None:
             distinct_id = _get_context_distinct_id()
         if device_id is None:
@@ -1207,6 +1229,8 @@ class AsyncClient:
                 disable_geoip=disable_geoip,
                 flag_keys=flag_keys,
                 device_id=device_id,
+                person_property_keys_known_absent=person_keys_known_absent,
+                group_property_keys_known_absent=group_keys_known_absent,
             )
             request_id = response.get("requestId")
             raw_evaluated_at = response.get("evaluatedAt")
