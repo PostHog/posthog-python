@@ -98,6 +98,10 @@ def _validate_known_absent_keys(
         )
     group_keys: dict[str, list[str]] = {}
     for group_type, keys in group_property_keys_known_absent.items():
+        if not isinstance(group_type, str) or keys is None:
+            raise TypeError(
+                "group_property_keys_known_absent must map group types to collections of strings"
+            )
         key_list = _known_absent_key_list(
             keys, f"group_property_keys_known_absent[{group_type!r}]"
         )

@@ -432,6 +432,8 @@ class TestKnownAbsentRemoteBody(unittest.TestCase):
             ("string", {"person_property_keys_known_absent": "plan"}),
             ("non-string key", {"person_property_keys_known_absent": [1]}),
             ("group list", {"group_property_keys_known_absent": ["tier"]}),
+            ("non-string group type", {"group_property_keys_known_absent": {1: ["t"]}}),
+            ("None group keys", {"group_property_keys_known_absent": {"org": None}}),
         ]
     )
     def test_wrong_type_raises_without_a_request(self, _name, kwargs):
