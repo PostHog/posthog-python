@@ -59,6 +59,14 @@ explicit property matching; it does not change the SDK's default matching mode.
   enabled, forced remote calls use a separate definitions-free SDK Client so
   they cannot accidentally resolve from local rules. Legacy remote responses
   and flag-called events are preserved. Reset disposes both Clients.
+- The adapter also advertises `feature_flags_known_absent_v1`. `/get_feature_flag`
+  passes optional `person_property_keys_known_absent` and
+  `group_property_keys_known_absent` to the SDK unchanged, including empty or
+  over-limit lists, so the SDK's own validation is tested. A rejected list
+  returns HTTP 500 with the SDK's error. With `allow_remote_fallback: true` it
+  calls the SDK's default getter on the Client with local definitions, which
+  evaluates locally and falls back to `/flags` when inconclusive. That mode
+  conflicts with `force_remote: true` and `only_evaluate_locally: true` (HTTP 400).
 
 The adapter is sequential (it does not advertise parallel-test support).
 

@@ -88,6 +88,7 @@ def test_health_and_init_use_one_codec(adapter, monkeypatch, env_value, codec):
         monkeypatch.setenv("COMPRESSION", env_value)
     capabilities = adapter.app.test_client().get("/health").json["capabilities"]
     assert "feature_flags_local_evaluation_v1" in capabilities
+    assert "feature_flags_known_absent_v1" in capabilities
     assert {
         "capture_v1",
         "capture_ai_v1",
@@ -291,6 +292,103 @@ def test_rejects_conflicting_evaluation_modes(adapter, route):
             "distinct_id": "user",
             "only_evaluate_locally": True,
             "force_remote": True,
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_known_absent_keys_resolve_locally(adapter, monkeypatch):
+    client = initialize(adapter)
+    monkeypatch.setattr(
+        posthog.client, "get", Mock(return_value=GetResponse(data=definitions()))
+    )
+    client.post("/reload_feature_flag_definitions", json={})
+    remote = Mock(side_effect=AssertionError("Local-only must never request /flags"))
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_properties": {"plan": "banana"},
+            "person_property_keys_known_absent": ["plan"],
+            "only_evaluate_locally": True,
+        },
+    )
+    assert response.json == {
+        "success": True,
+        "value": False,
+        "locally_evaluated": True,
+    }
+    remote.assert_not_called()
+
+
+def test_allow_remote_fallback_sends_known_absent_keys(adapter, monkeypatch):
+    client = initialize(adapter)
+    monkeypatch.setattr(
+        posthog.client, "get", Mock(return_value=GetResponse(data=definitions()))
+    )
+    client.post("/reload_feature_flag_definitions", json={})
+    remote = Mock(
+        return_value=posthog.client.normalize_flags_response(
+            {"featureFlags": {"flag": True}}
+        )
+    )
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    monkeypatch.setattr(
+        adapter.state.remote_client,
+        "_get_flags_decision",
+        Mock(side_effect=AssertionError("Fallback must use the local client")),
+    )
+    monkeypatch.setattr(adapter.state.client, "capture", Mock())
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_property_keys_known_absent": ["region"],
+            "group_property_keys_known_absent": {"organization": ["tier"]},
+            "allow_remote_fallback": True,
+        },
+    )
+    assert response.json == {"success": True, "value": True}
+    remote.assert_called_once()
+    assert remote.call_args.kwargs["person_property_keys_known_absent"] == ["region"]
+    assert remote.call_args.kwargs["group_property_keys_known_absent"] == {
+        "organization": ["tier"]
+    }
+
+
+def test_over_limit_known_absent_keys_are_rejected_by_the_sdk(adapter, monkeypatch):
+    client = initialize(adapter)
+    remote = Mock(side_effect=AssertionError("Over-limit lists must not be sent"))
+    monkeypatch.setattr(adapter.state.client, "_get_flags_decision", remote)
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "person_property_keys_known_absent": ["plan"] * 1001,
+            "allow_remote_fallback": True,
+        },
+    )
+    assert response.status_code == 500
+    assert "at most 1000" in response.json["error"]
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "mode", [{"force_remote": True}, {"only_evaluate_locally": True}]
+)
+def test_allow_remote_fallback_conflicts_with_other_modes(adapter, mode):
+    client = initialize(adapter)
+    response = client.post(
+        "/get_feature_flag",
+        json={
+            "key": "flag",
+            "distinct_id": "user",
+            "allow_remote_fallback": True,
+            **mode,
         },
     )
     assert response.status_code == 400
