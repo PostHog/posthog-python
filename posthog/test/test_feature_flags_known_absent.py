@@ -1,5 +1,6 @@
 """Known-absent property keys in local evaluation and the /flags request body."""
 
+import itertools
 import unittest
 from unittest import mock
 
@@ -378,6 +379,39 @@ class TestKnownAbsentRemoteBody(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "at most 1000 keys"):
                 call()
         self.flags.assert_not_called()
+
+    def test_send_feature_flags_over_limit_raises_without_a_request(self):
+        client = Client(FAKE_TEST_API_KEY, send=False, debug=True)
+        with self.assertRaisesRegex(ValueError, "at most 1000 keys"):
+            client.capture(
+                "event",
+                distinct_id="user-1",
+                send_feature_flags={
+                    "only_evaluate_locally": False,
+                    "person_property_keys_known_absent": ["plan"] * 1001,
+                },
+            )
+        self.flags.assert_not_called()
+
+    def test_unbounded_iterable_raises_without_a_request(self):
+        with self.assertRaisesRegex(ValueError, "at most 1000 keys"):
+            self.client.get_flags_decision(
+                "user-1", person_property_keys_known_absent=itertools.repeat("plan")
+            )
+        self.flags.assert_not_called()
+
+    def test_get_flags_decision_sends_iterator_inputs(self):
+        self.client.get_flags_decision(
+            "user-1",
+            groups={"organization": "org-1"},
+            person_property_keys_known_absent=iter(["plan"]),
+            group_property_keys_known_absent={"organization": iter(["tier"])},
+        )
+        body = self.flags.call_args.kwargs
+        self.assertEqual(body["person_property_keys_known_absent"], ["plan"])
+        self.assertEqual(
+            body["group_property_keys_known_absent"], {"organization": ["tier"]}
+        )
 
     def test_limit_counts_duplicates_and_is_per_group_type(self):
         self.client.get_feature_flag(

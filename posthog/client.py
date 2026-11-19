@@ -2275,7 +2275,7 @@ class Client(object):
         Category:
             Feature flags
         """
-        _validate_known_absent_keys(
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
             person_property_keys_known_absent, group_property_keys_known_absent
         )
         try:
@@ -2287,8 +2287,8 @@ class Client(object):
                 disable_geoip,
                 flag_keys_to_evaluate,
                 device_id=device_id,
-                person_property_keys_known_absent=person_property_keys_known_absent,
-                group_property_keys_known_absent=group_property_keys_known_absent,
+                person_property_keys_known_absent=person_keys_known_absent,
+                group_property_keys_known_absent=group_keys_known_absent,
             )
         except Exception as err:
             self.log.exception("Unable to get feature flags: %s", err)
@@ -2660,14 +2660,18 @@ class Client(object):
                 "group_properties": send_feature_flags.get("group_properties"),
                 "flag_keys_filter": send_feature_flags.get("flag_keys_filter"),
             }
-            if "person_property_keys_known_absent" in send_feature_flags:
-                options["person_property_keys_known_absent"] = send_feature_flags[
-                    "person_property_keys_known_absent"
-                ]
-            if "group_property_keys_known_absent" in send_feature_flags:
-                options["group_property_keys_known_absent"] = send_feature_flags[
-                    "group_property_keys_known_absent"
-                ]
+            # Validate here so invalid keys raise to the caller instead of being
+            # logged as a flag enrichment failure.
+            person_keys_known_absent, group_keys_known_absent = (
+                _validate_known_absent_keys(
+                    send_feature_flags.get("person_property_keys_known_absent"),
+                    send_feature_flags.get("group_property_keys_known_absent"),
+                )
+            )
+            if person_keys_known_absent:
+                options["person_property_keys_known_absent"] = person_keys_known_absent
+            if group_keys_known_absent:
+                options["group_property_keys_known_absent"] = group_keys_known_absent
             return options
         elif isinstance(send_feature_flags, bool):
             return {

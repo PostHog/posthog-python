@@ -1,6 +1,7 @@
 import calendar
 import datetime
 import hashlib
+import itertools
 import json
 import logging
 import math
@@ -65,13 +66,14 @@ def _known_absent_key_list(keys, field: str) -> Optional[list[str]]:
         return None
     if isinstance(keys, (str, bytes)) or not isinstance(keys, Iterable):
         raise TypeError(f"{field} must be a collection of strings")
-    key_list = list(keys)
-    if not all(isinstance(key, str) for key in key_list):
-        raise TypeError(f"{field} must contain only strings")
+    # Read one key past the limit so an unbounded iterable can't exhaust memory.
+    key_list = list(itertools.islice(keys, _MAX_KNOWN_ABSENT_KEYS + 1))
     if len(key_list) > _MAX_KNOWN_ABSENT_KEYS:
         raise ValueError(
-            f"{field} allows at most {_MAX_KNOWN_ABSENT_KEYS} keys, got {len(key_list)}"
+            f"{field} allows at most {_MAX_KNOWN_ABSENT_KEYS} keys, got more"
         )
+    if not all(isinstance(key, str) for key in key_list):
+        raise TypeError(f"{field} must contain only strings")
     return key_list or None
 
 
