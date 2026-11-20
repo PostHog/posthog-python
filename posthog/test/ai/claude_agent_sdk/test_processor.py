@@ -596,15 +596,16 @@ class TestToolSpanEmission:
         assert events.index("$ai_span") < events.index("$ai_trace")
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("entry_point", ["module_query", "processor_query"])
     async def test_pending_span_is_sent_when_caller_stops_early(
-        self, processor, mock_client
+        self, mock_client, entry_point
     ):
         messages = self._tool_turn(ToolResultBlock(tool_use_id="tu_1", content="ok"))
         with patch(
             "posthog.ai.claude_agent_sdk.processor.original_query",
             side_effect=lambda **kw: _fake_query(messages),
         ):
-            stream = processor.query(prompt="Run it", options=ClaudeAgentOptions())
+            stream = _claude_query(entry_point, mock_client, "user", None)
             async for message in stream:
                 if isinstance(message, AssistantMessage):
                     break

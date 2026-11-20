@@ -6,7 +6,11 @@ from types import SimpleNamespace
 import pytest
 
 from posthog.ai.types import TokenUsage
-from posthog.ai.utils import merge_usage_stats, serialize_raw_usage
+from posthog.ai.utils import (
+    _format_tool_error,
+    merge_usage_stats,
+    serialize_raw_usage,
+)
 
 
 class PydanticUsage:
@@ -164,3 +168,20 @@ def test_merge_usage_stats_invalid_mode_does_not_mutate_target():
     with pytest.raises(ValueError, match="Invalid mode: unknown"):
         merge_usage_stats(target, TokenUsage(input_tokens=4), mode="unknown")
     assert target == {"input_tokens": 10}
+
+
+def test_format_tool_error_redacts_media_blocks():
+    client = SimpleNamespace(privacy_mode=False, enable_full_ai_capture=False)
+    content = [
+        {
+            "type": "image",
+            "source_type": "base64",
+            "data": "iVBORw0KGgo" + "A" * 3000,
+            "mime_type": "image/png",
+        }
+    ]
+
+    error = _format_tool_error(client, False, content)
+
+    assert "iVBORw0KGgo" not in error
+    assert "redacted" in error

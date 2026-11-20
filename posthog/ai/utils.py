@@ -1106,6 +1106,8 @@ def _format_tool_error(
         ]
         if texts:
             return "\n".join(texts)
+    # Structured content can carry media, so redact it before serializing.
+    content = finalize_ai_content(content, ph_client)
     try:
         return json.dumps(content, default=str)
     except Exception:
