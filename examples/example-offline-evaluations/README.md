@@ -155,7 +155,7 @@ The SDK keeps all supplied results for a composite-bearing item together without
 
 HTTP success acknowledges persistence, not successful calculation. Input errors become `composite_input_error`; formula errors or invalid output values become `composite_formula_error`. Input statuses propagate in the order `error`, `skipped`, `not_applicable`. Check each receipt's `status` and `error_code`; no result-read permission is needed. For ordinary results on an older backend, `status=None` means the backend omitted the outcome. Composite acknowledgments require an outcome.
 
-All accepted composite outcomes count toward `expected_result_count`, including errors and skips. Derived results add no uploaded-result billing usage. Omitting a composite leaves it unrequested. Exact retries return the stored outcome, including after completion; formulas are not recalculated on retry or read. Persist declarations with `to_dict` and restore them with `from_dict` for exact recovery.
+All accepted composite outcomes count toward `expected_result_count`, including errors and skips. Derived results add no uploaded-result billing usage. Omitting a composite leaves it unrequested. An exact upload retry for a retained result returns its original outcome, even after an edit or experiment completion. The server does not recalculate formulas on retry or read. Persist declarations with `to_dict` and restore them with `from_dict` for exact recovery.
 
 Formulas support 1–16 reported inputs and at most 1,024 characters; aliases start with a lowercase letter and contain lowercase letters, digits, or underscores, up to 32 characters. Nested composites are unsupported. Use `number(flag)` for explicit boolean conversion and `"good" in categories` for categorical membership. Boolean inputs retain their raw meaning regardless of passing rules. Numeric composites support bounds and passing thresholds, but no non-null `step`. Formula syntax, input access, and output types are validated by the server; runtime values and bounds are checked during ingestion.
 
@@ -461,7 +461,9 @@ Passing `payload={}` stores an empty first payload or preserves the fields of an
 | `delete_item_payload(item_id, revision=...)` | The stored item payload |
 | `delete_result_payload(result_id, revision=...)` | The stored result payload |
 
-Deletes return `None` on acknowledgment. A deleted or expired payload cannot be restored on that record. Re-uploading a deleted item or result can recreate it while the experiment is open. A recreated reported result counts toward usage again.
+Deletes return `None` on acknowledgment. Deleting a payload advances its owner's revision. Deleting a result or its payload also advances the parent item's revision. Before editing an affected record that still exists, read its new revision with `get_item_revision` or `get_result_revision`.
+
+A deleted or expired payload cannot be restored on that record. Re-uploading a deleted item or result can recreate it while the experiment is open. A recreated reported result counts toward usage again.
 
 ## Receipts, errors, and recovery
 

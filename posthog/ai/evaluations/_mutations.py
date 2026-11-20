@@ -55,14 +55,19 @@ def _result_changes(fields: ResultUpdate) -> dict[str, Any]:
     if fields.keys() - ResultUpdate.__annotations__:
         raise TypeError("Unsupported result update field.")
     changes: dict[str, Any] = dict(fields)
+    value = fields.get("value")
+    error_code = fields.get("error_code")
     if "status" in fields:
-        _validate_result_status(
-            fields["status"], fields.get("value"), fields.get("error_code")
-        )
-    if (value := fields.get("value")) is not None:
+        status = fields["status"]
+        _validate_result_status(status, value, error_code)
+        if status == "ok" and "value" in fields and value is None:
+            raise ValueError("An ok result requires a score.")
+    elif value is not None and error_code is not None:
+        raise ValueError("A result cannot contain both a score and an error_code.")
+    if value is not None:
         changes["value"] = _score(value)
     if "error_code" in fields:
-        changes["error_code"] = _identifier(fields["error_code"], "error_code", 128)
+        changes["error_code"] = _identifier(error_code, "error_code", 128)
     return changes
 
 

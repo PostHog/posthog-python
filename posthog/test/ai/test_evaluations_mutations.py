@@ -7,6 +7,7 @@ import pytest
 import requests
 
 from posthog.ai.evaluations import (
+    AsyncExperiment,
     AsyncOfflineEvaluations,
     EvaluationAPIError,
     OfflineEvaluations,
@@ -140,6 +141,41 @@ def test_read_update_and_delete_with_revisions(
     ]
 
 
+def test_ok_update_can_omit_value(api):
+    experiment, send, respond = api
+    send.return_value = respond(200, {"revision": 0})
+
+    assert invoke(experiment.update_result, RESOURCE_ID, revision=0, status="ok") == 0
+    send.assert_called_once()
+    request = send.call_args.args[0]
+    body = request.content if isinstance(request, httpx.Request) else request.body
+    assert json.loads(body) == {"revision": 0, "status": "ok"}
+
+
+def test_retry_revision_read_then_delete_with_revision_zero(api):
+    experiment, send, respond = api
+    send.side_effect = [
+        respond(503, {"code": "unavailable"}),
+        respond(200, {"id": str(RESOURCE_ID), "revision": 0}),
+        respond(204),
+    ]
+    with (
+        patch("posthog.ai.evaluations._transport.time.sleep"),
+        patch("posthog.ai.evaluations._transport.asyncio.sleep"),
+    ):
+        revision = invoke(experiment.get_item_revision, RESOURCE_ID)
+    assert revision == 0
+    assert invoke(experiment.delete_item, RESOURCE_ID, revision=revision) is None
+
+    url = f"{EXPERIMENT_URL}items/{RESOURCE_ID}/"
+    requests_sent = [call.args[0] for call in send.call_args_list]
+    assert [(req.method, str(req.url)) for req in requests_sent] == [
+        ("GET", url),
+        ("GET", url),
+        ("DELETE", url + "?revision=0"),
+    ]
+
+
 @pytest.mark.parametrize("method", ["update_item_payload", "update_result_payload"])
 def test_empty_payload_update_is_sent(api, method):
     experiment, send, respond = api
@@ -181,6 +217,24 @@ def test_mutations_surface_errors_without_replaying(
     send.assert_called_once()
 
 
+@pytest.mark.parametrize("method", ["update_result", "delete_result"])
+def test_lost_mutation_response_is_unknown_and_never_retried(api, method):
+    experiment, send, _ = api
+    send.side_effect = (
+        httpx.ReadTimeout("lost response")
+        if isinstance(experiment, AsyncExperiment)
+        else requests.ReadTimeout("lost response")
+    )
+    fields = {"value": True} if method == "update_result" else {}
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(getattr(experiment, method), RESOURCE_ID, revision=1, **fields)
+    assert (caught.value.code, caught.value.persistence) == (
+        "transport_error",
+        "unknown",
+    )
+    send.assert_called_once()
+
+
 @pytest.mark.parametrize(
     "method,fields,status,response",
     [
@@ -209,6 +263,12 @@ def test_malformed_acknowledgments_have_unknown_outcome(
     [
         ("update_item", RESOURCE_ID, {"revision": 0}),
         ("update_result", RESOURCE_ID, {"revision": 1, "value": 2**53 + 1}),
+        ("update_result", RESOURCE_ID, {"revision": 0, "status": "ok", "value": None}),
+        (
+            "update_result",
+            RESOURCE_ID,
+            {"revision": 0, "value": False, "error_code": "timeout"},
+        ),
         (
             "update_result",
             RESOURCE_ID,
