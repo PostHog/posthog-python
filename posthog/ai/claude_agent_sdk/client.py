@@ -32,6 +32,7 @@ from .formatting import (
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
     _GenerationTracker,
+    _ToolSpanTracker,
     _from_subagent,
     _promote_input,
     _starts_generation,
@@ -114,6 +115,7 @@ class PostHogClaudeSDKClient:
 
         # Shared state across turns
         self._tracker = _GenerationTracker()
+        self._tool_spans = _ToolSpanTracker(self._processor)
         self._generation_index = 0
         self._current_generation_span_id: Optional[str] = None
         self._current_input: Optional[List[Dict[str, Any]]] = None
@@ -186,16 +188,21 @@ class PostHogClaudeSDKClient:
         elif isinstance(message, AssistantMessage):
             self._process_assistant_message(message)
 
-        elif isinstance(message, UserMessage) and not _from_subagent(message):
-            if not self._tracker.had_any_stream_events:
-                # Without stream events, a tool result ends the assistant turn;
-                # the result fallback reports the final turn only.
-                self._pending_output = []
-            self._next_input = _format_user_input(
-                message.content, self._processor._client, self._next_input
-            )
+        elif isinstance(message, UserMessage):
+            if not _from_subagent(message):
+                if not self._tracker.had_any_stream_events:
+                    # Without stream events, a tool result ends the assistant
+                    # turn; the result fallback reports the final turn only.
+                    self._pending_output = []
+                self._next_input = _format_user_input(
+                    message.content, self._processor._client, self._next_input
+                )
+            # Subagent tool spans are tracked too, so match their results.
+            self._tool_spans.finish(message.content)
 
         elif isinstance(message, ResultMessage):
+            # The turn is over: spans still waiting for a result go out now.
+            self._tool_spans.flush()
             if not self._tracker.had_any_stream_events:
                 self._processor._emit_generation_from_result(
                     message,
@@ -217,7 +224,7 @@ class PostHogClaudeSDKClient:
         parent_id = self._tracker.current_span_id or self._current_generation_span_id
         for block in message.content:
             if isinstance(block, ToolUseBlock):
-                self._processor._emit_tool_span(
+                self._tool_spans.start(
                     block,
                     self._trace_id,
                     parent_id,
@@ -237,6 +244,7 @@ class PostHogClaudeSDKClient:
         """
         # Emit the trace event covering the entire session
         try:
+            self._tool_spans.flush()
             latency = time.time() - self._query_start
             resolved_id = self._processor._resolve_distinct_id(self._distinct_id)
 

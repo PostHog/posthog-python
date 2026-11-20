@@ -14,6 +14,7 @@ try:
     from claude_agent_sdk import (
         AssistantMessage,
         ResultMessage,
+        ToolResultBlock,
         ToolUseBlock,
         UserMessage,
     )
@@ -34,6 +35,7 @@ from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
     _ai_event_options,
     _capture_processor_event,
+    _format_tool_error,
     _resolve_ai_client,
     finalize_ai_content,
     with_privacy_mode as _with_privacy_mode,
@@ -60,6 +62,60 @@ class _GenerationData:
     end_time: float = 0.0
     span_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     stop_reason: Optional[str] = None
+
+
+@dataclass
+class _PendingToolSpan:
+    """A tool $ai_span waiting for the ToolResultBlock of its tool use."""
+
+    properties: Dict[str, Any]
+    start_time: float
+    distinct_id: Optional[str]
+    trace_id: str
+    privacy: bool
+    groups: Dict[str, Any]
+    options: Optional[Dict[str, Any]]
+
+
+class _ToolSpanTracker:
+    """Holds each tool span until its result arrives, keyed by tool_use_id.
+
+    The span is sent with the result's output, error flag and latency. Spans
+    still waiting when the query or session ends are sent without a result.
+    """
+
+    def __init__(self, processor: "PostHogClaudeAgentProcessor") -> None:
+        self._processor = processor
+        self._pending: Dict[str, _PendingToolSpan] = {}
+
+    def start(self, block: "ToolUseBlock", *args: Any, **kwargs: Any) -> None:
+        previous = self._pending.pop(block.id, None)
+        if previous is not None:
+            self._processor._emit_tool_span(previous)
+        self._pending[block.id] = self._processor._start_tool_span(
+            block, *args, **kwargs
+        )
+
+    def finish(self, content: Any) -> None:
+        """Send the spans whose results are in a UserMessage's content."""
+        if not isinstance(content, list):
+            return
+        for block in content:
+            if not isinstance(block, ToolResultBlock):
+                continue
+            span = self._pending.pop(block.tool_use_id, None)
+            if span is not None:
+                self._processor._emit_tool_span(span, block)
+
+    def flush(self) -> None:
+        """Send every span still waiting for a result, without one."""
+        pending = list(self._pending.values())
+        self._pending.clear()
+        for span in pending:
+            try:
+                self._processor._emit_tool_span(span)
+            except Exception as e:
+                log.debug(f"PostHog tool span error (non-fatal): {e}")
 
 
 class _GenerationTracker:
@@ -286,6 +342,7 @@ class PostHogClaudeAgentProcessor:
             options = replace(options, include_partial_messages=True)
 
         tracker = _GenerationTracker()
+        tool_spans = _ToolSpanTracker(self)
         query_start = time.time()
         generation_index = 0
         current_generation_span_id: Optional[str] = None
@@ -315,90 +372,110 @@ class PostHogClaudeAgentProcessor:
         # Accumulate assistant output per generation
         pending_output: List[Dict[str, Any]] = []
 
-        async for message in original_query(
-            prompt=prompt, options=options, transport=transport
-        ):
-            # All instrumentation is wrapped in try/except so PostHog errors
-            # never interrupt the underlying Claude Agent SDK query.
-            try:
-                if isinstance(message, StreamEvent):
-                    if _starts_generation(message):
-                        if tracker.current_span_id is not None:
-                            # The previous request never finished (it was
-                            # retried), so its partial output is dropped.
-                            pending_output = []
-                        current_input, next_input = _promote_input(
-                            current_input, next_input
-                        )
-                    tracker.process_stream_event(message)
+        try:
+            async for message in original_query(
+                prompt=prompt, options=options, transport=transport
+            ):
+                # All instrumentation is wrapped in try/except so PostHog errors
+                # never interrupt the underlying Claude Agent SDK query.
+                try:
+                    if isinstance(message, StreamEvent):
+                        if _starts_generation(message):
+                            if tracker.current_span_id is not None:
+                                # The previous request never finished (it was
+                                # retried), so its partial output is dropped.
+                                pending_output = []
+                            current_input, next_input = _promote_input(
+                                current_input, next_input
+                            )
+                        tracker.process_stream_event(message)
 
-                    # Emit $ai_generation when a turn completes
-                    if tracker.has_completed_generation():
-                        gen = tracker.pop_generation()
-                        generation_index += 1
-                        current_generation_span_id = gen.span_id
-                        self._emit_generation(
-                            gen,
-                            trace_id,
-                            generation_index,
-                            current_input,
-                            pending_output or None,
-                            distinct_id_override,
-                            extra_props,
-                            privacy,
-                            groups,
-                            extra_options=extra_options,
-                        )
-                        current_input = None
-                        pending_output = []
-
-                elif isinstance(message, AssistantMessage):
-                    tracker.set_model(message.model)
-                    # Use the in-progress generation's span_id as parent for tool spans.
-                    # AssistantMessage arrives before message_stop, so current_generation_span_id
-                    # would be stale (from the previous turn). tracker.current_span_id gives us
-                    # the correct in-progress generation.
-                    parent_id = tracker.current_span_id or current_generation_span_id
-                    for block in message.content:
-                        if isinstance(block, ToolUseBlock):
-                            self._emit_tool_span(
-                                block,
+                        # Emit $ai_generation when a turn completes
+                        if tracker.has_completed_generation():
+                            gen = tracker.pop_generation()
+                            generation_index += 1
+                            current_generation_span_id = gen.span_id
+                            self._emit_generation(
+                                gen,
                                 trace_id,
-                                parent_id,
+                                generation_index,
+                                current_input,
+                                pending_output or None,
                                 distinct_id_override,
                                 extra_props,
                                 privacy,
                                 groups,
                                 extra_options=extra_options,
                             )
-                    if not _from_subagent(message):
-                        # A subagent's own API calls are not this query's generations.
-                        pending_output = _append_assistant_output(
-                            pending_output, message.content
+                            current_input = None
+                            pending_output = []
+
+                    elif isinstance(message, AssistantMessage):
+                        tracker.set_model(message.model)
+                        # Use the in-progress generation's span_id as parent for tool spans.
+                        # AssistantMessage arrives before message_stop, so current_generation_span_id
+                        # would be stale (from the previous turn). tracker.current_span_id gives us
+                        # the correct in-progress generation.
+                        parent_id = (
+                            tracker.current_span_id or current_generation_span_id
                         )
+                        for block in message.content:
+                            if isinstance(block, ToolUseBlock):
+                                tool_spans.start(
+                                    block,
+                                    trace_id,
+                                    parent_id,
+                                    distinct_id_override,
+                                    extra_props,
+                                    privacy,
+                                    groups,
+                                    extra_options=extra_options,
+                                )
+                        if not _from_subagent(message):
+                            # A subagent's own API calls are not this query's generations.
+                            pending_output = _append_assistant_output(
+                                pending_output, message.content
+                            )
 
-                elif isinstance(message, UserMessage) and not _from_subagent(message):
-                    # UserMessages carry tool results; queue them as input for the
-                    # *next* generation.
-                    if not tracker.had_any_stream_events:
-                        # Without stream events, a tool result ends the assistant
-                        # turn; the result fallback reports the final turn only.
-                        pending_output = []
-                    next_input = _format_user_input(
-                        message.content, self._client, next_input
-                    )
+                    elif isinstance(message, UserMessage):
+                        if not _from_subagent(message):
+                            # UserMessages carry tool results; queue them as input
+                            # for the *next* generation.
+                            if not tracker.had_any_stream_events:
+                                # Without stream events, a tool result ends the
+                                # assistant turn; the result fallback reports the
+                                # final turn only.
+                                pending_output = []
+                            next_input = _format_user_input(
+                                message.content, self._client, next_input
+                            )
+                        # Subagent tool spans are tracked too, so match their results.
+                        tool_spans.finish(message.content)
 
-                elif isinstance(message, ResultMessage):
-                    # Fallback: if no StreamEvents were received, emit a single
-                    # generation from ResultMessage aggregate data
-                    if not tracker.had_any_stream_events:
-                        self._emit_generation_from_result(
+                    elif isinstance(message, ResultMessage):
+                        # Spans still waiting for a result go out before the trace.
+                        tool_spans.flush()
+                        # Fallback: if no StreamEvents were received, emit a single
+                        # generation from ResultMessage aggregate data
+                        if not tracker.had_any_stream_events:
+                            self._emit_generation_from_result(
+                                message,
+                                trace_id,
+                                tracker.last_model,
+                                query_start,
+                                initial_input,
+                                pending_output,
+                                distinct_id_override,
+                                extra_props,
+                                privacy,
+                                groups,
+                                extra_options=extra_options,
+                            )
+
+                        self._emit_trace(
                             message,
                             trace_id,
-                            tracker.last_model,
                             query_start,
-                            initial_input,
-                            pending_output,
                             distinct_id_override,
                             extra_props,
                             privacy,
@@ -406,21 +483,14 @@ class PostHogClaudeAgentProcessor:
                             extra_options=extra_options,
                         )
 
-                    self._emit_trace(
-                        message,
-                        trace_id,
-                        query_start,
-                        distinct_id_override,
-                        extra_props,
-                        privacy,
-                        groups,
-                        extra_options=extra_options,
-                    )
+                except Exception as e:
+                    log.debug(f"PostHog instrumentation error (non-fatal): {e}")
 
-            except Exception as e:
-                log.debug(f"PostHog instrumentation error (non-fatal): {e}")
-
-            yield message
+                yield message
+        finally:
+            # Send tool spans whose results never arrived (the query ended
+            # without a result or the caller stopped iterating).
+            tool_spans.flush()
 
     def _emit_generation(
         self,
@@ -573,7 +643,7 @@ class PostHogClaudeAgentProcessor:
             options=extra_options,
         )
 
-    def _emit_tool_span(
+    def _start_tool_span(
         self,
         block: "ToolUseBlock",
         trace_id: str,
@@ -583,9 +653,8 @@ class PostHogClaudeAgentProcessor:
         privacy: bool,
         groups: Dict[str, Any],
         extra_options: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        resolved_id = self._resolve_distinct_id(distinct_id)
-
+    ) -> "_PendingToolSpan":
+        """Build the $ai_span for a tool use; it is sent once its result arrives."""
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
             "$ai_span_id": str(uuid.uuid4()),
@@ -602,13 +671,45 @@ class PostHogClaudeAgentProcessor:
                 _ensure_serializable(block.input), self._client
             )
 
+        return _PendingToolSpan(
+            properties=properties,
+            start_time=time.time(),
+            distinct_id=self._resolve_distinct_id(distinct_id),
+            trace_id=trace_id,
+            privacy=privacy,
+            groups=groups,
+            options=extra_options,
+        )
+
+    def _emit_tool_span(
+        self,
+        span: "_PendingToolSpan",
+        result: Optional["ToolResultBlock"] = None,
+    ) -> None:
+        """Send a tool $ai_span, with its result when the tool returned one."""
+        properties = span.properties
+        if result is not None:
+            properties["$ai_latency"] = time.time() - span.start_time
+            is_error = bool(result.is_error)
+            properties["$ai_is_error"] = is_error
+            if _with_privacy_mode(self._client, span.privacy, True):
+                properties["$ai_output_state"] = finalize_ai_content(
+                    format_tool_result_content(result, self._client), self._client
+                )
+            if is_error:
+                properties["$ai_error"] = _format_tool_error(
+                    self._client,
+                    span.privacy,
+                    format_tool_result_content(result, self._client),
+                )
+
         self._capture_event(
             "$ai_span",
             properties,
-            resolved_id or trace_id,
-            groups,
-            personless=resolved_id is None,
-            options=extra_options,
+            span.distinct_id or span.trace_id,
+            span.groups,
+            personless=span.distinct_id is None,
+            options=span.options,
         )
 
     def _emit_trace(

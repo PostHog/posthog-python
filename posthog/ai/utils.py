@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import json
 import logging
 import re
 import time
@@ -1079,6 +1080,36 @@ def _format_ai_error(
     ):
         return _summarize_error_for_privacy(exc)
     return describe(exc)
+
+
+_PRIVACY_SAFE_TOOL_ERROR = "ToolError"
+
+
+def _format_tool_error(
+    ph_client: Any, privacy_mode: Optional[bool], content: Any
+) -> str:
+    """
+    The `$ai_error` value for a tool result the tool reported as an error.
+
+    The result content can echo prompts and user data, so privacy mode keeps
+    only a fixed label.
+    """
+    if _privacy_mode_enabled(ph_client, privacy_mode):
+        return _PRIVACY_SAFE_TOOL_ERROR
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = [
+            block["text"]
+            for block in content
+            if isinstance(block, dict) and isinstance(block.get("text"), str)
+        ]
+        if texts:
+            return "\n".join(texts)
+    try:
+        return json.dumps(content, default=str)
+    except Exception:
+        return str(content)
 
 
 _MCP_TOOL_CREDENTIAL_FIELDS = ("headers", "authorization")

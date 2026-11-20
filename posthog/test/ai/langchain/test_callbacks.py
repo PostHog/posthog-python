@@ -2247,6 +2247,119 @@ def test_convert_message_to_dict_tool_calls():
     ]
 
 
+def test_convert_message_to_dict_tool_message():
+    from langchain_core.messages import ToolMessage
+
+    from posthog.ai.langchain.callbacks import _convert_message_to_dict
+
+    assert _convert_message_to_dict(
+        ToolMessage(content="Sunny", tool_call_id="call_1", name="get_weather")
+    ) == {
+        "role": "tool",
+        "content": "Sunny",
+        "tool_call_id": "call_1",
+        "name": "get_weather",
+    }
+    assert _convert_message_to_dict(
+        ToolMessage(content="City not found", tool_call_id="call_2", status="error")
+    ) == {
+        "role": "tool",
+        "content": "City not found",
+        "tool_call_id": "call_2",
+        "status": "error",
+    }
+
+
+def _invoke_tool_in_chain(mock_client, tool_obj, args, **handler_kwargs):
+    """Run a tool call as a child of a chain, so the tool run is an $ai_span."""
+    callbacks = CallbackHandler(mock_client, **handler_kwargs)
+    call = {"name": tool_obj.name, "args": args, "id": "call_1", "type": "tool_call"}
+    chain = RunnableLambda(lambda _, config: tool_obj.invoke(call, config=config))
+    try:
+        chain.invoke({}, config={"callbacks": [callbacks]})
+    except Exception:
+        pass
+    return [
+        c[1]["properties"]
+        for c in mock_client.capture_ai.call_args_list
+        if c[1]["event"] == "$ai_span"
+    ]
+
+
+def _failing_weather_tool(handle_tool_error):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException(f"City not found: {city}")
+
+    get_weather.handle_tool_error = handle_tool_error
+    return get_weather
+
+
+def test_tool_span_type_and_result(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"Sunny in {city}"
+
+    [span] = _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+    assert span["$ai_span_name"] == "get_weather"
+    assert span["$ai_span_type"] == "tool"
+    assert "$ai_is_error" not in span
+    assert span["$ai_output_state"].content == "Sunny in Paris"
+    assert span["$ai_output_state"].tool_call_id == "call_1"
+
+
+def test_tool_span_marks_error_tool_message(mock_client):
+    [span] = _invoke_tool_in_chain(
+        mock_client, _failing_weather_tool(True), {"city": "Atlantis"}
+    )
+    assert span["$ai_span_type"] == "tool"
+    assert span["$ai_is_error"] is True
+    assert span["$ai_error"] == "City not found: Atlantis"
+
+
+def test_tool_span_error_tool_message_in_privacy_mode(mock_client):
+    [span] = _invoke_tool_in_chain(
+        mock_client,
+        _failing_weather_tool(True),
+        {"city": "Atlantis"},
+        privacy_mode=True,
+    )
+    assert span["$ai_is_error"] is True
+    assert span["$ai_error"] == "ToolError"
+    assert span["$ai_output_state"] is None
+
+
+def test_tool_span_marks_raised_tool_error(mock_client):
+    [span] = _invoke_tool_in_chain(
+        mock_client, _failing_weather_tool(False), {"city": "Atlantis"}
+    )
+    assert span["$ai_span_type"] == "tool"
+    assert span["$ai_is_error"] is True
+    assert "City not found: Atlantis" in span["$ai_error"]
+
+
+def test_non_tool_spans_have_no_span_type(mock_client):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = (
+        RunnableLambda(lambda x: x)
+        | prompt
+        | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    )
+    chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
+
+    spans = [
+        c[1]["properties"]
+        for c in mock_client.capture_ai.call_args_list
+        if c[1]["event"] == "$ai_span"
+    ]
+    assert spans
+    assert all("$ai_span_type" not in span for span in spans)
+
+
 def test_tool_definition(mock_client):
     """Test that tools defined in invocation parameters are captured in $ai_tools property"""
     callbacks = CallbackHandler(mock_client)
