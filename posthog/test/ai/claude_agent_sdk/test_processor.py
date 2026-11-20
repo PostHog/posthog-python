@@ -533,6 +533,38 @@ class TestToolSpanEmission:
         assert span["$ai_latency"] >= 0
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("result_arrives", [True, False])
+    async def test_privacy_enabled_mid_tool_drops_buffered_content(
+        self, processor, mock_client, result_arrives
+    ):
+        turn = self._tool_turn(
+            ToolResultBlock(tool_use_id="tu_1", content="oops", is_error=True)
+        )
+        if not result_arrives:
+            turn = turn[:3] + [_make_result_message()]
+
+        async def query(messages):
+            for i, msg in enumerate(messages):
+                if i == 3:
+                    # Privacy turns on while the tool runs.
+                    mock_client.privacy_mode = True
+                yield msg
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: query(turn),
+        ):
+            async for _ in processor.query(prompt="go", options=ClaudeAgentOptions()):
+                pass
+
+        spans = [p for name, p in self._events(mock_client) if name == "$ai_span"]
+        assert len(spans) == 1
+        for key in ("$ai_input_state", "$ai_output_state", "$ai_error"):
+            assert key not in spans[0]
+        if result_arrives:
+            assert spans[0]["$ai_is_error"] is True
+
+    @pytest.mark.asyncio
     async def test_span_carries_tool_error(self, processor, mock_client):
         await self._run(
             processor,

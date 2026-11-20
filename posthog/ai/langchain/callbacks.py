@@ -8,7 +8,7 @@ except ImportError:
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Dict,
@@ -72,7 +72,7 @@ class SpanMetadata:
     """End time of the run."""
     input: Optional[Any]
     """Input of the run: messages, prompt variables, etc."""
-    span_type: Optional[str] = None
+    span_type: Optional[str] = field(default=None, kw_only=True)
     """`$ai_span_type` of the run, e.g. "tool" for tool runs."""
 
     @property

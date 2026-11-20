@@ -71,6 +71,10 @@ class _PendingToolSpan:
     distinct_id: Any
     groups: Dict[str, Any]
     extra_options: Optional[Dict[str, Any]] = None
+    privacy: bool = False
+
+
+_TOOL_SPAN_CONTENT_PROPERTIES = ("$ai_input_state", "$ai_output_state", "$ai_error")
 
 
 def _tool_error_text(content: Any) -> str:
@@ -661,6 +665,7 @@ class PostHogClaudeAgentProcessor:
             distinct_id=distinct_id,
             groups=groups,
             extra_options=extra_options,
+            privacy=privacy,
         )
         tool_use_id = getattr(block, "id", None)
         if tool_use_id is None:
@@ -702,6 +707,11 @@ class PostHogClaudeAgentProcessor:
             self._capture_tool_span(span)
 
     def _capture_tool_span(self, span: _PendingToolSpan) -> None:
+        if _with_privacy_mode(self._client, span.privacy, True) is None:
+            # Privacy may have been enabled while the tool ran; drop content
+            # buffered before then.
+            for key in _TOOL_SPAN_CONTENT_PROPERTIES:
+                span.properties.pop(key, None)
         resolved_id = self._resolve_distinct_id(span.distinct_id)
         trace_id = span.properties["$ai_trace_id"]
         self._capture_event(
