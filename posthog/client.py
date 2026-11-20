@@ -19,6 +19,7 @@ from typing import (
     Callable,
     Dict,
     FrozenSet,
+    Iterable,
     List,
     Mapping,
     NamedTuple,
@@ -124,6 +125,8 @@ from posthog.feature_flags import (
     RequiresServerEvaluation,
     _get_definition_unresolved_reason,
     _group_key_to_string,
+    _mark_known_absent_properties,
+    _validate_known_absent_keys,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -2085,6 +2088,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        *,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> dict[str, Union[bool, str]]:
         """
         Get feature flag variants for a user.
@@ -2098,6 +2104,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Category:
             Feature flags
@@ -2110,6 +2120,8 @@ class Client(object):
             disable_geoip,
             flag_keys_to_evaluate,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         return to_values(resp_data) or {}
 
@@ -2122,6 +2134,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        *,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> dict[str, Optional[str]]:
         """
         Get feature flag payloads for a user, preserving valid serialized JSON.
@@ -2135,6 +2150,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -2152,6 +2171,8 @@ class Client(object):
             disable_geoip,
             flag_keys_to_evaluate,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         return {
             key: _parse_flag_payload(payload, decode=False)
@@ -2167,6 +2188,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        *,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FlagsAndPayloads:
         """
         Get feature flags and payloads for a user.
@@ -2180,6 +2204,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -2197,6 +2225,8 @@ class Client(object):
             disable_geoip,
             flag_keys_to_evaluate,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         response = to_flags_and_payloads(resp)
         payloads = response.get("featureFlagPayloads")
@@ -2216,6 +2246,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        *,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FlagsResponse:
         """
         Get feature flags decision.
@@ -2229,6 +2262,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -2238,6 +2275,9 @@ class Client(object):
         Category:
             Feature flags
         """
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
         try:
             return self._get_flags_decision(
                 distinct_id,
@@ -2247,6 +2287,8 @@ class Client(object):
                 disable_geoip,
                 flag_keys_to_evaluate,
                 device_id=device_id,
+                person_property_keys_known_absent=person_keys_known_absent,
+                group_property_keys_known_absent=group_keys_known_absent,
             )
         except Exception as err:
             self.log.exception("Unable to get feature flags: %s", err)
@@ -2261,6 +2303,9 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        *,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FlagsResponse:
         if self.disabled:
             return normalize_flags_response({})
@@ -2292,6 +2337,14 @@ class Client(object):
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
+
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
+        if person_keys_known_absent:
+            request_data["person_property_keys_known_absent"] = person_keys_known_absent
+        if group_keys_known_absent:
+            request_data["group_property_keys_known_absent"] = group_keys_known_absent
 
         resp_data = flags(
             self.api_key,
@@ -2496,6 +2549,12 @@ class Client(object):
                             disable_geoip=disable_geoip,
                             only_evaluate_locally=True,
                             flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                            person_property_keys_known_absent=flag_options.get(
+                                "person_property_keys_known_absent"
+                            ),
+                            group_property_keys_known_absent=flag_options.get(
+                                "group_property_keys_known_absent"
+                            ),
                         )
                     elif flag_options["only_evaluate_locally"] is False:
                         # Remote evaluation explicitly requested
@@ -2506,6 +2565,12 @@ class Client(object):
                             group_properties=flag_options["group_properties"],
                             disable_geoip=disable_geoip,
                             flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                            person_property_keys_known_absent=flag_options.get(
+                                "person_property_keys_known_absent"
+                            ),
+                            group_property_keys_known_absent=flag_options.get(
+                                "group_property_keys_known_absent"
+                            ),
                         )
                     elif self.feature_flags:
                         # Local flags available, prefer local evaluation
@@ -2517,6 +2582,12 @@ class Client(object):
                             disable_geoip=disable_geoip,
                             only_evaluate_locally=True,
                             flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                            person_property_keys_known_absent=flag_options.get(
+                                "person_property_keys_known_absent"
+                            ),
+                            group_property_keys_known_absent=flag_options.get(
+                                "group_property_keys_known_absent"
+                            ),
                         )
                     else:
                         # Fall back to remote evaluation
@@ -2527,6 +2598,12 @@ class Client(object):
                             group_properties=flag_options["group_properties"],
                             disable_geoip=disable_geoip,
                             flag_keys_to_evaluate=flag_options["flag_keys_filter"],
+                            person_property_keys_known_absent=flag_options.get(
+                                "person_property_keys_known_absent"
+                            ),
+                            group_property_keys_known_absent=flag_options.get(
+                                "group_property_keys_known_absent"
+                            ),
                         )
                 except Exception as e:
                     self.log.exception(
@@ -2574,7 +2651,7 @@ class Client(object):
             TypeError: If send_feature_flags is not bool or dict
         """
         if isinstance(send_feature_flags, dict):
-            return {
+            options: SendFeatureFlagsOptions = {
                 "should_send": True,
                 "only_evaluate_locally": send_feature_flags.get(
                     "only_evaluate_locally"
@@ -2583,6 +2660,19 @@ class Client(object):
                 "group_properties": send_feature_flags.get("group_properties"),
                 "flag_keys_filter": send_feature_flags.get("flag_keys_filter"),
             }
+            # Validate here so invalid keys fail the whole capture call instead of
+            # being swallowed as a flag enrichment failure.
+            person_keys_known_absent, group_keys_known_absent = (
+                _validate_known_absent_keys(
+                    send_feature_flags.get("person_property_keys_known_absent"),
+                    send_feature_flags.get("group_property_keys_known_absent"),
+                )
+            )
+            if person_keys_known_absent:
+                options["person_property_keys_known_absent"] = person_keys_known_absent
+            if group_keys_known_absent:
+                options["group_property_keys_known_absent"] = group_keys_known_absent
+            return options
         elif isinstance(send_feature_flags, bool):
             return {
                 "should_send": send_feature_flags,
@@ -4699,6 +4789,8 @@ class Client(object):
         send_feature_flag_events: bool = True,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[bool]:
         """
         Check if a feature flag is enabled for a user.
@@ -4717,6 +4809,10 @@ class Client(object):
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -4750,6 +4846,8 @@ class Client(object):
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         response = flag_result.get_value() if flag_result else None
 
@@ -4783,7 +4881,12 @@ class Client(object):
         send_feature_flag_events: bool = True,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[FeatureFlagResult]:
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
         if self.disabled:
             return None
 
@@ -4813,15 +4916,21 @@ class Client(object):
         if device_id is None:
             device_id = get_context_device_id()
 
-        local_person_properties = self._person_properties_for_local_evaluation(
-            distinct_id, person_properties
+        local_person_properties, local_group_properties = (
+            self._properties_for_local_evaluation(
+                distinct_id,
+                person_properties,
+                group_properties,
+                person_keys_known_absent,
+                group_keys_known_absent,
+            )
         )
         flag_value, snapshot = self._locally_evaluate_flag(
             key,
             distinct_id,
             groups,
             local_person_properties,
-            group_properties,
+            local_group_properties,
             device_id,
         )
         local_definition_version = snapshot["flag_definition_version"]
@@ -4880,6 +4989,8 @@ class Client(object):
                     group_properties,
                     disable_geoip,
                     device_id=device_id,
+                    person_property_keys_known_absent=person_keys_known_absent,
+                    group_property_keys_known_absent=group_keys_known_absent,
                 )
                 errors = []
                 if errors_while_computing:
@@ -5002,6 +5113,8 @@ class Client(object):
         send_feature_flag_events: bool = True,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[FeatureFlagResult]:
         """
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
@@ -5030,6 +5143,10 @@ class Client(object):
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Returns:
             Optional[FeatureFlagResult]: The evaluated result, including a healthy
@@ -5046,6 +5163,8 @@ class Client(object):
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
 
     def get_feature_flag(
@@ -5060,6 +5179,8 @@ class Client(object):
         send_feature_flag_events: bool = True,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[FlagValue]:
         """
         Get multivariate feature flag value for a user.
@@ -5078,6 +5199,10 @@ class Client(object):
             send_feature_flag_events: Whether to send feature flag events.
             disable_geoip: Whether to disable GeoIP for this request.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -5111,6 +5236,8 @@ class Client(object):
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         return feature_flag_result.get_value() if feature_flag_result else None
 
@@ -5166,6 +5293,8 @@ class Client(object):
         send_feature_flag_events: bool = False,
         disable_geoip: Optional[bool] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[object]:
         """
         Get the payload for a feature flag.
@@ -5185,6 +5314,10 @@ class Client(object):
             send_feature_flag_events: Deprecated. Use get_feature_flag() instead if you need events.
             disable_geoip: Whether to disable GeoIP for this request.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Returns:
             The payload associated with the matched feature flag value, or None.
@@ -5231,6 +5364,8 @@ class Client(object):
             send_feature_flag_events=send_feature_flag_events,
             disable_geoip=disable_geoip,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         return feature_flag_result.payload if feature_flag_result else None
 
@@ -5243,6 +5378,8 @@ class Client(object):
         group_properties: dict[str, dict[str, Any]],
         disable_geoip: Optional[bool],
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[list[str]] = None,
+        group_property_keys_known_absent: Optional[dict[str, list[str]]] = None,
     ) -> tuple[Optional[FeatureFlag], Optional[str], Optional[int], bool, bool]:
         """
         Calls /flags and returns the flag details, request id, evaluated at timestamp,
@@ -5258,6 +5395,8 @@ class Client(object):
             disable_geoip,
             flag_keys_to_evaluate=[key],
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
         request_id = resp_data.get("requestId")
         evaluated_at = resp_data.get("evaluatedAt")
@@ -5458,6 +5597,8 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> Optional[dict[str, Union[bool, str]]]:
         """
         Get all feature flags for a user.
@@ -5472,6 +5613,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -5490,6 +5635,8 @@ class Client(object):
             disable_geoip=disable_geoip,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
+            person_property_keys_known_absent=person_property_keys_known_absent,
+            group_property_keys_known_absent=group_property_keys_known_absent,
         )
 
         return response["featureFlags"]
@@ -5505,6 +5652,8 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FlagsAndPayloads:
         """
         Get all feature flags and their payloads for a user.
@@ -5519,6 +5668,10 @@ class Client(object):
             flag_keys_to_evaluate: A list of specific flag keys to evaluate. If provided,
                 only these flags will be evaluated, improving performance.
             device_id: The device ID for this request.
+            person_property_keys_known_absent: Person property keys known to be absent.
+                See ``evaluate_flags``.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. See ``evaluate_flags``.
 
         Examples:
             ```python
@@ -5528,6 +5681,9 @@ class Client(object):
         Category:
             Feature flags
         """
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
         if self.disabled:
             return {"featureFlags": None, "featureFlagPayloads": None}
 
@@ -5543,14 +5699,20 @@ class Client(object):
 
         groups = groups or {}
 
-        local_person_properties = self._person_properties_for_local_evaluation(
-            distinct_id, person_properties
+        local_person_properties, local_group_properties = (
+            self._properties_for_local_evaluation(
+                distinct_id,
+                person_properties,
+                group_properties,
+                person_keys_known_absent,
+                group_keys_known_absent,
+            )
         )
         response, fallback_to_flags, _ = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
             person_properties=local_person_properties,
-            group_properties=group_properties,
+            group_properties=local_group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
         )
@@ -5565,6 +5727,8 @@ class Client(object):
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                     device_id=device_id,
+                    person_property_keys_known_absent=person_keys_known_absent,
+                    group_property_keys_known_absent=group_keys_known_absent,
                 )
                 remote_response = to_flags_and_payloads(decide_response)
                 # A key the server marked failed keeps its locally computed value
@@ -5616,6 +5780,8 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         flag_keys: Optional[List[str]] = None,
         device_id: Optional[str] = None,
+        person_property_keys_known_absent: Optional[Iterable[str]] = None,
+        group_property_keys_known_absent: Optional[Mapping[str, Iterable[str]]] = None,
     ) -> FeatureFlagEvaluations:
         """Evaluate all feature flags for a user in a single call and return a
         :class:`FeatureFlagEvaluations` snapshot. Branch on ``.is_enabled()`` /
@@ -5649,6 +5815,17 @@ class Client(object):
             device_id: Optional device ID override. If not provided, falls back to the
                 context device_id (which may be set via tracing headers). Used by
                 experience-continuity flags to match users across distinct_id changes.
+            person_property_keys_known_absent: Person property keys the caller knows are
+                absent for this person. Local evaluation treats a listed key as absent,
+                even when ``person_properties`` supplies a value for it: ``is_not_set``
+                and the negated operators match, and every other operator does not, with
+                no remote fallback. A listed ``$feature_enrollment/<flag key>`` means not
+                enrolled. Keys starting with ``__posthog_person_metadata__`` are ignored.
+                Sent to ``/flags`` on remote evaluation. At most 1000 keys, counting
+                duplicates; a longer list raises ``ValueError`` and nothing is evaluated.
+            group_property_keys_known_absent: Group property keys known to be absent,
+                keyed by group type. A key applies only to its own group type. Same
+                rules and per-group-type limit as ``person_property_keys_known_absent``.
 
         Returns:
             A :class:`FeatureFlagEvaluations` snapshot.
@@ -5668,6 +5845,9 @@ class Client(object):
             Feature flags
         """
         host = self._get_feature_flag_evaluations_host()
+        person_keys_known_absent, group_keys_known_absent = _validate_known_absent_keys(
+            person_property_keys_known_absent, group_property_keys_known_absent
+        )
 
         if distinct_id is None:
             distinct_id = get_context_distinct_id()
@@ -5711,15 +5891,21 @@ class Client(object):
         locally_evaluated_keys: set[str] = set()
         unresolved: Dict[str, UnresolvedFlagReason] = {}
         # Try local evaluation first when the poller has loaded definitions.
-        local_person_properties = self._person_properties_for_local_evaluation(
-            distinct_id, person_properties
+        local_person_properties, local_group_properties = (
+            self._properties_for_local_evaluation(
+                distinct_id,
+                person_properties,
+                group_properties,
+                person_keys_known_absent,
+                group_keys_known_absent,
+            )
         )
         local_result, fallback_to_server, definition_snapshot = (
             self._get_all_flags_and_payloads_locally(
                 distinct_id,
                 groups=dict(groups),
                 person_properties=local_person_properties,
-                group_properties=group_properties,
+                group_properties=local_group_properties,
                 flag_keys_to_evaluate=flag_keys,
                 device_id=device_id,
                 unresolved=unresolved,
@@ -5767,6 +5953,8 @@ class Client(object):
                     disable_geoip=disable_geoip,
                     flag_keys_to_evaluate=flag_keys,
                     device_id=device_id,
+                    person_property_keys_known_absent=person_keys_known_absent,
+                    group_property_keys_known_absent=group_keys_known_absent,
                 )
                 request_id = response.get("requestId")
                 raw_evaluated_at = response.get("evaluatedAt")
@@ -6077,10 +6265,22 @@ class Client(object):
             ).matches(wanted)
         ]
 
-    def _person_properties_for_local_evaluation(self, distinct_id, person_properties):
+    def _properties_for_local_evaluation(
+        self,
+        distinct_id,
+        person_properties,
+        group_properties,
+        person_property_keys_known_absent=None,
+        group_property_keys_known_absent=None,
+    ):
         local_person_properties = dict(person_properties or {})
         local_person_properties.setdefault("distinct_id", distinct_id)
-        return local_person_properties
+        return _mark_known_absent_properties(
+            local_person_properties,
+            group_properties or {},
+            person_property_keys_known_absent,
+            group_property_keys_known_absent,
+        )
 
     def _add_local_person_and_group_properties(
         self, groups, person_properties, group_properties

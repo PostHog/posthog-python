@@ -318,6 +318,7 @@ def health():
         "fail_open",
         "encoding_" + compression_name(),
         "feature_flags_local_evaluation_v1",
+        "feature_flags_known_absent_v1",
         # Remote /flags requests send ?v=4 and read the v4 flag record.
         "flags_response_v4",
         # The legacy payload accessor is exposed on /get_feature_flag_payload.
@@ -632,13 +633,32 @@ def get_feature_flag():
         person_properties = data.get("person_properties")
         groups = data.get("groups")
         group_properties = data.get("group_properties")
+        # Passed through unchanged so the SDK's own validation is exercised.
+        known_absent = {
+            name: data[name]
+            for name in (
+                "person_property_keys_known_absent",
+                "group_property_keys_known_absent",
+            )
+            if name in data
+        }
         disable_geoip = data.get("disable_geoip")
         only_evaluate_locally = data.get("only_evaluate_locally", False)
-        force_remote = data.get("force_remote", not only_evaluate_locally)
+        allow_remote_fallback = data.get("allow_remote_fallback", False)
+        force_remote = data.get(
+            "force_remote", not only_evaluate_locally and not allow_remote_fallback
+        )
 
         if only_evaluate_locally and force_remote:
             return jsonify(
                 {"error": "only_evaluate_locally conflicts with force_remote"}
+            ), 400
+        if allow_remote_fallback and (only_evaluate_locally or force_remote):
+            return jsonify(
+                {
+                    "error": "allow_remote_fallback conflicts with force_remote "
+                    "and only_evaluate_locally"
+                }
             ), 400
         if not key:
             return jsonify({"error": "key is required"}), 400
@@ -655,6 +675,7 @@ def get_feature_flag():
                 disable_geoip=disable_geoip,
                 only_evaluate_locally=True,
                 send_feature_flag_events=False,
+                **known_absent,
             )
             # The real local-only SDK API returns None for inconclusive results;
             # a conclusive false is a FeatureFlagResult, not a cache miss.
@@ -665,16 +686,32 @@ def get_feature_flag():
                 locally_evaluated=conclusive,
             )
 
-        client = (state.remote_client or state.client) if force_remote else state.client
-        value = client.get_feature_flag(
-            key,
-            distinct_id,
-            person_properties=person_properties,
-            groups=groups,
-            group_properties=group_properties,
-            disable_geoip=disable_geoip,
-            only_evaluate_locally=not force_remote,
-        )
+        if allow_remote_fallback:
+            # The default getter: local evaluation, then /flags when inconclusive.
+            client = state.client
+            value = client.get_feature_flag(
+                key,
+                distinct_id,
+                person_properties=person_properties,
+                groups=groups,
+                group_properties=group_properties,
+                disable_geoip=disable_geoip,
+                **known_absent,
+            )
+        else:
+            client = (
+                (state.remote_client or state.client) if force_remote else state.client
+            )
+            value = client.get_feature_flag(
+                key,
+                distinct_id,
+                person_properties=person_properties,
+                groups=groups,
+                group_properties=group_properties,
+                disable_geoip=disable_geoip,
+                only_evaluate_locally=not force_remote,
+                **known_absent,
+            )
 
         # Ensure the SDK's side-effect $feature_flag_called event is sent before
         # the adapter action returns. Otherwise the harness may reset mock-server

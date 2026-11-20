@@ -4,7 +4,7 @@ This package contains the PostHog Python SDK compliance adapter used with the Po
 
 ## Running tests
 
-Tests run automatically in CI via GitHub Actions against harness **1.26.0**. The compliance job runs once for each capture compression (gzip, deflate and zstd). Each run opts into the local-evaluation suite and fails on compliance regressions.
+Tests run automatically in CI via GitHub Actions against harness **1.34.0**. The compliance job runs once for each capture compression (gzip, deflate and zstd). Each run opts into the local-evaluation suite and fails on compliance regressions.
 
 Run adapter protocol tests from the repository root in an activated virtual environment:
 
@@ -44,7 +44,7 @@ docker run -d --name sdk-adapter --network test-network -p 8080:8080 posthog-pyt
 docker run --rm \
   --name test-harness \
   --network test-network \
-  ghcr.io/posthog/sdk-test-harness:1.26.0 \
+  ghcr.io/posthog/sdk-test-harness:1.34.0@sha256:43f75861fbcf5bc6c3d35511caa2be2d55274054c6071ebeb943aca0bcd0633a \
   run --adapter-url http://sdk-adapter:8080 --mock-url http://test-harness:8081
 
 # Cleanup
