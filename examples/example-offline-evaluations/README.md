@@ -448,7 +448,11 @@ experiment.update_item_payload(item_id, revision=revision, payload={"expected_ou
 
 Each update returns the server's current revision, including when a score already has the requested value. A payload shares its owner's revision. Changes to a result or its payload can also advance the item revision. A stale write raises `EvaluationAPIError` with HTTP 409 and code `revision_conflict`. After a conflict or lost response, inspect the current data before deciding whether to write again. The SDK sends each mutation once.
 
+If an update acknowledgment returns a revision below the one you submitted, the SDK raises `EvaluationAPIError` with code `invalid_response` and `persistence="unknown"`.
+
 Payload updates replace only the supplied top-level fields. Use `None` to store JSON null. Edits keep the original 30-day retention deadline. Editing an item's input, output, or expected output can mark existing scores stale. To correct a composite, edit its reported inputs and the server recomputes dependent scores.
+
+Passing `payload={}` stores an empty first payload or preserves the fields of an existing payload. Either write advances the owner's revision. A deleted or expired payload raises HTTP 409 `payload_unavailable` even for `{}`. When you change a result's status from `error` to another status, the server removes any stored `error_message` from its payload.
 
 | Method | What it permanently removes |
 | --- | --- |

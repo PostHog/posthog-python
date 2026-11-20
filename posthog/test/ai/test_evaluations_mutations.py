@@ -140,6 +140,26 @@ def test_read_update_and_delete_with_revisions(
     ]
 
 
+@pytest.mark.parametrize("method", ["update_item_payload", "update_result_payload"])
+def test_empty_payload_update_is_sent(api, method):
+    experiment, send, respond = api
+    update = getattr(experiment, method)
+    send.side_effect = [
+        respond(200, {"revision": 4}),
+        respond(409, {"code": "payload_unavailable"}),
+    ]
+
+    assert invoke(update, RESOURCE_ID, revision=3, payload={}) == 4
+    with pytest.raises(EvaluationAPIError) as caught:
+        invoke(update, RESOURCE_ID, revision=4, payload={})
+    assert (caught.value.status, caught.value.code) == (409, "payload_unavailable")
+
+    for call, revision in zip(send.call_args_list, [3, 4], strict=True):
+        request = call.args[0]
+        body = request.content if isinstance(request, httpx.Request) else request.body
+        assert json.loads(body) == {"revision": revision, "payload": {}}
+
+
 @pytest.mark.parametrize("method", ["update_result", "delete_result"])
 @pytest.mark.parametrize(
     "status,code,persistence",
