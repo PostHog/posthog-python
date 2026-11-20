@@ -17,6 +17,9 @@ Offline evaluations must be enabled for your PostHog project. Use the project's 
 | Create/update/archive/restore datasets and items | Personal API key with `dataset:write` |
 | Read experiment tags | Personal API key with `evaluation:read` |
 | Replace experiment tags | Personal API key with `evaluation:write` |
+| Read an item or result revision | Personal API key with `evaluation:read`. Result reads also require `llm_analytics:read` and access to the scorer. |
+| Update an item or update/delete its payload | Personal API key with `evaluation:write` and evaluation editor access |
+| Delete an item, change/delete a result or its payload | Personal API key with `evaluation:write`, evaluation editor access, `llm_analytics:read`, and access to affected scorers and composite inputs |
 
 A personal key can cover both scorer management and uploads. Project secret keys can upload using a known scorer-version UUID without scorer read access. All operations use the explicit project/environment; scorer names are not unique.
 
@@ -80,7 +83,7 @@ with OfflineEvaluations(
 
 Use one `EvaluationItem` for the application's execution and reuse it across scorer results. `upload_results([EvaluationResult(...), ...])` uploads a finite sequence, eagerly and sequentially. It splits at 1,000 items/results or 5 MiB of UTF-8 JSON per request, whichever comes first. Item payloads are limited to 1 MiB; result payloads to 256 KiB. Payload JSON supports at most 32 nested containers. The SDK raises for invalid values and oversized payloads without truncating them. Memory use scales with the sequence you supply, so submit caller-sized batches for large datasets.
 
-Set `model_version` on each item to compare executions from different models in one experiment. It identifies the application's model and overrides the default supplied to `create_experiment(model_version=...)`. Omit it or pass `None` to inherit that default on the server; without either value, the model remains unknown. Explicit model identifiers must be nonempty strings of at most 255 characters and are preserved without trimming. The declared model is immutable item content: changing, adding, or removing it after acceptance causes a `content_conflict`, even if the effective model is unchanged. Create a new item for a different model execution, and preserve the original declaration for retries.
+Set `model_version` on each item to compare executions from different models in one experiment. It identifies the application's model and overrides the default supplied to `create_experiment(model_version=...)`. Omit it or pass `None` to inherit that default on the server; without either value, the model remains unknown. Explicit model identifiers must be nonempty strings of at most 255 characters and are preserved without trimming. Re-uploading a retained item with a different declaration raises `content_conflict`. Use `update_item` to correct a recorded model, and create a new item for a different execution. Keep the original declaration for upload retries.
 
 `status="ok"` means the evaluator ran successfully. Its boolean, number, or category-list `value` is uploaded with its original polarity. Numeric scores use finite double-precision (binary64) values; integer inputs are rejected if conversion would change their value. Use `error`, `skipped`, or `not_applicable` without a value for other outcomes. `error_code` and a non-null `error_message` are valid only with `status="error"`.
 
@@ -424,6 +427,37 @@ experiment.set_tags([])  # Remove all tags.
 Reading and writing experiment tags require the personal-key scopes listed above; an upload-only project secret key cannot manage tags. Tag updates do not change the saved `submission`, lifecycle `receipt`, or scorer versions. They are not retried automatically: after a lost acknowledgment, read the current tags before deciding whether to repeat the replacement, since another caller may have edited them.
 
 The async client exposes the same API: await scorer methods and `experiment.get_tags()` / `experiment.set_tags(...)`.
+
+## Correcting or deleting accepted data
+
+Use the item and result IDs from the upload receipt. You can make corrections while an experiment is uploading or after it completes or fails. With `AsyncOfflineEvaluations`, await each read, update, and delete.
+
+```python
+experiment = evaluations.resume_experiment(experiment_id)
+item_id = receipt.items[0].id
+result_id = receipt.results[0].id
+
+revision = experiment.get_result_revision(result_id)
+revision = experiment.update_result(result_id, revision=revision, status="ok", value=False)
+experiment.update_result_payload(result_id, revision=revision, payload={"reasoning": "Reviewed by hand"})
+
+revision = experiment.get_item_revision(item_id)
+revision = experiment.update_item(item_id, revision=revision, model_version="v2")
+experiment.update_item_payload(item_id, revision=revision, payload={"expected_output": None})
+```
+
+Each update returns the server's current revision, including when a score already has the requested value. A payload shares its owner's revision. Changes to a result or its payload can also advance the item revision. A stale write raises `EvaluationAPIError` with HTTP 409 and code `revision_conflict`. After a conflict or lost response, inspect the current data before deciding whether to write again. The SDK sends each mutation once.
+
+Payload updates replace only the supplied top-level fields. Use `None` to store JSON null. Edits keep the original 30-day retention deadline. Editing an item's input, output, or expected output can mark existing scores stale. To correct a composite, edit its reported inputs and the server recomputes dependent scores.
+
+| Method | What it permanently removes |
+| --- | --- |
+| `delete_item(item_id, revision=...)` | The item, its results, and their payloads |
+| `delete_result(result_id, revision=...)` | The result, its payload, and dependent composites |
+| `delete_item_payload(item_id, revision=...)` | The stored item payload |
+| `delete_result_payload(result_id, revision=...)` | The stored result payload |
+
+Deletes return `None` on acknowledgment. A deleted or expired payload cannot be restored on that record. Re-uploading a deleted item or result can recreate it while the experiment is open. A recreated reported result counts toward usage again.
 
 ## Receipts, errors, and recovery
 
