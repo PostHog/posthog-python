@@ -1096,6 +1096,9 @@ def _format_tool_error(
     """
     if _privacy_mode_enabled(ph_client, privacy_mode):
         return _PRIVACY_SAFE_TOOL_ERROR
+    # The content can carry media (data URLs, base64 blocks), so redact it
+    # the same way as `$ai_output_state` before building the message.
+    content = finalize_ai_content(content, ph_client)
     if isinstance(content, str):
         return content
     if isinstance(content, list):
@@ -1106,8 +1109,6 @@ def _format_tool_error(
         ]
         if texts:
             return "\n".join(texts)
-    # Structured content can carry media, so redact it before serializing.
-    content = finalize_ai_content(content, ph_client)
     try:
         return json.dumps(content, default=str)
     except Exception:

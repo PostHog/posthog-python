@@ -185,3 +185,11 @@ def test_format_tool_error_redacts_media_blocks():
 
     assert "iVBORw0KGgo" not in error
     assert "redacted" in error
+
+
+def test_format_tool_error_redacts_data_url_string():
+    client = SimpleNamespace(privacy_mode=False, enable_full_ai_capture=False)
+
+    error = _format_tool_error(client, False, "data:image/png;base64," + "A" * 3000)
+
+    assert "AAAA" not in error
