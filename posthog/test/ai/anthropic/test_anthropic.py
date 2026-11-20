@@ -2087,6 +2087,27 @@ def test_explicit_distinct_id_overrides_outer_context(
         assert call_args["distinct_id"] == "explicit-user-789"
 
 
+def test_streaming_uses_outer_context_distinct_id(mock_client):
+    with patch(
+        "anthropic.resources.Messages.create",
+        return_value=iter(anthropic_stream_with_cache_ttl()),
+    ):
+        client = Anthropic(api_key="test-key", posthog_client=mock_client)
+        with new_context():
+            identify_context("outer-user-456")
+            list(
+                client.messages.create(
+                    model="claude-sonnet-4-20250514",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    stream=True,
+                )
+            )
+
+    call_args = mock_client.capture_ai.call_args[1]
+    assert call_args["distinct_id"] == "outer-user-456"
+    assert "options" not in call_args
+
+
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 
