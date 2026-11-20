@@ -1,5 +1,11 @@
 # posthog
 
+## 8.1.0 — 2026-11-20
+
+### Minor changes
+
+- [7eece541](https://github.com/posthog/posthog-python/commit/7eece541c823ce3f8d3e35516ea1eb801c5c2d94) Update and delete offline experiment items, reported scores, and payloads from sync and async clients using the current revision. — Thanks @Radu-Raicea!
+
 ## 8.0.2 — 2026-11-18
 
 ### Patch changes
