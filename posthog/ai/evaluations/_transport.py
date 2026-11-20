@@ -124,10 +124,18 @@ def _retry_delay(
 
 
 def _parse_response(
-    status: int, payload: Any, retry_after: str | None
+    method: str, status: int, payload: Any, retry_after: str | None
 ) -> dict[str, Any]:
     if 200 <= status < 300:
-        if isinstance(payload, dict):
+        if method == "DELETE":
+            if status == 204:
+                return {}
+            raise EvaluationAPIError(
+                status=status,
+                code="invalid_response",
+                detail="Expected HTTP 204 to acknowledge deletion.",
+            )
+        if status != 204 and isinstance(payload, dict):
             return payload
         raise EvaluationAPIError(
             status=status,
@@ -214,6 +222,7 @@ class SyncTransport:
                     except ValueError:
                         payload = None
                     return _parse_response(
+                        method,
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
@@ -292,6 +301,7 @@ class AsyncTransport:
                     except ValueError:
                         payload = None
                     return _parse_response(
+                        method,
                         response.status_code,
                         payload,
                         response.headers.get("Retry-After"),
