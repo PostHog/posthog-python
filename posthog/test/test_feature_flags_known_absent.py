@@ -9,7 +9,9 @@ from parameterized import parameterized
 
 from posthog import AsyncPosthog
 from posthog.client import Client
+from posthog.feature_flags import _KNOWN_ABSENT, InconclusiveMatchError, match_cohort
 from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.types import UnresolvedFlagReason
 
 pytestmark = [
     pytest.mark.filterwarnings(
@@ -210,6 +212,33 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         }
         flag = _flag("flag", [{"key": "id", "value": 5, "type": "cohort"}])
         self.assert_local(flag, expected, person_property_keys_known_absent=["plan"])
+
+    @parameterized.expand([(False,), (True,)])
+    def test_cohort_leaf_unsupported_operator_falls_back_before_known_absence(
+        self, negation
+    ):
+        cohort = {
+            "type": "AND",
+            "values": [
+                {
+                    "key": "plan",
+                    "operator": "not_between",
+                    "value": [1, 2],
+                    "type": "person",
+                    "negation": negation,
+                }
+            ],
+        }
+        cohort_filter = {"key": "id", "value": 5, "type": "cohort"}
+        with self.assertRaises(InconclusiveMatchError) as ctx:
+            match_cohort(cohort_filter, {"plan": _KNOWN_ABSENT}, {"5": cohort})
+        self.assertEqual(
+            ctx.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
+
+        self.client.cohorts = {"5": cohort}
+        flag = _flag("flag", [cohort_filter])
+        self.assert_remote(flag, person_property_keys_known_absent=["plan"])
 
     def test_flag_dependency_uses_the_same_listing(self):
         dependency = _flag("dependency", [_person_filter("is_not_set")])
