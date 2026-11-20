@@ -8,13 +8,14 @@ except ImportError:
 import json
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import (
     Any,
     Dict,
     List,
     Optional,
     Sequence,
+    Set,
     Union,
     cast,
 )
@@ -73,8 +74,6 @@ class SpanMetadata:
     """End time of the run."""
     input: Optional[Any]
     """Input of the run: messages, prompt variables, etc."""
-    span_type: Optional[str] = field(default=None, kw_only=True)
-    """`$ai_span_type` of the run's span, e.g. "tool" for tool runs."""
 
     @property
     def latency(self) -> float:
@@ -173,6 +172,8 @@ class CallbackHandler(BaseCallbackHandler):
         self._groups = groups or {}
         self._options = _ai_event_options(options)
         self._runs = {}
+        # Runs started by on_tool_start; their spans get `$ai_span_type: tool`.
+        self._tool_run_ids: Set[UUID] = set()
         self._parent_tree = {}
 
     def on_chain_start(
@@ -306,8 +307,9 @@ class CallbackHandler(BaseCallbackHandler):
         )
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(
-            serialized, input_str, run_id, parent_run_id, span_type="tool", **kwargs
+            serialized, input_str, run_id, parent_run_id, **kwargs
         )
+        self._tool_run_ids.add(run_id)
 
     def on_tool_end(
         self,
@@ -464,7 +466,6 @@ class CallbackHandler(BaseCallbackHandler):
         input: Any,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
-        span_type: Optional[str] = None,
         **kwargs,
     ):
         default_name = "trace" if parent_run_id is None else "span"
@@ -474,7 +475,6 @@ class CallbackHandler(BaseCallbackHandler):
             input=input,
             start_time=time.time(),
             end_time=None,
-            span_type=span_type,
         )
 
     def _set_llm_metadata(
@@ -543,6 +543,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
+            self._tool_run_ids.discard(run_id)
             return
         if isinstance(run, GenerationMetadata):
             log.warning(
@@ -583,8 +584,10 @@ class CallbackHandler(BaseCallbackHandler):
         }
         if parent_run_id is not None:
             event_properties["$ai_parent_id"] = parent_run_id
-        if run.span_type is not None and event_name == "$ai_span":
-            event_properties["$ai_span_type"] = run.span_type
+        if run_id in self._tool_run_ids:
+            self._tool_run_ids.discard(run_id)
+            if event_name == "$ai_span":
+                event_properties["$ai_span_type"] = "tool"
         if self._properties:
             event_properties.update(self._properties)
 

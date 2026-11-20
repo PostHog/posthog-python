@@ -130,7 +130,6 @@ def test_generation_metadata_keeps_positional_arguments():
     run = GenerationMetadata("test", 1.0, None, None, "openai", "gpt-4o")
     assert run.provider == "openai"
     assert run.model == "gpt-4o"
-    assert run.span_type is None
 
 
 def test_run_metadata_capture(mock_client):
