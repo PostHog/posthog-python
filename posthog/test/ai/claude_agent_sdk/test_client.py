@@ -599,3 +599,62 @@ async def test_result_fallback_does_not_carry_output_into_the_next_query(sdk):
     assert second["$ai_output_choices"] == [
         {"role": "assistant", "content": [{"type": "text", "text": "second"}]}
     ]
+
+
+async def tool_spans_for(sdk, monkeypatch, use_client, messages):
+    ph = analytics()
+    if use_client:
+        async with PostHogClaudeSDKClient(posthog_client=ph) as client:
+            await client.query("question")
+            respond(sdk, messages)
+            assert [msg async for msg in client.receive_response()] == messages
+    else:
+
+        async def query(**kwargs):
+            for message in messages:
+                yield message
+
+        monkeypatch.setattr(
+            "posthog.ai.claude_agent_sdk.processor.original_query", query
+        )
+        processor = PostHogClaudeAgentProcessor(client=ph)
+        assert [msg async for msg in processor.query(prompt="question")] == messages
+    return [event["properties"] for event in events(ph, "$ai_span")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_tool_spans_carry_the_result_of_their_own_tool_use(
+    sdk, monkeypatch, use_client
+):
+    messages = cli_tool_turn()
+    # The CLI sends results in any order; tool-2's result is an error.
+    messages[6] = UserMessage(
+        content=[
+            ToolResultBlock(tool_use_id="tool-2", content="no such file", is_error=True)
+        ]
+    )
+    spans = await tool_spans_for(sdk, monkeypatch, use_client, messages)
+    by_input = {span["$ai_input_state"]["path"]: span for span in spans}
+    assert by_input["a"]["$ai_is_error"] is False
+    assert by_input["a"]["$ai_output_state"] == "a text"
+    assert "$ai_error" not in by_input["a"]
+    assert by_input["b"]["$ai_is_error"] is True
+    assert by_input["b"]["$ai_error"] == "no such file"
+    assert all(span["$ai_latency"] >= 0 for span in spans)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_tool_span_without_result_is_still_emitted(sdk, monkeypatch, use_client):
+    messages = [
+        stream("message_start", message={"model": "claude", "usage": {}}),
+        AssistantMessage(
+            model="claude",
+            content=[ToolUseBlock(id="tool-1", name="Read", input={"path": "a"})],
+        ),
+        stream("message_stop"),
+    ]
+    (span,) = await tool_spans_for(sdk, monkeypatch, use_client, messages)
+    assert span["$ai_span_name"] == "Read"
+    assert "$ai_is_error" not in span

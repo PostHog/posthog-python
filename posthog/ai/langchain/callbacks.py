@@ -8,7 +8,7 @@ except ImportError:
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import (
     Any,
     Dict,
@@ -72,6 +72,8 @@ class SpanMetadata:
     """End time of the run."""
     input: Optional[Any]
     """Input of the run: messages, prompt variables, etc."""
+    span_type: Optional[str] = field(default=None, kw_only=True)
+    """`$ai_span_type` of the run, e.g. "tool" for tool runs."""
 
     @property
     def latency(self) -> float:
@@ -303,7 +305,7 @@ class CallbackHandler(BaseCallbackHandler):
         )
         self._set_parent_of_run(run_id, parent_run_id)
         self._set_trace_or_span_metadata(
-            serialized, input_str, run_id, parent_run_id, **kwargs
+            serialized, input_str, run_id, parent_run_id, span_type="tool", **kwargs
         )
 
     def on_tool_end(
@@ -461,12 +463,17 @@ class CallbackHandler(BaseCallbackHandler):
         input: Any,
         run_id: UUID,
         parent_run_id: Optional[UUID] = None,
+        span_type: Optional[str] = None,
         **kwargs,
     ):
         default_name = "trace" if parent_run_id is None else "span"
         run_name = _get_langchain_run_name(serialized, **kwargs) or default_name
         self._runs[run_id] = SpanMetadata(
-            name=run_name, input=input, start_time=time.time(), end_time=None
+            name=run_name,
+            input=input,
+            start_time=time.time(),
+            end_time=None,
+            span_type=span_type,
         )
 
     def _set_llm_metadata(
@@ -575,6 +582,8 @@ class CallbackHandler(BaseCallbackHandler):
         }
         if parent_run_id is not None:
             event_properties["$ai_parent_id"] = parent_run_id
+        if run.span_type is not None and event_name == "$ai_span":
+            event_properties["$ai_span_type"] = run.span_type
         if self._properties:
             event_properties.update(self._properties)
 
@@ -593,6 +602,15 @@ class CallbackHandler(BaseCallbackHandler):
                 self._privacy_mode,
                 finalize_ai_content(outputs, self._ph_client),
             )
+            if isinstance(outputs, ToolMessage) and outputs.status == "error":
+                # A tool error handled by `handle_tool_error` ends the run
+                # normally, with the error as a ToolMessage.
+                event_properties["$ai_is_error"] = True
+                event_properties["$ai_error"] = with_privacy_mode(
+                    self._ph_client,
+                    self._privacy_mode,
+                    _tool_message_text(outputs),
+                )
 
         _capture_ai_event(
             self._ph_client,
@@ -847,6 +865,19 @@ def _convert_lc_tool_calls_to_oai(
         return tool_calls
 
 
+def _tool_message_text(message: ToolMessage) -> str:
+    """The text of a ToolMessage, for `$ai_error`."""
+    content = message.content
+    if isinstance(content, str):
+        return content
+    texts = [
+        item if isinstance(item, str) else item.get("text", "")
+        for item in content
+        if isinstance(item, str) or isinstance(item, dict)
+    ]
+    return "\n".join(text for text in texts if text)
+
+
 def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     # assistant message
     if isinstance(message, HumanMessage):
@@ -860,7 +891,15 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     elif isinstance(message, SystemMessage):
         message_dict = {"role": "system", "content": message.content}
     elif isinstance(message, ToolMessage):
-        message_dict = {"role": "tool", "content": message.content}
+        message_dict = {
+            "role": "tool",
+            "content": message.content,
+            "tool_call_id": message.tool_call_id,
+        }
+        if message.name:
+            message_dict["name"] = message.name
+        if message.status == "error":
+            message_dict["status"] = message.status
     elif isinstance(message, FunctionMessage):
         message_dict = {"role": "function", "content": message.content}
     else:

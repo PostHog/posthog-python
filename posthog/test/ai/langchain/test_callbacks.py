@@ -1582,6 +1582,125 @@ def test_captures_error_without_details_in_span(mock_client):
     assert mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_is_error"]
 
 
+def _tool_spans(mock_client):
+    return [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_span"
+        and call[1]["properties"].get("$ai_span_type") == "tool"
+    ]
+
+
+def _invoke_tool_in_chain(mock_client, tool_to_call, args, privacy_mode=False):
+    # A ToolCall input makes the tool return a ToolMessage.
+    chain = RunnableLambda(
+        lambda x, config: tool_to_call.invoke(
+            {"name": tool_to_call.name, "args": x, "id": "call_1", "type": "tool_call"},
+            config,
+        )
+    )
+    callbacks = [CallbackHandler(mock_client, privacy_mode=privacy_mode)]
+    return chain.invoke(args, config={"callbacks": callbacks})
+
+
+def test_tool_span_has_tool_span_type(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"Sunny in {city}"
+
+    _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_span_name"] == "get_weather"
+    assert "$ai_is_error" not in spans[0]
+    # Only tool runs are typed.
+    other_events = [
+        call[1]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["properties"].get("$ai_span_type") is None
+    ]
+    assert [event["event"] for event in other_events] == ["$ai_trace"]
+
+
+def test_tool_span_marks_handled_tool_error(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException(f"weather service unavailable for {city}")
+
+    get_weather.handle_tool_error = True
+
+    output = _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+    assert output.status == "error"
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "weather service unavailable for Paris"
+
+
+def test_tool_span_handled_tool_error_respects_privacy_mode(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException("secret details")
+
+    get_weather.handle_tool_error = True
+
+    _invoke_tool_in_chain(
+        mock_client, get_weather, {"city": "Paris"}, privacy_mode=True
+    )
+
+    spans = _tool_spans(mock_client)
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] is None
+    assert spans[0]["$ai_output_state"] is None
+
+
+def test_tool_span_unhandled_tool_error(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "ValueError: boom"
+
+
+def test_convert_message_to_dict_tool_message():
+    from langchain_core.messages import ToolMessage
+
+    from posthog.ai.langchain.callbacks import _convert_message_to_dict
+
+    assert _convert_message_to_dict(
+        ToolMessage(content="Sunny", tool_call_id="call_1", name="get_weather")
+    ) == {
+        "role": "tool",
+        "content": "Sunny",
+        "tool_call_id": "call_1",
+        "name": "get_weather",
+    }
+    assert _convert_message_to_dict(
+        ToolMessage(content="boom", tool_call_id="call_2", status="error")
+    ) == {
+        "role": "tool",
+        "content": "boom",
+        "tool_call_id": "call_2",
+        "status": "error",
+    }
+
+
 def test_openai_reasoning_tokens(mock_client):
     """Test that OpenAI reasoning tokens are captured correctly."""
     prompt = ChatPromptTemplate.from_messages(
