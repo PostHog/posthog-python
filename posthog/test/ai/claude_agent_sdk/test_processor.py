@@ -18,7 +18,9 @@ try:
         ResultMessage,
         StreamEvent,
         TextBlock,
+        ToolResultBlock,
         ToolUseBlock,
+        UserMessage,
     )
 
     from posthog.ai.claude_agent_sdk import (
@@ -477,6 +479,141 @@ class TestToolSpanEmission:
         assert props["$ai_span_name"] == "Read"
         assert props["$ai_span_type"] == "tool"
         assert props["$ai_input_state"] == {"file_path": "/tmp/test.py"}
+        # No ToolResultBlock arrived, so the span is sent without a result.
+        assert "$ai_output_state" not in props
+        assert "$ai_is_error" not in props
+
+    @staticmethod
+    def _tool_turn(result_block, parent_tool_use_id=None):
+        return [
+            _make_message_start(),
+            _make_assistant_message(
+                tool_uses=[
+                    {"id": "tu_1", "name": "Bash", "input": {"command": "ls /nope"}}
+                ]
+            ),
+            _make_message_stop(),
+            UserMessage(content=[result_block], parent_tool_use_id=parent_tool_use_id),
+            _make_result_message(),
+        ]
+
+    @staticmethod
+    async def _run(proc, messages):
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(prompt="Run it", options=ClaudeAgentOptions()):
+                pass
+
+    @staticmethod
+    def _spans(mock_client):
+        return [
+            c.kwargs["properties"]
+            for c in mock_client.capture_ai.call_args_list
+            if c.kwargs.get("event") == "$ai_span"
+        ]
+
+    @pytest.mark.asyncio
+    async def test_span_carries_tool_result(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(
+                ToolResultBlock(tool_use_id="tu_1", content="file.txt", is_error=None)
+            ),
+        )
+
+        [props] = self._spans(mock_client)
+        assert props["$ai_span_name"] == "Bash"
+        assert props["$ai_input_state"] == {"command": "ls /nope"}
+        assert props["$ai_output_state"] == "file.txt"
+        assert props["$ai_is_error"] is False
+        assert "$ai_error" not in props
+        assert props["$ai_latency"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_span_marks_tool_error(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(
+                ToolResultBlock(
+                    tool_use_id="tu_1",
+                    content=[{"type": "text", "text": "No such file or directory"}],
+                    is_error=True,
+                )
+            ),
+        )
+
+        [props] = self._spans(mock_client)
+        assert props["$ai_is_error"] is True
+        assert props["$ai_output_state"] == [
+            {"type": "text", "text": "No such file or directory"}
+        ]
+        assert props["$ai_error"] == "No such file or directory"
+        assert props["$ai_latency"] >= 0
+
+    @pytest.mark.asyncio
+    async def test_privacy_mode_redacts_tool_result_and_error(self, mock_client):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client, distinct_id="user", privacy_mode=True
+        )
+        await self._run(
+            proc,
+            self._tool_turn(
+                ToolResultBlock(tool_use_id="tu_1", content="secret", is_error=True)
+            ),
+        )
+
+        [props] = self._spans(mock_client)
+        assert "$ai_input_state" not in props
+        assert "$ai_output_state" not in props
+        assert props["$ai_is_error"] is True
+        assert props["$ai_error"] == "ToolError"
+
+    @pytest.mark.asyncio
+    async def test_subagent_tool_result_is_matched(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(
+                ToolResultBlock(tool_use_id="tu_1", content="boom", is_error=True),
+                parent_tool_use_id="task_1",
+            ),
+        )
+
+        [props] = self._spans(mock_client)
+        assert props["$ai_is_error"] is True
+        assert props["$ai_error"] == "boom"
+
+    @pytest.mark.asyncio
+    async def test_span_is_sent_once_and_before_the_trace(self, processor, mock_client):
+        await self._run(
+            processor,
+            self._tool_turn(ToolResultBlock(tool_use_id="tu_1", content="ok")),
+        )
+
+        events = [c.kwargs["event"] for c in mock_client.capture_ai.call_args_list]
+        assert events.count("$ai_span") == 1
+        assert events.index("$ai_span") < events.index("$ai_trace")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("entry_point", ["module_query", "processor_query"])
+    async def test_pending_span_is_sent_when_caller_stops_early(
+        self, mock_client, entry_point
+    ):
+        messages = self._tool_turn(ToolResultBlock(tool_use_id="tu_1", content="ok"))
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            stream = _claude_query(entry_point, mock_client, "user", None)
+            async for message in stream:
+                if isinstance(message, AssistantMessage):
+                    break
+            await stream.aclose()
+
+        [props] = self._spans(mock_client)
+        assert props["$ai_span_name"] == "Bash"
+        assert "$ai_is_error" not in props
 
 
 class TestTraceEmission:

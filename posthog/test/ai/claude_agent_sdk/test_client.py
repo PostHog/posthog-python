@@ -178,6 +178,11 @@ async def test_multiturn_stream_tool_parentage_input_promotion_and_final_trace(s
         assert span["$ai_parent_id"] == one["$ai_span_id"]
         assert span["$ai_input_state"] == {"query": "stock"}
         assert span["$ai_span_name"] == "lookup"
+        assert span["$ai_is_error"] is False
+        assert span["$ai_output_state"][0]["source"]["data"] == (
+            "[base64 image redacted]"
+        )
+        assert span["$ai_latency"] >= 0
 
         await client.query("follow up")
         second = [
@@ -410,7 +415,7 @@ def cli_tool_turn():
     ]
 
 
-async def run_turn(sdk, monkeypatch, use_client, messages):
+async def run_turn(sdk, monkeypatch, use_client, messages, event="$ai_generation"):
     ph = analytics()
     if use_client:
         client = PostHogClaudeSDKClient(posthog_client=ph)
@@ -428,7 +433,51 @@ async def run_turn(sdk, monkeypatch, use_client, messages):
         )
         processor = PostHogClaudeAgentProcessor(client=ph)
         assert [msg async for msg in processor.query(prompt="question")] == messages
-    return [event["properties"] for event in events(ph, "$ai_generation")]
+    return [captured["properties"] for captured in events(ph, event)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("use_client", [False, True])
+async def test_cli_order_tool_spans_carry_their_own_results(
+    sdk, monkeypatch, use_client
+):
+    turn = cli_tool_turn()
+    turn[6] = UserMessage(
+        content=[ToolResultBlock(tool_use_id="tool-2", content="denied", is_error=True)]
+    )
+    spans = await run_turn(sdk, monkeypatch, use_client, turn, event="$ai_span")
+    by_input = {span["$ai_input_state"]["path"]: span for span in spans}
+    assert len(spans) == 2
+    assert by_input["a"]["$ai_output_state"] == "a text"
+    assert by_input["a"]["$ai_is_error"] is False
+    assert "$ai_error" not in by_input["a"]
+    assert by_input["b"]["$ai_output_state"] == "denied"
+    assert by_input["b"]["$ai_is_error"] is True
+    assert by_input["b"]["$ai_error"] == "denied"
+
+
+@pytest.mark.asyncio
+async def test_disconnect_sends_tool_spans_still_waiting_for_a_result(sdk):
+    ph = analytics()
+    messages = [
+        AssistantMessage(
+            model="claude",
+            content=[ToolUseBlock(id="tool-1", name="Read", input={"path": "a"})],
+        ),
+    ]
+    client = PostHogClaudeSDKClient(posthog_client=ph)
+    await client.query("question")
+    respond(sdk, messages)
+    assert [msg async for msg in client.receive_response()] == messages
+    assert not events(ph, "$ai_span")
+
+    await client.disconnect()
+
+    [span] = events(ph, "$ai_span")
+    assert span["properties"]["$ai_span_name"] == "Read"
+    assert "$ai_is_error" not in span["properties"]
+    captured = [call.kwargs["event"] for call in ph.capture_ai.call_args_list]
+    assert captured.index("$ai_span") < captured.index("$ai_trace")
 
 
 @pytest.mark.asyncio

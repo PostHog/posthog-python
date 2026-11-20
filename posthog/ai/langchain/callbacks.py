@@ -15,6 +15,7 @@ from typing import (
     List,
     Optional,
     Sequence,
+    Set,
     Union,
     cast,
 )
@@ -50,6 +51,7 @@ from posthog.ai.utils import (
     _user_distinct_id,
     finalize_ai_content,
     _format_ai_error,
+    _format_tool_error,
     get_model_params,
     _privacy_mode_enabled,
     _redact_mcp_tool_credentials,
@@ -170,6 +172,8 @@ class CallbackHandler(BaseCallbackHandler):
         self._groups = groups or {}
         self._options = _ai_event_options(options)
         self._runs = {}
+        # Runs started by on_tool_start; their spans get `$ai_span_type: tool`.
+        self._tool_run_ids: Set[UUID] = set()
         self._parent_tree = {}
 
     def on_chain_start(
@@ -305,6 +309,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._set_trace_or_span_metadata(
             serialized, input_str, run_id, parent_run_id, **kwargs
         )
+        self._tool_run_ids.add(run_id)
 
     def on_tool_end(
         self,
@@ -466,7 +471,10 @@ class CallbackHandler(BaseCallbackHandler):
         default_name = "trace" if parent_run_id is None else "span"
         run_name = _get_langchain_run_name(serialized, **kwargs) or default_name
         self._runs[run_id] = SpanMetadata(
-            name=run_name, input=input, start_time=time.time(), end_time=None
+            name=run_name,
+            input=input,
+            start_time=time.time(),
+            end_time=None,
         )
 
     def _set_llm_metadata(
@@ -535,6 +543,7 @@ class CallbackHandler(BaseCallbackHandler):
         self._pop_parent_of_run(run_id)
         run = self._pop_run_metadata(run_id)
         if not run:
+            self._tool_run_ids.discard(run_id)
             return
         if isinstance(run, GenerationMetadata):
             log.warning(
@@ -575,6 +584,10 @@ class CallbackHandler(BaseCallbackHandler):
         }
         if parent_run_id is not None:
             event_properties["$ai_parent_id"] = parent_run_id
+        if run_id in self._tool_run_ids:
+            self._tool_run_ids.discard(run_id)
+            if event_name == "$ai_span":
+                event_properties["$ai_span_type"] = "tool"
         if self._properties:
             event_properties.update(self._properties)
 
@@ -593,6 +606,16 @@ class CallbackHandler(BaseCallbackHandler):
                 self._privacy_mode,
                 finalize_ai_content(outputs, self._ph_client),
             )
+            if (
+                isinstance(outputs, ToolMessage)
+                and getattr(outputs, "status", None) == "error"
+            ):
+                # A tool that reports its failure as a result (e.g. with
+                # handle_tool_error) ends without an exception.
+                event_properties["$ai_is_error"] = True
+                event_properties["$ai_error"] = _format_tool_error(
+                    self._ph_client, self._privacy_mode, outputs.content
+                )
 
         _capture_ai_event(
             self._ph_client,
@@ -860,7 +883,15 @@ def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:
     elif isinstance(message, SystemMessage):
         message_dict = {"role": "system", "content": message.content}
     elif isinstance(message, ToolMessage):
-        message_dict = {"role": "tool", "content": message.content}
+        message_dict = {
+            "role": "tool",
+            "content": message.content,
+            "tool_call_id": message.tool_call_id,
+        }
+        if message.name:
+            message_dict["name"] = message.name
+        if getattr(message, "status", None) == "error":
+            message_dict["status"] = "error"
     elif isinstance(message, FunctionMessage):
         message_dict = {"role": "function", "content": message.content}
     else:
