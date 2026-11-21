@@ -795,6 +795,23 @@ def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
     return enrollment is True or enrollment == "true"
 
 
+# Filter types matched against the person or group properties the caller passes. Cohort
+# and flag filters have their own matching. Any other type, such as "person_metadata"
+# (a value /flags reads from the persons table, not from person properties), can't be
+# evaluated locally: matching it against a caller property with the same key could
+# disagree with /flags.
+_PROPERTY_FILTER_TYPES = ("person", "group")
+
+
+def _assert_property_filter_type_supported(prop) -> None:
+    property_type = prop.get("type")
+    if property_type and property_type not in _PROPERTY_FILTER_TYPES:
+        raise InconclusiveMatchError(
+            f"Can't evaluate a '{property_type}' filter on '{prop.get('key')}' locally",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+        )
+
+
 def _match_condition_filter(
     prop,
     properties,
@@ -829,6 +846,7 @@ def _match_condition_filter(
             device_id=device_id,
             property_matching_version=property_matching_version,
         )
+    _assert_property_filter_type_supported(prop)
     return match_property(prop, properties, property_matching_version)
 
 
@@ -1841,6 +1859,7 @@ def _is_unsupported_property(
         return _is_unsupported_dependency(prop, flags_by_key)
     if property_type != "cohort":
         try:
+            _assert_property_filter_type_supported(prop)
             _assert_filter_supported(prop)
         except InconclusiveMatchError:
             return True
