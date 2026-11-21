@@ -32,6 +32,10 @@ from ._async_request import (
     async_flags as _async_flags,
     async_remote_config as _async_remote_config,
 )
+from .ai_trace_sample_rate import (
+    _resolve_ai_trace_sample_rate,
+    _sample_ai_trace_event,
+)
 from .args import (
     ID_TYPES,
     ExceptionArg,
@@ -136,8 +140,9 @@ class AsyncClient:
     ``flush()``, ``join()``, and ``shutdown()`` are awaitable lifecycle methods.
     Leaving an ``async with`` block on the client calls ``shutdown()``.
 
-    The ``capture_ai_*``, ``privacy_mode`` and ``enable_full_ai_capture``
-    options work the same way as on :class:`posthog.Client`.
+    The ``capture_ai_*``, ``ai_trace_sample_rate``, ``privacy_mode`` and
+    ``enable_full_ai_capture`` options work the same way as on
+    :class:`posthog.Client`.
     """
 
     log = logging.getLogger("posthog")
@@ -187,6 +192,7 @@ class AsyncClient:
         email_request_timeout_seconds: float = 15,
         email_request_max_retries: int = 2,
         migrated_from: Optional[str] = None,
+        ai_trace_sample_rate: Optional[float] = None,
     ) -> None:
         if flush_at <= 0:
             raise ValueError("flush_at must be greater than zero")
@@ -290,6 +296,9 @@ class AsyncClient:
             else DEFAULT_CODE_VARIABLES_DETECT_SECRETS
         )
         self.in_app_modules = in_app_modules
+        self.ai_trace_sample_rate = _resolve_ai_trace_sample_rate(
+            ai_trace_sample_rate, self.log
+        )
         self.project_root = project_root
         if self.project_root is None:
             try:
@@ -578,6 +587,8 @@ class AsyncClient:
 
         msg["distinct_id"] = _stringify_id(msg.get("distinct_id"))
         cleaned = clean(msg)
+        if not _sample_ai_trace_event(cleaned, self.ai_trace_sample_rate, self.log):
+            return None, None
         return cleaned, sent_uuid
 
     async def _process_event(
@@ -708,7 +719,9 @@ class AsyncClient:
     ) -> Optional[str]:
         """Queue an AI event for the AI capture endpoint without blocking.
 
-        Takes the same arguments and returns the same value as ``capture()``.
+        Takes the same arguments and returns the same value as ``capture()``:
+        the event UUID, or None when the event was not admitted (disabled
+        client, dropped by ``ai_trace_sample_rate``, or dropped by ``before_send``).
         The event uses a separate queue with a larger per-event size cap. The
         payload is sent as given, with no redaction or truncation.
         """
@@ -768,6 +781,8 @@ class AsyncClient:
         """Capture one AI event and wait until its delivery attempt completes.
 
         Uses the AI capture endpoint and the ``capture_ai_*`` settings.
+        Returns the event UUID, or None when dropped by
+        ``ai_trace_sample_rate`` or ``before_send``.
         """
         self._log_non_ai_event(event)
         return await self._capture_immediate(event, self._ai_lane, kwargs)
