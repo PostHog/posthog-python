@@ -261,6 +261,7 @@ _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
 _HEADER_TOKEN = re.compile(r"[\x21-\x7e]+")
 _IN_FLIGHT_CODES = frozenset({"idempotency_key_in_flight"})
+_UNCONFIRMED_SLOT_CODES = _IN_FLIGHT_CODES | {"delivery_unavailable", "api_error"}
 _QUOTA_CODES = frozenset({"quota_limited"})
 _DAILY_QUOTA_CODES = frozenset({"upload_quota_exceeded"})
 _MAX_ATTACHMENTS = 10
@@ -568,7 +569,10 @@ class BatchRecipient(TypedDict):
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters, a different one
             for each recipient of the call. Without it, the client makes one
-            that covers its own retries. A single send and a batch recipient
+            that covers its own retries but not a second call, so pass keys
+            you store when a batch may be cut off and run again: the rerun
+            then replays the emails that went out instead of sending them
+            twice. A single send and a batch recipient
             with the same key and the same email replay each other. Never
             reuse a key for another email: after a lost answer, the client
             reads the email by its key, and an earlier email with that key
@@ -1946,7 +1950,7 @@ class _BatchRun:
                 error=earlier.error,
                 later_error=answer,
             )
-        elif answer.code in ("delivery_unavailable", "api_error"):
+        elif answer.code in _UNCONFIRMED_SLOT_CODES:
             self._maybe_queued.add(index)
             self._set(index, "unconfirmed", message_id=message_id, error=answer)
         else:
@@ -1969,15 +1973,29 @@ class _BatchRun:
                     error=earlier.error,
                     later_error=later,
                 )
-        skipped = EmailError(
-            name="application_error",
-            code="not_attempted",
-            message="An earlier request of the batch failed, so the client sent nothing for "
-            "this recipient.",
+        self.skip_from(
+            position + 1,
+            EmailError(
+                name="application_error",
+                code="not_attempted",
+                message="An earlier request of the batch failed, so the client sent "
+                "nothing for this recipient.",
+            ),
         )
-        for chunk in self.chunks[position + 1 :]:
+
+    def closed_at(self, position: int) -> EmailError:
+        """The client shut down before chunk ``position`` went out."""
+        error = _sdk_error(
+            "client_closed",
+            "The PostHog client is shut down, so the rest of the batch wasn't sent.",
+        )
+        self.skip_from(position, error)
+        return error
+
+    def skip_from(self, position: int, error: EmailError) -> None:
+        for chunk in self.chunks[position:]:
             for index in chunk.indices:
-                self._set(index, "not_attempted", error=skipped)
+                self._set(index, "not_attempted", error=error)
 
     def lost_ids(self) -> list[tuple[int, str]]:
         """Recipients a lost answer left without a message ID, with their keys."""
@@ -2062,6 +2080,13 @@ class _EmailsBase:
                 "client_closed", f"The PostHog client is shut down, so {not_done}."
             )
         return finish
+
+    def _still_admitted(self) -> bool:
+        finish = self._admit()
+        if finish is None:
+            return False
+        finish()
+        return True
 
     def _secret_key(self, key_needed: str) -> str:
         if self._host_error:
@@ -2256,7 +2281,8 @@ class Emails(_EmailsBase):
                 stopped. ``results`` holds every recipient, those not sent as
                 ``not_attempted``. ``code`` is ``batch_unavailable`` when the
                 project can't send batches yet: send each email with
-                :meth:`send`.
+                :meth:`send`. ``client_closed`` means the client shut down
+                during the batch.
             EmailError: The client sent nothing, such as when it is disabled.
             TypeError, ValueError: An argument has the wrong type or format,
                 such as two recipients with the same ``idempotency_key``.
@@ -2281,6 +2307,8 @@ class Emails(_EmailsBase):
             secret_key = self._secret_key(_SEND_KEY_NEEDED)
             headers = _headers(secret_key, self.migrated_from, has_body=True)
             for position, chunk in enumerate(run.chunks):
+                if position and not self._still_admitted():
+                    raise run.failure(run.closed_at(position))
                 try:
                     self._call(
                         self._batch_attempt(run, chunk, headers),
@@ -2574,6 +2602,8 @@ class AsyncEmails(_EmailsBase):
             secret_key = self._secret_key(_SEND_KEY_NEEDED)
             headers = _headers(secret_key, self.migrated_from, has_body=True)
             for position, chunk in enumerate(run.chunks):
+                if position and not self._still_admitted():
+                    raise run.failure(run.closed_at(position))
                 try:
                     await self._call(
                         self._batch_attempt(run, chunk, headers),

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import Any, Optional
@@ -11,7 +12,7 @@ import pytest
 import requests
 from parameterized import parameterized
 
-from posthog import Posthog
+from posthog import AsyncPosthog, Posthog
 from posthog.emails import (
     AsyncEmails,
     EmailBatchError,
@@ -465,6 +466,39 @@ def test_a_slot_the_pipeline_did_not_confirm_is_unconfirmed():
     assert result.error is not None and result.error.code == "delivery_unavailable"
 
 
+def test_a_slot_another_request_still_holds_is_unconfirmed():
+    emails, _ = emails_on(
+        [ok(refused("m0", "idempotency_key_in_flight", status=409, retryable=True))]
+    )
+
+    [result] = batch(emails, recipients(1)).results
+
+    assert (result.status, result.message_id) == ("unconfirmed", "m0")
+    assert result.error is not None
+    assert result.error.code == "idempotency_key_in_flight"
+
+
+def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
+    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+
+    def shutdown_then_queue(request: requests.PreparedRequest) -> Answer:
+        client.shutdown()
+        return all_queued(request)
+
+    posthog = BatchPostHog([shutdown_then_queue, all_queued])
+    client.emails._get_session().mount("https://", posthog)
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(client.emails, recipients(150))
+
+    assert raised.value.code == "client_closed"
+    assert len(posthog.requests) == 1
+    statuses = [r.status for r in raised.value.results]
+    assert statuses == ["queued"] * 100 + ["not_attempted"] * 50
+    assert raised.value.results[100].error is not None
+    assert raised.value.results[100].error.code == "client_closed"
+
+
 def test_a_whole_call_error_raises_with_the_results_so_far():
     emails, posthog = emails_on([all_queued, whole_call(429, "quota_limited")])
 
@@ -763,3 +797,29 @@ async def test_async_batch_reads_a_lost_email_by_its_key():
     assert raised.value.code == "network_error"
     assert [r.status for r in raised.value.results] == ["unconfirmed"]
     assert str(seen[-1].url) == STATUS_BY_KEY_URL + "?idempotency_key=key-0"
+
+
+@pytest.mark.asyncio
+async def test_async_shutdown_during_a_batch_stops_it_before_the_next_request():
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
+    seen: list[httpx.Request] = []
+    shutting_down: list[asyncio.Task[None]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if not shutting_down:
+            shutting_down.append(asyncio.create_task(client.shutdown()))
+            for _ in range(5):
+                await asyncio.sleep(0)
+        return async_all_queued(request)
+
+    client.emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+    with pytest.raises(EmailBatchError) as raised:
+        await client.emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
+    await shutting_down[0]
+
+    assert raised.value.code == "client_closed"
+    assert len(seen) == 1
+    statuses = [r.status for r in raised.value.results]
+    assert statuses == ["queued"] * 100 + ["not_attempted"] * 50
