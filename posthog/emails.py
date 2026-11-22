@@ -569,7 +569,10 @@ class BatchRecipient(TypedDict):
         idempotency_key: 1 to 255 visible ASCII characters, a different one
             for each recipient of the call. Without it, the client makes one
             that covers its own retries. A single send and a batch recipient
-            with the same key and the same email replay each other.
+            with the same key and the same email replay each other. Never
+            reuse a key for another email: after a lost answer, the client
+            reads the email by its key, and an earlier email with that key
+            reads as this one, ``queued``.
         template_data: Only with ``template_id``: values for this recipient,
             merged over the batch's ``template_data``. A top-level key set here
             replaces the same key there.
@@ -693,10 +696,15 @@ class EmailBatchError(EmailError):
 
     Attributes:
         results: One result per recipient, in the order of ``recipients``.
+        warnings: Warnings PostHog returned about the requests that went out,
+            each once.
     """
 
     def __init__(
-        self, error: EmailError, results: tuple[BatchEmailResult, ...]
+        self,
+        error: EmailError,
+        results: tuple[BatchEmailResult, ...],
+        warnings: tuple[EmailWarning, ...] = (),
     ) -> None:
         super().__init__(
             name=error.name,
@@ -710,6 +718,7 @@ class EmailBatchError(EmailError):
             retry_after=error.retry_after,
         )
         self.results = results
+        self.warnings = warnings
 
 
 @dataclass(frozen=True)
@@ -808,13 +817,13 @@ def _prepare_code_send(
     )
 
 
-def _code_content(args: Mapping[str, Any]) -> dict[str, str]:
+def _code_content(args: Mapping[str, Any], method: str = "send") -> dict[str, str]:
     content = {"subject": _nonempty_text(args, "subject")}
     content.update(
         {field: _string(args, field) for field in ("html", "text") if field in args}
     )
     if "html" not in content and "text" not in content:
-        raise TypeError("send() needs html, text or both.")
+        raise TypeError(f"{method}() needs html, text or both.")
     if not (content.get("html") or content.get("text")):
         raise ValueError("html or text must be a nonempty string.")
 
@@ -1693,7 +1702,11 @@ def _code_batch_email(args: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "template_key can only have letters, digits, hyphens (-) and underscores (_), at most 400."
         )
-    return {"template_key": template_key, **_code_content(args), **_sender(args)}
+    return {
+        "template_key": template_key,
+        **_code_content(args, "batch"),
+        **_sender(args),
+    }
 
 
 def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember]:
@@ -1750,13 +1763,23 @@ def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember
 
 
 def _batch_response_error(
-    fields: Mapping[str, Any], status: int, retry_after_header: Optional[str]
+    fields: Mapping[str, Any],
+    status: int,
+    retry_after_header: Optional[str],
+    indices: Sequence[int],
 ) -> EmailError:
-    if status == 404 and not _text(fields.get("code")):
+    answered = {key: value for key, value in fields.items() if value is not None}
+    if isinstance(answered.get("attr"), str):
+        answered["attr"] = _recipients_field(answered["attr"], indices)
+    fields = answered
+    if status == 404:
         fields = {
             "code": "not_found",
-            "detail": "Batch sends are unavailable on this PostHog server, so no email was sent.",
-            **{key: value for key, value in fields.items() if value is not None},
+            "detail": "PostHog found no batch send for this request, so no email was sent.",
+            "why": "The template doesn't exist, or batch sends are off for this project "
+            "or this PostHog version.",
+            "fix": "Check template_id, or send each email with send().",
+            **answered,
         }
     if fields.get("code") == "batch_unavailable":
         fields = {
@@ -1764,6 +1787,15 @@ def _batch_response_error(
             "fix": "Send each email with send() until batch sends are on for the project.",
         }
     return _response_error(fields, status, retry_after_header)
+
+
+def _recipients_field(attr: str, indices: Sequence[int]) -> str:
+    position, separator, rest = attr.removeprefix("recipients__").partition("__")
+    if not attr.startswith("recipients__") or not position.isdigit():
+        return attr
+    if int(position) >= len(indices):
+        return "recipients"
+    return f"recipients__{indices[int(position)]}{separator}{rest}"
 
 
 def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
@@ -1875,7 +1907,9 @@ class _BatchRun:
         if not 200 <= status < 300:
             if status >= 500:
                 self.lost(chunk)
-            raise _batch_response_error(fields, status, retry_after_header)
+            raise _batch_response_error(
+                fields, status, retry_after_header, chunk.indices
+            )
         slots = fields.get("results")
         if not isinstance(slots, list) or len(slots) != len(chunk.indices):
             self.lost(chunk)
@@ -1963,6 +1997,11 @@ class _BatchRun:
     def result(self) -> SendBatchResult:
         return SendBatchResult(results=self.outcome(), warnings=tuple(self.warnings))
 
+    def failure(self, error: EmailError) -> EmailBatchError:
+        sent = self.result()
+        _log_warnings(sent)
+        return EmailBatchError(error, sent.results, sent.warnings)
+
 
 def _chunk(empty: bytes, members: Sequence[_BatchMember]) -> _BatchChunk:
     without_closing_brackets = empty[: -len(b"]}")]
@@ -1977,7 +2016,7 @@ def _recipient_too_large() -> EmailError:
         name="validation_error",
         code="content_too_large",
         message="This recipient's email is larger than one batch request takes, so it "
-        "wasn't sent. The other recipients were.",
+        "wasn't sent.",
         fix="Send this recipient's email with send().",
         field="recipients",
     )
@@ -2251,7 +2290,7 @@ class Emails(_EmailsBase):
                 except EmailError as error:
                     run.stop(position, error)
                     self._read_lost(run, secret_key)
-                    raise EmailBatchError(error, run.outcome()) from error
+                    raise run.failure(error) from error
         finally:
             finish()
         result = run.result()
@@ -2544,7 +2583,7 @@ class AsyncEmails(_EmailsBase):
                 except EmailError as error:
                     run.stop(position, error)
                     await self._read_lost(run, secret_key)
-                    raise EmailBatchError(error, run.outcome()) from error
+                    raise run.failure(error) from error
         finally:
             finish()
         result = run.result()

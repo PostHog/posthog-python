@@ -14,7 +14,6 @@ from parameterized import parameterized
 from posthog import Posthog
 from posthog.emails import (
     AsyncEmails,
-    BatchEmailResult,
     EmailBatchError,
     EmailError,
     Emails,
@@ -366,6 +365,7 @@ def test_splits_by_the_4_mib_body_and_fails_only_a_recipient_too_large_alone():
     too_large = result.results[3]
     assert too_large.error is not None
     assert too_large.error.code == "content_too_large"
+    assert "other recipients" not in too_large.error.message
     assert (too_large.message_id, too_large.idempotency_key) == (None, "key-3")
 
 
@@ -478,8 +478,11 @@ def test_a_whole_call_error_raises_with_the_results_so_far():
     )  # a quota refusal is not retried, and the batch stops
     statuses = [r.status for r in error.results]
     assert statuses == ["queued"] * 100 + ["failed"] * 100 + ["not_attempted"] * 50
-    assert error.results[150].error is error.results[100].error
-    assert error.results[150].error.code == "quota_limited"
+    assert error.results[150].error is not None
+    assert (error.results[150].error.code, error.results[150].error.message) == (
+        "quota_limited",
+        "Nope.",
+    )
     assert error.results[200].error is not None
     assert error.results[200].error.code == "not_attempted"
     assert error.results[249].idempotency_key == "key-249"
@@ -563,14 +566,19 @@ def test_batch_unavailable_is_not_retried_and_says_to_send_singly():
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
 
 
-def test_a_404_without_a_code_says_batch_sends_are_unavailable():
-    emails, _ = emails_on([(404, None, {})])
+@pytest.mark.parametrize(
+    "body",
+    [None, {"type": "invalid_request", "code": "not_found", "detail": "Not found."}],
+)
+def test_a_404_says_batch_sends_are_unavailable(body):
+    emails, _ = emails_on([(404, body, {})])
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(1))
 
     assert raised.value.code == "not_found"
-    assert "batch sends" in raised.value.message.lower()
+    assert raised.value.why is not None and "batch sends" in raised.value.why.lower()
+    assert raised.value.fix is not None and "send()" in raised.value.fix
 
 
 def test_an_answer_without_a_result_per_recipient_leaves_the_chunk_unconfirmed():
@@ -606,71 +614,152 @@ def test_warnings_reach_the_caller_once(caplog):
     assert caplog.text.count("sandbox_sender") == 1
 
 
-def test_a_disabled_or_unaddressable_client_sends_nothing():
+def test_a_disabled_client_sends_nothing():
     emails, posthog = emails_on([], disabled=True)
+
     with pytest.raises(EmailError) as disabled:
         batch(emails, recipients(1))
+
     assert disabled.value.code == "client_disabled"
     assert posthog.requests == []
 
+
+def test_a_client_off_cloud_without_an_app_host_sends_nothing():
     client = Posthog(
         "phc_test", host="https://ph.example.com", secret_key=SECRET_KEY, sync_mode=True
     )
-    with mock.patch.object(requests.Session, "request") as request:
-        with pytest.raises(EmailError) as no_host:
-            batch(client.emails, recipients(1))
+    posthog = BatchPostHog([])
+    client.emails._get_session().mount("https://", posthog)
+
+    with pytest.raises(EmailError) as no_host:
+        batch(client.emails, recipients(1))
+
     assert no_host.value.code == "missing_app_host"
-    request.assert_not_called()
+    assert posthog.requests == []
 
 
-def test_results_are_typed():
-    emails, _ = emails_on([all_queued])
+def test_warnings_reach_the_caller_when_a_later_request_fails(caplog):
+    warning = {"code": "sandbox_sender", "detail": "Sent from the test sender."}
 
-    [result] = batch(emails, recipients(1)).results
+    def queued_with_warning(request: requests.PreparedRequest) -> Answer:
+        status, body, headers = all_queued(request)
+        return status, {**body, "warnings": [warning]}, headers
 
-    assert isinstance(result, BatchEmailResult)
+    emails, _ = emails_on([queued_with_warning, whole_call(429, "quota_limited")])
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        with pytest.raises(EmailBatchError) as raised:
+            batch(emails, recipients(150))
+
+    assert [w.code for w in raised.value.warnings] == ["sandbox_sender"]
+    assert caplog.text.count("sandbox_sender") == 1
 
 
-@pytest.mark.asyncio
-async def test_async_batch_splits_keeps_uncertainty_and_reads_by_key():
+def test_a_refused_recipient_field_names_its_position_in_recipients():
+    emails, _ = emails_on(
+        [
+            all_queued,
+            (
+                400,
+                {
+                    "type": "validation_error",
+                    "code": "invalid_input",
+                    "detail": "Enter a valid email address.",
+                    "attr": "recipients__37__to",
+                },
+                {},
+            ),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(150))
+
+    assert raised.value.field == "recipients__137__to"
+
+
+def test_a_code_batch_without_content_names_batch():
+    emails, posthog = emails_on([])
+
+    with pytest.raises(TypeError, match=r"batch\(\) needs html, text or both"):
+        emails.batch(template_key="digest", subject="Hi", recipients=recipients(1))
+
+    assert posthog.requests == []
+
+
+def async_emails_on(
+    answers: list[Any], **options: Any
+) -> tuple[AsyncEmails, list[httpx.Request]]:
     seen: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        if request.url.path == "/api/messaging/emails/status/":
-            return httpx.Response(404, json={"code": "not_found"})
-        body = json.loads(request.content)
-        keys = [r["idempotency_key"] for r in body["recipients"]]
-        if len([r for r in seen if r.url.path.endswith("email_batch/")]) == 2:
-            raise httpx.ConnectError("reset")
-        if len([r for r in seen if r.url.path.endswith("email_batch/")]) == 3:
-            return httpx.Response(
-                200,
-                json={"results": [refused(f"m-{k}", "sending_paused") for k in keys]},
-            )
-        if len([r for r in seen if r.url.path.endswith("email_batch/")]) == 4:
-            raise httpx.ConnectError("reset")
-        return httpx.Response(200, json={"results": [queued(f"m-{k}") for k in keys]})
+        answer = answers.pop(0)
+        if callable(answer):
+            answer = answer(request)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
-    emails = AsyncEmails(
-        SECRET_KEY,
-        timeout=3,
-        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    return AsyncEmails(SECRET_KEY, http_client=client, **options), seen
+
+
+def async_all_queued(request: httpx.Request) -> httpx.Response:
+    keys = [r["idempotency_key"] for r in json.loads(request.content)["recipients"]]
+    return httpx.Response(200, json={"results": [queued(f"m-{k}") for k in keys]})
+
+
+@pytest.mark.asyncio
+async def test_async_batch_sends_chunks_of_100_in_order():
+    emails, seen = async_emails_on([async_all_queued, async_all_queued])
+
+    result = await emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
+
+    assert [len(json.loads(r.content)["recipients"]) for r in seen] == [100, 50]
+    assert [r.status for r in result.results] == ["queued"] * 150
+
+
+@pytest.mark.asyncio
+async def test_async_batch_keeps_a_recipient_unconfirmed_after_a_lost_answer():
+    emails, _ = async_emails_on(
+        [
+            httpx.ConnectError("reset"),
+            httpx.Response(200, json={"results": [refused("m-0", "sending_paused")]}),
+        ]
     )
 
     with mock.patch("posthog.emails.asyncio.sleep"):
-        first = await emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
-        with pytest.raises(EmailBatchError) as raised:
-            await emails.batch(
-                recipients=recipients(1), template_id=TEMPLATE_ID, max_retries=0
-            )
+        result = await emails.batch(recipients=recipients(1), template_id=TEMPLATE_ID)
 
-    assert [r.status for r in first.results] == ["queued"] * 100 + ["unconfirmed"] * 50
-    assert first.results[120].later_error is not None
-    assert first.results[120].later_error.code == "sending_paused"
+    [only] = result.results
+    assert only.status == "unconfirmed"
+    assert only.later_error is not None
+    assert only.later_error.code == "sending_paused"
+
+
+@pytest.mark.asyncio
+async def test_async_batch_waits_45_seconds_per_attempt():
+    emails, seen = async_emails_on([async_all_queued], timeout=3)
+
+    await emails.batch(recipients=recipients(1), template_id=TEMPLATE_ID)
+
     assert seen[0].extensions["timeout"] == dict.fromkeys(
         ["connect", "read", "write", "pool"], 45
     )
+
+
+@pytest.mark.asyncio
+async def test_async_batch_reads_a_lost_email_by_its_key():
+    emails, seen = async_emails_on(
+        [httpx.ConnectError("reset"), httpx.Response(404, json={"code": "not_found"})]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        await emails.batch(
+            recipients=recipients(1), template_id=TEMPLATE_ID, max_retries=0
+        )
+
     assert raised.value.code == "network_error"
     assert [r.status for r in raised.value.results] == ["unconfirmed"]
     assert str(seen[-1].url) == STATUS_BY_KEY_URL + "?idempotency_key=key-0"
