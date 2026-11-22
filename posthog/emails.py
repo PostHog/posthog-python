@@ -167,6 +167,7 @@ from typing import (
     Any,
     Awaitable,
     Callable,
+    Literal,
     Mapping,
     Optional,
     Sequence,
@@ -299,8 +300,11 @@ class SendEmailResult:
     id: str
     replayed: bool = False
     warnings: tuple[EmailWarning, ...] = ()
-    status: str = "queued"
     scheduled_at: Optional[datetime] = None
+
+    @property
+    def status(self) -> Literal["queued", "scheduled"]:
+        return "queued" if self.scheduled_at is None else "scheduled"
 
 
 class EmailAttachment(TypedDict):
@@ -551,6 +555,7 @@ def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
         )
     if "to" not in args:
         raise TypeError("send() is missing the argument to.")
+    scheduled_at = _requested_time(args.get("scheduled_at"))
     if is_template_form:
         return _prepare_send(
             args["to"],
@@ -559,12 +564,14 @@ def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
             args.get("distinct_id"),
             args.get("idempotency_key"),
             args.get("max_retries"),
-            args.get("scheduled_at"),
+            scheduled_at,
         )
-    return _prepare_code_send(args)
+    return _prepare_code_send(args, scheduled_at)
 
 
-def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
+def _prepare_code_send(
+    args: Mapping[str, Any], scheduled_at: Optional[datetime]
+) -> _PreparedSend:
     args = {
         name: value
         for name, value in args.items()
@@ -591,7 +598,7 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     payload.update(_sender(args))
     if references:
         payload["attachments"] = references
-    scheduled_at = _schedule(payload, args.get("scheduled_at"))
+    payload.update(_schedule_field(scheduled_at))
     return _PreparedSend(
         path=_SEND_PATH,
         body=_encode(payload),
@@ -864,7 +871,7 @@ def _prepare_send(
     distinct_id: Optional[str],
     idempotency_key: Optional[str],
     max_retries: Optional[int] = None,
-    scheduled_at: Optional[Union[datetime, str]] = None,
+    scheduled_at: Optional[datetime] = None,
 ) -> _PreparedSend:
     to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     max_retries = _retry_limit(max_retries)
@@ -884,13 +891,13 @@ def _prepare_send(
     }
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
-    requested_at = _schedule(payload, scheduled_at)
+    payload.update(_schedule_field(scheduled_at))
     return _PreparedSend(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
-        scheduled_at=requested_at,
+        scheduled_at=scheduled_at,
     )
 
 
@@ -926,33 +933,15 @@ def _retry_limit(max_retries: Any) -> Optional[int]:
     return max_retries
 
 
-_ISO_TIME = re.compile(
-    r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})",
-    re.ASCII,
-)
 _TIME_NEEDS_OFFSET = (
     "scheduled_at must be an ISO 8601 time with a timezone offset, such as "
     "2026-12-01T09:00:00Z or 2026-12-01T09:00:00+02:00."
 )
 
 
-def _schedule(payload: dict[str, Any], scheduled_at: Any) -> Optional[datetime]:
-    """Put the send time on the wire, rounded up to the millisecond, and return it."""
-    if scheduled_at is None:
+def _requested_time(value: Any) -> Optional[datetime]:
+    if value is None:
         return None
-    try:
-        when = _requested_time(scheduled_at)
-    except OverflowError:
-        raise ValueError(
-            "scheduled_at is past the latest time a datetime holds."
-        ) from None
-    payload["scheduled_at"] = (
-        f"{when:%Y-%m-%dT%H:%M:%S}.{when.microsecond // 1000:03d}Z"
-    )
-    return when
-
-
-def _requested_time(value: Any) -> datetime:
     if isinstance(value, datetime):
         if value.utcoffset() is None:
             raise ValueError(
@@ -962,54 +951,40 @@ def _requested_time(value: Any) -> datetime:
             )
         return _ceil_to_millisecond(value)
     if isinstance(value, str):
-        parsed = _iso_time(value)
-        if parsed is None:
+        parsed = _timestamp(value)
+        if parsed is None or parsed.utcoffset() is None:
             raise ValueError(_TIME_NEEDS_OFFSET)
-        return parsed
+        return _ceil_to_millisecond(parsed)
     raise TypeError(
         "scheduled_at must be an aware datetime or an ISO 8601 string with an offset."
     )
 
 
-def _iso_time(text: str) -> Optional[datetime]:
-    """An ISO 8601 time with an offset, as a UTC datetime rounded up to the millisecond."""
-    match = _ISO_TIME.fullmatch(text)
-    if match is None:
-        return None
-    year, month, day, hour, minute, second, fraction, offset = match.groups()
-    try:
-        zone = timezone.utc if offset == "Z" else _offset(offset)
-        when = datetime(
-            int(year),
-            int(month),
-            int(day),
-            int(hour),
-            int(minute),
-            int(second),
-            tzinfo=zone,
-        )
-    except ValueError:
-        return None
-    if fraction:
-        milliseconds = _ceil_div(int(fraction) * 1000, 10 ** len(fraction))
-        when += timedelta(milliseconds=milliseconds)
-    return when.astimezone(timezone.utc)
-
-
-def _offset(offset: str) -> timezone:
-    hours, minutes = int(offset[1:3]), int(offset[4:6])
-    if minutes >= 60:
-        raise ValueError("an offset's minutes run to 59")
-    sign = -1 if offset[0] == "-" else 1
-    return timezone(sign * timedelta(hours=hours, minutes=minutes))
-
-
 def _ceil_to_millisecond(when: datetime) -> datetime:
-    when = when.astimezone(timezone.utc)
-    below_a_millisecond = when.microsecond % 1000
+    utc = when.astimezone(timezone.utc)
+    plain = datetime(
+        utc.year,
+        utc.month,
+        utc.day,
+        utc.hour,
+        utc.minute,
+        utc.second,
+        utc.microsecond,
+        tzinfo=timezone.utc,
+    )
+    below_a_millisecond = plain.microsecond % 1000
     if below_a_millisecond:
-        when += timedelta(microseconds=1000 - below_a_millisecond)
-    return when
+        plain += timedelta(microseconds=1000 - below_a_millisecond)
+    return plain
+
+
+def _schedule_field(scheduled_at: Optional[datetime]) -> dict[str, str]:
+    if scheduled_at is None:
+        return {}
+    return {
+        "scheduled_at": f"{scheduled_at:%Y-%m-%dT%H:%M:%S}."
+        f"{scheduled_at.microsecond // 1000:03d}Z"
+    }
 
 
 def _status_path(message_id: Union[str, UUID]) -> str:
@@ -1131,7 +1106,7 @@ def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
         if scheduled_at is None:
             return result
         if _confirms_schedule(fields, scheduled_at):
-            return replace(result, status="scheduled", scheduled_at=scheduled_at)
+            return replace(result, scheduled_at=scheduled_at)
         if _sends_now(fields):
             return result
         raise _schedule_not_confirmed(message_id, status)
@@ -1152,7 +1127,7 @@ def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
     return (
         fields.get("status") == "scheduled"
         and isinstance(answered, str)
-        and _iso_time(answered) == requested
+        and _timestamp(answered) == requested
     )
 
 
@@ -1163,8 +1138,8 @@ def _schedule_not_confirmed(message_id: str, status: int) -> EmailError:
         message=f"PostHog accepted email {message_id} without confirming its "
         "scheduled_at, so it may go out at another time.",
         status_code=status,
-        fix=f"Read the email's status with emails.get('{message_id}'). Sending it "
-        "again with the same idempotency_key returns this same answer.",
+        fix=f"Read the email's status with emails.get('{message_id}') before you send "
+        "it again: a send with another idempotency_key makes a second email.",
         field="scheduled_at",
         message_id=message_id,
     )

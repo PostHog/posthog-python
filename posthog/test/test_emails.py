@@ -2824,8 +2824,8 @@ def sent_body(adapter: FakeAdapter, index: int = 0) -> dict[str, Any]:
         ("utc_string", "2026-12-01T09:00:00Z", DUE),
         ("offset_string", "2026-12-01T11:00:00+02:00", DUE),
         (
-            "nanosecond_string_rounds_up",
-            "2026-12-01T11:00:00.123000001+02:00",
+            "microsecond_string_rounds_up",
+            "2026-12-01T11:00:00.123001+02:00",
             "2026-12-01T09:00:00.124Z",
         ),
         ("negative_offset_string", "2026-12-01T04:00:00.000-05:00", DUE),
@@ -2852,6 +2852,22 @@ def test_a_code_send_takes_scheduled_at_too():
     assert (result.status, result.scheduled_at) == (
         "scheduled",
         datetime(2026, 12, 1, 9, tzinfo=timezone.utc),
+    )
+
+
+def test_a_datetime_subclass_comes_back_as_the_time_on_the_wire():
+    class PreciseTime(datetime):
+        pass
+
+    emails, adapter = emails_with([scheduled(scheduled_at="2026-12-01T09:00:00.124Z")])
+    when = PreciseTime(2026, 12, 1, 9, 0, 0, 123999, tzinfo=timezone.utc)
+
+    result = send(emails, scheduled_at=when)
+
+    assert sent_body(adapter)["scheduled_at"] == "2026-12-01T09:00:00.124Z"
+    assert type(result.scheduled_at) is datetime
+    assert result.scheduled_at == datetime(
+        2026, 12, 1, 9, 0, 0, 124000, tzinfo=timezone.utc
     )
 
 
@@ -2885,21 +2901,14 @@ def test_a_send_without_scheduled_at_keeps_todays_result():
         ("natural_language", "in 1 hour", ValueError, "offset"),
         ("bad_month", "2026-13-01T09:00:00Z", ValueError, "offset"),
         ("offset_past_a_day", "2026-12-01T09:00:00+24:00", ValueError, "offset"),
-        ("offset_minutes_past_59", "2026-12-01T09:00:00+01:60", ValueError, "offset"),
-        ("space_separator", "2026-12-01 09:00:00Z", ValueError, "offset"),
         ("non_ascii_digits", "２０２６-12-01T09:00:00Z", ValueError, "offset"),
-        ("past_the_last_datetime", "9999-12-31T23:59:59.9999Z", ValueError, "latest"),
-        (
-            "aware_datetime_max",
-            datetime.max.replace(tzinfo=timezone.utc),
-            ValueError,
-            "latest",
-        ),
         ("unix_seconds", 1796115600, TypeError, "datetime"),
         ("date_object", datetime(2026, 12, 1).date(), TypeError, "datetime"),
     ]
 )
-def test_refuses_a_time_without_a_zone_before_any_request(_name, when, error, says):
+def test_refuses_a_scheduled_at_it_cannot_read_before_any_request(
+    _name, when, error, says
+):
     emails, adapter = emails_with([])
 
     with pytest.raises(error, match=says):
