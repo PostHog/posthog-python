@@ -111,6 +111,32 @@ Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 ``not_found`` (404) for an unknown ID, an email older than 30 days, or for a
 few seconds after the send.
 
+Scheduling: pass ``scheduled_at``, an aware ``datetime`` or an ISO 8601 string
+with an offset, to send the email up to 7 days later. Only PostHog Cloud
+schedules emails: on any other app host, such as a reverse proxy or a custom
+domain, a send with ``scheduled_at`` raises ``scheduling_requires_cloud``
+before any request. A naive ``datetime`` or a string without an offset raises
+``ValueError`` before any request. The client rounds the time up to the next
+millisecond, so the email never goes out early. A result with ``status``
+``"scheduled"`` carries the confirmed ``scheduled_at``; ``get`` reads
+``scheduled`` until the email goes out. A time that has already passed sends
+the email now, and the result's ``status`` is ``"queued"``. Compute the time
+once and reuse it on your own retries: the idempotency key covers it, so the
+same key with another time raises ``idempotency_key_reused``. To stop scheduled
+emails before they go out, disable the email's workflow in PostHog until they
+have reached a final status. That refuses every new send of it meanwhile.
+
+```python
+from datetime import datetime, timedelta, timezone
+
+result = posthog.emails.send(
+    to="user@example.com",
+    template_id="<template UUID>",
+    scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+)
+print(result.status, result.scheduled_at)  # scheduled, the time in UTC
+```
+
 Cleanup: ``shutdown()`` on the client closes its email connections. Close a
 standalone :class:`Emails` with ``close()`` or a ``with`` block.
 
@@ -134,8 +160,8 @@ import random
 import re
 import threading
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from types import TracebackType
 from typing import (
     Any,
@@ -216,6 +242,8 @@ class EmailError(Exception):
         docs_url: A docs page about the error, when PostHog gave one.
         field: The request field the error is about, when there is one.
         retry_after: Seconds to wait before retrying, when PostHog said.
+        message_id: The message ID of an email PostHog accepted, when the
+            error is about that email, such as ``schedule_not_confirmed``.
     """
 
     def __init__(
@@ -230,6 +258,7 @@ class EmailError(Exception):
         docs_url: Optional[str] = None,
         field: Optional[str] = None,
         retry_after: Optional[float] = None,
+        message_id: Optional[str] = None,
     ) -> None:
         super().__init__(message)
         self.name = name
@@ -241,6 +270,7 @@ class EmailError(Exception):
         self.docs_url = docs_url
         self.field = field
         self.retry_after = retry_after
+        self.message_id = message_id
 
 
 @dataclass(frozen=True)
@@ -252,18 +282,25 @@ class EmailWarning:
 
 @dataclass(frozen=True)
 class SendEmailResult:
-    """The queued email. ``id`` is its message ID.
+    """The accepted email. ``id`` is its message ID.
 
     Attributes:
         id: The email's message ID.
         replayed: ``True`` when the response says PostHog replayed an earlier send for
             the same ``idempotency_key`` instead of sending again.
         warnings: Warnings PostHog returned about the request.
+        status: ``"scheduled"`` when the email waits for its ``scheduled_at``,
+            ``"queued"`` when it goes out now.
+        scheduled_at: When a scheduled email goes out, in UTC. ``None`` for
+            an email that goes out now, also when ``scheduled_at`` had
+            already passed when PostHog accepted it.
     """
 
     id: str
     replayed: bool = False
     warnings: tuple[EmailWarning, ...] = ()
+    status: str = "queued"
+    scheduled_at: Optional[datetime] = None
 
 
 class EmailAttachment(TypedDict):
@@ -291,6 +328,7 @@ class _RecipientArgs(TypedDict):
     distinct_id: NotRequired[Optional[str]]
     idempotency_key: NotRequired[Optional[str]]
     max_retries: NotRequired[Optional[int]]
+    scheduled_at: NotRequired[Optional[Union[datetime, str]]]
 
 
 class TemplateEmailArgs(_RecipientArgs):
@@ -305,6 +343,8 @@ class TemplateEmailArgs(_RecipientArgs):
         idempotency_key: 1 to 255 visible ASCII characters.
         max_retries: Overrides the client's maximum number of retries for this
             send. ``0`` turns retries off.
+        scheduled_at: When to send the email, up to 7 days ahead, on PostHog
+            Cloud only. See :meth:`Emails.send`.
     """
 
     template_id: Union[str, UUID]
@@ -399,6 +439,8 @@ class CodeEmailArgs(_RecipientArgs):
             first send's result, also when its workflow was paused since.
         max_retries: Overrides the client's maximum number of retries for this
             send. ``0`` turns retries off.
+        scheduled_at: When to send the email, up to 7 days ahead, on PostHog
+            Cloud only. See :meth:`Emails.send`.
     """
 
     template_key: str
@@ -426,6 +468,7 @@ _OPTIONAL_CODE_FIELDS = frozenset(
         "bcc",
         "attachments",
         "capture_engagement",
+        "scheduled_at",
         "sensitive",
         "tracking",
     }
@@ -438,6 +481,7 @@ class EmailStatus:
 
     ``status`` is one of:
 
+    - ``scheduled``: the email waits for its ``scheduled_at``.
     - ``queued``: the email waits to go out.
     - ``sent``: PostHog handed the email to the email provider.
     - ``failed``: the email was not sent, and ``reason`` says why.
@@ -491,6 +535,8 @@ class _PreparedSend:
     idempotency_key: str
     max_retries: Optional[int] = None
     files: tuple[_File, ...] = ()
+    # The send time asked for, rounded up to the millisecond, or None for a send now.
+    scheduled_at: Optional[datetime] = None
 
 
 def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
@@ -514,6 +560,7 @@ def _prepare(args: Mapping[str, Any]) -> _PreparedSend:
             args.get("distinct_id"),
             args.get("idempotency_key"),
             args.get("max_retries"),
+            args.get("scheduled_at"),
         )
     return _prepare_code_send(args)
 
@@ -545,12 +592,14 @@ def _prepare_code_send(args: Mapping[str, Any]) -> _PreparedSend:
     payload.update(_sender(args))
     if references:
         payload["attachments"] = references
+    scheduled_at = _schedule(payload, args.get("scheduled_at"))
     return _PreparedSend(
         path=_SEND_PATH,
         body=_encode(payload),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
         files=_each_file_once(files),
+        scheduled_at=scheduled_at,
     )
 
 
@@ -816,6 +865,7 @@ def _prepare_send(
     distinct_id: Optional[str],
     idempotency_key: Optional[str],
     max_retries: Optional[int] = None,
+    scheduled_at: Optional[Union[datetime, str]] = None,
 ) -> _PreparedSend:
     to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     max_retries = _retry_limit(max_retries)
@@ -835,11 +885,13 @@ def _prepare_send(
     }
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
+    requested_at = _schedule(payload, scheduled_at)
     return _PreparedSend(
         path=_SEND_PATH,
         body=json.dumps(payload, cls=DatetimeSerializer).encode("utf-8"),
         idempotency_key=idempotency_key,
         max_retries=max_retries,
+        scheduled_at=requested_at,
     )
 
 
@@ -873,6 +925,93 @@ def _retry_limit(max_retries: Any) -> Optional[int]:
     ):
         raise ValueError("max_retries must be a nonnegative integer.")
     return max_retries
+
+
+_ISO_TIME = re.compile(
+    r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:\d{2})",
+    re.ASCII,
+)
+_TIME_NEEDS_OFFSET = (
+    "scheduled_at must be an ISO 8601 time with a timezone offset, such as "
+    "2026-12-01T09:00:00Z or 2026-12-01T09:00:00+02:00."
+)
+
+
+def _schedule(payload: dict[str, Any], scheduled_at: Any) -> Optional[datetime]:
+    """Put the send time on the wire, rounded up to the millisecond, and return it."""
+    if scheduled_at is None:
+        return None
+    try:
+        when = _requested_time(scheduled_at)
+    except OverflowError:
+        raise ValueError(
+            "scheduled_at is past the latest time a datetime holds."
+        ) from None
+    payload["scheduled_at"] = (
+        f"{when:%Y-%m-%dT%H:%M:%S}.{when.microsecond // 1000:03d}Z"
+    )
+    return when
+
+
+def _requested_time(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        if value.utcoffset() is None:
+            raise ValueError(
+                "scheduled_at has no timezone, so the email could go out at the wrong "
+                "time. Pass an aware datetime, such as "
+                "datetime.now(timezone.utc) + timedelta(hours=1)."
+            )
+        return _ceil_to_millisecond(value)
+    if isinstance(value, str):
+        parsed = _iso_time(value)
+        if parsed is None:
+            raise ValueError(_TIME_NEEDS_OFFSET)
+        return parsed
+    raise TypeError(
+        "scheduled_at must be an aware datetime or an ISO 8601 string with an offset."
+    )
+
+
+def _iso_time(text: str) -> Optional[datetime]:
+    """An ISO 8601 time with an offset, as a UTC datetime rounded up to the millisecond."""
+    match = _ISO_TIME.fullmatch(text)
+    if match is None:
+        return None
+    year, month, day, hour, minute, second, fraction, offset = match.groups()
+    try:
+        zone = timezone.utc if offset == "Z" else _offset(offset)
+        when = datetime(
+            int(year),
+            int(month),
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            tzinfo=zone,
+        )
+    except ValueError:
+        return None
+    if fraction:
+        # Round any digits past the millisecond up, so the email never goes out early.
+        milliseconds = _ceil_div(int(fraction) * 1000, 10 ** len(fraction))
+        when += timedelta(milliseconds=milliseconds)
+    return when.astimezone(timezone.utc)
+
+
+def _offset(offset: str) -> timezone:
+    hours, minutes = int(offset[1:3]), int(offset[4:6])
+    if minutes >= 60:
+        raise ValueError("an offset's minutes run to 59")
+    sign = -1 if offset[0] == "-" else 1
+    return timezone(sign * timedelta(hours=hours, minutes=minutes))
+
+
+def _ceil_to_millisecond(when: datetime) -> datetime:
+    when = when.astimezone(timezone.utc)
+    below_a_millisecond = when.microsecond % 1000
+    if below_a_millisecond:
+        when += timedelta(microseconds=1000 - below_a_millisecond)
+    return when
 
 
 def _status_path(message_id: Union[str, UUID]) -> str:
@@ -974,23 +1113,58 @@ def _json_object(body: bytes) -> dict[str, Any]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _parse_response(
-    status: int, body: bytes, retry_after_header: Optional[str]
-) -> SendEmailResult:
-    fields = _json_object(body)
-    if 200 <= status < 300:
+def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
+    def parse(
+        status: int, body: bytes, retry_after_header: Optional[str]
+    ) -> SendEmailResult:
+        fields = _json_object(body)
+        if not 200 <= status < 300:
+            raise _response_error(fields, status, retry_after_header)
         message_id = _text(fields.get("message_id"))
         if message_id is None:
             raise _sdk_error(
                 "api_error", "PostHog answered without a message ID.", status
             )
-        warnings = fields.get("warnings")
-        return SendEmailResult(
+        result = SendEmailResult(
             id=message_id,
             replayed=fields.get("replayed") is True,
-            warnings=_parse_warnings(warnings),
+            warnings=_parse_warnings(fields.get("warnings")),
         )
-    raise _response_error(fields, status, retry_after_header)
+        if scheduled_at is None:
+            return result
+        if _confirms_schedule(fields, scheduled_at):
+            return replace(result, status="scheduled", scheduled_at=scheduled_at)
+        if fields.get("status") == "queued" and (
+            "scheduled_at" in fields and fields["scheduled_at"] is None
+        ):
+            # The time had passed when PostHog accepted the send, so it goes out now.
+            return result
+        raise _schedule_not_confirmed(message_id, status)
+
+    return parse
+
+
+def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
+    answered = fields.get("scheduled_at")
+    return (
+        fields.get("status") == "scheduled"
+        and isinstance(answered, str)
+        and _iso_time(answered) == requested
+    )
+
+
+def _schedule_not_confirmed(message_id: str, status: int) -> EmailError:
+    return EmailError(
+        name="application_error",
+        code="schedule_not_confirmed",
+        message=f"PostHog accepted email {message_id} without confirming its "
+        "scheduled_at, so it may go out at another time.",
+        status_code=status,
+        fix=f"Read the email's status with emails.get('{message_id}'). Sending it "
+        "again with the same idempotency_key returns this same answer.",
+        field="scheduled_at",
+        message_id=message_id,
+    )
 
 
 def _parse_warnings(warnings: Any) -> tuple[EmailWarning, ...]:
@@ -1328,6 +1502,23 @@ class _EmailsBase:
             raise _sdk_error("missing_secret_key", key_needed)
         return self.secret_key
 
+    def _check_schedulable(self, prepared: _PreparedSend) -> None:
+        # A self-hosted PostHog from before scheduled sends drops scheduled_at and sends at once.
+        if prepared.scheduled_at is None or self.host in (
+            US_APP_ENDPOINT,
+            EU_APP_ENDPOINT,
+        ):
+            return
+        raise EmailError(
+            name="validation_error",
+            code="scheduling_requires_cloud",
+            message="Scheduled sends work only on PostHog Cloud (us.posthog.com or "
+            f"eu.posthog.com), and this client sends to {self.host}, so no email was sent.",
+            fix="Send without scheduled_at, or send through PostHog Cloud's app host. "
+            "A reverse proxy or custom domain can't schedule emails yet.",
+            field="scheduled_at",
+        )
+
 
 class Emails(_EmailsBase):
     """Sends transactional email from PostHog email templates or from content in your code.
@@ -1398,10 +1589,16 @@ class Emails(_EmailsBase):
                 outside this call, too.
             max_retries: Overrides the client's maximum number of retries for
                 this send. ``0`` turns retries off.
+            scheduled_at: When to send the email, up to 7 days ahead: an aware
+                ``datetime``, or an ISO 8601 string with an offset, such as
+                ``"2026-12-01T09:00:00+02:00"``. The client rounds it up to the
+                next millisecond and sends that time on every retry. A time at
+                or before now sends the email now. Only a client on PostHog
+                Cloud schedules.
 
         Returns:
-            The queued email. A result means PostHog queued the email, not that
-            it was delivered.
+            The accepted email. A result means PostHog queued or scheduled the
+            email, not that it was delivered. ``status`` says which.
 
         Raises:
             EmailError: PostHog did not queue the email, or the client could
@@ -1411,7 +1608,14 @@ class Emails(_EmailsBase):
                 request, ``attachment_upload_failed`` when the storage
                 refused an upload, and ``network_error`` with ``field``
                 naming the attachment when the storage didn't answer.
-            TypeError, ValueError: An argument has the wrong type or format.
+                With ``scheduled_at``, ``code`` is
+                ``scheduling_requires_cloud`` before any request when the
+                client's host isn't PostHog Cloud, and
+                ``schedule_not_confirmed`` when PostHog accepted the email
+                without confirming the time. ``message_id`` then names the
+                email, which may go out at another time.
+            TypeError, ValueError: An argument has the wrong type or format,
+                such as a ``scheduled_at`` without a timezone.
 
         Examples:
             ```python
@@ -1434,7 +1638,9 @@ class Emails(_EmailsBase):
         prepared = _prepare(kwargs)
         finish = self._start(_SEND_NOT_DONE)
         try:
-            result = self._deliver(prepared, self._secret_key(_SEND_KEY_NEEDED))
+            secret_key = self._secret_key(_SEND_KEY_NEEDED)
+            self._check_schedulable(prepared)
+            result = self._deliver(prepared, secret_key)
         finally:
             finish()
         _log_warnings(result)
@@ -1451,7 +1657,7 @@ class Emails(_EmailsBase):
         )
         return self._call(
             self._posthog_request("POST", prepared.path, prepared.body, headers),
-            _parse_response,
+            _send_parser(prepared.scheduled_at),
             prepared.max_retries,
         )
 
@@ -1653,7 +1859,9 @@ class AsyncEmails(_EmailsBase):
         prepared = _prepare(kwargs)
         finish = self._start(_SEND_NOT_DONE)
         try:
-            result = await self._deliver(prepared, self._secret_key(_SEND_KEY_NEEDED))
+            secret_key = self._secret_key(_SEND_KEY_NEEDED)
+            self._check_schedulable(prepared)
+            result = await self._deliver(prepared, secret_key)
         finally:
             finish()
         _log_warnings(result)
@@ -1672,7 +1880,7 @@ class AsyncEmails(_EmailsBase):
         )
         return await self._call(
             self._posthog_request("POST", prepared.path, prepared.body, headers),
-            _parse_response,
+            _send_parser(prepared.scheduled_at),
             prepared.max_retries,
         )
 
