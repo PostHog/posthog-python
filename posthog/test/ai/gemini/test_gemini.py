@@ -1371,6 +1371,25 @@ def mock_embed_content_response_with_stats():
     return mock_response
 
 
+def test_embed_content_uses_context_distinct_id(
+    mock_client, mock_google_genai_client, mock_embed_content_response
+):
+    from posthog import identify_context, new_context
+
+    mock_google_genai_client.models.embed_content.return_value = (
+        mock_embed_content_response
+    )
+
+    client = Client(api_key="test-key", posthog_client=mock_client)
+    with new_context():
+        identify_context("context-user")
+        client.models.embed_content(model="gemini-embedding-001", contents="Hello")
+
+    call_args = mock_client.capture_ai.call_args[1]
+    assert call_args["distinct_id"] == "context-user"
+    assert call_args["event"] == "$ai_embedding"
+
+
 def test_embed_content_basic(
     mock_client, mock_google_genai_client, mock_embed_content_response
 ):

@@ -4,7 +4,7 @@ from ..utils import (
     _capture_ai_event,
     _format_ai_error,
     _get_http_status,
-    _user_distinct_id,
+    _resolve_distinct_id,
     finalize_ai_content,
     with_privacy_mode,
 )
@@ -56,12 +56,13 @@ def _capture_embedding_event(
     }
 
     if callable(getattr(posthog_client, "capture_ai", None)):
+        resolved_distinct_id = _resolve_distinct_id(distinct_id)
         _capture_ai_event(
             posthog_client,
             "$ai_embedding",
-            distinct_id=_user_distinct_id(distinct_id) or trace_id,
+            distinct_id=resolved_distinct_id or trace_id,
             properties=event_properties,
             groups=groups,
-            personless=_user_distinct_id(distinct_id) is None,
+            personless=resolved_distinct_id is None,
             options=options,
         )

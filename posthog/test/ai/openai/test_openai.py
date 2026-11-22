@@ -465,6 +465,23 @@ def test_embeddings(mock_client, mock_embedding_response):
         assert isinstance(props["$ai_latency"], float)
 
 
+def test_embeddings_use_context_distinct_id(mock_client, mock_embedding_response):
+    from posthog import identify_context, new_context
+
+    with patch(
+        "openai.resources.embeddings.Embeddings.create",
+        return_value=mock_embedding_response,
+    ):
+        client = OpenAI(api_key="test-key", posthog_client=mock_client)
+        with new_context():
+            identify_context("context-user")
+            client.embeddings.create(model="text-embedding-3-small", input="Hello")
+
+    call_args = mock_client.capture_ai.call_args[1]
+    assert call_args["distinct_id"] == "context-user"
+    assert call_args["event"] == "$ai_embedding"
+
+
 @pytest.mark.parametrize("stream_options", [None, NOT_GIVEN, {"foo": "bar"}])
 def test_streaming_stream_options_are_not_mutated(
     mock_client, streaming_tool_call_chunks, stream_options
