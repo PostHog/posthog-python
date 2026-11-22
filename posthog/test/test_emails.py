@@ -2948,7 +2948,10 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
         assert send(client.emails).id == "m"
 
     assert raised.value.code == "scheduling_requires_cloud"
-    assert "https://posthog.example.com" in raised.value.message
+    assert raised.value.message == (
+        "Scheduled sends work only on PostHog Cloud (us.posthog.com or eu.posthog.com), "
+        "and this client sends to https://posthog.example.com, so no email was sent."
+    )
 
 
 @parameterized.expand(
