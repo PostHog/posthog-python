@@ -1071,7 +1071,12 @@ def _prepare_send(
 ) -> _PreparedSend:
     to, distinct_id, idempotency_key = _recipient(to, distinct_id, idempotency_key)
     max_retries = _retry_limit(max_retries)
-    payload: dict[str, Any] = {"to": to, **_template(template_id, template_data)}
+    template, message_data = _template(template_id, template_data)
+    payload: dict[str, Any] = {
+        "template_id": template,
+        "to": to,
+        "message_data": message_data,
+    }
     if distinct_id is not None:
         payload["distinct_id"] = distinct_id
     payload.update(_schedule_field(scheduled_at))
@@ -1084,7 +1089,7 @@ def _prepare_send(
     )
 
 
-def _template(template_id: Any, template_data: Any) -> dict[str, Any]:
+def _template(template_id: Any, template_data: Any) -> tuple[str, dict[str, Any]]:
     try:
         template_uuid = (
             template_id if isinstance(template_id, UUID) else UUID(template_id)
@@ -1093,10 +1098,7 @@ def _template(template_id: Any, template_data: Any) -> dict[str, Any]:
         raise ValueError("template_id must be the template's UUID.") from None
     if template_data is not None and not isinstance(template_data, Mapping):
         raise TypeError("template_data must be a mapping.")
-    return {
-        "template_id": str(template_uuid),
-        "message_data": clean(dict(template_data or {})),
-    }
+    return str(template_uuid), clean(dict(template_data or {}))
 
 
 def _recipient(
@@ -1664,12 +1666,15 @@ def _prepare_batch(args: Mapping[str, Any]) -> _BatchRun:
         raise TypeError("batch() is missing the argument recipients.")
     max_retries = _retry_limit(args.get("max_retries"))
     shared = (
-        _template(args["template_id"], args.get("template_data"))
-        if is_template_form
-        else _code_batch_email(args)
+        _template_batch_email(args) if is_template_form else _code_batch_email(args)
     )
     members = _batch_members(args["recipients"], is_template_form)
     return _BatchRun(shared, members, max_retries)
+
+
+def _template_batch_email(args: Mapping[str, Any]) -> dict[str, Any]:
+    template, message_data = _template(args["template_id"], args.get("template_data"))
+    return {"template_id": template, "message_data": message_data}
 
 
 def _code_batch_email(args: Mapping[str, Any]) -> dict[str, Any]:
