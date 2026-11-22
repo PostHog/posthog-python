@@ -981,7 +981,7 @@ attribute posthog.emails.SendBatchResult.warnings: tuple[EmailWarning, ...] = ()
 attribute posthog.emails.SendEmailResult.id: str
 attribute posthog.emails.SendEmailResult.replayed: bool = False
 attribute posthog.emails.SendEmailResult.scheduled_at: Optional[datetime] = None
-attribute posthog.emails.SendEmailResult.status: str = 'queued'
+attribute posthog.emails.SendEmailResult.status: Literal['queued', 'scheduled']
 attribute posthog.emails.SendEmailResult.warnings: tuple[EmailWarning, ...] = ()
 attribute posthog.emails.TemplateBatchArgs.template_data: NotRequired[Optional[Mapping[str, Any]]]
 attribute posthog.emails.TemplateBatchArgs.template_id: Union[str, UUID]
@@ -1433,7 +1433,7 @@ class posthog.emails.EmailTracking
 class posthog.emails.EmailWarning(code: str, message: str, fix: Optional[str] = None)
 class posthog.emails.Emails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None, migrated_from: Optional[str] = None)
 class posthog.emails.SendBatchResult(results: tuple[BatchEmailResult, ...], warnings: tuple[EmailWarning, ...] = ())
-class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = (), status: str = 'queued', scheduled_at: Optional[datetime] = None)
+class posthog.emails.SendEmailResult(id: str, replayed: bool = False, warnings: tuple[EmailWarning, ...] = (), scheduled_at: Optional[datetime] = None)
 class posthog.emails.TemplateBatchArgs 
 class posthog.emails.TemplateEmailArgs 
 class posthog.exception_capture.ExceptionCapture(client: Client, rate_limiting_enabled=False, bucket_size=DEFAULT_BUCKET_SIZE, refill_rate=DEFAULT_REFILL_RATE, refill_interval_seconds=DEFAULT_REFILL_INTERVAL_SECONDS)

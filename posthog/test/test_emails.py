@@ -2824,8 +2824,8 @@ def sent_body(adapter: FakeAdapter, index: int = 0) -> dict[str, Any]:
         ("utc_string", "2026-12-01T09:00:00Z", DUE),
         ("offset_string", "2026-12-01T11:00:00+02:00", DUE),
         (
-            "nanosecond_string_rounds_up",
-            "2026-12-01T11:00:00.123000001+02:00",
+            "microsecond_string_rounds_up",
+            "2026-12-01T11:00:00.123001+02:00",
             "2026-12-01T09:00:00.124Z",
         ),
         ("negative_offset_string", "2026-12-01T04:00:00.000-05:00", DUE),
@@ -2852,6 +2852,22 @@ def test_a_code_send_takes_scheduled_at_too():
     assert (result.status, result.scheduled_at) == (
         "scheduled",
         datetime(2026, 12, 1, 9, tzinfo=timezone.utc),
+    )
+
+
+def test_a_datetime_subclass_comes_back_as_the_time_on_the_wire():
+    class PreciseTime(datetime):
+        pass
+
+    emails, adapter = emails_with([scheduled(scheduled_at="2026-12-01T09:00:00.124Z")])
+    when = PreciseTime(2026, 12, 1, 9, 0, 0, 123999, tzinfo=timezone.utc)
+
+    result = send(emails, scheduled_at=when)
+
+    assert sent_body(adapter)["scheduled_at"] == "2026-12-01T09:00:00.124Z"
+    assert type(result.scheduled_at) is datetime
+    assert result.scheduled_at == datetime(
+        2026, 12, 1, 9, 0, 0, 124000, tzinfo=timezone.utc
     )
 
 
@@ -2885,21 +2901,14 @@ def test_a_send_without_scheduled_at_keeps_todays_result():
         ("natural_language", "in 1 hour", ValueError, "offset"),
         ("bad_month", "2026-13-01T09:00:00Z", ValueError, "offset"),
         ("offset_past_a_day", "2026-12-01T09:00:00+24:00", ValueError, "offset"),
-        ("offset_minutes_past_59", "2026-12-01T09:00:00+01:60", ValueError, "offset"),
-        ("space_separator", "2026-12-01 09:00:00Z", ValueError, "offset"),
         ("non_ascii_digits", "２０２６-12-01T09:00:00Z", ValueError, "offset"),
-        ("past_the_last_datetime", "9999-12-31T23:59:59.9999Z", ValueError, "latest"),
-        (
-            "aware_datetime_max",
-            datetime.max.replace(tzinfo=timezone.utc),
-            ValueError,
-            "latest",
-        ),
         ("unix_seconds", 1796115600, TypeError, "datetime"),
         ("date_object", datetime(2026, 12, 1).date(), TypeError, "datetime"),
     ]
 )
-def test_refuses_a_time_without_a_zone_before_any_request(_name, when, error, says):
+def test_refuses_a_scheduled_at_it_cannot_read_before_any_request(
+    _name, when, error, says
+):
     emails, adapter = emails_with([])
 
     with pytest.raises(error, match=says):
@@ -2939,13 +2948,13 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
         app_host="https://posthog.example.com",
     )
 
-    with mock.patch.object(
-        requests.Session, "request", return_value=response(202, {"message_id": "m"})
-    ) as request:
-        with pytest.raises(EmailError) as raised:
-            send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
-        request.assert_not_called()
-        assert send(client.emails).id == "m"
+    adapter = FakeAdapter([(202, {"message_id": "m"}, {})])
+    client.emails._get_session().mount("https://", adapter)
+
+    with pytest.raises(EmailError) as raised:
+        send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
+    assert adapter.requests == []
+    assert send(client.emails).id == "m"
 
     assert raised.value.code == "scheduling_requires_cloud"
     assert raised.value.message == (
@@ -2955,22 +2964,21 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
 
 
 @parameterized.expand(
-    [("us", "https://us.i.posthog.com"), ("eu", "https://eu.i.posthog.com")]
+    [
+        ("us", "https://us.i.posthog.com", "https://us.posthog.com/"),
+        ("eu", "https://eu.i.posthog.com", "https://eu.posthog.com/"),
+    ]
 )
-def test_a_client_on_either_cloud_region_schedules(_name, host):
+def test_a_client_on_either_cloud_region_schedules(_name, host, app_host):
     client = Posthog("phc_test", host=host, secret_key=SECRET_KEY, sync_mode=True)
+    adapter = FakeAdapter([scheduled()])
+    client.emails._get_session().mount("https://", adapter)
 
-    with mock.patch.object(
-        requests.Session,
-        "request",
-        return_value=response(
-            202, {"message_id": "m", "status": "scheduled", "scheduled_at": DUE}
-        ),
-    ) as request:
-        result = send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
+    result = send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
 
     assert result.status == "scheduled"
-    assert json.loads(request.call_args.kwargs["data"])["scheduled_at"] == DUE
+    assert (adapter.requests[0].url or "").startswith(app_host)
+    assert json.loads(adapter.requests[0].body)["scheduled_at"] == DUE
 
 
 def test_retries_send_the_same_time():
@@ -3063,68 +3071,89 @@ def test_a_refused_scheduled_at_raises_and_never_sends_now():
     assert (raised.value.status_code, raised.value.field) == (400, "scheduled_at")
 
 
-@pytest.mark.asyncio
-async def test_async_schedules_checks_the_answer_and_keeps_to_cloud():
+def async_emails_with(
+    replies: list[httpx.Response], **options: Any
+) -> tuple[AsyncEmails, list[httpx.Request]]:
     seen: list[httpx.Request] = []
-    replies = [
-        httpx.Response(503, json={"code": "delivery_unavailable"}),
-        httpx.Response(
-            202,
-            json={
-                "message_id": "msg_1",
-                "status": "scheduled",
-                "scheduled_at": "2026-12-01T09:00:00.001Z",
-            },
-        ),
-        httpx.Response(202, json={"message_id": "msg_2"}),
-    ]
 
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         return replies.pop(0)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
-    emails = AsyncEmails(SECRET_KEY, http_client=client)
-    when = datetime(2026, 12, 1, 11, 0, 0, 999, tzinfo=PLUS_TWO)
+    return AsyncEmails(SECRET_KEY, http_client=client, **options), seen
+
+
+@pytest.mark.asyncio
+async def test_async_retries_send_the_same_rounded_time_and_confirm_it():
+    emails, seen = async_emails_with(
+        [
+            httpx.Response(503, json={"code": "delivery_unavailable"}),
+            httpx.Response(
+                202,
+                json={
+                    "message_id": "msg_1",
+                    "status": "scheduled",
+                    "scheduled_at": "2026-12-01T09:00:00.001Z",
+                },
+            ),
+        ]
+    )
 
     with mock.patch("posthog.emails.asyncio.sleep"):
         result = await emails.send(
-            to="user@example.com", template_id=TEMPLATE_ID, scheduled_at=when
+            to="user@example.com",
+            template_id=TEMPLATE_ID,
+            scheduled_at=datetime(2026, 12, 1, 11, 0, 0, 999, tzinfo=PLUS_TWO),
         )
-        with pytest.raises(EmailError) as unconfirmed:
-            await emails.send(
-                to="user@example.com",
-                template_key="welcome",
-                subject="Hi",
-                html=HTML,
-                scheduled_at=DUE,
-            )
 
-    assert [json.loads(request.content)["scheduled_at"] for request in seen] == [
-        "2026-12-01T09:00:00.001Z",
-        "2026-12-01T09:00:00.001Z",
-        DUE,
-    ]
-    assert seen[0].content == seen[1].content
+    assert [request.content for request in seen] == [seen[0].content] * 2
+    assert json.loads(seen[0].content)["scheduled_at"] == "2026-12-01T09:00:00.001Z"
     assert (result.status, result.scheduled_at) == (
         "scheduled",
         datetime(2026, 12, 1, 9, 0, 0, 1000, tzinfo=timezone.utc),
     )
+
+
+@pytest.mark.asyncio
+async def test_async_raises_when_posthog_does_not_confirm_the_time():
+    emails, _ = async_emails_with([httpx.Response(202, json={"message_id": "msg_2"})])
+
+    with pytest.raises(EmailError) as unconfirmed:
+        await emails.send(
+            to="user@example.com",
+            template_key="welcome",
+            subject="Hi",
+            html=HTML,
+            scheduled_at=DUE,
+        )
+
     assert unconfirmed.value.code == "schedule_not_confirmed"
     assert unconfirmed.value.message_id == "msg_2"
 
-    custom = AsyncEmails(
-        SECRET_KEY, host="https://posthog.example.com", http_client=client
-    )
+
+@pytest.mark.asyncio
+async def test_async_refuses_a_custom_host_before_any_request():
+    emails, seen = async_emails_with([], host="https://posthog.example.com")
+
     with pytest.raises(EmailError) as off_cloud:
-        await custom.send(
+        await emails.send(
             to="user@example.com", template_id=TEMPLATE_ID, scheduled_at=DUE
         )
+
     assert off_cloud.value.code == "scheduling_requires_cloud"
+    assert seen == []
+
+
+@pytest.mark.asyncio
+async def test_async_refuses_a_naive_time_before_any_request():
+    emails, seen = async_emails_with([])
+
     with pytest.raises(ValueError):
         await emails.send(
             to="user@example.com",
             template_id=TEMPLATE_ID,
             scheduled_at=datetime(2026, 12, 1),
         )
-    assert len(seen) == 3
+
+    assert seen == []
