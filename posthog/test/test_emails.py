@@ -2964,9 +2964,12 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
 
 
 @parameterized.expand(
-    [("us", "https://us.i.posthog.com"), ("eu", "https://eu.i.posthog.com")]
+    [
+        ("us", "https://us.i.posthog.com", "https://us.posthog.com/"),
+        ("eu", "https://eu.i.posthog.com", "https://eu.posthog.com/"),
+    ]
 )
-def test_a_client_on_either_cloud_region_schedules(_name, host):
+def test_a_client_on_either_cloud_region_schedules(_name, host, app_host):
     client = Posthog("phc_test", host=host, secret_key=SECRET_KEY, sync_mode=True)
     adapter = FakeAdapter([scheduled()])
     client.emails._get_session().mount("https://", adapter)
@@ -2974,6 +2977,7 @@ def test_a_client_on_either_cloud_region_schedules(_name, host):
     result = send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
 
     assert result.status == "scheduled"
+    assert (adapter.requests[0].url or "").startswith(app_host)
     assert json.loads(adapter.requests[0].body)["scheduled_at"] == DUE
 
 
