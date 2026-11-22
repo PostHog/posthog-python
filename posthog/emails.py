@@ -253,8 +253,8 @@ _BATCH_PATH = "/api/messaging/send/email_batch/"
 _STATUS_BY_KEY_PATH = "/api/messaging/emails/status/"
 _BATCH_MAX_RECIPIENTS = 100
 _BATCH_MAX_BODY_BYTES = 4 * 1024 * 1024
-# Above PostHog's own 30 second wait on its email pipeline, so an attempt sees its answer.
-_BATCH_ATTEMPT_TIMEOUT = 45.0
+_POSTHOG_PIPELINE_WAIT = 30.0
+_BATCH_ATTEMPT_TIMEOUT = _POSTHOG_PIPELINE_WAIT + 15.0
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
 _MAX_RETRY_DELAY = 30.0
 _IDEMPOTENCY_KEY = re.compile(r"^[\x21-\x7e]{1,255}$")
@@ -1826,8 +1826,7 @@ class _BatchRun:
         self.max_retries = max_retries
         self.results: list[Optional[BatchEmailResult]] = [None] * len(members)
         self.warnings: list[EmailWarning] = []
-        # Recipients a lost answer may have queued. Only a later queued answer settles them.
-        self._uncertain: set[int] = set()
+        self._maybe_queued: set[int] = set()
         self.chunks = self._split(_encode({**shared, "recipients": []}))
 
     def _split(self, empty: bytes) -> list[_BatchChunk]:
@@ -1869,7 +1868,7 @@ class _BatchRun:
     def lost(self, chunk: _BatchChunk) -> None:
         """An attempt that may have queued some of the chunk got no usable answer."""
         for index in chunk.indices:
-            self._uncertain.add(index)
+            self._maybe_queued.add(index)
             message_id = (self.results[index] or _NO_RESULT).message_id
             self._set(
                 index,
@@ -1908,7 +1907,7 @@ class _BatchRun:
         message_id = _text(slot.get("message_id"))
         error = slot.get("error")
         if error is None and slot.get("status") == "queued" and message_id:
-            self._uncertain.discard(index)
+            self._maybe_queued.discard(index)
             self._set(
                 index,
                 "queued",
@@ -1917,8 +1916,7 @@ class _BatchRun:
             )
             return
         answer = _slot_error(error, message_id)
-        if index in self._uncertain:
-            # An earlier attempt may have queued it, so this answer describes only this attempt.
+        if index in self._maybe_queued:
             earlier = self._current(index)
             self._set(
                 index,
@@ -1928,7 +1926,7 @@ class _BatchRun:
                 later_error=answer,
             )
         elif answer.code in ("delivery_unavailable", "api_error"):
-            self._uncertain.add(index)
+            self._maybe_queued.add(index)
             self._set(index, "unconfirmed", message_id=message_id, error=answer)
         else:
             self._set(index, "failed", message_id=message_id, error=answer)
@@ -1939,7 +1937,7 @@ class _BatchRun:
             error if error.status_code is not None and error.status_code < 500 else None
         )
         for index in self.chunks[position].indices:
-            if index not in self._uncertain:
+            if index not in self._maybe_queued:
                 self._set(index, "failed", error=error)
             elif later is not None:
                 earlier = self._current(index)
@@ -1964,13 +1962,12 @@ class _BatchRun:
         """Recipients a lost answer left without a message ID, with their keys."""
         return [
             (index, self.members[index].idempotency_key)
-            for index in sorted(self._uncertain)
+            for index in sorted(self._maybe_queued)
             if self._current(index).message_id is None
         ]
 
-    def found(self, index: int, status: EmailStatus) -> None:
-        # PostHog records a status only for an email it accepted.
-        self._uncertain.discard(index)
+    def accepted(self, index: int, status: EmailStatus) -> None:
+        self._maybe_queued.discard(index)
         self._set(index, "queued", message_id=status.id)
 
     def outcome(self) -> tuple[BatchEmailResult, ...]:
@@ -1984,8 +1981,10 @@ _NO_RESULT = BatchEmailResult(index=-1, to="", idempotency_key="", status="")
 
 
 def _chunk(empty: bytes, members: Sequence[_BatchMember]) -> _BatchChunk:
-    # The empty body ends with "recipients":[]}, so the recipients go between its brackets.
-    body = empty[:-2] + b",".join(member.wire for member in members) + b"]}"
+    without_closing_brackets = empty[: -len(b"]}")]
+    body = (
+        without_closing_brackets + b",".join(member.wire for member in members) + b"]}"
+    )
     return _BatchChunk(body=body, indices=tuple(member.index for member in members))
 
 
@@ -2305,7 +2304,7 @@ class Emails(_EmailsBase):
                 if error.status_code == 404:
                     continue
                 return
-            run.found(index, status)
+            run.accepted(index, status)
 
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
         if prepared.files:
@@ -2599,7 +2598,7 @@ class AsyncEmails(_EmailsBase):
                 if error.status_code == 404:
                     continue
                 return
-            run.found(index, status)
+            run.accepted(index, status)
 
     async def _deliver(
         self, prepared: _PreparedSend, secret_key: str
