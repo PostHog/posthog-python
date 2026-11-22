@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 
 import posthog
 from posthog import FeatureFlagEvaluations, FlagValue, Posthog
-from posthog.emails import AsyncEmails, Emails, SendEmailResult
+from posthog.emails import AsyncEmails, BatchEmailResult, EmailBatchError, EmailError, Emails, SendBatchResult, SendEmailResult
 from posthog.ai.evaluations import (
     AsyncOfflineEvaluations,
     BooleanScorerConfig,
@@ -54,12 +54,23 @@ not_sensitive_send: SendEmailResult = emails.send(to="user@example.com", templat
 scheduled_send: SendEmailResult = emails.send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", scheduled_at=datetime(2026, 12, 1, tzinfo=timezone.utc))
 scheduled_status: str = scheduled_send.status
 scheduled_time: datetime | None = scheduled_send.scheduled_at
-_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send, scheduled_status, scheduled_time)
+template_batch: SendBatchResult = emails.batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", template_data={"team": "Data"}, recipients=[{"to": "ada@example.com", "distinct_id": "user_1", "idempotency_key": "invite:user_1", "template_data": {"name": "Ada"}}])
+code_batch: SendBatchResult = emails.batch(template_key="digest", subject="Digest", html="<p>Digest</p>", recipients=[{"to": "ada@example.com"}], max_retries=0)
+first_batch_result: BatchEmailResult = template_batch.results[0]
+batch_status: str = first_batch_result.status
+batch_later_error: EmailError | None = first_batch_result.later_error
+try:
+    emails.batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", recipients=[{"to": "ada@example.com"}])
+except EmailBatchError as batch_error:
+    failed_results: tuple[BatchEmailResult, ...] = batch_error.results
+    _ = failed_results
+_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send, scheduled_status, scheduled_time, code_batch, batch_status, batch_later_error)
 
 
 async def async_email_types() -> None:
     sent: SendEmailResult = await AsyncEmails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", scheduled_at="2026-12-01T09:00:00Z")
-    _ = sent
+    batch: SendBatchResult = await AsyncEmails("phs_example").batch(template_key="welcome", subject="Hi", html="<p>Hi</p>", recipients=[{"to": "user@example.com"}])
+    _ = (sent, batch)
 
 
 async def offline_evaluation_types(
@@ -119,6 +130,10 @@ Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", tracking={"open": False})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", template_data={"name": "Ada"})  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", scheduled_at=1796115600)  # expected-type-error
+Emails("phs_example").batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", recipients=[{"to": "user@example.com"}], scheduled_at="2026-12-01T09:00:00Z")  # expected-type-error
+Emails("phs_example").batch(template_key="welcome", subject="Hi", html="<p>Hi</p>", recipients=[{"to": "user@example.com"}], cc="team@example.com")  # expected-type-error
+Emails("phs_example").batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", recipients=[{"email": "user@example.com"}])  # expected-type-error
+Emails("phs_example").batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", to="user@example.com", recipients=[{"to": "user@example.com"}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": [104, 105]}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_key="welcome", subject="Hi", html="<p>Hi</p>", attachments=[{"filename": "a.txt", "content": b"hi", "path": "/tmp/a.txt"}])  # expected-type-error
 Emails("phs_example").send(to="user@example.com", template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", attachments=[{"filename": "a.txt", "content": b"hi"}])  # expected-type-error
