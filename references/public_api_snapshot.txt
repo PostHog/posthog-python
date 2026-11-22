@@ -923,7 +923,7 @@ attribute posthog.emails.BatchEmailResult.index: int
 attribute posthog.emails.BatchEmailResult.later_error: Optional[EmailError] = None
 attribute posthog.emails.BatchEmailResult.message_id: Optional[str] = None
 attribute posthog.emails.BatchEmailResult.replayed: bool = False
-attribute posthog.emails.BatchEmailResult.status: str
+attribute posthog.emails.BatchEmailResult.status: BatchStatus
 attribute posthog.emails.BatchEmailResult.to: str
 attribute posthog.emails.BatchRecipient.distinct_id: NotRequired[Optional[str]]
 attribute posthog.emails.BatchRecipient.idempotency_key: NotRequired[Optional[str]]
@@ -1421,7 +1421,7 @@ class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout: float = 15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
-class posthog.emails.BatchEmailResult(index: int, to: str, idempotency_key: str, status: str, message_id: Optional[str] = None, replayed: bool = False, error: Optional[EmailError] = None, later_error: Optional[EmailError] = None)
+class posthog.emails.BatchEmailResult(index: int, to: str, idempotency_key: str, status: BatchStatus, message_id: Optional[str] = None, replayed: bool = False, error: Optional[EmailError] = None, later_error: Optional[EmailError] = None)
 class posthog.emails.BatchRecipient 
 class posthog.emails.CodeBatchArgs 
 class posthog.emails.CodeEmailArgs 

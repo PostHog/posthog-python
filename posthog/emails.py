@@ -627,6 +627,9 @@ class CodeBatchArgs(_BatchArgs):
 _BATCH_RECIPIENT_FIELDS = frozenset(BatchRecipient.__annotations__)
 
 
+BatchStatus = Literal["queued", "failed", "unconfirmed", "not_attempted"]
+
+
 @dataclass(frozen=True)
 class BatchEmailResult:
     """What happened to one recipient of :meth:`Emails.batch`.
@@ -660,7 +663,7 @@ class BatchEmailResult:
     index: int
     to: str
     idempotency_key: str
-    status: str
+    status: BatchStatus
     message_id: Optional[str] = None
     replayed: bool = False
     error: Optional[EmailError] = None
@@ -1833,7 +1836,7 @@ class _BatchRun:
             chunks.append(_chunk(empty, current))
         return chunks
 
-    def _set(self, index: int, status: str, **fields: Any) -> None:
+    def _set(self, index: int, status: BatchStatus, **fields: Any) -> None:
         member = self.members[index]
         self.results[index] = BatchEmailResult(
             index=index,
@@ -1852,7 +1855,8 @@ class _BatchRun:
         """An attempt that may have queued some of the chunk got no usable answer."""
         for index in chunk.indices:
             self._maybe_queued.add(index)
-            message_id = (self.results[index] or _NO_RESULT).message_id
+            earlier = self.results[index]
+            message_id = earlier.message_id if earlier is not None else None
             self._set(
                 index,
                 "unconfirmed",
@@ -1958,9 +1962,6 @@ class _BatchRun:
 
     def result(self) -> SendBatchResult:
         return SendBatchResult(results=self.outcome(), warnings=tuple(self.warnings))
-
-
-_NO_RESULT = BatchEmailResult(index=-1, to="", idempotency_key="", status="")
 
 
 def _chunk(empty: bytes, members: Sequence[_BatchMember]) -> _BatchChunk:
