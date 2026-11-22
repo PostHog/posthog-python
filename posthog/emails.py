@@ -156,7 +156,8 @@ every retry reuses. Check each result's ``status``:
 A request that fails as a whole, such as a rate limit past its retries, stops
 the batch and raises :class:`EmailBatchError`, whose ``results`` hold every
 recipient. ``code`` ``batch_unavailable`` (409) means the project can't send
-batches yet: send each email with ``send``. A batch takes no ``cc``, ``bcc``,
+batches yet, and a 404 that the template doesn't exist or batch sends are off
+for the project: send each email with ``send``. A batch takes no ``cc``, ``bcc``,
 ``attachments`` or ``scheduled_at``.
 
 ```python
