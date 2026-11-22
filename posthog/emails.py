@@ -535,7 +535,6 @@ class _PreparedSend:
     idempotency_key: str
     max_retries: Optional[int] = None
     files: tuple[_File, ...] = ()
-    # The send time asked for, rounded up to the millisecond, or None for a send now.
     scheduled_at: Optional[datetime] = None
 
 
@@ -992,7 +991,6 @@ def _iso_time(text: str) -> Optional[datetime]:
     except ValueError:
         return None
     if fraction:
-        # Round any digits past the millisecond up, so the email never goes out early.
         milliseconds = _ceil_div(int(fraction) * 1000, 10 ** len(fraction))
         when += timedelta(milliseconds=milliseconds)
     return when.astimezone(timezone.utc)
@@ -1134,14 +1132,19 @@ def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
             return result
         if _confirms_schedule(fields, scheduled_at):
             return replace(result, status="scheduled", scheduled_at=scheduled_at)
-        if fields.get("status") == "queued" and (
-            "scheduled_at" in fields and fields["scheduled_at"] is None
-        ):
-            # The time had passed when PostHog accepted the send, so it goes out now.
+        if _sends_now(fields):
             return result
         raise _schedule_not_confirmed(message_id, status)
 
     return parse
+
+
+def _sends_now(fields: Mapping[str, Any]) -> bool:
+    return (
+        fields.get("status") == "queued"
+        and "scheduled_at" in fields
+        and fields["scheduled_at"] is None
+    )
 
 
 def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
@@ -1503,7 +1506,6 @@ class _EmailsBase:
         return self.secret_key
 
     def _check_schedulable(self, prepared: _PreparedSend) -> None:
-        # A self-hosted PostHog from before scheduled sends drops scheduled_at and sends at once.
         if prepared.scheduled_at is None or self.host in (
             US_APP_ENDPOINT,
             EU_APP_ENDPOINT,
@@ -1514,6 +1516,7 @@ class _EmailsBase:
             code="scheduling_requires_cloud",
             message="Scheduled sends work only on PostHog Cloud (us.posthog.com or "
             f"eu.posthog.com), and this client sends to {self.host}, so no email was sent.",
+            why="A PostHog that doesn't schedule emails would send this one at once.",
             fix="Send without scheduled_at, or send through PostHog Cloud's app host. "
             "A reverse proxy or custom domain can't schedule emails yet.",
             field="scheduled_at",
@@ -1601,8 +1604,9 @@ class Emails(_EmailsBase):
             email, not that it was delivered. ``status`` says which.
 
         Raises:
-            EmailError: PostHog did not queue the email, or the client could
-                not tell whether it did.
+            EmailError: PostHog did not queue the email, the client could
+                not tell whether it did, or, with ``schedule_not_confirmed``,
+                PostHog queued it without confirming the time.
                 With attachments, ``code`` is ``too_many_attachments``,
                 ``message_too_large`` or ``invalid_attachment`` before any
                 request, ``attachment_upload_failed`` when the storage
