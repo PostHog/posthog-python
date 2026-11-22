@@ -4,6 +4,59 @@ All notable changes to `openfeature-provider-posthog` are documented here. This
 file is maintained by [Sampo](https://github.com/bruits/sampo) from changesets in
 `.sampo/changesets/` that target `pypi/openfeature-provider-posthog`.
 
+## 0.2.3 — 2026-11-20
+
+### Patch changes
+
+- Updated dependencies: posthog@8.1.0
+
+## 0.2.2 — 2026-11-18
+
+### Patch changes
+
+- Updated dependencies: posthog@8.0.2
+
+## 0.2.1 — 2026-11-17
+
+### Patch changes
+
+- Updated dependencies: posthog@8.0.1
+
+## 0.2.0 — 2026-11-17
+
+### Minor changes
+
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Supports posthog-python 8.x.x as well as 7.x.x. — Thanks @eli-r-ph!
+
+### Patch changes
+
+- Updated dependencies: posthog@8.0.0
+
+## 0.1.167 — 2026-11-17
+
+### Patch changes
+
+- Updated dependencies: posthog@7.91.4
+
+## 0.1.166 — 2026-11-17
+
+### Patch changes
+
+- Updated dependencies: posthog@7.91.3
+
+## 0.1.165 — 2026-11-16
+
+### Patch changes
+
+- Updated dependencies: posthog@7.91.2
+
+## 0.1.164 — 2026-11-13
+
+### Patch changes
+
+- [3511570b](https://github.com/posthog/posthog-python/commit/3511570b4d19f84589b59dcd677df0c7b0d05cfe) Document failed-record default handling with the updated PostHog SDK: a server-marked failed flag supplies no result, so the provider's existing FlagNotFoundError mapping lets OpenFeature return the caller's default instead of treating the failed record as a healthy disabled flag. This behavior requires upgrading the installed posthog dependency; the provider's compatible dependency range is unchanged and this patch intent does not force that upgrade. — Thanks @marandaneto!
+- Updated dependencies: posthog@7.91.1
+
 ## 0.1.163 — 2026-11-13
 
 ### Patch changes

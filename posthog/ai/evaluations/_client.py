@@ -14,14 +14,28 @@ from typing_extensions import Unpack
 from ._async_datasets import AsyncDatasets
 from ._datasets import Datasets
 from ._errors import EvaluationAPIError
+from ._mutations import (
+    ItemUpdate,
+    ResultUpdate,
+    _item_changes,
+    _item_path,
+    _item_payload_changes,
+    _patch_body,
+    _response_revision,
+    _result_changes,
+    _result_path,
+    _result_payload_changes,
+)
 from ._scorers import AsyncScorers, Scorers
 from ._serialization import (
+    JSONValue,
     _MAX_ITEMS,
     _MAX_REQUEST_BYTES,
     _MAX_RESULTS,
     _count,
     _encode,
     _identifier,
+    _integer,
     _timestamp,
     _uuid,
 )
@@ -282,6 +296,81 @@ class Experiment:
             )
             return _experiment_tags(data, self.id)
 
+    def get_item_revision(self, item_id: str | UUID) -> int:
+        """Read the current revision shared by an item and its payload."""
+        path = self._path + _item_path(item_id)
+        with self._lock:
+            data = self._transport.request("GET", path)
+            return _response_revision(data, identity=item_id)
+
+    def get_result_revision(self, result_id: str | UUID) -> int:
+        """Read the current result revision from its payload endpoint."""
+        path = self._path + _result_path(result_id) + "payload/"
+        with self._lock:
+            data = self._transport.request("GET", path)
+            return _response_revision(data, identity=result_id)
+
+    def _patch(self, path: str, revision: int, changes: dict[str, Any]) -> int:
+        body = _patch_body(revision, changes)
+        with self._lock:
+            data = self._transport.request(
+                "PATCH", self._path + path, body=body, retry_safe=False
+            )
+            return _response_revision(data, minimum=revision)
+
+    def _delete(self, path: str, revision: int) -> None:
+        params: dict[str, str | int] = {"revision": _integer(revision, minimum=0)}
+        with self._lock:
+            self._transport.request(
+                "DELETE", self._path + path, params=params, retry_safe=False
+            )
+
+    def update_item(
+        self, item_id: str | UUID, *, revision: int, **fields: Unpack[ItemUpdate]
+    ) -> int:
+        """Update item identifiers at the observed revision and return the current revision."""
+        return self._patch(_item_path(item_id), revision, _item_changes(fields))
+
+    def update_result(
+        self, result_id: str | UUID, *, revision: int, **fields: Unpack[ResultUpdate]
+    ) -> int:
+        """Correct a reported score and return its revision. Dependent composites are recalculated."""
+        return self._patch(_result_path(result_id), revision, _result_changes(fields))
+
+    def update_item_payload(
+        self, item_id: str | UUID, *, revision: int, payload: dict[str, JSONValue]
+    ) -> int:
+        """Patch input, output, expected_output, or metadata and return the item revision."""
+        return self._patch(
+            _item_path(item_id) + "payload/", revision, _item_payload_changes(payload)
+        )
+
+    def update_result_payload(
+        self, result_id: str | UUID, *, revision: int, payload: dict[str, JSONValue]
+    ) -> int:
+        """Patch reasoning, error_message, or metadata and return the result revision."""
+        return self._patch(
+            _result_path(result_id) + "payload/",
+            revision,
+            _result_payload_changes(payload),
+        )
+
+    def delete_item(self, item_id: str | UUID, *, revision: int) -> None:
+        """Permanently delete an item and all its results and payloads."""
+        self._delete(_item_path(item_id), revision)
+
+    def delete_result(self, result_id: str | UUID, *, revision: int) -> None:
+        """Permanently delete a result, its payload, and dependent composites."""
+        self._delete(_result_path(result_id), revision)
+
+    def delete_item_payload(self, item_id: str | UUID, *, revision: int) -> None:
+        """Permanently remove the stored payload while retaining the item and scores."""
+        self._delete(_item_path(item_id) + "payload/", revision)
+
+    def delete_result_payload(self, result_id: str | UUID, *, revision: int) -> None:
+        """Permanently remove the stored payload while retaining its result."""
+        self._delete(_result_path(result_id) + "payload/", revision)
+
     def upload_result(
         self,
         *,
@@ -412,6 +501,85 @@ class AsyncExperiment:
             )
             return _experiment_tags(data, self.id)
 
+    async def get_item_revision(self, item_id: str | UUID) -> int:
+        """Read the current revision shared by an item and its payload."""
+        path = self._path + _item_path(item_id)
+        async with self._lock:
+            data = await self._transport.request("GET", path)
+            return _response_revision(data, identity=item_id)
+
+    async def get_result_revision(self, result_id: str | UUID) -> int:
+        """Read the current result revision from its payload endpoint."""
+        path = self._path + _result_path(result_id) + "payload/"
+        async with self._lock:
+            data = await self._transport.request("GET", path)
+            return _response_revision(data, identity=result_id)
+
+    async def _patch(self, path: str, revision: int, changes: dict[str, Any]) -> int:
+        body = _patch_body(revision, changes)
+        async with self._lock:
+            data = await self._transport.request(
+                "PATCH", self._path + path, body=body, retry_safe=False
+            )
+            return _response_revision(data, minimum=revision)
+
+    async def _delete(self, path: str, revision: int) -> None:
+        params: dict[str, str | int] = {"revision": _integer(revision, minimum=0)}
+        async with self._lock:
+            await self._transport.request(
+                "DELETE", self._path + path, params=params, retry_safe=False
+            )
+
+    async def update_item(
+        self, item_id: str | UUID, *, revision: int, **fields: Unpack[ItemUpdate]
+    ) -> int:
+        """Update item identifiers at the observed revision and return the current revision."""
+        return await self._patch(_item_path(item_id), revision, _item_changes(fields))
+
+    async def update_result(
+        self, result_id: str | UUID, *, revision: int, **fields: Unpack[ResultUpdate]
+    ) -> int:
+        """Correct a reported score and return its revision. Dependent composites are recalculated."""
+        return await self._patch(
+            _result_path(result_id), revision, _result_changes(fields)
+        )
+
+    async def update_item_payload(
+        self, item_id: str | UUID, *, revision: int, payload: dict[str, JSONValue]
+    ) -> int:
+        """Patch input, output, expected_output, or metadata and return the item revision."""
+        return await self._patch(
+            _item_path(item_id) + "payload/", revision, _item_payload_changes(payload)
+        )
+
+    async def update_result_payload(
+        self, result_id: str | UUID, *, revision: int, payload: dict[str, JSONValue]
+    ) -> int:
+        """Patch reasoning, error_message, or metadata and return the result revision."""
+        return await self._patch(
+            _result_path(result_id) + "payload/",
+            revision,
+            _result_payload_changes(payload),
+        )
+
+    async def delete_item(self, item_id: str | UUID, *, revision: int) -> None:
+        """Permanently delete an item and all its results and payloads."""
+        await self._delete(_item_path(item_id), revision)
+
+    async def delete_result(self, result_id: str | UUID, *, revision: int) -> None:
+        """Permanently delete a result, its payload, and dependent composites."""
+        await self._delete(_result_path(result_id), revision)
+
+    async def delete_item_payload(self, item_id: str | UUID, *, revision: int) -> None:
+        """Permanently remove the stored payload while retaining the item and scores."""
+        await self._delete(_item_path(item_id) + "payload/", revision)
+
+    async def delete_result_payload(
+        self, result_id: str | UUID, *, revision: int
+    ) -> None:
+        """Permanently remove the stored payload while retaining its result."""
+        await self._delete(_result_path(result_id) + "payload/", revision)
+
     async def upload_result(
         self,
         *,
@@ -480,6 +648,8 @@ class OfflineEvaluations:
     ``secret_key`` accepts personal or project secret keys with
     offline_evaluation_ingestion:write. Scorer reads/writes require a personal
     key with llm_analytics:read/write; datasets require dataset:read/write.
+    Editing accepted data requires an evaluation editor's personal key with
+    evaluation:write. Result operations and item deletion also need scorer access.
     Each operation requires its corresponding product feature to be enabled.
     ``host`` defaults to the US app API; known ingestion hosts are mapped to
     their app hosts. Custom hosts are preserved. Requests use a 15 second

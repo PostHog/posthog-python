@@ -55,11 +55,45 @@ def format_assistant_blocks(blocks: Any) -> List[Dict[str, Any]]:
     return out
 
 
+def _append_assistant_output(
+    pending: List[Dict[str, Any]], blocks: Any
+) -> List[Dict[str, Any]]:
+    """Add one AssistantMessage's blocks to the output of the current generation.
+
+    The CLI sends each content block of a response as its own AssistantMessage.
+    """
+    output_content = format_assistant_blocks(blocks)
+    if not output_content:
+        return pending
+    previous = pending[0]["content"] if pending else []
+    return [{"role": "assistant", "content": previous + output_content}]
+
+
+def _append_user_input(
+    previous: Optional[List[Dict[str, Any]]], content: Any
+) -> List[Dict[str, Any]]:
+    queued = previous or []
+    last = queued[-1] if queued else None
+    if (
+        isinstance(content, list)
+        and last is not None
+        and last.get("role") == "user"
+        and isinstance(last.get("content"), list)
+    ):
+        return queued[:-1] + [{"role": "user", "content": last["content"] + content}]
+    return queued + [{"role": "user", "content": content}]
+
+
 def _format_user_input(
     content: Any, client: Any, previous: Optional[List[Dict[str, Any]]]
 ) -> Optional[List[Dict[str, Any]]]:
+    """Queue a UserMessage as input for the next generation.
+
+    The CLI sends each tool result as its own UserMessage, so results are
+    appended to what is already queued instead of replacing it.
+    """
     if isinstance(content, str):
-        return [{"role": "user", "content": content}]
+        return _append_user_input(previous, content)
     if isinstance(content, list):
         formatted: List[Dict[str, Any]] = []
         for block in content:
@@ -74,5 +108,5 @@ def _format_user_input(
             elif hasattr(block, "text"):
                 formatted.append({"type": "text", "text": block.text})
         if formatted:
-            return [{"role": "user", "content": formatted}]
+            return _append_user_input(previous, formatted)
     return previous

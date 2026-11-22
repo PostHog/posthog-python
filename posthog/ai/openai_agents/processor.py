@@ -19,11 +19,13 @@ from agents.tracing.span_data import (
     TranscriptionSpanData,
 )
 
-from posthog import setup
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.sanitization import _full_ai_capture_enabled, _placeholder
 from posthog.ai.utils import (
+    _ai_event_options,
+    _user_distinct_id,
     _capture_processor_event,
+    _resolve_ai_client,
     finalize_ai_content,
     _format_error_summary,
     _privacy_mode_enabled,
@@ -101,6 +103,7 @@ class PostHogTracingProcessor(TracingProcessor):
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize the PostHog tracing processor.
@@ -112,12 +115,17 @@ class PostHogTracingProcessor(TracingProcessor):
             privacy_mode: If True, redacts input/output content from events.
             groups: Optional PostHog groups to associate with all events.
             properties: Optional additional properties to include with all events.
+            options: Optional capture options for all events, such as
+                ``{"cookieless_mode": True}``. They win over context options and
+                ``super_options``. An event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
-        self._client = client or setup()
+        self._client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
+        self._options = _ai_event_options(options)
 
         # Track span start times for latency calculation
         self._span_start_times: Dict[str, float] = {}
@@ -193,14 +201,20 @@ class PostHogTracingProcessor(TracingProcessor):
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
     ) -> None:
-        """Capture an event without allowing telemetry failures to escape."""
+        """Capture an event without allowing telemetry failures to escape.
+
+        Without a distinct ID, the event is personless and uses its trace ID.
+        """
         _capture_processor_event(
             self._client,
             event,
             properties,
             default_properties=self._properties,
-            distinct_id=distinct_id,
+            distinct_id=_user_distinct_id(distinct_id)
+            or properties.get("$ai_trace_id"),
             groups=self._groups,
+            personless=_user_distinct_id(distinct_id) is None,
+            default_options=self._options,
         )
 
     def on_trace_start(self, trace: Trace) -> None:
@@ -248,41 +262,29 @@ class PostHogTracingProcessor(TracingProcessor):
                 "$ai_framework": "openai-agents",
             }
 
-            self._add_trace_details(properties, latency, group_id, metadata)
+            if latency is not None:
+                properties["$ai_latency"] = latency
 
-            if distinct_id is None:
-                properties["$process_person_profile"] = False
+            # The Agents SDK group_id links traces from one conversation, which is
+            # exactly what PostHog calls a session. $ai_group_id is still emitted
+            # for anyone already querying it.
+            if group_id:
+                properties["$ai_session_id"] = group_id
+                properties["$ai_group_id"] = group_id
+
+            # Include trace metadata if present
+            if metadata:
+                properties["$ai_trace_metadata"] = self._with_privacy_mode(
+                    _ensure_serializable(metadata)
+                )
 
             self._capture_event(
                 event="$ai_trace",
-                distinct_id=distinct_id or trace_id,
+                distinct_id=distinct_id,
                 properties=properties,
             )
         except Exception as e:
             log.debug(f"Error in on_trace_end: {e}")
-
-    def _add_trace_details(
-        self,
-        properties: Dict[str, Any],
-        latency: Optional[float],
-        group_id: Any,
-        metadata: Any,
-    ) -> None:
-        if latency is not None:
-            properties["$ai_latency"] = latency
-
-        # The Agents SDK group_id links traces from one conversation, which is
-        # exactly what PostHog calls a session. $ai_group_id is still emitted
-        # for anyone already querying it.
-        if group_id:
-            properties["$ai_session_id"] = group_id
-            properties["$ai_group_id"] = group_id
-
-        # Include trace metadata if present
-        if metadata:
-            properties["$ai_trace_metadata"] = self._with_privacy_mode(
-                _ensure_serializable(metadata)
-            )
 
     def on_span_start(self, span: Span[Any]) -> None:
         """Called when a new span begins."""
@@ -301,94 +303,188 @@ class PostHogTracingProcessor(TracingProcessor):
             parent_id = span.parent_id
             span_data = span.span_data
 
-            latency = self._span_latency(span, span_id)
+            # Calculate latency
+            start_time = self._span_start_times.pop(span_id, None)
+            if start_time:
+                latency = time.time() - start_time
+            else:
+                # Fall back to parsing timestamps
+                started = _parse_iso_timestamp(span.started_at)
+                ended = _parse_iso_timestamp(span.ended_at)
+                latency = (ended - started) if (started and ended) else 0
 
             # Get user-provided distinct ID from trace metadata (resolved at trace start).
-            # None means no user-provided ID — use trace_id as fallback in personless mode,
-            # matching the langchain/openai pattern: `distinct_id or trace_id`.
+            # None means no user-provided ID: _capture_event falls back to the
+            # trace ID and makes the event personless.
             trace_info = self._trace_metadata.get(trace_id, {})
             distinct_id = trace_info.get("distinct_id") or self._get_distinct_id(None)
 
             # Get group_id from trace metadata for linking
             group_id = self._get_group_id(trace_id)
 
-            error_properties = self._span_error_properties(span.error)
+            # Get error info if present
+            error_info = span.error
+            error_properties = {}
+            if error_info:
+                if isinstance(error_info, dict):
+                    error_message = error_info.get("message", str(error_info))
+                    error_type_raw = error_info.get("type", "")
+                else:
+                    error_message = str(error_info)
+                    error_type_raw = ""
 
-            # Personless mode: no user-provided distinct_id, fallback to trace_id
-            if distinct_id is None:
-                error_properties["$process_person_profile"] = False
-                distinct_id = trace_id
+                # Categorize error type for cross-provider filtering/alerting
+                error_type = "unknown"
+                if (
+                    "ModelBehaviorError" in error_type_raw
+                    or "ModelBehaviorError" in error_message
+                ):
+                    error_type = "model_behavior_error"
+                elif "UserError" in error_type_raw or "UserError" in error_message:
+                    error_type = "user_error"
+                elif (
+                    "InputGuardrailTripwireTriggered" in error_type_raw
+                    or "InputGuardrailTripwireTriggered" in error_message
+                ):
+                    error_type = "input_guardrail_triggered"
+                elif (
+                    "OutputGuardrailTripwireTriggered" in error_type_raw
+                    or "OutputGuardrailTripwireTriggered" in error_message
+                ):
+                    error_type = "output_guardrail_triggered"
+                elif (
+                    "MaxTurnsExceeded" in error_type_raw
+                    or "MaxTurnsExceeded" in error_message
+                ):
+                    error_type = "max_turns_exceeded"
 
-            handler = self._span_handler(span_data)
-            handler(
-                span_data,
-                trace_id,
-                span_id,
-                parent_id,
-                latency,
-                distinct_id,
-                group_id,
-                error_properties,
-            )
+                error_properties = {
+                    "$ai_is_error": True,
+                    "$ai_error": (
+                        self._summarize_span_error(error_info)
+                        if self._privacy_enabled()
+                        else error_message
+                    ),
+                    "$ai_error_type": error_type,
+                }
+
+            # Dispatch based on span data type
+            if isinstance(span_data, GenerationSpanData):
+                self._handle_generation_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, FunctionSpanData):
+                self._handle_function_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, AgentSpanData):
+                self._handle_agent_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, HandoffSpanData):
+                self._handle_handoff_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, GuardrailSpanData):
+                self._handle_guardrail_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, ResponseSpanData):
+                self._handle_response_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, CustomSpanData):
+                self._handle_custom_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(
+                span_data, (TranscriptionSpanData, SpeechSpanData, SpeechGroupSpanData)
+            ):
+                self._handle_audio_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            elif isinstance(span_data, MCPListToolsSpanData):
+                self._handle_mcp_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
+            else:
+                # Unknown span type - capture as generic span
+                self._handle_generic_span(
+                    span_data,
+                    trace_id,
+                    span_id,
+                    parent_id,
+                    latency,
+                    distinct_id,
+                    group_id,
+                    error_properties,
+                )
 
         except Exception as e:
             log.debug(f"Error in on_span_end: {e}")
-
-    def _span_latency(self, span: Span[Any], span_id: str) -> float:
-        # Calculate latency
-        start_time = self._span_start_times.pop(span_id, None)
-        if start_time:
-            return time.time() - start_time
-        else:
-            # Fall back to parsing timestamps
-            started = _parse_iso_timestamp(span.started_at)
-            ended = _parse_iso_timestamp(span.ended_at)
-            return (ended - started) if (started and ended) else 0
-
-    def _span_error_properties(self, error_info: Any) -> Dict[str, Any]:
-        # Get error info if present
-        error_properties = {}
-        if error_info:
-            if isinstance(error_info, dict):
-                error_message = error_info.get("message", str(error_info))
-                error_type_raw = error_info.get("type", "")
-            else:
-                error_message = str(error_info)
-                error_type_raw = ""
-
-            error_type = _categorize_span_error(error_type_raw, error_message)
-
-            error_properties = {
-                "$ai_is_error": True,
-                "$ai_error": (
-                    self._summarize_span_error(error_info)
-                    if self._privacy_enabled()
-                    else error_message
-                ),
-                "$ai_error_type": error_type,
-            }
-
-        return error_properties
-
-    def _span_handler(self, span_data: Any) -> Callable[..., None]:
-        for span_types, handler_name in (
-            (GenerationSpanData, "_handle_generation_span"),
-            (FunctionSpanData, "_handle_function_span"),
-            (AgentSpanData, "_handle_agent_span"),
-            (HandoffSpanData, "_handle_handoff_span"),
-            (GuardrailSpanData, "_handle_guardrail_span"),
-            (ResponseSpanData, "_handle_response_span"),
-            (CustomSpanData, "_handle_custom_span"),
-            (
-                (TranscriptionSpanData, SpeechSpanData, SpeechGroupSpanData),
-                "_handle_audio_span",
-            ),
-            (MCPListToolsSpanData, "_handle_mcp_span"),
-        ):
-            if isinstance(span_data, span_types):
-                return getattr(self, handler_name)
-        # Unknown span type - capture as generic span.
-        return self._handle_generic_span
 
     def _base_properties(
         self,
@@ -421,7 +517,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -464,19 +560,20 @@ class PostHogTracingProcessor(TracingProcessor):
                     _ensure_serializable(span_data.output), self._client
                 )
             ),
-            **_token_properties(input_tokens, output_tokens),
+            **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+            **(
+                {"$ai_output_tokens": output_tokens}
+                if output_tokens is not None
+                else {}
+            ),
+            # Sum of the reported sides; omitted when neither side was reported.
+            **(
+                {"$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0)}
+                if input_tokens is not None or output_tokens is not None
+                else {}
+            ),
         }
 
-        self._add_generation_usage_details(properties, usage, span_data)
-
-        self._capture_event("$ai_generation", properties, distinct_id)
-
-    def _add_generation_usage_details(
-        self,
-        properties: Dict[str, Any],
-        usage: Dict[str, Any],
-        span_data: GenerationSpanData,
-    ) -> None:
         # Add optional token fields if present. The Agents SDK nests cached
         # tokens under the usage details fields; flat keys are kept for custom
         # models. Nested reasoning is not forwarded: compatible providers count
@@ -510,6 +607,8 @@ class PostHogTracingProcessor(TracingProcessor):
             if finish_reason is not None:
                 properties["$ai_stop_reason"] = finish_reason
 
+        self._capture_event("$ai_generation", properties, distinct_id)
+
     def _handle_function_span(
         self,
         span_data: FunctionSpanData,
@@ -517,7 +616,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -550,7 +649,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -579,7 +678,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -603,7 +702,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -626,7 +725,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -634,9 +733,14 @@ class PostHogTracingProcessor(TracingProcessor):
         response = span_data.response
         response_id = response.id if response else None
 
-        usage, total_cost_usd, input_tokens, output_tokens = _response_usage_counts(
-            response
-        )
+        # Try to extract usage from response
+        usage = getattr(response, "usage", None) if response else None
+        total_cost_usd = getattr(usage, "cost", None) if usage else None
+        # None when the response never reported a count: absent means unknown,
+        # 0 is a report of nothing.
+        input_tokens = getattr(usage, "input_tokens", None) if usage else None
+        output_tokens = getattr(usage, "output_tokens", None) if usage else None
+
         # Try to extract model from response
         model = getattr(response, "model", None) if response else None
 
@@ -649,7 +753,18 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_input": self._with_privacy_mode(
                 finalize_ai_content(_ensure_serializable(span_data.input), self._client)
             ),
-            **_token_properties(input_tokens, output_tokens),
+            **({"$ai_input_tokens": input_tokens} if input_tokens is not None else {}),
+            **(
+                {"$ai_output_tokens": output_tokens}
+                if output_tokens is not None
+                else {}
+            ),
+            # Sum of the reported sides; omitted when neither side was reported.
+            **(
+                {"$ai_total_tokens": (input_tokens or 0) + (output_tokens or 0)}
+                if input_tokens is not None or output_tokens is not None
+                else {}
+            ),
         }
 
         if total_cost_usd is not None:
@@ -688,7 +803,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -713,7 +828,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -728,20 +843,6 @@ class PostHogTracingProcessor(TracingProcessor):
             "$ai_span_type": span_type,
         }
 
-        self._add_audio_metadata(properties, span_data)
-
-        self._add_audio_input(properties, span_data, span_type)
-
-        if hasattr(span_data, "output") and isinstance(span_data.output, str):
-            properties["$ai_output_state"] = self._with_privacy_mode(
-                finalize_ai_content(
-                    _ensure_serializable(span_data.output), self._client
-                )
-            )
-
-        self._capture_event("$ai_span", properties, distinct_id)
-
-    def _add_audio_metadata(self, properties: Dict[str, Any], span_data: Any) -> None:
         # Add model info if available
         if hasattr(span_data, "model") and span_data.model:
             properties["$ai_model"] = span_data.model
@@ -762,9 +863,6 @@ class PostHogTracingProcessor(TracingProcessor):
         if hasattr(span_data, "output_format"):
             properties["audio_output_format"] = span_data.output_format
 
-    def _add_audio_input(
-        self, properties: Dict[str, Any], span_data: Any, span_type: str
-    ) -> None:
         # Capture the input. For speech (TTS) spans the input is the text to
         # synthesize. For transcription spans the input is the base64-encoded
         # audio — a bare string with no key/parent context the structural
@@ -791,6 +889,15 @@ class PostHogTracingProcessor(TracingProcessor):
                     )
                 )
 
+        if hasattr(span_data, "output") and isinstance(span_data.output, str):
+            properties["$ai_output_state"] = self._with_privacy_mode(
+                finalize_ai_content(
+                    _ensure_serializable(span_data.output), self._client
+                )
+            )
+
+        self._capture_event("$ai_span", properties, distinct_id)
+
     def _redact_audio_model_config(self, model_config: Any) -> Any:
         # The STT prompt and TTS instructions are user-authored text.
         if not isinstance(model_config, dict) or not self._privacy_enabled():
@@ -807,7 +914,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -831,7 +938,7 @@ class PostHogTracingProcessor(TracingProcessor):
         span_id: str,
         parent_id: Optional[str],
         latency: float,
-        distinct_id: str,
+        distinct_id: Optional[str],
         group_id: Optional[str],
         error_properties: Dict[str, Any],
     ) -> None:
@@ -875,43 +982,3 @@ class PostHogTracingProcessor(TracingProcessor):
                 self._client.flush()
         except Exception as e:
             log.debug(f"Error in force_flush: {e}")
-
-
-def _categorize_span_error(error_type_raw: str, error_message: str) -> str:
-    # Ordered categories preserve precedence when a message names several errors.
-    for name, category in (
-        ("ModelBehaviorError", "model_behavior_error"),
-        ("UserError", "user_error"),
-        ("InputGuardrailTripwireTriggered", "input_guardrail_triggered"),
-        ("OutputGuardrailTripwireTriggered", "output_guardrail_triggered"),
-        ("MaxTurnsExceeded", "max_turns_exceeded"),
-    ):
-        if name in error_type_raw or name in error_message:
-            return category
-    return "unknown"
-
-
-def _token_properties(input_tokens: Any, output_tokens: Any) -> Dict[str, Any]:
-    properties = {}
-    if input_tokens is not None:
-        properties["$ai_input_tokens"] = input_tokens
-    if output_tokens is not None:
-        properties["$ai_output_tokens"] = output_tokens
-    # Sum of the reported sides; omitted when neither side was reported.
-    if input_tokens is not None or output_tokens is not None:
-        properties["$ai_total_tokens"] = (input_tokens or 0) + (output_tokens or 0)
-    return properties
-
-
-def _response_usage_counts(
-    response: Any,
-) -> tuple[Any, Optional[float], Optional[int], Optional[int]]:
-    # Try to extract usage from response
-    usage = getattr(response, "usage", None) if response else None
-    total_cost_usd = getattr(usage, "cost", None) if usage else None
-    # None when the response never reported a count: absent means unknown,
-    # 0 is a report of nothing.
-    input_tokens = getattr(usage, "input_tokens", None) if usage else None
-    output_tokens = getattr(usage, "output_tokens", None) if usage else None
-
-    return usage, total_cost_usd, input_tokens, output_tokens

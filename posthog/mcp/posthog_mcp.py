@@ -42,7 +42,6 @@ from ._instrumentation import (
     fire_and_forget,
     virtual_tool_collision_message,
 )
-from ._lib_identity import apply_mcp_lib_identity
 from .logger import log, warn
 from ._model_parameters import (
     add_model_parameter_to_schema,
@@ -122,7 +121,6 @@ class PostHogMCP(Client):
     ) -> None:
         self._server_build = validate_server_build(server_build)
         super().__init__(api_key, **kwargs)
-        apply_mcp_lib_identity(self)
         self._mcp_sink = McpEventSink(self)
         self._missing_capability_tool_name = (
             missing_capability_tool_name or _GET_MORE_TOOLS_NAME
@@ -177,7 +175,10 @@ class PostHogMCP(Client):
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
-        """Capture a custom event with the configured server build as a default."""
+        """Capture a custom event with the configured server build as a default.
+
+        This is the core ``Client.capture``, so it takes ``options=``. The MCP
+        ``capture_*`` methods take ``event_options=`` instead."""
         if self._server_build is not None:
             properties = dict(kwargs.get("properties") or {})
             if properties.get(PostHogMCPAnalyticsProperty.SERVER_BUILD) is None:
@@ -212,9 +213,14 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
-        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error)."""
+        """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error).
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_TOOLS_CALL,
             distinct_id,
@@ -223,6 +229,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -261,9 +268,14 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
-        """Capture the connection handshake. Emits ``$mcp_initialize``."""
+        """Capture the connection handshake. Emits ``$mcp_initialize``.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_INITIALIZE,
             distinct_id,
@@ -272,6 +284,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -302,10 +315,15 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``tools/list`` response. Emits ``$mcp_tools_list`` with the
-        advertised tool names (``$mcp_listed_tool_names``)."""
+        advertised tool names (``$mcp_listed_tool_names``).
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_TOOLS_LIST,
             distinct_id,
@@ -314,6 +332,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -347,12 +366,17 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``get_more_tools`` call as a missing-capability report. Emits
         ``$mcp_missing_capability`` with the agent's description as ``$mcp_intent``.
         Reply to the agent with ``get_more_tools_result()`` after passing it
-        through :meth:`prepare_tool_result`."""
+        through :meth:`prepare_tool_result`.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_MISSING_CAPABILITY,
             distinct_id,
@@ -361,6 +385,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -387,6 +412,7 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord] = None,
         groups: Optional[Dict[str, str]] = None,
         properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
     ) -> None:
         """Capture a ``send_feedback`` call as an agent-feedback report. Emits
@@ -394,7 +420,11 @@ class PostHogMCP(Client):
         summary/details as ``$mcp_intent``. Reply to the agent with
         ``send_feedback_result()`` (or a custom text) after routing the report to
         your own feedback backend and passing the reply through
-        :meth:`prepare_tool_result`."""
+        :meth:`prepare_tool_result`.
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. Without ``distinct_id`` the
+        event always sends ``process_person_profile: False``."""
         event = self._base_event(
             MCPAnalyticsEventType.MCP_FEEDBACK,
             distinct_id,
@@ -403,6 +433,7 @@ class PostHogMCP(Client):
             set_properties,
             groups,
             properties,
+            event_options,
             timestamp,
             client_user_agent,
             vendor_client,
@@ -756,6 +787,7 @@ class PostHogMCP(Client):
         set_properties: Optional[JsonRecord],
         groups: Optional[Dict[str, str]],
         properties: Optional[JsonRecord],
+        event_options: Optional[Dict[str, Any]],
         timestamp: Optional[datetime],
         client_user_agent: Optional[str] = None,
         vendor_client: Optional[str] = None,
@@ -766,6 +798,7 @@ class PostHogMCP(Client):
             "conversation_id": conversation_id,
             "timestamp": timestamp or datetime.now(timezone.utc),
             "properties": properties,
+            "event_options": event_options,
             "groups": groups,
             # Raw transport headers. A custom dispatcher holds its own request
             # object, so it passes these itself; instrumented servers read them

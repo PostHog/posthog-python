@@ -61,6 +61,23 @@ def test_source_context_falls_back_when_loader_cannot_read_source(tmp_path, fail
     ) == ([], "current", ["after"])
 
 
+def test_source_context_truncates_long_lines_to_strings(tmp_path):
+    long_line = "x" * 1100
+    source = tmp_path / "application.py"
+    source.write_text("\n".join([long_line, long_line, long_line]))
+
+    pre_context, context_line, post_context = exception_utils.get_lines_from_file(
+        str(source), 1
+    )
+
+    truncated = "x" * 1021 + "..."
+    assert (pre_context, context_line, post_context) == (
+        [truncated],
+        truncated,
+        [truncated],
+    )
+
+
 def test_source_context_handles_changed_files(tmp_path):
     source = tmp_path / "application.py"
     source.write_text("current\n")
@@ -158,6 +175,25 @@ def test_frame_classification_preserves_overrides_and_module_boundaries(
         )
         is frames
     )
+    assert frame.get("in_app") is expected
+
+
+@pytest.mark.parametrize(
+    "project_root, abs_path, expected",
+    [
+        ("/work/app", "/work/app/lib.py", True),
+        ("/work/app", "/work/app/pkg/mod.py", True),
+        ("/work/app/", "/work/app/lib.py", True),
+        ("/work/app", "/work/app-shared/lib.py", None),
+        ("/work/app", "/work/application/x.py", None),
+        ("/work/app/", "/work/app-shared/lib.py", None),
+    ],
+)
+def test_project_root_match_respects_directory_boundaries(
+    project_root, abs_path, expected
+):
+    frame = {"abs_path": abs_path}
+    exception_utils.set_in_app_in_frames([frame], None, None, project_root)
     assert frame.get("in_app") is expected
 
 

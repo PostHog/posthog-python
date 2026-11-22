@@ -15,6 +15,7 @@ from posthog.test.tracing.helpers import SPAN_ID, TRACE_ID
 from posthog.tracing._transport import OK
 from posthog.tracing._span import NOOP_SPAN, RecordingSpan, Span
 from posthog.version import VERSION
+from posthog.test.capture_helpers import patch_capture_send, sent_batch
 
 FAKE_API_KEY = "phc_test_key"
 
@@ -671,10 +672,10 @@ class TestLifecycle:
         client.start_span("x").end()
         with mock.patch("posthog.client._atexit_deadline", None):
             client._atexit_spans()
-        with mock.patch("posthog.client.batch_post") as batch_post:
+        with patch_capture_send("client") as batch_post:
             client.capture("after-exit", distinct_id="d")
         batch_post.assert_called_once()
-        assert batch_post.call_args[1]["batch"][0]["event"] == "after-exit"
+        assert sent_batch(batch_post)[0]["event"] == "after-exit"
         client.shutdown()
 
     @pytest.mark.parametrize("traces", [{}, None])

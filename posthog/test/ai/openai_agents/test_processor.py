@@ -5,6 +5,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
+
 try:
     from agents.tracing.span_data import (
         AgentSpanData,
@@ -109,7 +111,7 @@ class TestPostHogTracingProcessor:
         """Test that on_trace_start stores metadata but does not capture an event."""
         processor.on_trace_start(mock_trace)
 
-        mock_client.capture.assert_not_called()
+        mock_client.capture_ai.assert_not_called()
         assert mock_trace.trace_id in processor._trace_metadata
 
     def test_on_trace_end_captures_ai_trace(self, processor, mock_client, mock_trace):
@@ -117,8 +119,8 @@ class TestPostHogTracingProcessor:
         processor.on_trace_start(mock_trace)
         processor.on_trace_end(mock_trace)
 
-        mock_client.capture.assert_called_once()
-        call_kwargs = mock_client.capture.call_args[1]
+        mock_client.capture_ai.assert_called_once()
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_trace"
         assert call_kwargs["distinct_id"] == "test-user"
@@ -137,27 +139,33 @@ class TestPostHogTracingProcessor:
         mock_span.span_data = GenerationSpanData(model="gpt-4o")
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
-        span_kwargs = mock_client.capture.call_args[1]
+        span_kwargs = mock_client.capture_ai.call_args[1]
 
         processor.on_trace_end(mock_trace)
-        trace_kwargs = mock_client.capture.call_args[1]
+        trace_kwargs = mock_client.capture_ai.call_args[1]
 
         assert span_kwargs["properties"]["$ai_session_id"] == "group_123"
         assert span_kwargs["properties"]["$ai_group_id"] == "group_123"
         assert trace_kwargs["properties"]["$ai_session_id"] == "group_123"
         assert trace_kwargs["properties"]["$ai_group_id"] == "group_123"
 
-    def test_personless_mode_when_no_distinct_id(self, mock_client, mock_trace):
+    @pytest.mark.parametrize(
+        "distinct_id", [None, "", "  "], ids=["missing", "empty", "blank"]
+    )
+    def test_personless_mode_when_no_distinct_id(
+        self, mock_client, mock_trace, distinct_id
+    ):
         """Test that trace events use personless mode when no distinct_id is provided."""
         processor = PostHogTracingProcessor(
             client=mock_client,
+            distinct_id=distinct_id,
         )
 
         processor.on_trace_start(mock_trace)
         processor.on_trace_end(mock_trace)
 
-        call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        call_kwargs = mock_client.capture_ai.call_args[1]
+        assert call_kwargs["options"] == {"process_person_profile": False}
         # Should fallback to trace_id as the distinct_id
         assert call_kwargs["distinct_id"] == mock_trace.trace_id
 
@@ -170,7 +178,7 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
-        mock_client.capture.reset_mock()
+        mock_client.capture_ai.reset_mock()
 
         span_data = GenerationSpanData(model="gpt-4o")
         mock_span.span_data = span_data
@@ -178,8 +186,8 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        call_kwargs = mock_client.capture_ai.call_args[1]
+        assert call_kwargs["options"] == {"process_person_profile": False}
         assert call_kwargs["distinct_id"] == mock_span.trace_id
 
     def test_personless_mode_when_callable_returns_none(
@@ -196,7 +204,7 @@ class TestPostHogTracingProcessor:
         )
 
         processor.on_trace_start(mock_trace)
-        mock_client.capture.reset_mock()
+        mock_client.capture_ai.reset_mock()
 
         span_data = GenerationSpanData(model="gpt-4o")
         mock_span.span_data = span_data
@@ -204,8 +212,8 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
-        assert call_kwargs["properties"]["$process_person_profile"] is False
+        call_kwargs = mock_client.capture_ai.call_args[1]
+        assert call_kwargs["options"] == {"process_person_profile": False}
         assert call_kwargs["distinct_id"] == mock_span.trace_id
 
     def test_person_profile_when_distinct_id_provided(self, mock_client, mock_trace):
@@ -218,8 +226,8 @@ class TestPostHogTracingProcessor:
         processor.on_trace_start(mock_trace)
         processor.on_trace_end(mock_trace)
 
-        call_kwargs = mock_client.capture.call_args[1]
-        assert "$process_person_profile" not in call_kwargs["properties"]
+        call_kwargs = mock_client.capture_ai.call_args[1]
+        assert "options" not in call_kwargs
 
     def test_on_trace_end_clears_metadata(self, processor, mock_client, mock_trace):
         """Test that on_trace_end clears stored trace metadata."""
@@ -229,7 +237,7 @@ class TestPostHogTracingProcessor:
         processor.on_trace_end(mock_trace)
         assert mock_trace.trace_id not in processor._trace_metadata
         # Also verify it captured the event
-        mock_client.capture.assert_called_once()
+        mock_client.capture_ai.assert_called_once()
 
     def test_on_span_start_tracks_time(self, processor, mock_span):
         """Test that on_span_start records start time."""
@@ -250,8 +258,8 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        mock_client.capture.assert_called_once()
-        call_kwargs = mock_client.capture.call_args[1]
+        mock_client.capture_ai.assert_called_once()
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_generation"
         assert call_kwargs["properties"]["$ai_trace_id"] == "trace_123456789"
@@ -285,7 +293,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_reasoning_tokens"] == 400
 
     def test_generation_span_reads_nested_cache_tokens(
@@ -316,7 +324,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_input_tokens"] == 100
         assert props["$ai_cache_read_input_tokens"] == 60
         assert props["$ai_output_tokens"] == 50
@@ -357,7 +365,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_input_tokens"] == 100
         assert props["$ai_cache_read_input_tokens"] == 60
         assert props["$ai_output_tokens"] == 50
@@ -388,7 +396,7 @@ class TestPostHogTracingProcessor:
                     pass
             properties = next(
                 call.kwargs["properties"]
-                for call in client.capture.call_args_list
+                for call in client.capture_ai.call_args_list
                 if call.kwargs["event"] == "$ai_generation"
             )
             assert properties["$ai_cache_read_input_tokens"] == 10318
@@ -414,7 +422,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_cache_read_input_tokens"] == 60
         assert "$ai_cache_reporting_exclusive" not in props
 
@@ -441,7 +449,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        props = mock_client.capture.call_args[1]["properties"]
+        props = mock_client.capture_ai.call_args[1]["properties"]
         assert props["$ai_cache_read_input_tokens"] == 60
         assert props["$ai_cache_reporting_exclusive"] is True
 
@@ -457,7 +465,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_name"] == "get_weather"
@@ -480,7 +488,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_name"] == "CustomerServiceAgent"
@@ -502,7 +510,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_type"] == "handoff"
@@ -524,7 +532,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_name"] == "ContentFilter"
@@ -542,7 +550,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_name"] == "database_query"
@@ -571,7 +579,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         # Content should be redacted
         assert call_kwargs["properties"]["$ai_input"] is None
@@ -592,12 +600,12 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        properties = mock_client.capture.call_args.kwargs["properties"]
+        properties = mock_client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] is None
         assert properties["$ai_output_choices"] is None
 
     def test_client_without_privacy_mode_captures_content(self, mock_span):
-        client = SimpleNamespace(capture=MagicMock())
+        client = SimpleNamespace(capture_ai=MagicMock())
         processor = PostHogTracingProcessor(client=client)
         mock_span.span_data = GenerationSpanData(
             input=[{"role": "user", "content": "Visible message"}],
@@ -607,7 +615,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        properties = client.capture.call_args.kwargs["properties"]
+        properties = client.capture_ai.call_args.kwargs["properties"]
         assert properties["$ai_input"] == [
             {"role": "user", "content": "Visible message"}
         ]
@@ -637,7 +645,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         captured_input = call_kwargs["properties"]["$ai_input"]
         assert captured_input[0]["content"][0]["image_url"] == "[base64 image redacted]"
 
@@ -691,7 +699,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         captured_output = call_kwargs["properties"]["$ai_output_choices"]
         assert (
             captured_output[0]["content"][0]["image_url"] == "[base64 image redacted]"
@@ -706,7 +714,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["properties"]["$ai_is_error"] is True
         assert call_kwargs["properties"]["$ai_error"] == "Rate limit exceeded"
@@ -724,7 +732,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_total_tokens"] == 150
 
     def test_error_type_categorization_model_behavior(
@@ -741,7 +749,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_error_type"] == "model_behavior_error"
 
     def test_error_type_categorization_user_error(
@@ -755,7 +763,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_error_type"] == "user_error"
 
     def test_error_type_categorization_input_guardrail(
@@ -771,7 +779,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert (
             call_kwargs["properties"]["$ai_error_type"] == "input_guardrail_triggered"
         )
@@ -789,7 +797,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert (
             call_kwargs["properties"]["$ai_error_type"] == "output_guardrail_triggered"
         )
@@ -805,7 +813,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_error_type"] == "max_turns_exceeded"
 
     def test_error_type_categorization_unknown(self, processor, mock_client, mock_span):
@@ -817,7 +825,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_error_type"] == "unknown"
 
     def test_response_span_with_output_and_total_tokens(
@@ -843,7 +851,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_generation"
         assert call_kwargs["properties"]["$ai_total_tokens"] == 35
@@ -872,7 +880,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_total_cost_usd"] == total_cost_usd
 
     def test_speech_span_with_pass_through_properties(
@@ -892,7 +900,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_type"] == "speech"
@@ -925,7 +933,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
 
         assert call_kwargs["event"] == "$ai_span"
         assert call_kwargs["properties"]["$ai_span_type"] == "transcription"
@@ -956,7 +964,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_input"] == "[base64 audio redacted]"
 
     def test_transcription_span_audio_input_passthrough(
@@ -991,7 +999,7 @@ class TestPostHogTracingProcessor:
             mock_time.return_value = 1001.5  # 1.5 seconds later
             processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_latency"] == pytest.approx(1.5, rel=0.01)
 
     def test_groups_included_in_events(self, mock_client, mock_trace, mock_span):
@@ -1005,7 +1013,7 @@ class TestPostHogTracingProcessor:
         processor.on_trace_start(mock_trace)
         processor.on_trace_end(mock_trace)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["groups"] == {"company": "acme", "team": "engineering"}
 
     def test_additional_properties_included(self, mock_client, mock_trace):
@@ -1019,7 +1027,7 @@ class TestPostHogTracingProcessor:
         processor.on_trace_start(mock_trace)
         processor.on_trace_end(mock_trace)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["environment"] == "production"
         assert call_kwargs["properties"]["version"] == "1.0"
 
@@ -1046,7 +1054,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert "$ai_input_tokens" not in call_kwargs["properties"]
         assert "$ai_output_tokens" not in call_kwargs["properties"]
         assert "$ai_total_tokens" not in call_kwargs["properties"]
@@ -1064,7 +1072,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_input_tokens"] == 42
         # The output side was never reported, so it is omitted rather than 0;
         # the total is the sum of the reported sides.
@@ -1085,7 +1093,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["properties"]["$ai_error_type"] == "model_behavior_error"
 
     def test_distinct_id_resolved_from_trace_for_spans(
@@ -1103,7 +1111,7 @@ class TestPostHogTracingProcessor:
 
         # Start trace - this resolves and stores distinct_id
         processor.on_trace_start(mock_trace)
-        mock_client.capture.reset_mock()
+        mock_client.capture_ai.reset_mock()
 
         # End a span - should use the stored distinct_id from trace
         span_data = GenerationSpanData(model="gpt-4o")
@@ -1112,7 +1120,7 @@ class TestPostHogTracingProcessor:
         processor.on_span_start(mock_span)
         processor.on_span_end(mock_span)
 
-        call_kwargs = mock_client.capture.call_args[1]
+        call_kwargs = mock_client.capture_ai.call_args[1]
         assert call_kwargs["distinct_id"] == "user-Test Workflow"
 
     def test_eviction_of_stale_entries(self, mock_client):
@@ -1191,6 +1199,35 @@ class TestInstrumentHelper:
             assert processor._groups == {"company": "acme"}
             assert processor._properties == {"env": "test"}
 
+    @pytest.mark.parametrize(
+        "case",
+        POSTHOG_OPTIONS_CASES,
+        ids=[case[0] for case in POSTHOG_OPTIONS_CASES],
+    )
+    def test_instrument_options_reach_trace_and_span_events(
+        self, mock_client, mock_trace, mock_span, caplog, case
+    ):
+        _, distinct_id, options, expected, warns = case
+
+        with caplog.at_level(logging.WARNING, logger="posthog"):
+            with patch("agents.tracing.add_trace_processor"):
+                processor = instrument(
+                    client=mock_client, distinct_id=distinct_id, options=options
+                )
+            processor.on_trace_start(mock_trace)
+            mock_span.span_data = GenerationSpanData(model="gpt-4o")
+            processor.on_span_start(mock_span)
+            processor.on_span_end(mock_span)
+            processor.on_trace_end(mock_trace)
+
+        calls = mock_client.capture_ai.call_args_list
+        assert [call.kwargs["event"] for call in calls] == [
+            "$ai_generation",
+            "$ai_trace",
+        ]
+        for call in calls:
+            assert_captured_options(call.kwargs, expected, warns, caplog)
+
 
 class TestCapturePolicy:
     def test_processor_groups_are_forwarded(self, mock_client):
@@ -1201,91 +1238,13 @@ class TestCapturePolicy:
 
         processor._capture_event("$ai_trace", {})
 
-        assert mock_client.capture.call_args.kwargs["groups"] == {"company": "acme"}
+        assert mock_client.capture_ai.call_args.kwargs["groups"] == {"company": "acme"}
 
     def test_capture_errors_are_logged_and_suppressed(self, mock_client, caplog):
-        mock_client.capture.side_effect = RuntimeError("capture failed")
+        mock_client.capture_ai.side_effect = RuntimeError("capture failed")
         processor = PostHogTracingProcessor(client=mock_client)
 
         with caplog.at_level(logging.DEBUG, logger="posthog"):
             processor._capture_event("$ai_trace", {})
 
         assert "Failed to capture PostHog event: capture failed" in caplog.text
-
-
-def test_ai_lane_client_routes_through_capture_ai(mock_client, mock_trace):
-    mock_client.enable_full_ai_capture = True
-    processor = PostHogTracingProcessor(client=mock_client, distinct_id="test-user")
-    processor.on_trace_start(mock_trace)
-    processor.on_trace_end(mock_trace)
-
-    mock_client.capture.assert_not_called()
-    mock_client.capture_ai.assert_called_once()
-    assert mock_client.capture_ai.call_args[1]["event"] == "$ai_trace"
-
-
-@pytest.mark.parametrize("full_capture", [False, True])
-@pytest.mark.parametrize("privacy", [False, True])
-def test_transcription_privacy_wins_over_full_capture_without_mutating_config(
-    mock_client, mock_span, full_capture, privacy
-):
-    mock_client.enable_full_ai_capture = full_capture
-    processor = PostHogTracingProcessor(
-        client=mock_client, distinct_id="audio-user", privacy_mode=privacy
-    )
-    config = {
-        "prompt": "private prompt",
-        "instructions": "private instructions",
-        "language": "en",
-    }
-    data = TranscriptionSpanData(
-        input="AAAA",
-        input_format="pcm",
-        output="private transcript",
-        model_config=config,
-    )
-    mock_span.span_data = data
-    processor.on_span_end(mock_span)
-
-    capture = mock_client.capture_ai if full_capture else mock_client.capture
-    capture.assert_called_once()
-    props = capture.call_args.kwargs["properties"]
-    assert capture.call_args.kwargs["distinct_id"] == "audio-user"
-    assert props["$ai_input"] == (
-        None if privacy else "AAAA" if full_capture else "[base64 audio redacted]"
-    )
-    assert props["$ai_output_state"] == (None if privacy else "private transcript")
-    assert props["model_config"] == {
-        "prompt": None if privacy else "private prompt",
-        "instructions": None if privacy else "private instructions",
-        "language": "en",
-    }
-    assert (
-        data.model_config
-        == config
-        == {
-            "prompt": "private prompt",
-            "instructions": "private instructions",
-            "language": "en",
-        }
-    )
-
-
-def test_span_error_category_keeps_precedence_and_privacy_summary(
-    mock_client, mock_span
-):
-    processor = PostHogTracingProcessor(client=mock_client, privacy_mode=True)
-    mock_client.enable_full_ai_capture = False
-    mock_span.span_data = GenerationSpanData(model="gpt-4o", usage={"input_tokens": 0})
-    mock_span.error = {
-        "type": "UserError",
-        "message": "private ModelBehaviorError and MaxTurnsExceeded",
-    }
-    processor.on_span_end(mock_span)
-
-    props = mock_client.capture.call_args.kwargs["properties"]
-    assert props["$ai_error_type"] == "model_behavior_error"
-    assert props["$ai_error"] == "UserError"
-    assert props["$ai_input_tokens"] == props["$ai_total_tokens"] == 0
-    assert "$ai_output_tokens" not in props
-    assert props["$process_person_profile"] is False

@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import math
+import numbers
 import re
 import warnings
 from decimal import Decimal
@@ -692,7 +693,7 @@ def _get_condition_context(
                     reason=UnresolvedFlagReason.MISSING_CONTEXT,
                 )
             effective_properties = group_properties[group_name]
-            effective_bucketing = groups[group_name]
+            effective_bucketing = _group_key_to_string(groups[group_name])
         else:
             effective_properties = properties
             effective_bucketing = bucketing_value
@@ -1008,6 +1009,19 @@ def _json_object_to_string(value: dict, reason: UnresolvedFlagReason) -> str:
         for key in sorted(value)
     )
     return "{" + ",".join(items) + "}"
+
+
+def _group_key_to_string(value) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, bool) and isinstance(value, numbers.Integral):
+        return str(int(value))
+    if isinstance(value, float):
+        return _json_value_to_string(value, UnresolvedFlagReason.MISSING_CONTEXT)
+    raise InconclusiveMatchError(
+        "Group keys must be strings or finite numbers",
+        reason=UnresolvedFlagReason.MISSING_CONTEXT,
+    )
 
 
 def _value_to_string(value, reason: UnresolvedFlagReason) -> str:
