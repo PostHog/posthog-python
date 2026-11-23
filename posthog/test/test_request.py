@@ -1,8 +1,6 @@
-import gzip
 import json
 import socket
 import unittest
-import zlib
 from datetime import date, datetime, timedelta
 from unittest import mock
 from uuid import UUID
@@ -20,7 +18,6 @@ from posthog.request import (
     KEEP_ALIVE_SOCKET_OPTIONS,
     QuotaLimitError,
     _mask_tokens_in_url,
-    batch_post,
     determine_server_host,
     disable_connection_reuse,
     enable_keep_alive,
@@ -134,47 +131,6 @@ def test_message_only_debug_logs_include_posthog_prefix():
 
 
 class TestRequests(unittest.TestCase):
-    def test_valid_request(self):
-        response = requests.Response()
-        response.status_code = 200
-        session = mock.Mock()
-        session.post.return_value = response
-        batch = [
-            {"distinct_id": "distinct_id", "event": "python event", "type": "track"}
-        ]
-
-        res = batch_post(TEST_API_KEY, batch=batch, session=session)
-
-        self.assertIs(res, response)
-        session.post.assert_called_once()
-        self.assertTrue(session.post.call_args.args[0].endswith("/batch/"))
-        body = json.loads(session.post.call_args.kwargs["data"])
-        self.assertEqual(body["batch"], batch)
-        self.assertEqual(body["api_key"], TEST_API_KEY)
-
-    def test_invalid_request_error(self):
-        response = requests.Response()
-        response.status_code = 400
-        response._content = b'{"detail": "Invalid batch"}'
-        session = mock.Mock()
-        session.post.return_value = response
-
-        with self.assertRaises(APIError) as raised:
-            batch_post("testsecret", batch=[], session=session)
-
-        self.assertEqual(raised.exception.status, 400)
-        self.assertEqual(raised.exception.message, "Invalid batch")
-        session.post.assert_called_once()
-
-    def test_invalid_host(self):
-        self.assertRaises(
-            requests.exceptions.MissingSchema,
-            batch_post,
-            "testsecret",
-            "t.posthog.com/",
-            batch=[],
-        )
-
     def test_post_without_path_preserves_type_error(self):
         mock_session = mock.MagicMock()
 
@@ -187,7 +143,7 @@ class TestRequests(unittest.TestCase):
 
         mock_session.post.assert_not_called()
 
-    def test_post_sends_string_payload_without_gzip(self):
+    def test_post_sends_string_payload(self):
         mock_response = requests.Response()
         mock_response.status_code = 200
         mock_session = mock.MagicMock()
@@ -207,54 +163,6 @@ class TestRequests(unittest.TestCase):
         self.assertEqual(url, "https://test.posthog.com/batch/")
         self.assertIsInstance(data, str)
 
-    def test_post_sends_bytes_payload_with_gzip(self):
-        mock_response = requests.Response()
-        mock_response.status_code = 200
-        mock_session = mock.MagicMock()
-        mock_session.post.return_value = mock_response
-
-        request_module.post(
-            TEST_API_KEY,
-            host="https://test.posthog.com",
-            path="/batch/",
-            gzip=True,
-            session=mock_session,
-            batch=[],
-        )
-
-        data = mock_session.post.call_args.kwargs["data"]
-        headers = mock_session.post.call_args.kwargs["headers"]
-        self.assertIsInstance(data, bytes)
-        self.assertEqual(headers["Content-Encoding"], "gzip")
-        body = json.loads(gzip.decompress(data))
-        self.assertEqual(body["batch"], [])
-        self.assertEqual(body["api_key"], TEST_API_KEY)
-
-    def test_post_falls_back_to_uncompressed_payload_when_gzip_fails(self):
-        for compression_error in [OSError("boom"), zlib.error("boom")]:
-            with self.subTest(compression_error=type(compression_error)):
-                mock_response = requests.Response()
-                mock_response.status_code = 200
-                mock_session = mock.MagicMock()
-                mock_session.post.return_value = mock_response
-
-                with mock.patch.object(
-                    request_module, "GzipFile", side_effect=compression_error
-                ):
-                    request_module.post(
-                        TEST_API_KEY,
-                        host="https://test.posthog.com",
-                        path="/batch/",
-                        gzip=True,
-                        session=mock_session,
-                        batch=[],
-                    )
-
-                data = mock_session.post.call_args.kwargs["data"]
-                headers = mock_session.post.call_args.kwargs["headers"]
-                self.assertIsInstance(data, str)
-                self.assertNotIn("Content-Encoding", headers)
-
     def test_datetime_serialization(self):
         data = {"created": datetime(2012, 3, 4, 5, 6, 7, 891011)}
         result = json.dumps(data, cls=DatetimeSerializer)
@@ -271,30 +179,6 @@ class TestRequests(unittest.TestCase):
         data = {"id": UUID("12345678-1234-5678-1234-567812345678")}
         result = json.dumps(data, cls=DatetimeSerializer)
         self.assertEqual(result, '{"id": "12345678-1234-5678-1234-567812345678"}')
-
-    def test_should_not_timeout(self):
-        response = requests.Response()
-        response.status_code = 200
-        session = mock.Mock()
-        session.post.return_value = response
-
-        self.assertIs(
-            batch_post(TEST_API_KEY, batch=[], timeout=7, session=session), response
-        )
-        session.post.assert_called_once()
-        self.assertEqual(session.post.call_args.kwargs["timeout"], 7)
-
-    def test_should_timeout(self):
-        error = requests.ReadTimeout("response deadline exceeded")
-        session = mock.Mock()
-        session.post.side_effect = error
-
-        with self.assertRaises(requests.ReadTimeout) as raised:
-            batch_post("key", batch=[], timeout=1, session=session)
-
-        self.assertIs(raised.exception, error)
-        session.post.assert_called_once()
-        self.assertEqual(session.post.call_args.kwargs["timeout"], 1)
 
     def test_quota_limited_flags_response(self):
         mock_response = requests.Response()
@@ -541,10 +425,13 @@ def test_routing_to_custom_host(host, expected):
 def test_enable_keep_alive_sets_socket_options():
     try:
         enable_keep_alive()
-        from posthog.request import _session
-
-        adapter = _session.get_adapter("https://example.com")
-        assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
+        for session in (
+            request_module._get_session(),
+            request_module._get_flags_session(),
+            request_module._get_capture_session(),
+        ):
+            adapter = session.get_adapter("https://example.com")
+            assert adapter.socket_options == KEEP_ALIVE_SOCKET_OPTIONS
     finally:
         set_socket_options(None)
 
@@ -585,12 +472,14 @@ def test_set_socket_options_is_idempotent():
 class TestFlagsSession(unittest.TestCase):
     """Tests for flags session configuration."""
 
-    def test_flags_session_disables_adapter_retries(self):
-        """HTTP adapter retries are disabled; flags() handles bounded retries."""
-        from posthog.request import _build_flags_session
-
-        session = _build_flags_session()
-        adapter = session.get_adapter("https://test.posthog.com")
+    @parameterized.expand(
+        [
+            ("flags", request_module._get_flags_session),
+            ("capture", request_module._get_capture_session),
+        ]
+    )
+    def test_session_disables_adapter_retries(self, _name, get_session):
+        adapter = get_session().get_adapter("https://test.posthog.com")
         retry = adapter.max_retries
 
         self.assertEqual(retry.total, 0)
@@ -900,6 +789,33 @@ def test_post_serializes_non_finite_floats_as_null():
     assert props["ok"] == 1.5
 
 
-def test_datetime_serializer_keeps_finite_values():
-    body = {"n": 1.5, "s": "x", "b": True, "i": 3, "none": None}
-    assert json.loads(json.dumps(body, cls=DatetimeSerializer)) == body
+@pytest.mark.parametrize("allow_nan", [False, True])
+@pytest.mark.parametrize(
+    "body, expected",
+    [
+        (
+            {"n": 1.5, "s": "x", "b": True, "none": None, "t": (1, 2.5)},
+            '{"n": 1.5, "s": "x", "b": true, "none": null, "t": [1, 2.5]}',
+        ),
+        (
+            {"n": float("nan"), "l": [float("inf"), (float("-inf"), 2.5)]},
+            '{"n": null, "l": [null, [null, 2.5]]}',
+        ),
+    ],
+)
+def test_datetime_serializer_writes_non_finite_floats_as_null(
+    body, expected, allow_nan
+):
+    assert json.dumps(body, cls=DatetimeSerializer, allow_nan=allow_nan) == expected
+
+
+def test_datetime_serializer_copies_only_events_with_non_finite_floats():
+    with mock.patch.object(
+        request_module,
+        "_replace_non_finite_floats",
+        wraps=request_module._replace_non_finite_floats,
+    ) as copy:
+        json.dumps({"n": [1.5]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_not_called()
+        json.dumps({"n": [float("nan")]}, cls=DatetimeSerializer, allow_nan=False)
+        copy.assert_called()

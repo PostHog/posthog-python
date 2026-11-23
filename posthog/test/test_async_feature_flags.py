@@ -8,9 +8,12 @@ from unittest import mock
 import pytest
 
 from posthog import AsyncPosthog
+from posthog.capture_event import _to_v1_event
 from posthog.client import _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
 from posthog.contexts import new_context, set_context_device_id
 from posthog.request import APIError
+from posthog.test.capture_helpers import patch_async_capture_send
+from posthog.version import VERSION
 
 
 def flags_response(*, minimal=False):
@@ -138,15 +141,15 @@ async def test_empty_flag_keys_skips_remote_request():
 async def test_snapshot_access_captures_one_flag_called_event_and_attaches_flags():
     batches = []
 
-    async def batch_post(*args, **kwargs):
-        batches.append(kwargs["batch"])
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
 
     with (
         mock.patch(
             "posthog.async_client._async_flags",
             new=mock.AsyncMock(return_value=flags_response()),
         ),
-        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+        patch_async_capture_send(side_effect=send_batch),
     ):
         client = AsyncPosthog("project-key", flush_interval=30)
         snapshot = await client.evaluate_flags("user-1")
@@ -171,15 +174,15 @@ async def test_snapshot_access_captures_one_flag_called_event_and_attaches_flags
 async def test_minimal_flag_called_event_uses_strict_property_allowlist():
     batches = []
 
-    async def batch_post(*args, **kwargs):
-        batches.append(kwargs["batch"])
+    async def send_batch(api_key, host, batch, **kwargs):
+        batches.append(batch)
 
     with (
         mock.patch(
             "posthog.async_client._async_flags",
             new=mock.AsyncMock(return_value=flags_response(minimal=True)),
         ),
-        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+        patch_async_capture_send(side_effect=send_batch),
     ):
         client = AsyncPosthog("project-key", flush_interval=30)
         snapshot = await client.evaluate_flags("user-1", flag_keys=["beta"])
@@ -200,6 +203,11 @@ async def test_minimal_flag_called_event_uses_strict_property_allowlist():
         "$feature_flag_request_id",
         "$feature_flag_has_experiment",
     } <= set(event["properties"])
+    wire_properties = _to_v1_event(event)["properties"]
+    assert (wire_properties["$lib"], wire_properties["$lib_version"]) == (
+        "posthog-python",
+        VERSION,
+    )
 
 
 @pytest.mark.asyncio

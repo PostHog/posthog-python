@@ -364,8 +364,16 @@ class BenchmarksTest(unittest.TestCase):
 
     def test_balanced_duplicate_loss_fails_and_delivery_order_is_not_required(self):
         spec = next(s for s in workloads(True) if s["id"] == "capture.drain.burst.32")
-        for duplicate in (False, True):
-            with self.subTest(duplicate=duplicate), BenchmarkServer(spec) as server:
+        # The merge-base SDK in a paired run posts to /batch; this SDK posts to capture v1.
+        for route, duplicate in [
+            (route, duplicate)
+            for route in ("/batch", "/i/v1/analytics/events")
+            for duplicate in (False, True)
+        ]:
+            with (
+                self.subTest(route=route, duplicate=duplicate),
+                BenchmarkServer(spec) as server,
+            ):
                 workload = Workload(spec, server.url)
                 try:
                     events = workload.events
@@ -373,7 +381,23 @@ class BenchmarksTest(unittest.TestCase):
                         # Replace the final 16 events with the preceding 16: total and
                         # per-identity counts stay identical, but sequences do not.
                         events = events[:-16] + events[-32:-16]
-                    control(server.url, "/batch", {"batch": list(reversed(events))})
+                    reply = control(
+                        server.url,
+                        route,
+                        {"batch": list(reversed(events))},
+                    )
+                    if route == "/batch":
+                        self.assertEqual(reply, {"status": 1})
+                    else:
+                        self.assertEqual(
+                            reply,
+                            {
+                                "results": {
+                                    str(event.get("uuid")): {"result": "ok"}
+                                    for event in events
+                                }
+                            },
+                        )
                     workload.captured = spec["operations"]
                     for event in workload.events:
                         workload.captured_by_user[event["distinct_id"]] += 1
