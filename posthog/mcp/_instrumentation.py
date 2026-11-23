@@ -81,7 +81,6 @@ from .session import (
     ResolvedSession,
     PendingCustomEvents,
     bind_in_tool_session,
-    resolve_anchored_session,
     new_session_id,
     resolve_session_id_with_source,
     touch_connection_session,
@@ -640,15 +639,9 @@ class ToolCallLifecycle:
 
     @contextmanager
     def in_tool(self, primed: ResolvedSession) -> Iterator[None]:
-        """Scope the tool body to this call's session: its client id or echoed
-        handle, else the session :meth:`prime_session` returned. A handle minted
-        for this call counts only if its result delivers it, so until the call
-        settles its custom events wait in :attr:`pending_custom_events`."""
-        anchored = resolve_anchored_session(
-            self.conversation_id, self.client_conversation
-        )
-        pending = self.pending_custom_events if self.minted_conversation_id else None
-        with bind_in_tool_session(self.data, anchored or primed, pending):
+        """Scope the tool body to this call: its custom events wait in
+        :attr:`pending_custom_events` until the call settles."""
+        with bind_in_tool_session(self.data, primed, self.pending_custom_events):
             yield
 
     def settle_left_over_custom_events(self, primed: ResolvedSession) -> None:
@@ -664,19 +657,17 @@ class ToolCallLifecycle:
         pending = self.pending_custom_events
         pending.settled = session
         events, pending.events = pending.events, []
-        for event in events:
+        for context, event in events:
             try:
-                fire_and_forget(
-                    capture_event(
-                        self.data,
-                        {
-                            **event,
-                            "session_id": session.session_id,
-                            "session_source": session.source,
-                        },
-                    ),
+                capture = capture_event(
                     self.data,
+                    {
+                        **event,
+                        "session_id": session.session_id,
+                        "session_source": session.source,
+                    },
                 )
+                context.run(fire_and_forget, capture, self.data)
             except Exception as err:  # noqa: BLE001 - analytics must never break a tool call
                 log(f"custom event dropped while settling a call: {err}")
 

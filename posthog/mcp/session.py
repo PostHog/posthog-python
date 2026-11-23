@@ -9,13 +9,14 @@ rolls over after an inactivity timeout."""
 from __future__ import annotations
 
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import Context, ContextVar, copy_context
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, NamedTuple, Optional
+from typing import Any, Dict, Iterator, List, Mapping, NamedTuple, Optional, Tuple
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._client_conversation import ClientConversation
 from ._ids import deterministic_prefixed_id, new_prefixed_id
+from .logger import log
 from ._internal import MCPAnalyticsData
 from .session_token import SessionTokenPayload
 
@@ -35,14 +36,41 @@ class ResolvedSession(NamedTuple):
     source: str
 
 
+# A call holds its custom events until it settles; beyond this many, the rest are dropped.
+MAX_DEFERRED_CUSTOM_EVENTS = 1000
+
+
 class PendingCustomEvents:
-    """Custom events captured while a call's session is a handle minted for it. That
-    handle groups the call only once its result delivers it, so the events wait
-    until the call settles and then take the call's own session."""
+    """Custom events captured during a call. They go out when the call settles, with
+    its own session and the identity resolved for it: a minted handle groups the
+    call only once its result delivers it, and identify runs as the call records.
+
+    Each event is fixed when captured: its top-level properties, its duration, and
+    the context ``before_send`` runs in. Only the session is bound later."""
 
     def __init__(self) -> None:
-        self.events: List[Dict[str, Any]] = []
+        self.events: List[Tuple[Context, Dict[str, Any]]] = []
         self.settled: Optional[ResolvedSession] = None
+        self.dropped = 0
+
+    def defer(self, event_input: Dict[str, Any]) -> None:
+        if len(self.events) >= MAX_DEFERRED_CUSTOM_EVENTS:
+            self.dropped += 1
+            if self.dropped == 1:
+                log(
+                    f"Warning: a tool call captured more than {MAX_DEFERRED_CUSTOM_EVENTS} "
+                    "custom events; dropping the rest"
+                )
+            return
+        properties = event_input.get("properties")
+        snapshot = {
+            **event_input,
+            "properties": dict(properties)
+            if isinstance(properties, Mapping)
+            else properties,
+            "duration": 0,
+        }
+        self.events.append((copy_context(), snapshot))
 
 
 class _BoundSession(NamedTuple):

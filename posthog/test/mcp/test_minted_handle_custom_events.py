@@ -1,8 +1,9 @@
-"""A custom event captured on a handle minted for its call waits until the call
-settles. These are the ways a call can end without the usual result or error
-recording, run through the real mcp 1.x adapters."""
+"""A custom event captured during a tool call waits until the call settles, then
+goes out with the call's own session and identity. Run through the real mcp 1.x
+adapters."""
 
 import asyncio
+from contextvars import ContextVar
 
 import mcp.types as mcp_types
 import pytest
@@ -14,6 +15,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from posthog.mcp import McpAnalytics, instrument
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.mcp._internal import get_server_tracking_data
+from posthog.mcp.session import MAX_DEFERRED_CUSTOM_EVENTS
 from posthog.test.mcp._helpers import FakeClient, events_named, flush_background
 
 
@@ -126,6 +128,90 @@ async def test_a_held_back_custom_event_keeps_the_duration_it_had_when_captured(
 
     (event,) = events_named(client, "inside_tool")
     assert event["properties"].get("$mcp_duration_ms", 0) < 50
+
+
+@pytest.mark.parametrize("anchored", [True, False], ids=["anchored", "not anchored"])
+async def test_a_custom_event_keeps_the_properties_it_was_captured_with(anchored):
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+
+    @server.tool()
+    async def tool() -> str:
+        properties = {"step": 0}
+        await analytics[0].capture("progress", properties)
+        properties["step"] = 1
+        await analytics[0].capture("progress", properties)
+        properties.clear()
+        return "ok"
+
+    options = MCPAnalyticsOptions(enable_conversation_id=anchored)
+    analytics.append(instrument(server, client, options))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        await session.call_tool("tool", {})
+    await flush_background()
+
+    assert [e["properties"].get("step") for e in events_named(client, "progress")] == [
+        0,
+        1,
+    ]
+
+
+async def test_a_call_sends_at_most_its_bound_of_custom_events():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+
+    @server.tool()
+    async def chatty() -> str:
+        for i in range(MAX_DEFERRED_CUSTOM_EVENTS + 5):
+            await analytics[0].capture("tick", {"i": i})
+        return "ok"
+
+    analytics.append(instrument(server, client, anchored()))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        await session.call_tool("chatty", {})
+    await flush_background()
+
+    assert len(events_named(client, "tick")) == MAX_DEFERRED_CUSTOM_EVENTS
+
+
+consent: ContextVar[str] = ContextVar("consent", default="unset")
+
+
+async def test_before_send_sees_the_context_the_tool_captured_in():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    seen: list[str] = []
+
+    def before_send(event):
+        if event["event"] == "inside_tool":
+            seen.append(consent.get())
+        return event
+
+    @server.tool()
+    async def tool() -> str:
+        token = consent.set("denied")
+        try:
+            await analytics[0].capture("inside_tool")
+        finally:
+            consent.reset(token)
+        return "ok"
+
+    options = MCPAnalyticsOptions(enable_conversation_id=True, before_send=before_send)
+    analytics.append(instrument(server, client, options))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        await session.call_tool("tool", {})
+    await flush_background()
+
+    assert seen == ["denied"]
 
 
 class StrictResult(BaseModel):

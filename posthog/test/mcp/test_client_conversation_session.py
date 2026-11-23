@@ -417,10 +417,11 @@ async def test_custom_capture_in_a_metadata_call_is_not_the_previous_callers(
     )
     with bob.in_tool(await bob.prime_session()):
         await McpAnalytics(key).capture("inside_tool")
+    await bob.record_result({"content": []}, 1.0, conversation_id_delivered=False)
     await _flush()
 
     (event,) = _events(client, "inside_tool")
-    assert event["distinct_id"] != "alice"
+    assert event["distinct_id"] == "bob"
     assert "alice_only" not in json.dumps(event["properties"])
     assert event["properties"]["$session_id"] == CHATGPT_SESSION
 
@@ -509,6 +510,42 @@ async def test_a_custom_event_on_a_minted_handle_takes_its_calls_final_session(
     (call,) = _events(client, "$mcp_tool_call")
     assert event["properties"]["$session_id"] == call["properties"]["$session_id"]
     assert event["distinct_id"] == call["distinct_id"]
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        {"user_agent": CHATGPT, "meta": CHATGPT_META},
+        {"user_agent": OTHER, "arguments": {"conversation_id": HANDLE}},
+        {"user_agent": OTHER},
+    ],
+    ids=["a client id", "an echoed handle", "a minted handle"],
+)
+async def test_the_first_custom_event_in_a_conversation_carries_its_identity(call):
+    client = FakeClient()
+    key = FakeServer()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(
+            identify=UserIdentity(distinct_id="bob", properties={"plan": "pro"})
+        ),
+        sink=McpEventSink(client),
+        session_id=new_session_id(),
+    )
+    set_server_tracking_data(key, data)
+
+    lifecycle = start_call(data, **call)
+    with lifecycle.in_tool(await lifecycle.prime_session()):
+        await McpAnalytics(key).capture("inside_tool")
+    await lifecycle.record_result(
+        {"content": []},
+        1.0,
+        conversation_id_delivered=bool(lifecycle.minted_conversation_id),
+    )
+    await _flush()
+
+    (event,) = _events(client, "inside_tool")
+    assert event["distinct_id"] == "bob"
+    assert event["properties"]["$set"] == {"plan": "pro"}
 
 
 async def test_a_capture_in_on_feedback_keeps_its_callers_session():

@@ -185,8 +185,7 @@ class McpAnalytics:
         }
         pending = unsettled_custom_events(data)
         if pending is not None:
-            # Sent once the call settles; its duration is still the moment it was captured.
-            pending.events.append({**event_input, "duration": 0})
+            pending.defer(event_input)
             return
         coro = capture_event(data, event_input)
         if coro is not None:
