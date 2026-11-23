@@ -11,7 +11,17 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import Context, ContextVar, copy_context
 from datetime import datetime, timezone
-from typing import Any, Dict, Iterator, List, Mapping, NamedTuple, Optional, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Tuple,
+)
 
 from .constants import INACTIVITY_TIMEOUT_IN_MINUTES
 from ._client_conversation import ClientConversation
@@ -52,6 +62,9 @@ class PendingCustomEvents:
         self.events: List[Tuple[Context, Dict[str, Any]]] = []
         self.settled: Optional[ResolvedSession] = None
         self.dropped = 0
+        # Settles with the session the call already knows, for a flush (as before
+        # shutdown) that cannot wait for the call to end.
+        self.settle_early: Optional[Callable[[], None]] = None
 
     def defer(self, event_input: Dict[str, Any]) -> None:
         if len(self.events) >= MAX_DEFERRED_CUSTOM_EVENTS:
@@ -62,15 +75,21 @@ class PendingCustomEvents:
                     "custom events; dropping the rest"
                 )
             return
-        properties = event_input.get("properties")
-        snapshot = {
-            **event_input,
-            "properties": dict(properties)
-            if isinstance(properties, Mapping)
-            else properties,
-            "duration": 0,
-        }
+        try:
+            snapshot = {
+                **event_input,
+                "properties": _top_level_copy(event_input.get("properties")),
+                "event_options": _top_level_copy(event_input.get("event_options")),
+                "duration": 0,
+            }
+        except Exception as err:  # noqa: BLE001 - analytics must never break a tool call
+            log(f"custom event dropped: its properties could not be copied: {err}")
+            return
         self.events.append((copy_context(), snapshot))
+
+
+def _top_level_copy(value: Any) -> Any:
+    return dict(value) if isinstance(value, Mapping) else value
 
 
 class _BoundSession(NamedTuple):

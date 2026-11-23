@@ -85,6 +85,8 @@ class MCPAnalyticsData:
     )
     last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     identified_sessions: IdentityCache = field(default_factory=IdentityCache)
+    # Calls whose custom events wait for them, so a flush can settle them early.
+    calls_holding_custom_events: Set[Any] = field(default_factory=set)
     tool_categories: Dict[str, str] = field(default_factory=dict)
     tool_descriptions: Dict[str, str] = field(default_factory=dict)
     # True only when PostHog added llm_model to this tool's advertised schema.

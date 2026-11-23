@@ -3,6 +3,7 @@ goes out with the call's own session and identity. Run through the real mcp 1.x
 adapters."""
 
 import asyncio
+from collections.abc import Mapping
 from contextvars import ContextVar
 
 import mcp.types as mcp_types
@@ -246,3 +247,89 @@ async def test_a_listing_during_a_call_leaves_its_structured_result_valid():
     result = await call
 
     assert "_mcp_instructions" not in repr(result)
+
+
+@pytest.mark.parametrize("anchored", [True, False], ids=["anchored", "not anchored"])
+async def test_a_flush_while_a_call_runs_sends_what_it_captured(anchored):
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    captured, release = asyncio.Event(), asyncio.Event()
+
+    @server.tool()
+    async def slow() -> str:
+        await analytics[0].capture("progress")
+        captured.set()
+        await release.wait()
+        return "ok"
+
+    analytics.append(
+        instrument(server, client, MCPAnalyticsOptions(enable_conversation_id=anchored))
+    )
+    call = asyncio.create_task(
+        server._tool_manager.call_tool(
+            "slow", {}, context=server.get_context(), convert_result=True
+        )
+    )
+    await captured.wait()
+    await analytics[0].flush()
+
+    assert events_named(client, "progress")
+    release.set()
+    await call
+
+
+async def test_a_custom_event_keeps_the_options_it_was_captured_with():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+
+    @server.tool()
+    async def tool() -> str:
+        options = {"process_person_profile": False}
+        await analytics[0].capture("inside_tool", event_options=options)
+        options["process_person_profile"] = True
+        return "ok"
+
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=True, identify=UserIdentity(distinct_id="u1")
+    )
+    analytics.append(instrument(server, client, options))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        await session.call_tool("tool", {})
+    await flush_background()
+
+    (event,) = events_named(client, "inside_tool")
+    assert event["options"].get("process_person_profile") is False
+
+
+class UnreadableProperties(Mapping):
+    def __getitem__(self, key):
+        raise KeyError(key)
+
+    def __iter__(self):
+        raise RuntimeError("cannot iterate")
+
+    def __len__(self):
+        return 1
+
+
+async def test_properties_that_cannot_be_copied_leave_the_call_alone():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+
+    @server.tool()
+    async def tool() -> str:
+        await analytics[0].capture("inside_tool", UnreadableProperties())
+        return "ok"
+
+    analytics.append(instrument(server, client, anchored()))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        result = await session.call_tool("tool", {})
+
+    assert not result.isError

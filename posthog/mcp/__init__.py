@@ -197,6 +197,9 @@ class McpAnalytics:
         aren't dropped. (Then call ``posthog.flush()``/``shutdown()`` to send them.)"""
         data = get_server_tracking_data(self._key)
         if data is not None:
+            for pending in list(data.calls_holding_custom_events):
+                if pending.settle_early is not None:
+                    pending.settle_early()
             await drain_pending(data)
 
 

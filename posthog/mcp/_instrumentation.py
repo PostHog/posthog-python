@@ -81,6 +81,7 @@ from .session import (
     ResolvedSession,
     PendingCustomEvents,
     bind_in_tool_session,
+    resolve_anchored_session,
     new_session_id,
     resolve_session_id_with_source,
     touch_connection_session,
@@ -640,8 +641,18 @@ class ToolCallLifecycle:
     @contextmanager
     def in_tool(self, primed: ResolvedSession) -> Iterator[None]:
         """Scope the tool body to this call: its custom events wait in
-        :attr:`pending_custom_events` until the call settles."""
-        with bind_in_tool_session(self.data, primed, self.pending_custom_events):
+        :attr:`pending_custom_events` until the call settles. A flush before then
+        sends them with the session the call already knows: its client id or
+        echoed handle, else the primed one (a minted handle counts only once
+        delivered)."""
+        known = resolve_anchored_session(
+            None if self.minted_conversation_id else self.conversation_id,
+            self.client_conversation,
+        )
+        pending = self.pending_custom_events
+        pending.settle_early = lambda: self._settle_custom_events(known or primed)
+        self.data.calls_holding_custom_events.add(pending)
+        with bind_in_tool_session(self.data, primed, pending):
             yield
 
     def settle_left_over_custom_events(self, primed: ResolvedSession) -> None:
@@ -655,6 +666,9 @@ class ToolCallLifecycle:
         """Send the custom events this call held back, with its own event's session,
         without making the call wait on them or fail because of them."""
         pending = self.pending_custom_events
+        self.data.calls_holding_custom_events.discard(pending)
+        if pending.settled is not None:
+            return
         pending.settled = session
         events, pending.events = pending.events, []
         for context, event in events:
