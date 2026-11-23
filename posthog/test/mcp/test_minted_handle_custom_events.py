@@ -6,12 +6,14 @@ import asyncio
 
 import mcp.types as mcp_types
 import pytest
+from pydantic import BaseModel, ConfigDict
 from mcp.server.fastmcp import FastMCP
 from mcp.server.lowlevel import Server
 from mcp.shared.memory import create_connected_server_and_client_session
 
 from posthog.mcp import McpAnalytics, instrument
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
+from posthog.mcp._internal import get_server_tracking_data
 from posthog.test.mcp._helpers import FakeClient, events_named, flush_background
 
 
@@ -124,3 +126,37 @@ async def test_a_held_back_custom_event_keeps_the_duration_it_had_when_captured(
 
     (event,) = events_named(client, "inside_tool")
     assert event["properties"].get("$mcp_duration_ms", 0) < 50
+
+
+class StrictResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    value: int
+
+
+async def test_a_listing_during_a_call_leaves_its_structured_result_valid():
+    """The SDK validates a call's result against the schema it held when the call
+    started. A listing from a handle-free client declared no `_mcp_instructions`;
+    an ordinary listing that lands while the tool awaits must not add it."""
+    client = FakeClient()
+    server = FastMCP("t")
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    @server.tool()
+    async def strict() -> StrictResult:
+        entered.set()
+        await release.wait()
+        return StrictResult(value=7)
+
+    data = get_server_tracking_data(instrument(server, client, anchored())._key)
+    data.tool_output_instructions["strict"] = False
+    call = asyncio.create_task(
+        server._tool_manager.call_tool(
+            "strict", {}, context=server.get_context(), convert_result=True
+        )
+    )
+    await entered.wait()
+    data.tool_output_instructions["strict"] = True
+    release.set()
+    result = await call
+
+    assert "_mcp_instructions" not in repr(result)

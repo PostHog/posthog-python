@@ -593,6 +593,9 @@ class ToolCallLifecycle:
     conversation_id: Optional[str]
     minted_conversation_id: bool
     input_schema: Any
+    # Read when the call starts: the SDK validates the result against the schema it
+    # held then, so a listing that lands while the tool awaits must not change it.
+    mirrors_output_instructions: bool
     pending_custom_events: PendingCustomEvents = field(
         default_factory=PendingCustomEvents
     )
@@ -604,15 +607,6 @@ class ToolCallLifecycle:
     @property
     def is_feedback(self) -> bool:
         return self.feedback_name is not None and self.name == self.feedback_name
-
-    @property
-    def mirrors_output_instructions(self) -> bool:
-        """Whether a handle goes into ``structuredContent`` too. A handle-free
-        client's listing never declared ``_mcp_instructions``."""
-        handle_free = self.client is not None and self.client.handle_free
-        return not handle_free and bool(
-            self.data.tool_output_instructions.get(self.name)
-        )
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
         on_one_client_connection = (
@@ -904,6 +898,8 @@ def start_tool_call_lifecycle(
         conversation_id=conversation_id,
         minted_conversation_id=minted,
         input_schema=input_schema,
+        mirrors_output_instructions=not handle_free
+        and bool(data.tool_output_instructions.get(name)),
     )
 
 
