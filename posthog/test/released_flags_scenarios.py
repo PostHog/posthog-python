@@ -31,7 +31,6 @@ DESCRIPTION = (
 )
 API_KEY = "phc_released_flags_scenarios"
 DISTINCT_ID = "user-1"
-ACCEPTED_UUID = "70000000-0000-4000-8000-000000000000"
 REQUEST_ID = "60000000-0000-4000-8000-000000000000"
 EVALUATED_AT = 1800000000000
 MATCHED = {
@@ -170,15 +169,17 @@ def _with_client(
             raise response
         return copy.deepcopy(response)
 
-    def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+    # Read the built event in before_send: v1 layers flag properties inside _enqueue.
+    def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append([message["event"], _flag_event_properties(message)])
-        # Accept the event, as the real queue does, by returning an event UUID.
-        return ACCEPTED_UUID
+        # Keep the event, so capture accepts it and returns its UUID as the real
+        # queue does; flag events dedupe only events that were accepted.
+        return message
 
     try:
         with (
             mock.patch("posthog.client.flags", side_effect=flags),
-            mock.patch.object(client, "_enqueue", side_effect=enqueue),
+            mock.patch.object(client, "before_send", record),
             warnings.catch_warnings(),
         ):
             warnings.simplefilter("ignore")

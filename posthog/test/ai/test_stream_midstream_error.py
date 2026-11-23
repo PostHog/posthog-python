@@ -16,8 +16,8 @@ def mock_client():
 
 
 def _props(mock_client):
-    assert mock_client.capture.call_count == 1
-    return mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    return mock_client.capture_ai.call_args[1]["properties"]
 
 
 class _StatusError(RuntimeError):
@@ -273,6 +273,19 @@ class _ConnectError(RuntimeError):
     status_code = 401
 
 
+# A caller's options must reach the error event too. No distinct id, so the
+# event is personless and process_person_profile: False joins the caller's.
+_CALLER = {"posthog_options": {"cookieless_mode": True}}
+_SENT_OPTIONS = {"cookieless_mode": True, "process_person_profile": False}
+
+
+def _assert_connect_error_event(mock_client):
+    props = _props(mock_client)
+    assert props["$ai_is_error"] is True
+    assert props["$ai_http_status"] == 401
+    assert mock_client.capture_ai.call_args[1]["options"] == _SENT_OPTIONS
+
+
 def test_openai_chat_stream_connect_error(mock_client):
     from posthog.ai.openai import OpenAI
 
@@ -284,11 +297,10 @@ def test_openai_chat_stream_connect_error(mock_client):
                 model="gpt-4",
                 messages=[{"role": "user", "content": "hi"}],
                 stream=True,
+                **_CALLER,
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 @pytest.mark.asyncio
@@ -307,11 +319,10 @@ async def test_openai_chat_stream_connect_error_async(mock_client):
                 model="gpt-4",
                 messages=[{"role": "user", "content": "hi"}],
                 stream=True,
+                **_CALLER,
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 def test_openai_responses_stream_connect_error(mock_client):
@@ -321,11 +332,9 @@ def test_openai_responses_stream_connect_error(mock_client):
         create.side_effect = _ConnectError("bad key")
         client = OpenAI(api_key="k", posthog_client=mock_client)
         with pytest.raises(_ConnectError):
-            client.responses.create(model="gpt-4", input="hi", stream=True)
+            client.responses.create(model="gpt-4", input="hi", stream=True, **_CALLER)
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 @pytest.mark.asyncio
@@ -338,11 +347,11 @@ async def test_openai_responses_stream_connect_error_async(mock_client):
     with patch("openai.resources.responses.AsyncResponses.create", side_effect=create):
         client = AsyncOpenAI(api_key="k", posthog_client=mock_client)
         with pytest.raises(_ConnectError):
-            await client.responses.create(model="gpt-4", input="hi", stream=True)
+            await client.responses.create(
+                model="gpt-4", input="hi", stream=True, **_CALLER
+            )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 def test_anthropic_stream_connect_error(mock_client):
@@ -357,11 +366,10 @@ def test_anthropic_stream_connect_error(mock_client):
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=5,
                 stream=True,
+                **_CALLER,
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 @pytest.mark.asyncio
@@ -379,11 +387,10 @@ async def test_anthropic_stream_connect_error_async(mock_client):
                 messages=[{"role": "user", "content": "hi"}],
                 max_tokens=5,
                 stream=True,
+                **_CALLER,
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 def test_gemini_stream_connect_error(mock_client):
@@ -399,12 +406,10 @@ def test_gemini_stream_connect_error(mock_client):
         client = Client(api_key="k", posthog_client=mock_client)
         with pytest.raises(_ConnectError):
             client.models.generate_content_stream(
-                model="gemini-2.0-flash", contents=["hi"]
+                model="gemini-2.0-flash", contents=["hi"], **_CALLER
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 @pytest.mark.asyncio
@@ -423,12 +428,10 @@ async def test_gemini_stream_connect_error_async(mock_client):
         client = AsyncClient(api_key="k", posthog_client=mock_client)
         with pytest.raises(_ConnectError):
             await client.models.generate_content_stream(
-                model="gemini-2.0-flash", contents=["hi"]
+                model="gemini-2.0-flash", contents=["hi"], **_CALLER
             )
 
-    props = _props(mock_client)
-    assert props["$ai_is_error"] is True
-    assert props["$ai_http_status"] == 401
+    _assert_connect_error_event(mock_client)
 
 
 @pytest.mark.parametrize(

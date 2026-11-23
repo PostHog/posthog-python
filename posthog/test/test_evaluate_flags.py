@@ -1141,7 +1141,8 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
     def _client(self, **kwargs):
         client = Client(
             FAKE_TEST_API_KEY,
-            secret_key="test",
+            # A key no other test uses, so a poller leaked by another module never matches it.
+            secret_key="test-unresolvable-flag-warning",
             enable_local_evaluation=False,
             send=False,
             **kwargs,
@@ -1437,7 +1438,14 @@ class TestUnresolvableFlagWarning(unittest.TestCase):
                 mock.patch("posthog.client.get") as get,
             ):
                 client._load_feature_flags()
-                get.assert_not_called()
+                # Pollers left running by other test modules share the patched
+                # module-level `get`, so only this client's key counts.
+                own_calls = [
+                    call
+                    for call in get.call_args_list
+                    if call.args and call.args[0] == client.personal_api_key
+                ]
+                self.assertEqual(own_calls, [])
 
     @staticmethod
     def _never_resolvable_flag(key, reason, **kwargs):
@@ -1817,7 +1825,7 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
             None,
         )
         self.assertIsNotNone(page_viewed)
-        properties = page_viewed[0][0]["properties"]
+        properties = page_viewed.kwargs["flag_properties"]
         self.assertEqual(properties["$feature/variant-flag"], "variant-value")
         self.assertEqual(properties["$feature/boolean-flag"], True)
         self.assertEqual(properties["$feature/disabled-flag"], False)
@@ -1847,7 +1855,7 @@ class TestCaptureWithFlagsSnapshot(unittest.TestCase):
             ),
             None,
         )
-        properties = page_viewed[0][0]["properties"]
+        properties = page_viewed.kwargs["flag_properties"]
         self.assertEqual(properties["$feature/boolean-flag"], True)
         self.assertNotIn("$feature/variant-flag", properties)
         self.assertNotIn("$feature/disabled-flag", properties)

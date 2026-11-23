@@ -107,7 +107,7 @@ def test_nan_limiter_configuration_keeps_exception_hook_working(
     previous_hook = MagicMock()
     upload = MagicMock()
     monkeypatch.setattr(sys, "excepthook", previous_hook)
-    monkeypatch.setattr("posthog.client.batch_post", upload)
+    monkeypatch.setattr("posthog.client._send_v1_batch", upload)
     options = {
         "exception_autocapture_bucket_size": 3,
         "exception_autocapture_refill_interval_seconds": 60,
@@ -331,15 +331,10 @@ def test_excepthook(tmpdir):
         dedent(
             """
     from posthog import Posthog
-    from requests import Response
     import posthog.request
+    from posthog.test.capture_helpers import offline_v1_post
 
-    def offline_post(url, **kwargs):
-        response = Response()
-        response.status_code = 200
-        return response
-
-    posthog.request._session.post = offline_post
+    posthog.request._capture_session.post = offline_v1_post
     posthog = Posthog('phc_x', host='https://eu.i.posthog.com', enable_exception_autocapture=True, debug=True, on_error=lambda e, batch: print('error handling batch: ', e, batch))
 
     # frame_value = "LOL"
@@ -358,7 +353,9 @@ def test_excepthook(tmpdir):
 
     assert b"ZeroDivisionError" in output
     assert b"LOL" in output
-    assert b"DEBUG:posthog:[PostHog] data uploaded successfully" in output
+    assert b"[PostHog] capture v1 response" in output
+    assert b" ok=1 " in output
+    assert b'"type": "ZeroDivisionError", "value": "division by zero"' in output
     assert b'"$exception_level": "fatal"' in output
     assert b'"$exception_source": "python.sys_excepthook"' in output
     assert b'"type": "onuncaughtexception"' in output
@@ -743,3 +740,49 @@ def test_never_raised_exception_stack_omits_sdk_frames_in_renamed_package():
     functions = [frame["function"] for frame in exception["stacktrace"]["frames"]]
     assert functions[-1] == "handler"
     assert exception["mechanism"]["synthetic"] is True
+
+
+def _captured_events(client_class, capture_handled, pass_exception):
+    from posthog.async_client import AsyncClient
+    from posthog.client import Client
+
+    clients = {"Client": Client, "AsyncClient": AsyncClient}
+    client = clients[client_class]("phc_test", send=False)
+    with patch.object(client, "capture", wraps=client.capture) as capture:
+        try:
+            capture_handled(client, pass_exception)
+        except ZeroDivisionError:
+            pass
+    return [call.args[0] for call in capture.call_args_list]
+
+
+def _handled_then_reraised_in_context(client, pass_exception):
+    from posthog.contexts import new_context
+
+    with new_context(capture_exceptions=True, client=client):
+        try:
+            1 / 0
+        except ZeroDivisionError as error:
+            client.capture_exception(error if pass_exception else None)
+            raise
+
+
+def _handled_twice(client, pass_exception):
+    try:
+        1 / 0
+    except ZeroDivisionError as error:
+        client.capture_exception(error if pass_exception else None)
+        client.capture_exception(error if pass_exception else None)
+
+
+@pytest.mark.parametrize("client_class", ["Client", "AsyncClient"])
+@pytest.mark.parametrize("pass_exception", [True, False])
+@pytest.mark.parametrize(
+    "capture_handled", [_handled_then_reraised_in_context, _handled_twice]
+)
+def test_exception_from_sys_exc_info_is_captured_once(
+    client_class, capture_handled, pass_exception
+):
+    assert _captured_events(client_class, capture_handled, pass_exception) == [
+        "$exception"
+    ]

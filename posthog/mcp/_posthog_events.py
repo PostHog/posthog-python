@@ -10,12 +10,17 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
+from posthog.capture_event import _fill_library, _merge_groups
+from posthog.version import VERSION
+
 from .constants import (
     POSTHOG_MCP_ANALYTICS_SOURCE,
+    POSTHOG_MCP_LIB_NAME,
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
 from ._event_types import MCPAnalyticsEventType
+from .logger import warn
 from .types import Event, PostHogCaptureEvent
 
 _BUILT_IN_EVENT_NAME_BY_TYPE = {
@@ -48,27 +53,29 @@ def _get_timestamp(event: Event) -> datetime:
 def build_posthog_capture_events(
     event: Event, enable_exception_autocapture: bool = True
 ) -> List[PostHogCaptureEvent]:
-    batch = [_build_capture_event(event)]
+    options = _get_options(event)
+    batch = [_build_capture_event(event, dict(options))]
     if (
         event.get("is_error")
         and event.get("error")
         and enable_exception_autocapture is not False
     ):
-        batch.append(_build_exception_event(event))
+        batch.append(_build_exception_event(event, dict(options)))
+    for capture in batch:
+        _fill_library(capture["properties"], (POSTHOG_MCP_LIB_NAME, VERSION), None)
     return batch
 
 
-def _build_capture_event(event: Event) -> PostHogCaptureEvent:
+def _build_capture_event(event: Event, options: Dict[str, Any]) -> PostHogCaptureEvent:
     properties: Dict[str, Any] = {
         _P.INTERFACE: "mcp",
         _P.SOURCE: POSTHOG_MCP_ANALYTICS_SOURCE,
     }
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
-    _add_person_processing(event, properties)
-    _add_groups(event, properties)
     _add_common_properties(event, properties)
     _add_custom_properties(event, properties)
+    _add_groups(event, properties)
     _add_server_build(event, properties)
 
     event_name = (
@@ -78,6 +85,7 @@ def _build_capture_event(event: Event) -> PostHogCaptureEvent:
         "event": event_name,
         "distinct_id": _get_distinct_id(event),
         "properties": properties,
+        "options": options,
         "timestamp": _get_timestamp(event),
     }
 
@@ -95,16 +103,40 @@ def _add_conversation_id(event: Event, properties: Dict[str, Any]) -> None:
 
 
 def _add_groups(event: Event, properties: Dict[str, Any]) -> None:
+    """Merge the typed groups over a custom ``$groups`` property, key by key."""
     groups = event.get("groups")
     if groups:
-        properties["$groups"] = groups
+        _merge_groups(properties, groups)
 
 
-def _add_person_processing(event: Event, properties: Dict[str, Any]) -> None:
+def _event_options(value: Any, source: str) -> Dict[str, Any]:
+    """Return a copy of caller options, or ``{}`` when they are not a dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        warn(
+            f"{source} must be a dict, got {type(value).__name__}. "
+            "Sending the event without them."
+        )
+        return {}
+    return dict(value)
+
+
+def _get_options(event: Event) -> Dict[str, Any]:
+    # Per-call options win over the callback's, key by key.
+    options = {
+        **_event_options(
+            event.get("callback_event_options"), "The event_options callback result"
+        ),
+        **_event_options(event.get("event_options"), "event_options"),
+    }
     # Without a resolved identity the distinct id is just the session id, so
     # processing a person profile would mint one anonymous person per session.
+    # Applied last, so it beats caller options and any custom
+    # $process_person_profile property.
     if not event.get("identify_actor_given_id"):
-        properties["$process_person_profile"] = False
+        options["process_person_profile"] = False
+    return options
 
 
 def _is_tool_call(event: Event) -> bool:
@@ -245,12 +277,12 @@ def _add_server_build(event: Event, properties: Dict[str, Any]) -> None:
         properties[_P.SERVER_BUILD] = event["server_build"]
 
 
-def _build_exception_event(event: Event) -> PostHogCaptureEvent:
+def _build_exception_event(
+    event: Event, options: Dict[str, Any]
+) -> PostHogCaptureEvent:
     properties: Dict[str, Any] = {_P.INTERFACE: "mcp"}
     _add_session_id(event, properties)
     _add_conversation_id(event, properties)
-    _add_person_processing(event, properties)
-    _add_groups(event, properties)
 
     error = event.get("error")
     if error:
@@ -279,12 +311,14 @@ def _build_exception_event(event: Event) -> PostHogCaptureEvent:
     )
 
     _add_custom_properties(event, properties)
+    _add_groups(event, properties)
     _add_server_build(event, properties)
 
     return {
         "event": PostHogMCPAnalyticsEvent.EXCEPTION,
         "distinct_id": _get_distinct_id(event),
         "properties": properties,
+        "options": options,
         "timestamp": _get_timestamp(event),
     }
 

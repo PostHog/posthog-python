@@ -221,3 +221,19 @@ async def resolve_event_properties(
     except Exception as e:  # noqa: BLE001
         log(f"event_properties callback error: {e}")
         return None
+
+
+async def resolve_event_options(
+    data: MCPAnalyticsData,
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]] = None,
+) -> Any:
+    """Return the ``event_options`` callback's result as given. The event
+    builder checks that it is a dict, as it does for per-call options."""
+    if not data.options.event_options:
+        return None
+    try:
+        return await _maybe_await(data.options.event_options(request, extra))
+    except Exception as e:  # noqa: BLE001
+        log(f"event_options callback error: {e}")
+        return None

@@ -437,6 +437,7 @@ class TestClientForkEndToEnd(unittest.TestCase):
         old_poller = client.poller
         session_before = posthog.request._get_session()
         flags_session_before = posthog.request._get_flags_session()
+        capture_session_before = posthog.request._get_capture_session()
 
         def child_probe():
             poller_ok = False
@@ -456,8 +457,11 @@ class TestClientForkEndToEnd(unittest.TestCase):
 
             session_after = posthog.request._get_session()
             flags_session_after = posthog.request._get_flags_session()
-            sessions_ok = (session_after is not session_before) and (
-                flags_session_after is not flags_session_before
+            capture_session_after = posthog.request._get_capture_session()
+            sessions_ok = (
+                session_after is not session_before
+                and flags_session_after is not flags_session_before
+                and capture_session_after is not capture_session_before
             )
 
             if poller_ok and sessions_ok:

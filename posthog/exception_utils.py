@@ -413,7 +413,7 @@ def get_lines_from_file(
     loader=None,  # type: Optional[Any]
     module=None,  # type: Optional[str]
 ):
-    # type: (...) -> Tuple[List[Annotated[str]], Optional[Annotated[str]], List[Annotated[str]]]
+    # type: (...) -> Tuple[List[str], Optional[str], List[str]]
     context_lines = 5
     source = _get_source_lines(filename, loader, module)
 
@@ -423,14 +423,20 @@ def get_lines_from_file(
     lower_bound = max(0, lineno - context_lines)
     upper_bound = min(lineno + 1 + context_lines, len(source))
 
+    def strip_line(line):
+        # type: (str) -> str
+        # strip_string wraps a truncated line in an AnnotatedValue, which the
+        # event payload can't serialize, so keep only the truncated text.
+        stripped = strip_string(line.strip("\r\n"), max_length=max_length)
+        if isinstance(stripped, AnnotatedValue):
+            return cast(str, stripped.value)
+        return stripped
+
     try:
-        pre_context = [
-            strip_string(line.strip("\r\n"), max_length=max_length)
-            for line in source[lower_bound:lineno]
-        ]
-        context_line = strip_string(source[lineno].strip("\r\n"), max_length=max_length)
+        pre_context = [strip_line(line) for line in source[lower_bound:lineno]]
+        context_line = strip_line(source[lineno])
         post_context = [
-            strip_string(line.strip("\r\n"), max_length=max_length)
+            strip_line(line)
             for line in source[(lineno + 1) : upper_bound]  # noqa: E203
         ]
         return pre_context, context_line, post_context
@@ -464,7 +470,7 @@ def get_source_context(
     tb_lineno,  # type: int
     max_value_length=None,  # type: Optional[int]
 ):
-    # type: (...) -> Tuple[List[Annotated[str]], Optional[Annotated[str]], List[Annotated[str]]]
+    # type: (...) -> Tuple[List[str], Optional[str], List[str]]
     try:
         abs_path = frame.f_code.co_filename  # type: Optional[str]
     except Exception:
@@ -639,6 +645,47 @@ _EXCEPTION_LEVELS = {
 def _normalize_exception_level(level):
     # type: (Any) -> Optional[str]
     return _EXCEPTION_LEVELS.get(level.lower()) if isinstance(level, str) else None
+
+
+# Exception properties the SDK or PostHog owns. A caller's per-call
+# `properties` cannot set them.
+_RESERVED_EXCEPTION_PROPERTIES = frozenset(
+    {
+        "$exception_list",
+        "$exception_level",
+        "$exception_source",
+        "$debug_images",
+        "$exception_handled",
+        "$exception_types",
+        "$exception_values",
+        "$exception_sources",
+        "$exception_functions",
+        "$exception_fingerprint_version",
+        "$exception_fingerprint_record",
+        "$exception_issue_id",
+        "$exception_release",
+        "$cymbal_errors",
+    }
+)
+
+
+def _exception_level(integration_level, level):
+    # type: (Any, Any) -> str
+    """An integration's level wins over the caller's ``level=``; an invalid value counts as unset."""
+    return (
+        _normalize_exception_level(integration_level)
+        or _normalize_exception_level(level)
+        or "error"
+    )
+
+
+def _without_reserved_exception_properties(properties):
+    # type: (Optional[Dict[str, Any]]) -> Dict[str, Any]
+    return {
+        key: value
+        for key, value in (properties or {}).items()
+        if key not in _RESERVED_EXCEPTION_PROPERTIES
+    }
 
 
 def _capture_exception_with_metadata(client, exception, capture_metadata, **kwargs):
@@ -1189,11 +1236,10 @@ def _is_in_project_root(abs_path, project_root):
     if project_root is None:
         return False
 
-    # check if path is in the project root
-    if abs_path.startswith(project_root):
-        return True
-
-    return False
+    # check if path is in the project root, matching whole directory names so
+    # that sibling directories sharing a prefix (e.g. /app-shared) don't match
+    root = project_root.rstrip(os.sep)
+    return abs_path == root or abs_path.startswith(root + os.sep)
 
 
 def _truncate_by_bytes(string, max_bytes):
