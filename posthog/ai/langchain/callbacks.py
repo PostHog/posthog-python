@@ -47,7 +47,7 @@ from posthog.ai.utils import (
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
     _resolve_ai_client,
-    _user_distinct_id,
+    _resolve_distinct_id,
     finalize_ai_content,
     _format_ai_error,
     get_model_params,
@@ -594,13 +594,14 @@ class CallbackHandler(BaseCallbackHandler):
                 finalize_ai_content(outputs, self._ph_client),
             )
 
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
         _capture_ai_event(
             self._ph_client,
             event_name,
-            distinct_id=_user_distinct_id(self._distinct_id) or run_id,
+            distinct_id=resolved_distinct_id or run_id,
             properties=event_properties,
             groups=self._groups,
-            personless=_user_distinct_id(self._distinct_id) is None,
+            personless=resolved_distinct_id is None,
             options=self._options,
         )
 
@@ -617,12 +618,13 @@ class CallbackHandler(BaseCallbackHandler):
             return event_properties
 
         exception_options = dict(options)
-        if _user_distinct_id(self._distinct_id) is None:
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
+        if resolved_distinct_id is None:
             # Matches the AI event: without a user, person processing stays off.
             exception_options["process_person_profile"] = False
         exception_id = self._ph_client.capture_exception(
             exception,
-            distinct_id=self._distinct_id,
+            distinct_id=resolved_distinct_id or self._distinct_id,
             groups=self._groups,
             properties=event_properties,
             options=exception_options or None,
@@ -774,13 +776,14 @@ class CallbackHandler(BaseCallbackHandler):
                 if stop_reason is not None:
                     event_properties["$ai_stop_reason"] = stop_reason
 
+        resolved_distinct_id = _resolve_distinct_id(self._distinct_id)
         _capture_ai_event(
             self._ph_client,
             "$ai_generation",
-            distinct_id=_user_distinct_id(self._distinct_id) or trace_id,
+            distinct_id=resolved_distinct_id or trace_id,
             properties=event_properties,
             groups=self._groups,
-            personless=_user_distinct_id(self._distinct_id) is None,
+            personless=resolved_distinct_id is None,
             # The handler's options win over the run's, like its properties.
             options={**_ai_event_options(run.posthog_options), **self._options},
         )

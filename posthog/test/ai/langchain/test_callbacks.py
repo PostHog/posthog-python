@@ -534,6 +534,31 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
     assert trace_props["$ai_span_name"] == "RunnableSequence"
 
 
+def test_context_distinct_id_is_used(mock_client):
+    from posthog import identify_context, new_context
+
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+
+    with new_context():
+        identify_context("context-user")
+        chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
+
+    assert mock_client.capture_ai.call_count == 3
+    for call in mock_client.capture_ai.call_args_list:
+        assert call[1]["distinct_id"] == "context-user"
+        assert "options" not in call[1]
+
+    # An explicit handler distinct_id still wins over the context.
+    mock_client.capture_ai.reset_mock()
+    with new_context():
+        identify_context("context-user")
+        handler = CallbackHandler(mock_client, distinct_id="explicit")
+        chain.invoke({}, config={"callbacks": [handler]})
+    for call in mock_client.capture_ai.call_args_list:
+        assert call[1]["distinct_id"] == "explicit"
+
+
 def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
