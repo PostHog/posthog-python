@@ -336,7 +336,7 @@ class MessageCategory:
     description: Optional[str] = None
 
 
-_CATEGORY_TYPES = frozenset({"marketing", "transactional"})
+_CATEGORY_TYPES = ("marketing", "transactional")
 
 
 class EmailAttachment(TypedDict):
@@ -703,13 +703,21 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _category(category: Any) -> Union[str, dict[str, str]]:
-    if type(category) is str and category == TRANSACTIONAL_CATEGORY:
+    if isinstance(category, str) and str.__eq__(category, TRANSACTIONAL_CATEGORY):
         return TRANSACTIONAL_CATEGORY
     if not isinstance(category, MessageCategory):
         raise TypeError("category must be TRANSACTIONAL_CATEGORY or a MessageCategory.")
-    if type(category.type) is not str or category.type not in _CATEGORY_TYPES:
+    category_type = (
+        next(
+            (kind for kind in _CATEGORY_TYPES if str.__eq__(category.type, kind)),
+            None,
+        )
+        if isinstance(category.type, str)
+        else None
+    )
+    if category_type is None:
         raise ValueError("category.type must be 'marketing' or 'transactional'.")
-    fields = {"key": category.key, "type": category.type, "name": category.name}
+    fields = {"key": category.key, "type": category_type, "name": category.name}
     if category.description is not None:
         fields["description"] = category.description
     if not all(isinstance(value, str) for value in fields.values()):

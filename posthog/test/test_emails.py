@@ -16,6 +16,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
+from enum import Enum
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from ipaddress import ip_address
 from pathlib import Path
@@ -851,6 +852,11 @@ NEWSLETTER = MessageCategory(
 )
 
 
+class _CategoryKind(str, Enum):
+    MARKETING = "marketing"
+    TRANSACTIONAL = "transactional"
+
+
 @parameterized.expand(
     [
         ("omitted", {}, {}),
@@ -859,6 +865,30 @@ NEWSLETTER = MessageCategory(
             "built_in_transactional",
             {"category": TRANSACTIONAL_CATEGORY},
             {"category": "transactional"},
+        ),
+        (
+            "str_enum_transactional",
+            {"category": _CategoryKind.TRANSACTIONAL},
+            {"category": "transactional"},
+        ),
+        (
+            "str_enum_category_type",
+            {
+                "html": MARKETING_HTML,
+                "category": MessageCategory(
+                    key="newsletter",
+                    type=_CategoryKind.MARKETING,
+                    name="Newsletter",
+                ),
+            },
+            {
+                "html": MARKETING_HTML,
+                "category": {
+                    "key": "newsletter",
+                    "type": "marketing",
+                    "name": "Newsletter",
+                },
+            },
         ),
         (
             "category_without_description",
