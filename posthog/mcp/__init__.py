@@ -185,8 +185,14 @@ class McpAnalytics:
         }
         pending = unsettled_custom_events(data)
         if pending is not None:
-            pending.defer(event_input)
-            return
+            settled = pending.defer(event_input)
+            if settled is None:
+                return
+            event_input = {
+                **event_input,
+                "session_id": settled.session_id,
+                "session_source": settled.source,
+            }
         coro = capture_event(data, event_input)
         if coro is not None:
             await coro
@@ -199,7 +205,7 @@ class McpAnalytics:
         if data is not None:
             for pending in list(data.calls_holding_custom_events):
                 if pending.settle_early is not None:
-                    pending.settle_early()
+                    await pending.settle_early()
             await drain_pending(data)
 
 

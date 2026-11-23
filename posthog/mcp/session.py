@@ -9,10 +9,12 @@ rolls over after an inactivity timeout."""
 from __future__ import annotations
 
 from contextlib import contextmanager
+import threading
 from contextvars import Context, ContextVar, copy_context
 from datetime import datetime, timezone
 from typing import (
     Any,
+    Awaitable,
     Callable,
     Dict,
     Iterator,
@@ -63,18 +65,24 @@ class PendingCustomEvents:
         self.settled: Optional[ResolvedSession] = None
         self.dropped = 0
         # Settles with the session the call already knows, for a flush (as before
-        # shutdown) that cannot wait for the call to end.
-        self.settle_early: Optional[Callable[[], None]] = None
+        # shutdown) that cannot wait for the call to end. Cleared once the call
+        # starts recording its outcome, which settles it with the right session.
+        self.settle_early: Optional[Callable[[], Awaitable[None]]] = None
+        # A flush may run on another thread than the tool's.
+        self.lock = threading.Lock()
 
-    def defer(self, event_input: Dict[str, Any]) -> None:
-        if len(self.events) >= MAX_DEFERRED_CUSTOM_EVENTS:
-            self.dropped += 1
-            if self.dropped == 1:
-                log(
-                    f"Warning: a tool call captured more than {MAX_DEFERRED_CUSTOM_EVENTS} "
-                    "custom events; dropping the rest"
-                )
-            return
+    def settle(self, session: ResolvedSession) -> List[Tuple[Context, Dict[str, Any]]]:
+        """Mark the session the events go out with, and hand back the ones held."""
+        with self.lock:
+            if self.settled is not None:
+                return []
+            self.settled = session
+            events, self.events = self.events, []
+            return events
+
+    def defer(self, event_input: Dict[str, Any]) -> Optional[ResolvedSession]:
+        """Hold the event, or return the session the call settled with in the
+        meantime. It is copied before taking the lock: copying runs caller code."""
         try:
             snapshot = {
                 **event_input,
@@ -84,8 +92,21 @@ class PendingCustomEvents:
             }
         except Exception as err:  # noqa: BLE001 - analytics must never break a tool call
             log(f"custom event dropped: its properties could not be copied: {err}")
-            return
-        self.events.append((copy_context(), snapshot))
+            return None
+        context = copy_context()
+        with self.lock:
+            if self.settled is not None:
+                return self.settled
+            if len(self.events) >= MAX_DEFERRED_CUSTOM_EVENTS:
+                self.dropped += 1
+                if self.dropped == 1:
+                    log(
+                        f"Warning: a tool call captured more than {MAX_DEFERRED_CUSTOM_EVENTS} "
+                        "custom events; dropping the rest"
+                    )
+                return None
+            self.events.append((context, snapshot))
+            return None
 
 
 def _top_level_copy(value: Any) -> Any:

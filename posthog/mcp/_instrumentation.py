@@ -650,7 +650,15 @@ class ToolCallLifecycle:
             self.client_conversation,
         )
         pending = self.pending_custom_events
-        pending.settle_early = lambda: self._settle_custom_events(known or primed)
+
+        async def settle_early() -> None:
+            session = known or primed
+            await handle_identify(
+                self.data, session.session_id, self.request, self.extra
+            )
+            self._settle_custom_events(session)
+
+        pending.settle_early = settle_early
         self.data.calls_holding_custom_events.add(pending)
         with bind_in_tool_session(self.data, primed, pending):
             yield
@@ -667,11 +675,7 @@ class ToolCallLifecycle:
         without making the call wait on them or fail because of them."""
         pending = self.pending_custom_events
         self.data.calls_holding_custom_events.discard(pending)
-        if pending.settled is not None:
-            return
-        pending.settled = session
-        events, pending.events = pending.events, []
-        for context, event in events:
+        for context, event in pending.settle(session):
             try:
                 capture = capture_event(
                     self.data,
@@ -752,6 +756,7 @@ class ToolCallLifecycle:
             return True
         if tool_exists is not False:
             return False
+        self.pending_custom_events.settle_early = None
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         self._settle_custom_events(session)
@@ -769,6 +774,7 @@ class ToolCallLifecycle:
         return True
 
     async def record_error(self, error: Any, duration_ms: float) -> None:
+        self.pending_custom_events.settle_early = None
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
         conversation_id = self._anchored_conversation_id(False)
@@ -800,6 +806,7 @@ class ToolCallLifecycle:
         conversation_id_delivered: bool,
         error: Optional[BaseException] = None,
     ) -> None:
+        self.pending_custom_events.settle_early = None
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         self._settle_custom_events(session)

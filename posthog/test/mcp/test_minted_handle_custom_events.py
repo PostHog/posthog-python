@@ -3,6 +3,7 @@ goes out with the call's own session and identity. Run through the real mcp 1.x
 adapters."""
 
 import asyncio
+import threading
 from collections.abc import Mapping
 from contextvars import ContextVar
 
@@ -333,3 +334,127 @@ async def test_properties_that_cannot_be_copied_leave_the_call_alone():
         result = await session.call_tool("tool", {})
 
     assert not result.isError
+
+
+def session_and_person(event):
+    return event["distinct_id"], event["properties"]["$session_id"]
+
+
+@pytest.mark.parametrize("flush", [False, True], ids=["no flush", "flush mid-call"])
+async def test_a_custom_event_sent_by_a_flush_carries_its_calls_identity(flush):
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    captured, release = asyncio.Event(), asyncio.Event()
+
+    @server.tool()
+    async def job() -> str:
+        await analytics[0].capture("progress")
+        captured.set()
+        await release.wait()
+        return "done"
+
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=False, identify=UserIdentity(distinct_id="u1")
+    )
+    analytics.append(instrument(server, client, options))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        call = asyncio.create_task(session.call_tool("job", {}))
+        await captured.wait()
+        if flush:
+            await analytics[0].flush()
+        release.set()
+        await call
+    await flush_background()
+
+    (tool_call,) = events_named(client, "$mcp_tool_call")
+    (custom,) = events_named(client, "progress")
+    assert session_and_person(custom) == session_and_person(tool_call)
+
+
+@pytest.mark.parametrize(
+    "flush", [False, True], ids=["no flush", "flush while recording"]
+)
+async def test_a_flush_while_a_call_records_leaves_it_its_delivered_handle(flush):
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    recording, release = asyncio.Event(), asyncio.Event()
+
+    async def identify(request, extra):
+        if request.get("method") == "tools/call":
+            recording.set()
+            await release.wait()
+        return None
+
+    @server.tool()
+    async def job() -> str:
+        await analytics[0].capture("progress")
+        return "done"
+
+    options = MCPAnalyticsOptions(enable_conversation_id=True, identify=identify)
+    analytics.append(instrument(server, client, options))
+    async with create_connected_server_and_client_session(
+        server._mcp_server
+    ) as session:
+        call = asyncio.create_task(session.call_tool("job", {}))
+        await recording.wait()
+        if flush:
+            await analytics[0].flush()
+        release.set()
+        await call
+    await flush_background()
+
+    (tool_call,) = events_named(client, "$mcp_tool_call")
+    (custom,) = events_named(client, "progress")
+    assert custom["properties"]["$session_id"] == tool_call["properties"]["$session_id"]
+
+
+class PausingProperties(Mapping):
+    """Holds the tool's capture between deciding to defer and deferring."""
+
+    def __init__(self, inside: threading.Event, go: threading.Event):
+        self.inside, self.go = inside, go
+
+    def __getitem__(self, key):
+        return 1
+
+    def __len__(self):
+        return 1
+
+    def __iter__(self):
+        self.inside.set()
+        self.go.wait(5)
+        return iter(["k"])
+
+
+def test_a_flush_on_another_thread_racing_a_capture_sends_it_once():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    inside, go = threading.Event(), threading.Event()
+
+    @server.tool()
+    async def job() -> str:
+        await analytics[0].capture("racy", PausingProperties(inside, go))
+        return "done"
+
+    analytics.append(instrument(server, client, MCPAnalyticsOptions()))
+
+    async def run_call():
+        async with create_connected_server_and_client_session(
+            server._mcp_server
+        ) as session:
+            await session.call_tool("job", {})
+        await flush_background()
+
+    tool_thread = threading.Thread(target=lambda: asyncio.run(run_call()))
+    tool_thread.start()
+    assert inside.wait(5)
+    asyncio.run(analytics[0].flush())
+    go.set()
+    tool_thread.join()
+
+    assert len(events_named(client, "racy")) == 1
