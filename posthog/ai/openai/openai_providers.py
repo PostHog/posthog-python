@@ -23,8 +23,8 @@ from .openai_async import (
 )
 from .wrapper_utils import _wrap_openai_resources
 
+from posthog.ai.utils import _resolve_ai_client
 from posthog.client import Client as PostHogClient
-from posthog import setup
 
 
 class AzureOpenAI(openai.AzureOpenAI):
@@ -49,7 +49,7 @@ class AzureOpenAI(openai.AzureOpenAI):
                 ``api_key``, ``azure_endpoint``, or ``api_version``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         _wrap_openai_resources(self, _SYNC_RESOURCE_WRAPPERS)
 
@@ -76,6 +76,6 @@ class AsyncAzureOpenAI(openai.AsyncAzureOpenAI):
                 ``api_key``, ``azure_endpoint``, or ``api_version``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
 
         _wrap_openai_resources(self, _ASYNC_RESOURCE_WRAPPERS)

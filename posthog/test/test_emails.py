@@ -35,11 +35,9 @@ from posthog.version import VERSION
 
 SECRET_KEY = "phs_test_secret"
 TEMPLATE_ID = "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b"
-SEND_URL = "https://us.posthog.com/api/projects/@current/messaging/send/email/"
+SEND_URL = "https://us.posthog.com/api/messaging/send/email/"
 MESSAGE_ID = "01a18356-c56c-0001-e494-7666bc915188"
-STATUS_URL = (
-    f"https://us.posthog.com/api/projects/@current/messaging/emails/{MESSAGE_ID}/"
-)
+STATUS_URL = f"https://us.posthog.com/api/messaging/emails/{MESSAGE_ID}/"
 
 Reply = Union[Exception, tuple[int, Optional[dict[str, Any]], dict[str, str]]]
 
@@ -1058,8 +1056,8 @@ def test_a_refused_send_names_the_field_from_attr():
 
 
 POSTHOG_HOST = "https://us.posthog.com"
-UPLOADS_PATH = "/api/projects/@current/messaging/attachments/uploads/"
-SEND_PATH = "/api/projects/@current/messaging/send/email/"
+UPLOADS_PATH = "/api/messaging/attachments/uploads/"
+SEND_PATH = "/api/messaging/send/email/"
 STORAGE_URL = "https://files.example.com/team/1"
 STORAGE_SIGNING_KEY = b"fake-storage-signing-key"
 URL_LIFETIME_SECONDS = 900

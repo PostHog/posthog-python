@@ -77,9 +77,13 @@ def analytics():
 def events(ph, name):
     return [
         call.kwargs
-        for call in ph.capture.call_args_list
+        for call in ph.capture_ai.call_args_list
         if call.kwargs["event"] == name
     ]
+
+
+def event_options(event):
+    return event.get("options") or {}
 
 
 @pytest.mark.asyncio
@@ -196,7 +200,7 @@ async def test_multiturn_stream_tool_parentage_input_promotion_and_final_trace(s
     assert {
         event["properties"]["$ai_trace_id"] for event in events(ph, "$ai_generation")
     } == {"trace"}
-    for event in ph.capture.call_args_list:
+    for event in ph.capture_ai.call_args_list:
         assert event.kwargs["distinct_id"] == "user"
         assert event.kwargs["groups"] == {"team": "sdk"}
         assert event.kwargs["properties"]["environment"] == "test"
@@ -223,7 +227,7 @@ async def test_result_fallback_and_privacy_without_person_identity(sdk, private)
     generation = events(ph, "$ai_generation")[0]
     props = generation["properties"]
     assert generation["distinct_id"] == "trace"
-    assert props["$process_person_profile"] is False
+    assert event_options(generation)["process_person_profile"] is False
     assert props["$ai_input"] == (
         None if private else [{"role": "user", "content": "secret"}]
     )
@@ -238,7 +242,7 @@ async def test_result_fallback_and_privacy_without_person_identity(sdk, private)
     assert props["$ai_total_cost_usd"] == 0.01
     assert not events(ph, "$ai_trace")
     await client.disconnect()
-    assert events(ph, "$ai_trace")[0]["properties"]["$process_person_profile"] is False
+    assert event_options(events(ph, "$ai_trace")[0])["process_person_profile"] is False
 
 
 @pytest.mark.asyncio
@@ -277,7 +281,7 @@ async def test_options_are_copied_and_delegation_preserves_arguments(sdk, partia
 @pytest.mark.asyncio
 async def test_instrumentation_failures_never_interrupt_delivery_or_disconnect(sdk):
     ph = analytics()
-    ph.capture.side_effect = RuntimeError("capture failure")
+    ph.capture_ai.side_effect = RuntimeError("capture failure")
     ph.flush.side_effect = RuntimeError("flush failure")
     client = PostHogClaudeSDKClient(posthog_client=ph)
     await client.query("prompt")
@@ -317,11 +321,11 @@ async def test_processor_callable_identity_receives_result_only(
     generation = events(ph, "$ai_generation")[0]
     trace = events(ph, "$ai_trace")[0]
     assert generation["distinct_id"] == generation["properties"]["$ai_trace_id"]
-    assert generation["properties"]["$process_person_profile"] is False
+    assert event_options(generation)["process_person_profile"] is False
     assert trace["distinct_id"] == (
         str(resolved) if resolved else trace["properties"]["$ai_trace_id"]
     )
-    assert ("$process_person_profile" in trace["properties"]) is (not bool(resolved))
+    assert ("process_person_profile" in event_options(trace)) is (not bool(resolved))
 
 
 @pytest.mark.parametrize("resolved", [None, "person", 123, ""])
@@ -369,7 +373,7 @@ async def test_processor_cancellation_propagates_without_synthetic_generation_or
     with pytest.raises(asyncio.CancelledError):
         await task
     assert finalized.is_set()
-    ph.capture.assert_not_called()
+    ph.capture_ai.assert_not_called()
     ph.flush.assert_not_called()
 
 

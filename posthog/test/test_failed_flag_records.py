@@ -198,9 +198,11 @@ def test_filtered_snapshot_preserves_selected_failure_diagnostics(
         client.capture("filtered-snapshot", distinct_id="user", flags=filtered)
         enriched = enqueue.call_args.args[0]
         assert enriched["event"] == "filtered-snapshot"
-        assert enriched["properties"]["$feature/off"] is False
-        assert "$feature/failed" not in enriched["properties"]
-        assert "$feature/other-failed" not in enriched["properties"]
+        # v1 passes snapshot flag properties to _enqueue separately.
+        flag_properties = enqueue.call_args.kwargs["flag_properties"]
+        assert flag_properties["$feature/off"] is False
+        assert "$feature/failed" not in flag_properties
+        assert "$feature/other-failed" not in flag_properties
         assert enqueue.call_count == 2
 
         assert filtered.get_flag("other-failed") is None

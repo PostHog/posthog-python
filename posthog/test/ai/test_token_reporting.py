@@ -52,7 +52,7 @@ def test_token_counts_trace_back_to_a_provider_report(
 ):
     capture_streaming_event(mock_client, _event_data(usage_stats))
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     for key in ("$ai_input_tokens", "$ai_output_tokens"):
         if key in expected:
             assert props[key] == expected[key]
@@ -85,7 +85,7 @@ def test_aux_token_fields_trace_back_to_a_provider_report(
 ):
     capture_streaming_event(mock_client, _event_data(usage_stats, provider=provider))
 
-    props = mock_client.capture.call_args[1]["properties"]
+    props = mock_client.capture_ai.call_args[1]["properties"]
     for key in (
         "$ai_cache_read_input_tokens",
         "$ai_cache_creation_input_tokens",

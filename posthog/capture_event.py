@@ -1,0 +1,461 @@
+"""Event shaping for the capture v1 wire protocol.
+
+Transforms a legacy-shaped queued message into a v1 wire event and assembles
+the batch envelope. :mod:`posthog.capture_send` posts the result.
+
+The v1 contract (see ``rust/capture/src/v1/analytics/types.rs``) differs from
+the legacy queued-message shape in a few load-bearing ways that this module
+encodes:
+
+- An ``options`` object carries per-event processing options. Options the
+  caller sets are sent as given, for PostHog to validate. Four legacy ``$``
+  properties fill the matching option when the caller left it unset, and are
+  always removed from ``properties``.
+- ``$set``/``$set_once`` have no top-level form in v1; the server reads them
+  from ``properties``. The legacy ``set()``/``set_once()`` builders emit them at
+  the top level, so they are relocated into ``properties`` here.
+- ``$lib``/``$lib_version`` are sent as they are at send time. The SDK fills
+  them as a pair below every other layer, and ``before_send`` can change or
+  remove them. The ``PostHog-Sdk-Info`` header is only a server-side fallback
+  for events that don't name their library.
+"""
+
+import logging
+import re
+from collections.abc import Collection, Mapping
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any, Optional
+from uuid import UUID
+
+from posthog.utils import _normalize_timestamp, _rfc3339_timestamp, _uuid7
+from posthog.utils import clean as _clean
+
+if TYPE_CHECKING:
+    from posthog.args import _PinnedProperties
+
+log = logging.getLogger("posthog")
+
+# Sentinel properties lifted to top-level string fields on the event.
+_TOPLEVEL_SENTINELS: tuple[tuple[str, str], ...] = (
+    ("$session_id", "session_id"),
+    ("$window_id", "window_id"),
+)
+
+# Top-level legacy keys relocated into properties (v1 has no top-level form).
+_RELOCATE_TO_PROPERTIES = ("$set", "$set_once")
+
+# Properties that defaults fill one level deep when both values are dicts.
+_NESTED_FILL_PROPERTIES = frozenset({"$set", "$set_once", "$groups", "$group_set"})
+
+# The library identity pair. Only a non-empty string counts as set.
+_LIBRARY_PROPERTIES = ("$lib", "$lib_version")
+
+# Legacy properties and the option each one fills. The order matches posthog-rs
+# and posthog-go.
+_LEGACY_OPTION_PROPERTIES: tuple[tuple[str, str], ...] = (
+    ("$cookieless_mode", "cookieless_mode"),
+    ("$ignore_sent_at", "disable_skew_correction"),
+    ("$product_tour_id", "product_tour_id"),
+    ("$process_person_profile", "process_person_profile"),
+)
+
+# Events that change a person or group. PostHog drops or ignores them when
+# person processing is off, so they default it on (see
+# _default_identify_style_person_processing).
+_IDENTIFY_STYLE_EVENTS = (
+    "$identify",
+    "$create_alias",
+    "$merge_dangerously",
+    "$groupidentify",
+    "$set",
+    "$set_once",
+)
+
+# The uuid forms Go's uuid.Validate accepts. Python's UUID() also accepts
+# misplaced hyphens and a bare "uuid:" prefix, which other SDKs reject.
+_EVENT_UUID_PATTERN = re.compile(
+    r"(?:urn:uuid:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"|\{[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\}"
+    r"|[0-9a-f]{32}",
+    re.IGNORECASE,
+)
+
+
+def _canonical_event_uuid(value: Any) -> Optional[str]:
+    """Return the canonical form of a caller's event uuid, or None if invalid.
+
+    Capture keys per-event results by the canonical lowercase hyphenated form,
+    so a uuid sent in any other form would never match its result.
+    """
+    if isinstance(value, UUID):
+        return str(value)
+    if not isinstance(value, str) or not _EVENT_UUID_PATTERN.fullmatch(value):
+        return None
+    return str(UUID(value.lower()))
+
+
+def _resolve_event_uuid(value: Any) -> str:
+    """Return the canonical form of a caller's event uuid, or a generated one.
+
+    A missing or empty uuid is generated silently. An invalid one is replaced
+    and logs one warning. The warning names the rule and not the value,
+    because callers can put their own data in the uuid field.
+    """
+    if value is not None and value != "":
+        canonical = _canonical_event_uuid(value)
+        if canonical is not None:
+            return canonical
+        log.warning(
+            "Event uuid is not a valid UUID string or uuid.UUID. "
+            "Sending the event with a generated UUID."
+        )
+    return str(_uuid7())
+
+
+def _json_type_name(value: Any) -> str:
+    """Name a value's JSON type, the same names posthog-go and posthog-rs log."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, (int, float)):
+        return "number"
+    if isinstance(value, (list, tuple)):
+        return "array"
+    if isinstance(value, Mapping):
+        return "object"
+    return type(value).__name__
+
+
+def _event_options(value: Any) -> dict[str, Any]:
+    """Return a copy of a caller's ``options``, or ``{}`` when it is not a dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        log.error(
+            "options must be a dict, got %s. Sending the event without them.",
+            type(value).__name__,
+        )
+        return {}
+    return dict(value)
+
+
+@dataclass(frozen=True)
+class _EventDefaults:
+    """Per-call, context, global and SDK-derived values for one event, highest layer first.
+
+    They fill in before ``before_send``, so the hook sees them and can change
+    or remove them. The event's own values win over every default.
+    """
+
+    property_layers: tuple[Mapping[str, Any], ...] = ()
+    option_layers: tuple[Mapping[str, Any], ...] = ()
+    property_allowlist: Optional[Collection[str]] = None
+    trace_properties: Optional[Mapping[str, Any]] = None
+    library: Optional[tuple[str, str]] = None
+    pinned_properties: Optional["_PinnedProperties"] = None
+    personless: bool = False
+
+
+def _is_library_value(value: Any) -> bool:
+    """Whether ``value`` sets ``$lib`` or ``$lib_version``: a non-empty string."""
+    return isinstance(value, str) and value != ""
+
+
+def _build_event_defaults(
+    *,
+    super_properties: Optional[Mapping[str, Any]],
+    super_options: Any,
+    release_id: Optional[str],
+    context_properties: Optional[Mapping[str, Any]] = None,
+    context_options: Optional[Mapping[str, Any]] = None,
+    personless: bool = False,
+    property_allowlist: Optional[Collection[str]] = None,
+    is_server: bool = False,
+    disable_geoip: bool = False,
+    call_disable_geoip: Optional[bool] = None,
+    system_properties: Optional[Mapping[str, Any]] = None,
+    flag_properties: Optional[Mapping[str, Any]] = None,
+    trace_properties: Optional[Mapping[str, Any]] = None,
+    library_id: str,
+    library_version: str,
+    pinned_properties: Optional["_PinnedProperties"] = None,
+) -> _EventDefaults:
+    """Order the layers: per-call arguments, context, global, then SDK values.
+
+    ``disable_geoip`` is the client setting, an SDK value. ``call_disable_geoip``
+    is the argument of one call: it is a value of that event, so only the
+    event's own ``$geoip_disable`` property beats it. ``flag_properties`` (the
+    ``$feature/*`` and ``$active_feature_flags`` values from ``flags`` or
+    ``send_feature_flags``) are SDK values, so context and super properties
+    beat them. ``trace_properties`` (``$trace_id`` and ``$span_id`` from the
+    active OpenTelemetry span) are SDK values that fill as a pair.
+    ``library_id`` and ``library_version`` are the SDK's own ``$lib`` and
+    ``$lib_version``. They fill as a pair below every other layer.
+    ``pinned_properties`` is config version 2 flag attribution that no layer
+    may change or add to; it applies after every layer.
+    ``personless`` means the SDK generated the event's distinct ID. It adds
+    ``process_person_profile: False`` as the lowest option layer.
+    """
+    call_properties = (
+        {} if call_disable_geoip is None else {"$geoip_disable": call_disable_geoip}
+    )
+    # A value in the event, the context or super properties wins over every
+    # value the SDK adds, including `$is_server` and `$geoip_disable`.
+    sdk_properties = {**(flag_properties or {}), **(system_properties or {})}
+    if release_id is not None:
+        sdk_properties["$release_id"] = release_id
+    if is_server:
+        sdk_properties["$is_server"] = True
+    if disable_geoip:
+        sdk_properties["$geoip_disable"] = True
+    return _EventDefaults(
+        property_layers=(
+            call_properties,
+            context_properties or {},
+            super_properties or {},
+            sdk_properties,
+        ),
+        option_layers=(
+            context_options or {},
+            _event_options(super_options),
+            {"process_person_profile": False} if personless else {},
+        ),
+        property_allowlist=property_allowlist,
+        trace_properties=trace_properties,
+        library=(library_id, library_version),
+        pinned_properties=pinned_properties,
+        personless=personless,
+    )
+
+
+def _fill_event_defaults(
+    msg: dict[str, Any], defaults: Optional[_EventDefaults]
+) -> None:
+    """Fill the keys an event left unset from ``defaults``, layer by layer.
+
+    A property is unset only when its key is missing, except ``$lib`` and
+    ``$lib_version``, which are unset unless they hold a non-empty string. An
+    option is unset when it is missing or ``None``, the same rule hoisting
+    uses. ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill one
+    level deep when the event's value and the default are both dicts.
+    ``trace_properties`` fill last, and only when the event and every layer
+    leave all their keys unset. The SDK's ``library`` fills after every layer.
+    An identify-style event first resolves ``process_person_profile`` from the
+    call alone, so no layer can turn person processing off for it. Once its
+    option is set, its ``$process_person_profile`` property is removed.
+    """
+    _default_identify_style_person_processing(
+        msg, defaults is not None and defaults.personless
+    )
+    if defaults is None:
+        return
+    allowlist = defaults.property_allowlist
+    properties = msg.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        msg["properties"] = properties
+    for property_layer in defaults.property_layers:
+        for key, value in property_layer.items():
+            if allowlist is not None and key not in allowlist:
+                continue
+            if key not in properties or (
+                key in _LIBRARY_PROPERTIES
+                and _is_library_value(value)
+                and not _is_library_value(properties[key])
+            ):
+                properties[key] = _clean(value)
+                continue
+            existing = properties[key]
+            if (
+                key in _NESTED_FILL_PROPERTIES
+                and isinstance(existing, dict)
+                and isinstance(value, Mapping)
+            ):
+                properties[key] = {**_clean(dict(value)), **existing}
+    # A trace id and a span id from different spans would point at no real span,
+    # so a value for either key from any layer keeps out both of the SDK's ids.
+    trace_properties = defaults.trace_properties or {}
+    if not any(key in properties for key in trace_properties):
+        for key, value in trace_properties.items():
+            if allowlist is None or key in allowlist:
+                properties[key] = _clean(value)
+    if defaults.library is not None:
+        _fill_library(properties, defaults.library, allowlist)
+    if defaults.pinned_properties is not None:
+        # After every layer, so a context tag or super property never changes
+        # or adds config version 2 flag attribution. The allowlist still wins.
+        properties = defaults.pinned_properties.apply(properties)
+        if allowlist is not None:
+            properties = {k: v for k, v in properties.items() if k in allowlist}
+        msg["properties"] = properties
+    options = _event_options(msg.get("options"))
+    for option_layer in defaults.option_layers:
+        for key, value in option_layer.items():
+            if options.get(key) is None:
+                options[key] = _clean(value)
+    msg["options"] = options
+    # The option beats this property at serialization anyway. Dropping it now
+    # shows before_send one value, and a hook that drops options cannot send a
+    # layered legacy False.
+    if (
+        msg.get("event") in _IDENTIFY_STYLE_EVENTS
+        and options.get("process_person_profile") is not None
+    ):
+        msg["properties"].pop("$process_person_profile", None)
+
+
+def _default_identify_style_person_processing(
+    msg: dict[str, Any], personless: bool
+) -> None:
+    """Resolve ``process_person_profile`` for an identify-style event from the call.
+
+    Only the call's own values count, so it runs before any layer fills. A
+    non-null option is kept. Else a non-null ``$process_person_profile``
+    property moves into the option. Else the option is ``True``, unless the
+    SDK generated the distinct ID, which keeps the personless ``False``.
+    """
+    if msg.get("event") not in _IDENTIFY_STYLE_EVENTS:
+        return
+    options = _event_options(msg.get("options"))
+    if options.get("process_person_profile") is not None:
+        return
+    properties = msg.get("properties")
+    if (
+        isinstance(properties, dict)
+        and properties.get("$process_person_profile") is not None
+    ):
+        options["process_person_profile"] = properties.pop("$process_person_profile")
+    elif personless:
+        return
+    else:
+        options["process_person_profile"] = True
+    msg["options"] = options
+
+
+def _fill_library(
+    properties: dict[str, Any],
+    library: tuple[str, str],
+    allowlist: Optional[Collection[str]],
+) -> None:
+    """Fill the SDK's ``$lib`` and ``$lib_version`` as a pair.
+
+    With no ``$lib`` set, both are filled, replacing a lone ``$lib_version``.
+    A ``$lib`` naming this SDK with no ``$lib_version`` gets the SDK version.
+    A ``$lib`` naming another library keeps whatever ``$lib_version`` it has,
+    because the SDK version would misdescribe it.
+    """
+    library_id, library_version = library
+    if not _is_library_value(properties.get("$lib")):
+        fill = {"$lib": library_id, "$lib_version": library_version}
+    elif properties["$lib"] == library_id and not _is_library_value(
+        properties.get("$lib_version")
+    ):
+        fill = {"$lib_version": library_version}
+    else:
+        return
+    for key, value in fill.items():
+        if allowlist is None or key in allowlist:
+            properties[key] = value
+
+
+def _merge_groups(properties: dict[str, Any], groups: Mapping[str, Any]) -> None:
+    """Merge typed ``groups`` into the ``$groups`` property; ``groups`` wins key by key."""
+    existing = properties.get("$groups")
+    if isinstance(existing, dict):
+        properties["$groups"] = {**existing, **groups}
+    else:
+        properties["$groups"] = dict(groups)
+
+
+def _v1_timestamp(timestamp: Any) -> str:
+    """Return a UTC RFC3339 timestamp string.
+
+    Messages off the queue already carry a UTC ISO-8601 string (``_enqueue``
+    normalizes canonical datetimes), so that is passed through. A ``datetime``
+    is normalized to UTC and serialized; a missing value defaults to now in UTC.
+    The v1 server parses strictly with ``DateTime::parse_from_rfc3339`` and
+    rejects naive timestamps.
+    """
+    if timestamp is None:
+        return _rfc3339_timestamp(datetime.now(timezone.utc))
+    return _normalize_timestamp(timestamp)
+
+
+def _to_v1_event(msg: dict) -> dict:
+    """Transform a legacy-shaped queued message into a v1 wire event.
+
+    Pure: the input ``msg`` is not mutated (a fresh ``properties`` dict is
+    built), so it remains safe to keep the original for retries or callbacks.
+    """
+    properties = dict(msg.get("properties") or {})
+
+    # Relocate top-level $set/$set_once into properties; v1 has no top-level
+    # form. The top-level value comes from the set() or set_once() call, so it
+    # wins key by key over a $set in properties, as ingestion merges them.
+    for key in _RELOCATE_TO_PROPERTIES:
+        top_val = msg.get(key)
+        if top_val is None:
+            continue
+        existing = properties.get(key)
+        if isinstance(top_val, dict) and isinstance(existing, dict):
+            properties[key] = {**existing, **top_val}
+        else:
+            properties[key] = top_val
+
+    options = _event_options(msg.get("options"))
+    for prop_key, option_key in _LEGACY_OPTION_PROPERTIES:
+        if prop_key not in properties:
+            continue
+        legacy = properties.pop(prop_key)
+        # A null option counts as unset, so the legacy value fills it.
+        if options.get(option_key) is None:
+            options[option_key] = legacy
+
+    top_level: dict[str, str] = {}
+    for prop_key, field_name in _TOPLEVEL_SENTINELS:
+        if prop_key not in properties:
+            continue
+        # Always removed. A non-string value would fail the whole batch, so it
+        # is dropped. None counts as unset and drops silently.
+        value = properties.pop(prop_key)
+        if isinstance(value, str):
+            top_level[field_name] = value
+        elif value is not None:
+            log.warning(
+                "dropping %s: a %s value is not a string",
+                prop_key,
+                _json_type_name(value),
+            )
+
+    event = {
+        "event": msg["event"],
+        "uuid": msg["uuid"],
+        "distinct_id": msg["distinct_id"],
+        "timestamp": _v1_timestamp(msg.get("timestamp")),
+        # Always a dict so it serializes as "{}" rather than null when empty.
+        "options": options,
+        "properties": properties,
+    }
+    event.update(top_level)
+    return event
+
+
+def _build_v1_batch_body(
+    events: list[dict],
+    historical_migration: bool = False,
+    created_at: Optional[str] = None,
+) -> dict:
+    """Assemble the v1 batch envelope.
+
+    Carries no ``api_key`` (Bearer auth) and no ``sent_at``.
+    ``historical_migration`` is omitted when False (the server defaults it).
+    ``created_at`` defaults to now in UTC; :func:`_send_v1_batch` passes a value
+    hoisted once so it stays stable across retry attempts.
+    """
+    body: dict[str, Any] = {
+        "created_at": created_at or _rfc3339_timestamp(datetime.now(timezone.utc)),
+        "batch": events,
+    }
+    if historical_migration:
+        body["historical_migration"] = True
+    return body

@@ -4,12 +4,12 @@ import sys
 import time
 import unittest
 from collections import deque
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from unittest import mock
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
-from typing import Optional
+from typing import Iterator, Optional
 from uuid import UUID
 
 from parameterized import parameterized
@@ -21,6 +21,21 @@ from posthog.types import FeatureFlagResult
 
 TEST_API_KEY = "kOOlRy2QlMY9jHZQv0bKz0FZyazBUoY8Arj0lFVNjs4"
 FAKE_TEST_API_KEY = "random_key"
+
+
+@contextmanager
+def local_timezone(tz: str) -> Iterator[None]:
+    original_tz = os.environ.get("TZ")
+    os.environ["TZ"] = tz
+    time.tzset()
+    try:
+        yield
+    finally:
+        if original_tz is None:
+            os.environ.pop("TZ", None)
+        else:
+            os.environ["TZ"] = original_tz
+        time.tzset()
 
 
 class FakeRedis:
@@ -126,10 +141,7 @@ class TestUtils(unittest.TestCase):
 
     @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
     def test_guess_timezone_preserves_recent_naive_local_instant_as_utc(self):
-        original_tz = os.environ.get("TZ")
-        try:
-            os.environ["TZ"] = "EST5EDT"
-            time.tzset()
+        with local_timezone("EST5EDT"):
             local_now = datetime(2026, 1, 15, 7, 30, 45, 123456)
             utc_now = datetime(2026, 1, 15, 12, 30, 45, 123456, tzinfo=timezone.utc)
 
@@ -141,32 +153,17 @@ class TestUtils(unittest.TestCase):
 
             assert normalized == utc_now
             assert normalized.isoformat() == "2026-01-15T12:30:45.123456+00:00"
-        finally:
-            if original_tz is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = original_tz
-            time.tzset()
 
     @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
     def test_normalize_timestamp_treats_future_naive_string_as_utc(self):
-        original_tz = os.environ.get("TZ")
-        try:
-            os.environ["TZ"] = "EST5EDT"
-            time.tzset()
+        with local_timezone("EST5EDT"):
             now = datetime(2026, 1, 15, 12, 30, tzinfo=timezone.utc)
 
             with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
                 mock_datetime.now.return_value = now.replace(tzinfo=None)
                 normalized = utils._normalize_timestamp("2030-01-01T12:00:00")
 
-            assert normalized == "2030-01-01T12:00:00+00:00"
-        finally:
-            if original_tz is None:
-                os.environ.pop("TZ", None)
-            else:
-                os.environ["TZ"] = original_tz
-            time.tzset()
+            assert normalized == "2030-01-01T12:00:00.000000+00:00"
 
     def test_normalize_timestamp_converts_datetime_to_utc(self):
         timestamp = datetime(
@@ -177,12 +174,39 @@ class TestUtils(unittest.TestCase):
             utils._normalize_timestamp(timestamp) == "2026-01-15T12:30:45.123456+00:00"
         )
 
+    @parameterized.expand(
+        [
+            (
+                "whole_second_keeps_zero_fraction",
+                datetime(2026, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.000000+00:00",
+            ),
+            (
+                "microseconds_kept",
+                datetime(2026, 1, 15, 12, 0, 0, 120000, tzinfo=timezone.utc),
+                "2026-01-15T12:00:00.120000+00:00",
+            ),
+            (
+                "offset_converted_to_utc",
+                datetime(2026, 1, 15, 7, 30, 0, tzinfo=timezone(timedelta(hours=-5))),
+                "2026-01-15T12:30:00.000000+00:00",
+            ),
+        ]
+    )
+    @unittest.skipUnless(hasattr(time, "tzset"), "requires time.tzset")
+    def test_rfc3339_timestamp_always_writes_the_fraction_in_utc(
+        self, _name: str, value: datetime, expected: str
+    ):
+        # A non-UTC local zone tells UTC conversion apart from local conversion.
+        with local_timezone("EST5EDT"):
+            assert utils._rfc3339_timestamp(value) == expected
+
     def test_normalize_timestamp_converts_compact_offset_to_utc(self):
         with mock.patch("posthog.utils.datetime", wraps=datetime) as mock_datetime:
             normalized = utils._normalize_timestamp("2026-06-27T12:00:00+0530")
 
         mock_datetime.fromisoformat.assert_called_once_with("2026-06-27T12:00:00+05:30")
-        assert normalized == "2026-06-27T06:30:00+00:00"
+        assert normalized == "2026-06-27T06:30:00.000000+00:00"
 
     @parameterized.expand(["2026-06-27", "20260627", "not-Z-an-iso-timestamp"])
     def test_normalize_timestamp_rejects_invalid_string(self, timestamp):
@@ -262,6 +286,32 @@ class TestUtils(unittest.TestCase):
     def test_remove_slash(self, input_url, expected_url):
         assert expected_url == utils.remove_trailing_slash(input_url)
 
+    @parameterized.expand(
+        [
+            ("random_ones", b"\xff" * 10, "01234567-89ab-7fff-bfff-ffffffffffff"),
+            ("random_zeros", b"\x00" * 10, "01234567-89ab-7000-8000-000000000000"),
+            (
+                "random_mixed",
+                bytes(range(0x10, 0x1A)),
+                "01234567-89ab-7011-9213-141516171819",
+            ),
+        ]
+    )
+    def test_uuid7_layout(self, _name, random_bytes, expected):
+        # Bit 48 of the millisecond clock is set to check that it is masked off.
+        time_ns = ((1 << 48) + 0x0123456789AB) * 1_000_000 + 999_999
+        with (
+            mock.patch.object(utils.time, "time_ns", return_value=time_ns),
+            mock.patch.object(
+                utils.os,
+                "urandom",
+                side_effect=lambda n: (random_bytes + b"\xaa" * n)[:n],
+            ),
+        ):
+            value = utils._uuid7()
+        self.assertEqual(str(value), expected)
+        self.assertEqual(value.version, 7)
+
     def test_clean_pydantic(self):
         class ModelV2(BaseModel):
             foo: str
@@ -339,11 +389,125 @@ class TestUtils(unittest.TestCase):
         ):
             assert utils._clean_dict({"ok": 1, "bad": bad_value}) == {"ok": 1}
 
-        warning.assert_called_once()
-        assert warning.call_args.args[0] == (
-            'Dictionary values must be serializeable to JSON "%s" value %s of type %s is unsupported.'
+        warning.assert_called_once_with(
+            'Dictionary value for key "%s" of type %s is not JSON serializable, dropping it.',
+            "bad",
+            type(bad_value),
         )
-        assert warning.call_args.args[1:] == ("bad", bad_value, type(bad_value))
+
+    @parameterized.expand(
+        [
+            ("missing", None, "missing"),
+            ("non_string", 123, "non-string"),
+            ("bytes", b"event", "non-string"),
+            ("empty", "", "empty"),
+            ("valid", "signed_up", None),
+            ("whitespace_is_a_name", " ", None),
+        ]
+    )
+    def test_invalid_event_name_reason(self, _, event, expected):
+        assert utils._invalid_event_name_reason(event) == expected
+
+    def test_drop_invalid_event_name_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            dropped = [
+                utils._drop_invalid_event_name(logger, msg)
+                for msg in ({"event": None}, {}, {"event": ""}, {"event": "ok"})
+            ]
+
+        assert dropped == [True, True, True, False]
+        message = (
+            "Dropping an event with a %s name: event names must be non-empty strings. "
+            "Later events dropped for the same reason are not logged."
+        )
+        assert logger.warning.call_args_list == [
+            mock.call(message, "missing"),
+            mock.call(message, "empty"),
+        ]
+
+    def test_before_send_logs_name_the_event_and_never_the_exception_message(self):
+        logger = mock.Mock()
+        error = ValueError("secret@example.com")
+
+        utils._log_before_send_error(logger, "signup", error)
+        utils._log_before_send_bad_return(logger, "signup", ["not", "a", "dict"])
+
+        assert logger.method_calls == [
+            mock.call.error(
+                "Error in before_send callback for event %s (%s), dropping the event",
+                "signup",
+                "ValueError",
+            ),
+            mock.call.debug("before_send callback traceback", exc_info=error),
+            mock.call.error(
+                "before_send must return a dict or None, not %s, dropping event %s",
+                "list",
+                "signup",
+            ),
+        ]
+
+    def test_drop_invalid_distinct_id_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            dropped = [
+                utils._drop_invalid_distinct_id(logger, msg)
+                for msg in (
+                    {"distinct_id": None},
+                    {},
+                    {"distinct_id": 123},
+                    {"distinct_id": ["a"]},
+                    {"distinct_id": "user"},
+                    {"distinct_id": ""},
+                )
+            ]
+
+        assert dropped == [True, True, True, True, False, False]
+        message = (
+            "Dropping an event with a %s distinct_id: distinct IDs must be strings. "
+            "Later events dropped for the same reason are not logged."
+        )
+        assert logger.warning.call_args_list == [
+            mock.call(message, "missing"),
+            mock.call(message, "non-string"),
+        ]
+
+    def test_warn_once_logs_each_reason_once(self):
+        logger = mock.Mock()
+        with mock.patch.object(utils, "_warned_reasons", set()):
+            utils._warn_once(logger, "a", "first %s", 1)
+            utils._warn_once(logger, "a", "again %s", 2)
+            utils._warn_once(logger, "b", "second")
+
+        assert logger.warning.call_args_list == [
+            mock.call("first %s", 1),
+            mock.call("second"),
+        ]
+
+    @parameterized.expand(
+        [
+            ("personal", "phx_abc", True),
+            ("project", "phc_abc", False),
+            ("prefix_elsewhere", "abc_phx_", False),
+            ("empty", "", False),
+        ]
+    )
+    def test_is_personal_api_key(self, _, api_key, expected):
+        assert utils._is_personal_api_key(api_key) is expected
+
+    def test_clean_drops_only_keys_json_cannot_write(self):
+        cleaned = utils.clean(
+            {
+                ("t",): "tuple",
+                "s": 1,
+                2: "int",
+                1.5: "float",
+                True: "bool",
+                None: "none",
+            }
+        )
+        assert cleaned == {"s": 1, 2: "int", 1.5: "float", True: "bool", None: "none"}
+        json.dumps(cleaned)
 
     def test_coerce_unicode(self):
         assert utils._coerce_unicode("already unicode") == "already unicode"

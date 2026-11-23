@@ -89,7 +89,7 @@ To send your first event, install the package, create a client, capture an event
 ### Install
 
 ```bash
-pip install posthog
+pip install "posthog>=7,<8"
 ```
 
 ### Initialize
@@ -963,7 +963,7 @@ Flat list of the lanes' consumers, analytics first (kept for backwards compatibi
 new_context(fresh=False, capture_exceptions: Optional[bool] = None)
 ```
 
-Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
+Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#posthognew_context).
 
 **Parameters:**
 

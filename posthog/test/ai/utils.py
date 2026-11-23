@@ -7,6 +7,7 @@ def make_response_usage(
     total_tokens: int,
     cached_tokens: int = 0,
     reasoning_tokens: int = 0,
+    cache_write_tokens: int = 0,
 ):
     """Build an ``openai.types.responses.ResponseUsage`` across SDK versions.
 
@@ -33,7 +34,8 @@ def make_response_usage(
         output_tokens=output_tokens,
         total_tokens=total_tokens,
         input_tokens_details=build(
-            InputTokensDetails, {"cached_tokens": cached_tokens}
+            InputTokensDetails,
+            {"cached_tokens": cached_tokens, "cache_write_tokens": cache_write_tokens},
         ),
         output_tokens_details=build(
             OutputTokensDetails, {"reasoning_tokens": reasoning_tokens}
@@ -88,3 +90,55 @@ class RecordingAsyncStream:
 
     async def close(self):
         self.closed = True
+
+
+# Each case: name, distinct ID passed to the wrapper, posthog_options passed
+# (None means the argument is left out), expected ``options`` kwarg of
+# ``capture_ai`` (None means no ``options`` kwarg), and whether a non-dict
+# warning is logged.
+POSTHOG_OPTIONS_CASES = [
+    (
+        "identified_keeps_user_values",
+        "user-1",
+        {"cookieless_mode": True, "process_person_profile": True},
+        {"cookieless_mode": True, "process_person_profile": True},
+        False,
+    ),
+    (
+        "personless_false_beats_user_true",
+        None,
+        {"cookieless_mode": True, "process_person_profile": True},
+        {"cookieless_mode": True, "process_person_profile": False},
+        False,
+    ),
+    ("unset_sends_no_options", "user-1", None, None, False),
+    ("non_dict_is_ignored", "user-1", "cookieless_mode", None, True),
+    (
+        "non_dict_is_ignored_personless",
+        None,
+        ["cookieless_mode"],
+        {"process_person_profile": False},
+        True,
+    ),
+]
+
+NON_DICT_OPTIONS_WARNING = "posthog_options must be a dict"
+
+
+def posthog_call_kwargs(distinct_id, posthog_options):
+    """The PostHog arguments of one wrapper call, leaving out unset ones."""
+    kwargs = {}
+    if distinct_id is not None:
+        kwargs["posthog_distinct_id"] = distinct_id
+    if posthog_options is not None:
+        kwargs["posthog_options"] = posthog_options
+    return kwargs
+
+
+def assert_captured_options(capture_kwargs, expected, warns, caplog):
+    """Check the ``options`` kwarg of one ``capture_ai`` call and the warning log."""
+    if expected is None:
+        assert "options" not in capture_kwargs
+    else:
+        assert capture_kwargs["options"] == expected
+    assert (NON_DICT_OPTIONS_WARNING in caplog.text) is warns

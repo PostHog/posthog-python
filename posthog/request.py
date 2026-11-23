@@ -4,11 +4,8 @@ import math
 import re
 import socket
 import time
-import zlib
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from gzip import GzipFile
-from io import BytesIO
 from typing import Any, List, Optional, Tuple, Union, cast
 from uuid import UUID
 
@@ -78,7 +75,7 @@ class HTTPAdapterWithSocketOptions(HTTPAdapter):
 
 
 def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.Session:
-    """Build a session for general requests (batch, remote config, etc.)."""
+    """Build a session for general requests (remote config, flag definitions, etc.)."""
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(
             total=2,
@@ -92,13 +89,13 @@ def _build_session(socket_options: Optional[SocketOptions] = None) -> requests.S
     return session
 
 
-def _build_flags_session(
+def _build_no_retry_session(
     socket_options: Optional[SocketOptions] = None,
 ) -> requests.Session:
-    """Build a session for feature flag requests.
+    """Build a session whose adapter never retries; ``flags()`` and capture own retries.
 
-    /flags retries are handled explicitly in ``flags()`` so that only
-    transport failures and contract-defined transient HTTP responses are retried.
+    Capture needs a fresh ``PostHog-Request-Timestamp`` on every physical attempt,
+    because capture uses it to correct clock skew.
     """
     adapter = HTTPAdapterWithSocketOptions(
         max_retries=Retry(total=0, connect=0, read=0, status=0),
@@ -110,7 +107,8 @@ def _build_flags_session(
 
 
 _session = _build_session()
-_flags_session = _build_flags_session()
+_flags_session = _build_no_retry_session()
+_capture_session = _build_no_retry_session()
 _socket_options: Optional[SocketOptions] = None
 _pooling_enabled = True
 
@@ -124,7 +122,13 @@ def _get_session() -> requests.Session:
 def _get_flags_session() -> requests.Session:
     if _pooling_enabled:
         return _flags_session
-    return _build_flags_session(_socket_options)
+    return _build_no_retry_session(_socket_options)
+
+
+def _get_capture_session() -> requests.Session:
+    if _pooling_enabled:
+        return _capture_session
+    return _build_no_retry_session(_socket_options)
 
 
 def reset_sessions() -> None:
@@ -132,13 +136,16 @@ def reset_sessions() -> None:
     Reset the global sessions. This should be called after a fork to ensure
     that the child process does not use the parent's connection pool.
     """
-    global _session, _flags_session
+    global _session, _flags_session, _capture_session
     if _session:
         _session.close()
     if _flags_session:
         _flags_session.close()
+    if _capture_session:
+        _capture_session.close()
     _session = _build_session(_socket_options)
-    _flags_session = _build_flags_session(_socket_options)
+    _flags_session = _build_no_retry_session(_socket_options)
+    _capture_session = _build_no_retry_session(_socket_options)
 
 
 def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
@@ -156,12 +163,13 @@ def set_socket_options(socket_options: Optional[SocketOptions]) -> None:
         from posthog import set_socket_options
         set_socket_options([(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)])
     """
-    global _session, _flags_session, _socket_options
+    global _session, _flags_session, _capture_session, _socket_options
     if socket_options == _socket_options:
         return
     _socket_options = socket_options
     _session = _build_session(socket_options)
-    _flags_session = _build_flags_session(socket_options)
+    _flags_session = _build_no_retry_session(socket_options)
+    _capture_session = _build_no_retry_session(socket_options)
 
 
 def enable_keep_alive() -> None:
@@ -170,6 +178,9 @@ def enable_keep_alive() -> None:
 
     This helps prevent idle pooled connections from being dropped by network
     infrastructure. Call during initialization, before making API requests.
+    Where the platform supports the corresponding socket options, it uses
+    a 60 second idle time, a 60 second probe interval and 3 probes before
+    timeout. Unsupported settings keep their system defaults.
     """
     set_socket_options(KEEP_ALIVE_SOCKET_OPTIONS)
 
@@ -232,38 +243,26 @@ def post(
     api_key: str,
     host: Optional[str] = None,
     path: Optional[str] = None,
-    gzip: bool = False,
+    *,
     timeout: float = 15,
     session: Optional[requests.Session] = None,
     **kwargs,
 ) -> requests.Response:
     """Post the `kwargs` to the API"""
     log = logging.getLogger("posthog")
-    user_agent = kwargs.pop("_user_agent", USER_AGENT)
     body = kwargs
     body["sent_at"] = datetime.now(tz=timezone.utc).isoformat()
     trimmed_host = remove_trailing_slash(normalize_host(host))
     url = trimmed_host + cast(str, path)
     body["api_key"] = api_key
-    data: str | bytes = json.dumps(body, cls=DatetimeSerializer)
+    data = json.dumps(body, cls=DatetimeSerializer)
     if log.isEnabledFor(logging.DEBUG):
         log.debug(
             "making request: %s to url: %s",
             json.dumps({**body, "api_key": "[redacted]"}, cls=DatetimeSerializer),
             url,
         )
-    headers = {"Content-Type": "application/json", "User-Agent": user_agent}
-    if gzip:
-        try:
-            buf = BytesIO()
-            with GzipFile(fileobj=buf, mode="w") as gz:
-                # 'data' was produced by json.dumps(),
-                # whose default encoding is utf-8.
-                gz.write(cast(str, data).encode("utf-8"))
-            data = buf.getvalue()
-            headers["Content-Encoding"] = "gzip"
-        except (OSError, zlib.error) as exc:
-            log.warning("failed to gzip request body, sending uncompressed: %s", exc)
+    headers = {"Content-Type": "application/json", "User-Agent": USER_AGENT}
 
     res = (session or _get_session()).post(
         url, data=data, headers=headers, timeout=timeout
@@ -336,13 +335,12 @@ def _feature_flags_retry_delay(failed_attempt: int) -> float:
 def flags(
     api_key: str,
     host: Optional[str] = None,
-    gzip: bool = False,
+    *,
     timeout: float = 15,
     max_retries: int = 1,
     **kwargs,
 ) -> Any:
     """Post the kwargs to the flags API endpoint with bounded transient retries."""
-    user_agent = kwargs.pop("_user_agent", USER_AGENT)
     retries = max(0, max_retries)
     failed_attempt = 0
 
@@ -352,10 +350,8 @@ def flags(
                 api_key,
                 host,
                 "/flags/?v=4",
-                gzip,
-                timeout,
+                timeout=timeout,
                 session=_get_flags_session(),
-                _user_agent=user_agent,
                 **kwargs,
             )
             return _process_response(
@@ -386,45 +382,13 @@ def remote_config(
     timeout: float = 15,
 ) -> Any:
     """Get remote config flag value from remote_config API endpoint"""
-    return _remote_config(personal_api_key, project_api_key, host, key, timeout)
-
-
-def _remote_config(
-    personal_api_key: str,
-    project_api_key: str,
-    host: Optional[str] = None,
-    key: str = "",
-    timeout: float = 15,
-    *,
-    _user_agent: str = USER_AGENT,
-) -> Any:
-    response = _get(
+    response = get(
         personal_api_key,
         f"/api/projects/@current/feature_flags/{key}/remote_config?token={project_api_key}",
         host,
         timeout,
-        _user_agent=_user_agent,
     )
     return response.data
-
-
-EVENTS_ENDPOINT = "/batch/"
-AI_EVENTS_ENDPOINT = "/i/v0/ai/batch/"
-
-
-def batch_post(
-    api_key: str,
-    host: Optional[str] = None,
-    gzip: bool = False,
-    timeout: float = 15,
-    path: str = EVENTS_ENDPOINT,
-    **kwargs,
-) -> requests.Response:
-    """Post the `kwargs` to the batch API endpoint for events"""
-    res = post(api_key, host, path, gzip, timeout, **kwargs)
-    return _process_response(
-        res, success_message="data uploaded successfully", return_json=False
-    )
 
 
 def get(
@@ -441,25 +405,10 @@ def get(
     - not_modified=True and data=None if server returns 304
     - not_modified=False and data=response if server returns 200
     """
-    return _get(api_key, url, host, timeout, etag)
-
-
-def _get(
-    api_key: str,
-    url: str,
-    host: Optional[str] = None,
-    timeout: Optional[float] = None,
-    etag: Optional[str] = None,
-    *,
-    _user_agent: str = USER_AGENT,
-) -> GetResponse:
     log = logging.getLogger("posthog")
     trimmed_host = remove_trailing_slash(normalize_host(host))
     full_url = trimmed_host + url
-    headers = {
-        "Authorization": "Bearer %s" % api_key,
-        "User-Agent": _user_agent,
-    }
+    headers = {"Authorization": "Bearer %s" % api_key, "User-Agent": USER_AGENT}
 
     if etag:
         headers["If-None-Match"] = etag
@@ -532,6 +481,12 @@ class DatetimeSerializer(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
     def encode(self, o: Any) -> str:
+        # A strict encode fails only on a non-finite float, so finite events skip the copy.
+        if not self.allow_nan:
+            try:
+                return super().encode(o)
+            except ValueError:
+                pass
         return super().encode(_replace_non_finite_floats(o))
 
 

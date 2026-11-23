@@ -59,7 +59,14 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
         properties: Optional[dict[str, Any]] = None,
         privacy_mode: bool = False,
         groups: Optional[dict[str, Any]] = None,
+        options: Optional[dict[str, Any]] = None,
     ) -> None:
+        """
+        Args:
+            options: Optional capture options for every event, such as
+                ``{"cookieless_mode": True}``. The other arguments are the same
+                as :class:`CallbackHandler`'s.
+        """
         self._callback = CallbackHandler(
             client,
             distinct_id=distinct_id,
@@ -67,6 +74,7 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
             properties=properties,
             privacy_mode=privacy_mode,
             groups=groups,
+            options=options,
         )
 
     def before_agent(

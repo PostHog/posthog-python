@@ -19,10 +19,9 @@ CAPTURE_COMPRESSION_ENV_VAR = "POSTHOG_CAPTURE_COMPRESSION"
 
 
 class CaptureCompression(str, Enum):
-    """Selects the request-body compression for capture-v1 uploads.
+    """Selects the request-body compression for capture uploads.
 
-    Only honored when ``capture_mode`` is ``V1``; the legacy ``/batch/`` path
-    keeps using its own ``gzip`` flag. ``NONE`` sends the body uncompressed.
+    ``NONE`` sends the body uncompressed.
     ``GZIP`` and ``DEFLATE`` (zlib, RFC 1950) are both stdlib / zero-dependency;
     ``ZSTD`` is faster and compresses better but needs the optional zstandard
     package (``pip install posthog[zstd]``) until stdlib support lands in
@@ -61,6 +60,7 @@ def _zstd_available() -> bool:
 
 def _coerce_explicit(
     value: Union[CaptureCompression, str],
+    name: str = "capture_compression",
 ) -> CaptureCompression:
     """Normalize an explicitly-supplied compression to a ``CaptureCompression``.
 
@@ -75,22 +75,19 @@ def _coerce_explicit(
         if resolved is not None:
             return resolved
     raise ValueError(
-        f"invalid capture_compression {value!r}; expected a CaptureCompression "
+        f"invalid {name} {value!r}; expected a CaptureCompression "
         f"or one of {sorted(_ALIASES)}"
     )
 
 
 def _resolve_capture_compression(
     capture_compression: Optional[Union[CaptureCompression, str]] = None,
-    *,
-    gzip_fallback: bool = False,
 ) -> CaptureCompression:
-    """Resolve the effective v1 compression.
+    """Resolve the effective capture compression.
 
     Precedence: explicit ``capture_compression`` argument >
-    ``POSTHOG_CAPTURE_COMPRESSION`` env var > the legacy ``gzip`` flag
-    (``GZIP`` when set) > ``NONE``. An unrecognized env value logs a warning and
-    falls back to the ``gzip`` flag, so a typo never silently changes encoding.
+    ``POSTHOG_CAPTURE_COMPRESSION`` env var > ``NONE``. An unrecognized env
+    value logs a warning and falls back to ``NONE``.
 
     ``ZSTD`` requires the optional zstandard package: explicitly requesting it
     without the package raises ``ValueError`` (programming error, fail loud),
@@ -106,7 +103,7 @@ def _resolve_capture_compression(
             )
         return resolved
 
-    fallback = CaptureCompression.GZIP if gzip_fallback else CaptureCompression.NONE
+    fallback = CaptureCompression.NONE
 
     return _resolve_env_compression(fallback)
 
@@ -136,3 +133,22 @@ def _resolve_env_compression(fallback: CaptureCompression) -> CaptureCompression
         )
         return fallback
     return env_resolved
+
+
+def _resolve_capture_ai_compression(
+    capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+) -> CaptureCompression:
+    """Resolve the AI lane's request-body compression.
+
+    Explicit argument only, defaulting to ``NONE``. ``POSTHOG_CAPTURE_COMPRESSION``
+    does not apply, so changing analytics compression never changes AI uploads.
+    """
+    if capture_ai_compression is None:
+        return CaptureCompression.NONE
+    resolved = _coerce_explicit(capture_ai_compression, "capture_ai_compression")
+    if resolved is CaptureCompression.ZSTD and not _zstd_available():
+        raise ValueError(
+            "capture_ai_compression 'zstd' requires the zstandard package; "
+            "install posthog[zstd]"
+        )
+    return resolved

@@ -4,6 +4,7 @@ from ..utils import (
     _capture_ai_event,
     _format_ai_error,
     _get_http_status,
+    _user_distinct_id,
     finalize_ai_content,
     with_privacy_mode,
 )
@@ -22,6 +23,7 @@ def _capture_embedding_event(
     privacy_mode: bool,
     groups: Optional[Dict[str, Any]],
     error: Optional[BaseException] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Build and capture telemetry shared by sync and async embedding wrappers."""
     usage = getattr(response, "usage", None)
@@ -53,14 +55,13 @@ def _capture_embedding_event(
         ),
     }
 
-    if distinct_id is None:
-        event_properties["$process_person_profile"] = False
-
-    if hasattr(posthog_client, "capture"):
+    if callable(getattr(posthog_client, "capture_ai", None)):
         _capture_ai_event(
             posthog_client,
             "$ai_embedding",
-            distinct_id=distinct_id or trace_id,
+            distinct_id=_user_distinct_id(distinct_id) or trace_id,
             properties=event_properties,
             groups=groups,
+            personless=_user_distinct_id(distinct_id) is None,
+            options=options,
         )

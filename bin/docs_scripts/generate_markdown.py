@@ -214,6 +214,26 @@ def nest(markdown: str) -> str:
     return "\n".join(out)
 
 
+def migration_page(guides: list[str]) -> list[str]:
+    """The migration page. One guide's H1 becomes the page title, so the page shows one title."""
+    title = "PostHog Python SDK migration guides"
+    if len(guides) == 1 and guides[0].startswith("# "):
+        heading, _, rest = guides[0].partition("\n")
+        title, guides = heading[2:].strip(), [rest.strip()]
+    head = f"---\ntitle: {json.dumps(title)}\nsidebar: Docs\nshowTitle: true\n---"
+    return [head, *guides]
+
+
+def getting_started(major: int) -> str:
+    """docs/getting-started.md for one major. Its install line pins that major, so a
+    reader never installs a major the page doesn't describe."""
+    text = (ROOT / "docs/getting-started.md").read_text()
+    if "{major}" not in text:
+        raise SystemExit("docs/getting-started.md: the install line must pin {major}")
+    pinned = text.replace("{major}", str(major))
+    return nest(pinned.replace("{next_major}", str(major + 1)))
+
+
 def write(name: str, sections: list[str]) -> None:
     (ROOT / "references" / name).write_text("\n\n".join(sections) + "\n")
     print(f"wrote references/{name}")
@@ -239,15 +259,13 @@ def main() -> None:
         (ROOT / "posthog/version.py").read_text().split('"')[1].split(".")[0]
     )
     major = opts.major or declared
-    started = nest((ROOT / "docs/getting-started.md").read_text())
+    started = getting_started(major)
     body = [
         "## Getting started",
         started,
         *reference(pkg, capabilities(opts.sdk_specs), declared >= major),
     ]
-    title = f"PostHog Python SDK {major}.x" + (
-        "" if declared >= major else " (experimental)"
-    )
+    title = f"PostHog Python SDK {major}.x"
     write(f"posthog-python-{major}.md", [front_matter(title, body), *body])
     if declared >= major:
         write(
@@ -255,10 +273,9 @@ def main() -> None:
             [front_matter("PostHog Python SDK", body), *body],
         )
     if guides := sorted((ROOT / "docs").glob("migration-*.md"), reverse=True):
-        head = "---\ntitle: PostHog Python SDK migration guides\nsidebar: Docs\nshowTitle: true\n---"
         write(
             "posthog-python-migration.md",
-            [head, *(g.read_text().strip() for g in guides)],
+            migration_page([g.read_text().strip() for g in guides]),
         )
 
 

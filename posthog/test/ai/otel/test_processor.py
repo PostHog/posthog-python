@@ -8,7 +8,8 @@ from decimal import Decimal
 from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+from opentelemetry.trace import Link
 
 from posthog import contexts
 from posthog.ai.otel.processor import PostHogSpanProcessor, _reset_processors_after_fork
@@ -391,6 +392,40 @@ class TestPostHogSpanProcessorRequestContext(unittest.TestCase):
         self._emit_span()
 
         self.assertEqual(self._exported_attributes(), [{}])
+
+    def test_exported_copy_reports_dropped_counts(self):
+        with new_request_context():
+            contexts.identify_context("alice")
+            self._emit_span()
+
+        exported = self.inner.on_end.call_args.args[0]
+        self.assertEqual(exported.dropped_attributes, 0)
+        self.assertEqual(exported.dropped_events, 0)
+        self.assertEqual(exported.dropped_links, 0)
+
+    def test_exported_copy_keeps_counts_dropped_by_span_limits(self):
+        provider = TracerProvider(
+            span_limits=SpanLimits(max_attributes=2, max_events=1, max_links=1)
+        )
+        provider.add_span_processor(self.processor)
+        tracer = provider.get_tracer("test")
+        linked = [
+            Link(tracer.start_span(f"linked-{i}").get_span_context()) for i in range(3)
+        ]
+
+        with new_request_context():
+            contexts.identify_context("alice")
+            with tracer.start_as_current_span(
+                "gen_ai.chat", attributes={"a": 1, "b": 2, "c": 3}, links=linked
+            ) as span:
+                span.add_event("first")
+                span.add_event("second")
+
+        exported = self.inner.on_end.call_args.args[0]
+        self.assertEqual(exported.attributes["posthog.distinct_id"], "alice")
+        self.assertEqual(exported.dropped_attributes, 1)
+        self.assertEqual(exported.dropped_events, 1)
+        self.assertEqual(exported.dropped_links, 2)
 
     def test_overlapping_requests_export_their_own_values(self):
         both_started = threading.Barrier(2)

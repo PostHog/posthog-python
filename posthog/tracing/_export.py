@@ -12,7 +12,7 @@ import threading
 import time
 from typing import Any, Callable, List, Optional, Tuple
 
-from ..capture_v1 import _MAX_BACKOFF_SECONDS
+from ..capture_send import _MAX_BACKOFF_SECONDS
 from ._config import ResolvedTracesConfig
 from ._drops import DropLog
 from ._limits import truncate_attributes

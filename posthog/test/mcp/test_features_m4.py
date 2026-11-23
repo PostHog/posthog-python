@@ -296,13 +296,16 @@ async def test_minted_conversation_id_rides_errored_results():
     )
 
 
-async def test_event_properties_applied_to_all_event_types():
+async def test_event_properties_and_options_applied_to_all_event_types():
     server = make_lowlevel()
     client = FakeClient()
     instrument(
         server,
         client,
-        MCPAnalyticsOptions(event_properties=lambda request, extra: {"tenant": "acme"}),
+        MCPAnalyticsOptions(
+            event_properties=lambda request, extra: {"tenant": "acme"},
+            event_options=lambda request, extra: {"cookieless_mode": True},
+        ),
     )
 
     await server.request_handlers[mcp_types.ListToolsRequest](
@@ -320,6 +323,10 @@ async def test_event_properties_applied_to_all_event_types():
         assert evs[0]["properties"].get("tenant") == "acme", (
             f"{name} missing event_properties"
         )
+        assert evs[0]["options"] == {
+            "cookieless_mode": True,
+            "process_person_profile": False,
+        }, f"{name} missing event_options"
 
 
 # --- PostHogMCP --------------------------------------------------------------
