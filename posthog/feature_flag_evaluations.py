@@ -92,6 +92,18 @@ class _RemoteFlagRecord:
         return metadata.has_experiment if isinstance(metadata, _FlagMetadata) else None
 
 
+class _LocalDetailsFlagRecord(_RemoteFlagRecord):
+    """Internal per-flag record of a locally evaluated config version 2 flag.
+
+    Local evaluation gives the record a ``/flags?v=4`` response gives for the same
+    result, so the flag is read, and its events are built, as for a remote record.
+    """
+
+    __slots__ = ()
+
+    locally_evaluated = True
+
+
 # The per-flag record stored by a FeatureFlagEvaluations instance.
 _EvaluatedFlagRecord = Union[_LocalFlagRecord, _RemoteFlagRecord]
 
@@ -128,9 +140,9 @@ class FeatureFlagEvaluations:
     from the server in the first place, pass ``flag_keys`` to :meth:`Client.evaluate_flags`.
 
     Reading a flag sends ``$feature_flag_called``, deduplicated as :meth:`is_enabled`
-    describes. When the flag was evaluated remotely and its config version 2 record is
-    a complete experiment split (an experiment rule with a rule ID and a variant key),
-    the read also sends ``$experiment_exposure``. The SDK sends one exposure per
+    describes. When the flag's config version 2 record is a complete experiment split
+    (an experiment rule with a rule ID and a variant key), the read also sends
+    ``$experiment_exposure``. The SDK sends one exposure per
     distinct ID, groups, flag, rule and variant. ``send_feature_flag_events=False``
     suppresses both events.
     """

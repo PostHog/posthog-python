@@ -220,6 +220,25 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
+def _is_config_version_1(flag) -> bool:
+    """Whether a flag definition is config version 1, the format this module reads.
+
+    It is when ``filters.version`` is absent or the number 1. Any other value, also
+    one that is not a number, belongs to the config version 2 evaluator, which
+    accepts only version 2.
+    """
+    filters = flag.get("filters") if isinstance(flag, dict) else None
+    if not isinstance(filters, dict) or "version" not in filters:
+        return True
+    version = filters["version"]
+    # bool is an int subclass, so True == 1 would read as version 1 without this.
+    return (
+        isinstance(version, (int, float))
+        and not isinstance(version, bool)
+        and version == 1
+    )
+
+
 def _flag_dependency_shape_problem(prop) -> Optional[str]:
     """Describe why a flag dependency condition is malformed, or return None.
 
@@ -297,6 +316,7 @@ def evaluate_flag_dependency(
     _assert_dependency_definitions_loaded(
         dependency_chain, flags_by_key, evaluation_cache
     )
+    _assert_dependency_formats_supported(dependency_chain, flags_by_key)
     _evaluate_dependency_chain(
         dependency_chain,
         flags_by_key,
@@ -373,6 +393,25 @@ def _assert_dependency_definitions_loaded(
         evaluation_cache[missing_dependency] = None
         raise InconclusiveMatchError(
             f"Cannot evaluate flag dependency '{missing_dependency}' - flag not found in local flags",
+            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+        )
+
+
+def _assert_dependency_formats_supported(dependency_chain, flags_by_key):
+    # A config version 1 flag cannot depend on a config version 2 flag. Reading one
+    # here as version 1 would give it a value, and a later condition must not answer
+    # for the flag either, so the whole flag goes to the server.
+    dependency = next(
+        (
+            key
+            for key in dependency_chain
+            if not _is_config_version_1(flags_by_key.get(key))
+        ),
+        None,
+    )
+    if dependency is not None:
+        raise RequiresServerEvaluation(
+            f"Flag dependency '{dependency}' is not a config version 1 flag",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
@@ -1868,7 +1907,10 @@ def _is_unsupported_dependency(prop, flags_by_key) -> bool:
     dependency_chain = prop.get("dependency_chain")
     if not isinstance(dependency_chain, list) or not dependency_chain:
         return True
-    return any(not flags_by_key.get(key) for key in dependency_chain)
+    return any(
+        not flags_by_key.get(key) or not _is_config_version_1(flags_by_key[key])
+        for key in dependency_chain
+    )
 
 
 def _is_unsupported_property_group(
