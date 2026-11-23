@@ -1009,36 +1009,39 @@ async def test_async_client_posts_category_on_the_send_route(
     }
 
 
-@parameterized.expand(
+@pytest.mark.parametrize(
+    "status, code, attr, overrides",
     [
-        ("category_mismatch", 400, "category_mismatch", "category", {}),
-        ("too_many_categories", 400, "too_many_categories", "category", {}),
-        (
-            "unsubscribe_link_required",
+        pytest.param(400, "category_mismatch", "category", {}, id="category_mismatch"),
+        pytest.param(
+            400, "too_many_categories", "category", {}, id="too_many_categories"
+        ),
+        pytest.param(
             400,
             "unsubscribe_link_required",
             None,
             {"html": "<p>News</p>"},
+            id="unsubscribe_link_required",
         ),
-        (
-            "copies_not_allowed",
+        pytest.param(
             400,
             "copies_not_allowed",
             None,
             {"cc": "copy@example.com"},
+            id="copies_not_allowed",
         ),
-        ("marketing_template", 400, "marketing_template", None, {}),
-        ("recipient_opted_out", 422, "recipient_opted_out", None, {}),
-    ]
+        pytest.param(400, "marketing_template", None, {}, id="marketing_template"),
+        pytest.param(422, "recipient_opted_out", None, {}, id="recipient_opted_out"),
+    ],
 )
 def test_category_refusals_raise_validation_error_without_retrying(
-    _name, status, code, attr, overrides
+    status, code, attr, overrides, no_sleep
 ):
     body = {"type": "invalid_request", "code": code, "detail": "Refused."}
     if attr is not None:
         body["attr"] = attr
     reply = (status, body, {})
-    emails, adapter = emails_with([reply], max_retries=2)
+    emails, adapter = emails_with([reply, accepted()], max_retries=2)
 
     with pytest.raises(EmailError) as raised:
         send_code(
@@ -1052,6 +1055,7 @@ def test_category_refusals_raise_validation_error_without_retrying(
         raised.value.field,
     ) == ("validation_error", code, status, attr)
     assert len(adapter.requests) == 1
+    no_sleep.assert_not_called()
 
 
 class _CaseInsensitiveStr(str):
