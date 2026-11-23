@@ -463,28 +463,30 @@ class CodeEmailArgs(_RecipientArgs):
             PostHog's click tracking. The template form doesn't take it.
         category: Left out, the email is transactional with no category, or
             follows the category of the eligible template that
-            ``template_key`` names when code-send categories are enabled. A
-            matching template made in PostHog must first be enabled for
-            transactional sends (otherwise PostHog raises
-            ``template_not_transactional`` before checking its category), and
-            an enabled template in a marketing category is refused with
-            ``marketing_template``. A matching sendable template fixes the
-            category: for an uncategorized template, omit ``category`` or pass
-            :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``); for a
-            categorized transactional template, omit ``category`` or pass a
-            :class:`MessageCategory` with its matching ``key`` and ``type``.
+            ``template_key`` names when code-send categories are enabled.
             Passing any explicit :class:`MessageCategory` requires code-send
-            categories to be enabled for the project (otherwise PostHog raises
-            ``categories_not_enabled``; omitting ``category`` sends
-            uncategorized while that flag is off).
+            categories to be enabled for the project (otherwise PostHog can
+            raise ``categories_not_enabled`` before checking whether a saved
+            template is transactional; omitting ``category`` sends
+            uncategorized while that flag is off). A matching template made in
+            PostHog must first be enabled for transactional sends (otherwise
+            PostHog raises ``template_not_transactional`` before checking its
+            category), and an enabled template in a marketing category is
+            refused with ``marketing_template``. A matching sendable template
+            fixes the category: for an uncategorized template, omit
+            ``category`` or pass :data:`TRANSACTIONAL_CATEGORY`
+            (``"transactional"``); for a categorized transactional template,
+            omit ``category`` or pass a :class:`MessageCategory` with its
+            matching ``key`` and ``type``.
             When ``template_key`` matches no template,
             :data:`TRANSACTIONAL_CATEGORY` sends transactional email with no
             category, and a :class:`MessageCategory` files the email under
             that category, creating it or restoring a deleted one when the
             project has room under its active category limit. A marketing send
             honors the recipient's opt-outs, and its ``html`` must contain a
-            link whose full ``href`` is ``{{ unsubscribe_url }}``
-            (``<a href="{{ unsubscribe_url }}">``), or its ``text`` must hold
+            link whose ``href`` is ``{{ unsubscribe_url }}`` (with an optional
+            query string or fragment, such as
+            ``<a href="{{ unsubscribe_url }}">``), or its ``text`` must hold
             ``{{ unsubscribe_url }}`` when there is no ``html``. PostHog
             raises ``category_mismatch`` when the project's category with that
             key has another type, or when ``category`` differs from a matching
@@ -696,11 +698,11 @@ def _sender(args: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _category(category: Any) -> Union[str, dict[str, str]]:
-    if category == TRANSACTIONAL_CATEGORY:
+    if type(category) is str and category == TRANSACTIONAL_CATEGORY:
         return TRANSACTIONAL_CATEGORY
     if not isinstance(category, MessageCategory):
         raise TypeError("category must be TRANSACTIONAL_CATEGORY or a MessageCategory.")
-    if category.type not in _CATEGORY_TYPES:
+    if type(category.type) is not str or category.type not in _CATEGORY_TYPES:
         raise ValueError("category.type must be 'marketing' or 'transactional'.")
     fields = {"key": category.key, "type": category.type, "name": category.name}
     if category.description is not None:

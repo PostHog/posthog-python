@@ -1024,6 +1024,14 @@ def test_category_refusals_raise_validation_error_without_retrying(
     assert len(adapter.requests) == 1
 
 
+class _CaseInsensitiveStr(str):
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, str) and str(self).lower() == other.lower()
+
+    def __hash__(self) -> int:
+        return hash(str(self).lower())
+
+
 @parameterized.expand(
     [
         ("both_forms", {"template_id": TEMPLATE_ID, "html": HTML}, TypeError),
@@ -1051,6 +1059,12 @@ def test_category_refusals_raise_validation_error_without_retrying(
         ("blank_cc", {"html": HTML, "cc": " "}, ValueError),
         ("bcc_not_text", {"html": HTML, "bcc": [123]}, TypeError),
         ("category_not_a_category", {"html": HTML, "category": 1}, TypeError),
+        ("category_mock_any", {"html": HTML, "category": mock.ANY}, TypeError),
+        (
+            "category_str_subclass",
+            {"html": HTML, "category": _CaseInsensitiveStr("TRANSACTIONAL")},
+            TypeError,
+        ),
         (
             "category_as_a_key",
             {"html": HTML, "category": "product-updates"},
