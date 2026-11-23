@@ -293,6 +293,36 @@ async def test_instrumentation_failures_never_interrupt_delivery_or_disconnect(s
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("stop_early", [True, False])
+async def test_turn_without_result_message_flushes_unfinished_tool_spans(
+    sdk, stop_early
+):
+    ph = analytics()
+    client = PostHogClaudeSDKClient(posthog_client=ph)
+    await client.query("prompt")
+    tool = ToolUseBlock(id="tool-1", name="lookup", input={"query": "stock"})
+    respond(
+        sdk,
+        [
+            AssistantMessage(model="claude", content=[tool]),
+            AssistantMessage(model="claude", content=[TextBlock(text="more")]),
+        ],
+    )
+
+    response = client.receive_response()
+    if stop_early:
+        await response.__anext__()
+        await response.aclose()
+    else:
+        [msg async for msg in response]
+
+    spans = events(ph, "$ai_span")
+    assert [span["properties"]["$ai_span_name"] for span in spans] == ["lookup"]
+    assert "$ai_is_error" not in spans[0]["properties"]
+    assert client._pending_tools == {}
+
+
+@pytest.mark.asyncio
 async def test_context_manager_propagates_application_exception_and_disconnects(sdk):
     ph = analytics()
     with pytest.raises(ValueError, match="application failure"):

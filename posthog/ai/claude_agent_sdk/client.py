@@ -150,12 +150,20 @@ class PostHogClaudeSDKClient:
 
     async def receive_response(self):
         """Instrumented receive_response -- yields all messages, emits PostHog events."""
-        async for message in self._client.receive_response():
+        try:
+            async for message in self._client.receive_response():
+                try:
+                    self._process_message(message)
+                except Exception as e:
+                    log.debug(f"PostHog instrumentation error (non-fatal): {e}")
+                yield message
+        finally:
+            # A turn that stops early (break, interrupt, no ResultMessage) would
+            # otherwise hold its unfinished tool spans until disconnect().
             try:
-                self._process_message(message)
+                self._processor._flush_tool_spans(self._pending_tools)
             except Exception as e:
                 log.debug(f"PostHog instrumentation error (non-fatal): {e}")
-            yield message
 
     def _process_message(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
