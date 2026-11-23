@@ -1497,8 +1497,9 @@ def _record(definition: Mapping[str, Any], outcome: _Evaluated) -> FeatureFlag:
         "payload": None,
     }
     for field in ("id", "version"):
-        value = definition.get(field)
-        if isinstance(value, int) and not isinstance(value, bool):
+        value: Any = definition.get(field)
+        # An integral number, such as 41.0, is an integer to the v4 reader too.
+        if _is_number(value) and (isinstance(value, int) or value.is_integer()):
             metadata[field] = value
     if isinstance(definition.get("has_experiment"), bool):
         metadata["has_experiment"] = definition["has_experiment"]

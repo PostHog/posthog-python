@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import copy
 import datetime
+import hashlib
 import json
 import warnings
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -438,6 +439,25 @@ def test_the_local_record_is_the_record_a_v4_response_gives(
     assert isinstance(local, FeatureFlag)
     assert vars(local) == vars(remote)
     assert vars(local.metadata) == vars(remote.metadata)
+
+
+@pytest.mark.parametrize(
+    "stored, read",
+    [(41.0, 41), (41.5, None), ("41", None), (True, None)],
+    ids=["integral_float", "fraction", "string", "boolean"],
+)
+def test_the_record_reads_the_id_and_version_as_the_v4_reader_does(
+    client, stored, read
+):
+    # JSON has one number type, so the v4 reader reads 41.0 as 41. Any other value is
+    # left out, and the flag is still evaluated locally.
+    _load(client, {**BOOLEAN, "id": stored, "version": stored})
+    [loaded] = client.feature_flags or []
+
+    local = client._compute_flag_locally(loaded, DISTINCT_ID)
+
+    assert isinstance(local, FeatureFlag) and local.enabled is True
+    assert (local.metadata.id, local.metadata.version) == (read, read)
 
 
 def test_a_null_value_reads_as_disabled(client):
@@ -1096,6 +1116,64 @@ def test_flags_read_from_the_cache_include_config_version_2_flags():
     finally:
         writer.shutdown()
         reader.shutdown()
+
+
+@pytest.mark.parametrize(
+    "keys",
+    [
+        ("reading-mode", "legacy-shelf"),
+        ("legacy-shelf", "reading-mode", "legacy-label"),
+    ],
+    ids=["config_version_2_first", "interleaved"],
+)
+def test_the_cache_keeps_the_identity_of_the_definitions(keys):
+    # The cache stores each config version apart, so a reader loads the definitions
+    # in another order than the API sent them. Both must still give them one
+    # identity, or the reader rejects every flag result the writer cached.
+    definitions = {
+        "reading-mode": BOOLEAN,
+        "legacy-shelf": _v1_definition("legacy-shelf"),
+        "legacy-label": _v1_definition("legacy-label", variant="compact"),
+    }
+    writer_provider = _Provider()
+    writer = _fetch_into(writer_provider, [definitions[key] for key in keys])
+    [stored] = writer_provider.received
+    reader = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        secret_key="secret-key",
+        flag_definition_cache_provider=_Provider(stored),
+    )
+    try:
+        with mock.patch("posthog.client.get"):
+            reader._load_feature_flags()
+
+        assert (
+            reader._flag_definition_fingerprint == writer._flag_definition_fingerprint
+        )
+    finally:
+        writer.shutdown()
+        reader.shutdown()
+
+
+def test_the_identity_of_version_1_definitions_is_unchanged():
+    # Releases without the config version 2 evaluator share a flag cache with this
+    # one, so they must give version 1 definitions the same identity.
+    data = {
+        "flags": [_v1_definition("legacy-shelf"), _v1_definition("legacy-label")],
+        "group_type_mapping": {},
+        "cohorts": {},
+    }
+    encoded = json.dumps(
+        {**data, "property_matching_version": 1},
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+
+    assert Client._hash_flag_definitions(data) == (
+        hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    )
 
 
 # --- The corpora through the client ---------------------------------------------------

@@ -4193,9 +4193,14 @@ class Client(object):
     @staticmethod
     def _hash_flag_definitions(data: FlagDefinitionCacheData) -> str:
         # Hash only evaluation inputs, not transport metadata such as the ETag.
+        flags = data["flags"]
+        if isinstance(flags, list):
+            # Version 1 definitions first, in the order the definition cache stores
+            # them, so a client that loads them from the cache gives the same hash.
+            flags = sorted(flags, key=lambda flag: not _is_config_version_1(flag))
         serialized = json.dumps(
             {
-                "flags": data["flags"],
+                "flags": flags,
                 "cohorts": data["cohorts"],
                 "group_type_mapping": data["group_type_mapping"],
                 "property_matching_version": data.get("property_matching_version", 1),

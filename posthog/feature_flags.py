@@ -220,6 +220,10 @@ def variant_lookup_table(feature_flag):
     return lookup_table
 
 
+# Built once: a tuple written in the check would be built on every evaluation.
+_NUMBER_TYPES = (int, float)
+
+
 def _is_config_version_1(flag) -> bool:
     """Whether a flag definition is config version 1, the format this module reads.
 
@@ -233,7 +237,7 @@ def _is_config_version_1(flag) -> bool:
     version = filters["version"]
     # bool is an int subclass, so True == 1 would read as version 1 without this.
     return (
-        isinstance(version, (int, float))
+        isinstance(version, _NUMBER_TYPES)
         and not isinstance(version, bool)
         and version == 1
     )
