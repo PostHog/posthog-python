@@ -602,9 +602,14 @@ class CallbackHandler(BaseCallbackHandler):
                 self._privacy_mode,
                 finalize_ai_content(outputs, self._ph_client),
             )
-            if isinstance(outputs, ToolMessage) and outputs.status == "error":
+            if (
+                run.span_type == "tool"
+                and isinstance(outputs, ToolMessage)
+                and outputs.status == "error"
+            ):
                 # A tool error handled by `handle_tool_error` ends the run
-                # normally, with the error as a ToolMessage.
+                # normally, with the error as a ToolMessage. Only the tool's own
+                # span is the error, not a chain that returns the message.
                 event_properties["$ai_is_error"] = True
                 event_properties["$ai_error"] = with_privacy_mode(
                     self._ph_client,

@@ -1641,6 +1641,15 @@ def test_tool_span_marks_handled_tool_error(mock_client):
     assert len(spans) == 1
     assert spans[0]["$ai_is_error"] is True
     assert spans[0]["$ai_error"] == "weather service unavailable for Paris"
+    # The chain that returns the error ToolMessage didn't fail itself.
+    trace = [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_trace"
+    ]
+    assert len(trace) == 1
+    assert "$ai_is_error" not in trace[0]
+    assert "$ai_error" not in trace[0]
 
 
 def test_tool_span_handled_tool_error_respects_privacy_mode(mock_client):
