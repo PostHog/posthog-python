@@ -49,12 +49,13 @@ posthog.emails.send(
 Message categories: an email you send from code is transactional with no
 category, or follows the category of the template that ``template_key``
 names (when code-send categories are enabled), unless you pass ``category``.
-A :class:`MessageCategory` names the category by its ``key``: when the
-project has room under its active category limit, a send creates the
-category using its ``name`` and ``description`` when none exists with that
-key, or restores a deleted category while keeping its existing name and
-description. Any other send leaves the category as it is, so change a
-category's name or description in PostHog. A marketing send honors the recipient's
+A :class:`MessageCategory` names the category by its ``key``: when
+``template_key`` matches no saved template and the project has room under
+its active category limit, a send creates the category using its ``name``
+and ``description`` when none exists with that key, or restores a deleted
+category while keeping its existing name and description. Any other send
+leaves the category as it is, so change a category's name or description
+in PostHog. A marketing send honors the recipient's
 opt-outs, and its HTML body must link ``<a href="{{ unsubscribe_url }}">``
 (or its ``text`` body must hold ``{{ unsubscribe_url }}`` when there is no
 ``html``), which PostHog fills with the recipient's preferences link. When
@@ -307,13 +308,14 @@ class SendEmailResult:
 class MessageCategory:
     """A message category of the project, defined in your code.
 
-    A send creates the category when the project has no category with
-    ``key``, and restores it when it was deleted, as long as the project has
-    room under its active category limit (otherwise PostHog raises
-    ``too_many_categories``). Otherwise the send leaves the category as it is:
-    ``name`` and ``description`` apply only when the send creates the
-    category, and you change them later in PostHog. An existing category must
-    have the same ``type``.
+    When ``template_key`` matches no saved template, a send creates the
+    category when the project has no category with ``key``, and restores it
+    when it was deleted, as long as the project has room under its active
+    category limit (otherwise PostHog raises ``too_many_categories``).
+    Otherwise the send leaves the category as it is: ``name`` and
+    ``description`` apply only when the send creates the category, and you
+    change them later in PostHog. An existing category must have the same
+    ``type``.
 
     Args:
         key: The category's key, unique in the project. Recipients' opt-outs
@@ -471,6 +473,10 @@ class CodeEmailArgs(_RecipientArgs):
             :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``); for a
             categorized transactional template, omit ``category`` or pass a
             :class:`MessageCategory` with its matching ``key`` and ``type``.
+            Passing any explicit :class:`MessageCategory` requires code-send
+            categories to be enabled for the project (otherwise PostHog raises
+            ``categories_not_enabled``; omitting ``category`` sends
+            uncategorized while that flag is off).
             When ``template_key`` matches no template,
             :data:`TRANSACTIONAL_CATEGORY` sends transactional email with no
             category, and a :class:`MessageCategory` files the email under

@@ -981,16 +981,28 @@ async def test_async_client_posts_category_on_the_send_route(
 
 @parameterized.expand(
     [
-        ("category_mismatch", 400, "category_mismatch", "category"),
-        ("too_many_categories", 400, "too_many_categories", "category"),
-        ("unsubscribe_link_required", 400, "unsubscribe_link_required", None),
-        ("copies_not_allowed", 400, "copies_not_allowed", None),
-        ("marketing_template", 400, "marketing_template", None),
-        ("recipient_opted_out", 422, "recipient_opted_out", None),
+        ("category_mismatch", 400, "category_mismatch", "category", {}),
+        ("too_many_categories", 400, "too_many_categories", "category", {}),
+        (
+            "unsubscribe_link_required",
+            400,
+            "unsubscribe_link_required",
+            None,
+            {"html": "<p>News</p>"},
+        ),
+        (
+            "copies_not_allowed",
+            400,
+            "copies_not_allowed",
+            None,
+            {"cc": "copy@example.com"},
+        ),
+        ("marketing_template", 400, "marketing_template", None, {}),
+        ("recipient_opted_out", 422, "recipient_opted_out", None, {}),
     ]
 )
 def test_category_refusals_raise_validation_error_without_retrying(
-    _name, status, code, attr
+    _name, status, code, attr, overrides
 ):
     body = {"type": "invalid_request", "code": code, "detail": "Refused."}
     if attr is not None:
@@ -999,7 +1011,9 @@ def test_category_refusals_raise_validation_error_without_retrying(
     emails, adapter = emails_with([reply], max_retries=2)
 
     with pytest.raises(EmailError) as raised:
-        send_code(emails, html=MARKETING_HTML, category=NEWSLETTER)
+        send_code(
+            emails, **{"html": MARKETING_HTML, "category": NEWSLETTER, **overrides}
+        )
 
     assert (
         raised.value.name,
