@@ -49,11 +49,12 @@ posthog.emails.send(
 Message categories: an email you send from code is transactional with no
 category, or follows the category of the template that ``template_key``
 names (when code-send categories are enabled), unless you pass ``category``.
-A :class:`MessageCategory` names the category by its ``key``: the first send
-creates it in the project (or restores a deleted one) when the project has
-room under its active category limit, using its ``name`` and
-``description``. A later send leaves the category as it is, so change its
-name or description in PostHog. A marketing send honors the recipient's
+A :class:`MessageCategory` names the category by its ``key``: when the
+project has room under its active category limit, a send creates the
+category using its ``name`` and ``description`` when none exists with that
+key, or restores a deleted category while keeping its existing name and
+description. Any other send leaves the category as it is, so change a
+category's name or description in PostHog. A marketing send honors the recipient's
 opt-outs, and its HTML body must link ``<a href="{{ unsubscribe_url }}">``
 (or its ``text`` body must hold ``{{ unsubscribe_url }}`` when there is no
 ``html``), which PostHog fills with the recipient's preferences link. When
