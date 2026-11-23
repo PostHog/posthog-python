@@ -405,19 +405,12 @@ def _assert_dependency_formats_supported(dependency_chain, flags_by_key):
     # A config version 1 flag cannot depend on a config version 2 flag. Reading one
     # here as version 1 would give it a value, and a later condition must not answer
     # for the flag either, so the whole flag goes to the server.
-    dependency = next(
-        (
-            key
-            for key in dependency_chain
-            if not _is_config_version_1(flags_by_key.get(key))
-        ),
-        None,
-    )
-    if dependency is not None:
-        raise RequiresServerEvaluation(
-            f"Flag dependency '{dependency}' is not a config version 1 flag",
-            reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
-        )
+    for key in dependency_chain:
+        if not _is_config_version_1(flags_by_key.get(key)):
+            raise RequiresServerEvaluation(
+                f"Flag dependency '{key}' is not a config version 1 flag",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
 
 
 def _evaluate_dependency_chain(

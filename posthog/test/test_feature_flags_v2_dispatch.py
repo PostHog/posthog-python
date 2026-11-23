@@ -304,7 +304,7 @@ def test_any_other_config_version_goes_to_the_config_version_2_evaluator(
         result = _result(client, "other-version")
 
     assert evaluate.call_count == 1
-    if version == 2 and not isinstance(version, bool):
+    if version == 2:
         assert result is not None and result.get_value() is True
     else:
         # Only version 2 parses. Every other version is unsupported and falls back.
@@ -1056,6 +1056,19 @@ def _fetch_into(provider: _Provider, flags: List[Dict[str, Any]]) -> Client:
     return client
 
 
+def _load_from_cache(stored: Dict[str, Any]) -> Client:
+    client = Client(
+        FAKE_TEST_API_KEY,
+        send=False,
+        secret_key="secret-key",
+        flag_definition_cache_provider=_Provider(stored),
+    )
+    with mock.patch("posthog.client.get") as get:
+        client._load_feature_flags()
+    assert get.call_count == 0
+    return client
+
+
 def test_the_cache_keeps_config_version_2_flags_out_of_flags():
     legacy = _v1_definition("legacy-shelf")
     provider = _Provider()
@@ -1091,17 +1104,8 @@ def test_flags_read_from_the_cache_include_config_version_2_flags():
     writer = _fetch_into(writer_provider, [legacy, BOOLEAN, UNKNOWN_VERSION])
     [stored] = writer_provider.received
 
-    reader = Client(
-        FAKE_TEST_API_KEY,
-        send=False,
-        secret_key="secret-key",
-        flag_definition_cache_provider=_Provider(stored),
-    )
+    reader = _load_from_cache(stored)
     try:
-        with mock.patch("posthog.client.get") as get:
-            reader._load_feature_flags()
-        assert get.call_count == 0
-
         with _no_remote_request():
             snapshot = reader.evaluate_flags(DISTINCT_ID, only_evaluate_locally=True)
         assert {key: snapshot.get_flag(key) for key in snapshot.keys} == {
@@ -1138,16 +1142,8 @@ def test_the_cache_keeps_the_identity_of_the_definitions(keys):
     writer_provider = _Provider()
     writer = _fetch_into(writer_provider, [definitions[key] for key in keys])
     [stored] = writer_provider.received
-    reader = Client(
-        FAKE_TEST_API_KEY,
-        send=False,
-        secret_key="secret-key",
-        flag_definition_cache_provider=_Provider(stored),
-    )
+    reader = _load_from_cache(stored)
     try:
-        with mock.patch("posthog.client.get"):
-            reader._load_feature_flags()
-
         assert (
             reader._flag_definition_fingerprint == writer._flag_definition_fingerprint
         )
@@ -1177,10 +1173,6 @@ def test_the_identity_of_version_1_definitions_is_unchanged():
 
 
 # --- The corpora through the client ---------------------------------------------------
-
-# The client reads dates in UTC, so a case set in another timezone is replayed only by
-# the evaluator's own tests.
-SKIP_TIMEZONE = "the client reads dates in UTC"
 
 
 def _draw_for(case: Dict[str, Any]) -> Any:
@@ -1237,6 +1229,8 @@ RULE_REASONS = {
     "holdout",
 }
 
+# The client reads dates in UTC, so a case set in another timezone is replayed only by
+# the evaluator's own tests.
 REPLAYABLE = [
     case
     for case in CASES

@@ -222,16 +222,22 @@ class _LocalEvaluationSnapshot(FlagDefinitionCacheData):
 _V2_FLAGS_CACHE_FIELD = "flags_v2"
 
 
+def _split_by_config_version(flags: List[Any]) -> Tuple[List[Any], List[Any]]:
+    """The version 1 definitions and the others, each in their loaded order, as the
+    definition cache stores them."""
+    version_1: List[Any] = []
+    others: List[Any] = []
+    for flag in flags:
+        (version_1 if _is_config_version_1(flag) else others).append(flag)
+    return version_1, others
+
+
 def _with_cached_v2_flags(data: FlagDefinitionCacheData) -> FlagDefinitionCacheData:
     """Cached definitions with the config version 2 definitions back in ``flags``."""
     v2_flags = cast(Mapping[str, Any], data).get(_V2_FLAGS_CACHE_FIELD)
     if not isinstance(v2_flags, list) or not v2_flags:
         return data
-    merged: Dict[str, Any] = {
-        key: value for key, value in data.items() if key != _V2_FLAGS_CACHE_FIELD
-    }
-    merged["flags"] = [*data["flags"], *v2_flags]
-    return cast(FlagDefinitionCacheData, merged)
+    return cast(FlagDefinitionCacheData, {**data, "flags": [*data["flags"], *v2_flags]})
 
 
 def _supports_lane_synchronization(queue) -> bool:
@@ -4176,15 +4182,14 @@ class Client(object):
 
     def _flag_definitions_for_cache(self) -> FlagDefinitionCacheData:
         """The loaded definitions as the external definition cache stores them."""
-        flags = self.feature_flags or []
+        v1_flags, v2_flags = _split_by_config_version(self.feature_flags or [])
         data: Dict[str, Any] = {
-            "flags": [flag for flag in flags if _is_config_version_1(flag)],
+            "flags": v1_flags,
             "group_type_mapping": self.group_type_mapping or {},
             "cohorts": self.cohorts or {},
             "minimal_flag_called_events": self._minimal_flag_called_events,
             "property_matching_version": self._property_matching_version,
         }
-        v2_flags = [flag for flag in flags if not _is_config_version_1(flag)]
         if v2_flags:
             # Left out without such flags, so the data stays as before for them.
             data[_V2_FLAGS_CACHE_FIELD] = v2_flags
@@ -4195,9 +4200,10 @@ class Client(object):
         # Hash only evaluation inputs, not transport metadata such as the ETag.
         flags = data["flags"]
         if isinstance(flags, list):
-            # Version 1 definitions first, in the order the definition cache stores
-            # them, so a client that loads them from the cache gives the same hash.
-            flags = sorted(flags, key=lambda flag: not _is_config_version_1(flag))
+            # In the order the definition cache stores them, so a client that loads
+            # them from the cache gives the same hash.
+            v1_flags, v2_flags = _split_by_config_version(flags)
+            flags = [*v1_flags, *v2_flags]
         serialized = json.dumps(
             {
                 "flags": flags,
@@ -4290,7 +4296,7 @@ class Client(object):
                 key = flag["key"]
                 if not _is_config_version_1(flag):
                     reason = _v2_unresolved_reason(
-                        flag, snapshot.get("parsed_v2_definitions") or {}
+                        flag, snapshot["parsed_v2_definitions"]
                     )
                 else:
                     reason = _get_definition_unresolved_reason(
@@ -4654,7 +4660,7 @@ class Client(object):
         if not _is_config_version_1(feature_flag):
             return _evaluate_definition(
                 feature_flag,
-                snapshot.get("parsed_v2_definitions") or {},
+                snapshot["parsed_v2_definitions"],
                 distinct_id=distinct_id,
                 properties=person_properties,
                 property_matching_version=property_matching_version,
@@ -5446,8 +5452,9 @@ class Client(object):
 
         Shared by the single-flag evaluation path and the reads of a
         ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
-        identically. ``details`` is the parsed ``/flags`` record of the read, or
-        ``None`` for a locally evaluated flag. ``value_from_details`` includes a
+        identically. ``details`` is the record of the read: the parsed ``/flags``
+        record, the local record of a config version 2 flag, or ``None`` for a
+        locally evaluated version 1 flag. ``value_from_details`` includes a
         failed record supplying config-version and reason-code diagnostics despite
         having no value. Only a successful experiment split sends an exposure.
         """
@@ -5977,6 +5984,7 @@ class Client(object):
                         )
                     else:
                         if records is not None:
+                            # A later definition with the same key replaces the record.
                             records.pop(flag["key"], None)
                         flags[flag["key"]] = value
                         matched_payload = self._compute_payload_locally(

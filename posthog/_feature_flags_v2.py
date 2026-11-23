@@ -71,7 +71,13 @@ from .feature_flags import (
     _subtract_years,
     _value_to_string,
 )
-from .types import FeatureFlag, UnresolvedFlagReason, _parse_record
+from .types import (
+    FeatureFlag,
+    UnresolvedFlagReason,
+    _MalformedRecord,
+    _parse_record,
+    _read_int,
+)
 
 _CONFIG_VERSION = 2
 _ASSIGNMENT_ALGORITHM = "sha1_60_v1"
@@ -1417,16 +1423,14 @@ class _ParsedDefinition(NamedTuple):
     config: Union[_Config, _Unsupported]
 
 
-def _parse_definitions(flags: Any) -> Dict[str, _ParsedDefinition]:
+def _parse_definitions(flags: List[Any]) -> Dict[str, _ParsedDefinition]:
     """Parse each config version 2 definition of a definitions list, by flag key."""
-    parsed: Dict[str, _ParsedDefinition] = {}
-    for flag in flags or []:
-        if not isinstance(flag, dict) or _is_config_version_1(flag):
-            continue
-        key = flag.get("key")
-        if key is not None:
-            parsed[key] = _ParsedDefinition(flag, _parse_config(flag.get("filters")))
-    return parsed
+    # A definition that is not a dict reads as version 1, so each one here is a dict.
+    return {
+        flag["key"]: _ParsedDefinition(flag, _parse_config(flag.get("filters")))
+        for flag in flags
+        if not _is_config_version_1(flag) and flag.get("key") is not None
+    }
 
 
 def _config_for(
@@ -1443,9 +1447,9 @@ def _unresolved_reason(
     definition: Mapping[str, Any], parsed: Mapping[Any, _ParsedDefinition]
 ) -> Optional[UnresolvedFlagReason]:
     """The reason the definition alone leaves the flag unresolved, known on load."""
-    if not definition.get("active"):
-        return None
-    if isinstance(_config_for(definition, parsed), _Unsupported):
+    if definition.get("active") and isinstance(
+        _config_for(definition, parsed), _Unsupported
+    ):
         return UnresolvedFlagReason.UNSUPPORTED_DEFINITION
     return None
 
@@ -1497,10 +1501,10 @@ def _record(definition: Mapping[str, Any], outcome: _Evaluated) -> FeatureFlag:
         "payload": None,
     }
     for field in ("id", "version"):
-        value: Any = definition.get(field)
-        # An integral number, such as 41.0, is an integer to the v4 reader too.
-        if _is_number(value) and (isinstance(value, int) or value.is_integer()):
-            metadata[field] = value
+        try:
+            metadata[field] = _read_int(definition.get(field), field)
+        except _MalformedRecord:
+            pass  # Left out, so that a bad value does not fail the whole record.
     if isinstance(definition.get("has_experiment"), bool):
         metadata["has_experiment"] = definition["has_experiment"]
     for field, value in (
