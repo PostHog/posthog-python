@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.1 — 2026-11-23
+
+### Patch changes
+
+- [d390aae7](https://github.com/posthog/posthog-python/commit/d390aae70244586923ed427e926f3a07dfbae63e) `posthog.ai.openai_agents`: report token counts on response spans when the Agents SDK runs with `trace_include_sensitive_data=False`. The SDK then leaves `span_data.response` unset but still records usage on `span_data.usage`, which the processor ignored, so those `$ai_generation` events had no input, output or cache-read tokens. — Thanks @MaiAditya!
+
 ## 8.2.0 — 2026-11-23
 
 ### Minor changes
