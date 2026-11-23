@@ -9,8 +9,8 @@ from unittest import mock
 import pytest
 from mcp.types import CallToolResult, ServerResult, TextContent, Tool
 
-from posthog.capture_mode import CaptureMode
 from posthog.mcp import (
+    FeedbackReport,
     PostHogMCP,
     PreparedToolCall,
     derive_session_id_from_conversation,
@@ -111,98 +111,81 @@ def test_capture_adds_server_build_to_custom_events():
     assert captured[2]["properties"]["$mcp_server_build"] == "default-build"
 
 
-async def test_mcp_events_use_mcp_library_identity():
-    captured = []
-
-    def before_send(event):
-        captured.append(event)
-        return event
-
-    client = PostHogMCP(
-        "phc_test",
-        host="https://us.i.posthog.com",
-        send=False,
-        before_send=before_send,
-    )
-    client.capture_tool_call("broken", is_error=True, error=RuntimeError("kaboom"))
-    await _flush()
-
-    assert {event["event"] for event in captured} == {"$mcp_tool_call", "$exception"}
-    assert all(
-        event["properties"]["$lib"] == "posthog-python-mcp"
-        and event["properties"]["$lib_version"] == VERSION
-        for event in captured
-    )
-
-
-def test_mcp_library_identity_reaches_capture_v0_header():
-    response = mock.Mock(status_code=200)
+def test_mcp_client_keeps_the_sdk_identity():
     client = PostHogMCP("phc_test", sync_mode=True)
-
-    with mock.patch("posthog.request._session.post", return_value=response) as post:
-        client.capture("$mcp_custom")
-
-    assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{VERSION}"
-    )
-
-
-def test_mcp_library_identity_reaches_capture_v1_header():
-    client = PostHogMCP("phc_test", sync_mode=True, capture_mode=CaptureMode.V1)
     with mock.patch("posthog.client._send_v1_batch") as send:
         client.capture("$mcp_custom")
 
-    assert send.call_args.kwargs["sdk_info"] == f"posthog-python-mcp/{VERSION}"
-    event = send.call_args.args[2][0]
-    assert event["properties"]["$lib"] == "posthog-python-mcp"
-    assert event["properties"]["$lib_version"] == VERSION
+    assert send.call_args.kwargs["sdk_info"] == f"posthog-python/{VERSION}"
 
 
-def test_mcp_library_identity_reaches_feature_flag_requests():
-    response = mock.Mock(status_code=200)
-    response.json.return_value = {"flags": {}}
-    client = PostHogMCP("phc_test", send=False)
+_CAPTURE_METHODS = [
+    ("capture_tool_call", ("search",), {}, "$mcp_tool_call"),
+    ("capture_initialize", (), {}, "$mcp_initialize"),
+    ("capture_tools_list", (), {"tool_names": ["a"]}, "$mcp_tools_list"),
+    ("capture_missing_capability", (), {}, "$mcp_missing_capability"),
+    (
+        "capture_feedback",
+        (),
+        {"report": FeedbackReport(summary="good")},
+        "$mcp_feedback",
+    ),
+]
 
-    with mock.patch(
-        "posthog.request._flags_session.post", return_value=response
-    ) as post:
-        client.evaluate_flags("user_1")
 
-    assert post.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{VERSION}"
+@pytest.mark.parametrize(
+    "method, args, kwargs, event_name",
+    _CAPTURE_METHODS,
+    ids=[m[0] for m in _CAPTURE_METHODS],
+)
+@pytest.mark.parametrize(
+    "distinct_id, expected",
+    [
+        ("user_1", {"cookieless_mode": True, "process_person_profile": True}),
+        (None, {"cookieless_mode": True, "process_person_profile": False}),
+    ],
+    ids=["identified", "anonymous"],
+)
+async def test_capture_methods_send_event_options(
+    method, args, kwargs, event_name, distinct_id, expected
+):
+    client, captured = make_client()
+    event_options = {"cookieless_mode": True, "process_person_profile": True}
+    getattr(client, method)(
+        *args, distinct_id=distinct_id, event_options=event_options, **kwargs
     )
+    await _flush()
+
+    [event] = captured
+    assert event["event"] == event_name
+    assert event["options"] == expected
+    assert event_options == {"cookieless_mode": True, "process_person_profile": True}
 
 
-def test_mcp_library_identity_reaches_feature_flag_definition_requests():
-    response = mock.Mock(status_code=200, headers={})
-    response.json.return_value = {"flags": [], "group_type_mapping": {}, "cohorts": {}}
-    client = PostHogMCP(
-        "phc_test",
-        secret_key="phs_test",
-        send=False,
-        enable_local_evaluation=False,
+async def test_capture_tool_call_event_options_reach_the_exception_sibling():
+    client, captured = make_client()
+    client.capture_tool_call(
+        "broken",
+        is_error=True,
+        error=RuntimeError("kaboom"),
+        distinct_id="u",
+        event_options={"product_tour_id": "tour"},
     )
+    await _flush()
 
-    with mock.patch("posthog.request._session.get", return_value=response) as get:
-        client.load_feature_flags()
-
-    assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{VERSION}"
-    )
-    client.shutdown()
+    assert [(e["event"], e["options"]) for e in captured] == [
+        ("$mcp_tool_call", {"product_tour_id": "tour"}),
+        ("$exception", {"product_tour_id": "tour"}),
+    ]
 
 
-def test_mcp_library_identity_reaches_remote_config_requests():
-    response = mock.Mock(status_code=200, headers={})
-    response.json.return_value = "payload"
-    client = PostHogMCP("phc_test", secret_key="phs_test", send=False)
+async def test_capture_methods_pass_empty_options_without_event_options():
+    client, captured = make_client()
+    client.capture_tool_call("search", distinct_id="u")
+    await _flush()
 
-    with mock.patch("posthog.request._session.get", return_value=response) as get:
-        assert client.get_remote_config_payload("flag-key") == "payload"
-
-    assert get.call_args.kwargs["headers"]["User-Agent"] == (
-        f"posthog-python-mcp/{VERSION}"
-    )
+    [event] = captured
+    assert event["options"] == {}
 
 
 async def test_capture_initialize_and_tools_list():
@@ -797,3 +780,69 @@ def test_capture_without_a_session_gets_a_fresh_one_per_call():
     assert session.startswith("ses_")
     assert first["distinct_id"] == session
     assert second["properties"]["$session_id"] != session
+
+
+class _UncopyableToolResult:
+    def __init__(self):
+        self.content = []
+        self.structuredContent = {"rows": []}
+
+    def __copy__(self):
+        return self
+
+
+class _FailingModelCopyResult(_UncopyableToolResult):
+    def model_copy(self, **kwargs):
+        raise ValueError("result is read-only")
+
+
+class _FailingResultWrapper:
+    def __init__(self, root):
+        self.root = root
+
+    def model_copy(self, **kwargs):
+        raise ValueError("wrapper is read-only")
+
+
+@pytest.mark.parametrize(
+    "make_result",
+    [
+        _UncopyableToolResult,
+        _FailingModelCopyResult,
+        lambda: _FailingResultWrapper(
+            SimpleNamespace(content=[], structuredContent={"rows": []})
+        ),
+        lambda: SimpleNamespace(
+            root=SimpleNamespace(content=[], structuredContent={"rows": []})
+        ),
+    ],
+    ids=["uncopyable", "model-copy-fails", "rewrap-fails", "plain-wrapper"],
+)
+def test_prepare_tool_result_copy_failures_never_pin_a_shared_handle(make_result):
+    client, _ = make_client()
+    client.prepare_tool_list([_sql_tool()])
+    call = client.prepare_tool_call("execute-sql", {})
+    result = make_result()
+    target = getattr(result, "root", result)
+
+    prepared = client.prepare_tool_result(result, call)
+
+    assert target.content == []
+    assert target.structuredContent == {"rows": []}
+    if isinstance(result, SimpleNamespace):
+        assert prepared.result is not result
+        assert prepared.result.root is not target
+        assert prepared.result.root.structuredContent[MCP_INSTRUCTIONS_KEY] == {
+            "conversation_id": prepared.conversation_id
+        }
+        assert (
+            prepared.result.root.content[-1].text
+            == _handle_block(prepared.conversation_id)["text"]
+        )
+        assert prepared.session_id == derive_session_id_from_conversation(
+            prepared.conversation_id
+        )
+    else:
+        assert prepared.result is result
+        assert prepared.conversation_id is None
+        assert prepared.session_id is None

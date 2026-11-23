@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import weakref
 from datetime import datetime, timezone
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from posthog.client import Client
 
@@ -151,9 +151,19 @@ class McpAnalytics:
     def __init__(self, key: Any) -> None:
         self._key = key
 
-    async def capture(self, event: str, properties: Optional[dict] = None) -> None:
+    async def capture(
+        self,
+        event: str,
+        properties: Optional[dict] = None,
+        *,
+        event_options: Optional[Dict[str, Any]] = None,
+    ) -> None:
         """Capture a custom event for this server. ``event`` is sent verbatim (a
-        customer-defined event, so it is not ``$``-prefixed)."""
+        customer-defined event, so it is not ``$``-prefixed).
+
+        ``event_options`` sets capture options, such as
+        ``process_person_profile``, on the event. An event from a session
+        without an identity always sends ``process_person_profile: False``."""
         if not isinstance(event, str) or not event:
             raise ValueError(
                 'capture() requires an event name, e.g. await analytics.capture("feedback_submitted")'
@@ -169,6 +179,7 @@ class McpAnalytics:
                 "event_name": event,
                 "timestamp": datetime.now(timezone.utc),
                 "properties": properties,
+                "event_options": event_options,
             },
         )
         if coro is not None:
@@ -187,7 +198,13 @@ class _NoopAnalytics(McpAnalytics):
     def __init__(self) -> None:  # noqa: D401 - graceful degradation handle
         super().__init__(None)
 
-    async def capture(self, event: str, properties: Optional[dict] = None) -> None:
+    async def capture(
+        self,
+        event: str,
+        properties: Optional[dict] = None,
+        *,
+        event_options: Optional[Dict[str, Any]] = None,
+    ) -> None:
         return None
 
     async def flush(self) -> None:
@@ -290,6 +307,7 @@ def instrument(
         from ._instrument_fastmcp import instrument_fastmcp
         from ._instrument_lowlevel import instrument_fastmcp_v2, instrument_low_level
         from ._instrument_v2 import instrument_lowlevel_v2, instrument_mcpserver_v2
+        from ._raised_tool_error import wrap_tool_dispatch
 
         client = _resolve_client(posthog_client)
         if client is None:
@@ -306,8 +324,10 @@ def instrument(
                 server_build=server_build,
             )
 
-        if is_fastmcp_v2(server) and uses_v2_handler_registry(key):
-            data.standalone_fastmcp = weakref.ref(server)
+        if is_fastmcp_v2(server):
+            wrap_tool_dispatch(server)
+            if uses_v2_handler_registry(key):
+                data.standalone_fastmcp = weakref.ref(server)
 
         # A standalone FastMCP wrapper and its low-level server share one tracking
         # key, so instrumenting the second of the pair must still attach what only
@@ -339,11 +359,6 @@ def instrument(
                 "(mcp.server.fastmcp.FastMCP on SDK 1.x, mcp.server.mcpserver.MCPServer "
                 "on SDK 2.x, or jlowin's fastmcp.FastMCP) or a low-level mcp.server.Server."
             )
-
-        if client is not None:
-            from ._lib_identity import apply_mcp_lib_identity
-
-            apply_mcp_lib_identity(client)
 
         # Zero-config stateless minting: wrap the server's ASGI-app factories so a
         # stateless/multi-pod deployment keeps one $session_id + the client harness

@@ -25,6 +25,7 @@ def instrument(
     privacy_mode: bool = False,
     groups: Optional[Dict[str, Any]] = None,
     properties: Optional[Dict[str, Any]] = None,
+    options: Optional[Dict[str, Any]] = None,
 ) -> PostHogTracingProcessor:
     """
     One-liner to instrument OpenAI Agents SDK with PostHog tracing.
@@ -39,6 +40,10 @@ def instrument(
         privacy_mode: If True, redacts input/output content from events.
         groups: Optional PostHog groups to associate with events.
         properties: Optional additional properties to include with all events.
+        options: Optional capture options for all events, such as
+            ``{"cookieless_mode": True}``. They win over context options and
+            ``super_options``. An event without a distinct ID always sends
+            ``process_person_profile: False``.
 
     Returns:
         PostHogTracingProcessor: The registered processor instance.
@@ -71,6 +76,7 @@ def instrument(
         privacy_mode=privacy_mode,
         groups=groups,
         properties=properties,
+        options=options,
     )
     add_trace_processor(processor)
     return processor

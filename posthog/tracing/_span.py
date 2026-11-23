@@ -288,9 +288,7 @@ class RecordingSpan(_Activatable, Span):
                 return
             if value is None:
                 # None removes the key, freeing its slot.
-                if key in self._attributes and key not in self._auto_keys:
-                    self._user_attribute_count -= 1
-                self._attributes.pop(key, None)
+                self._remove_attribute_locked(key)
                 return
             # Checked before the value is walked, which is the costly part.
             if key not in self._auto_keys and key not in self._attributes:
@@ -304,6 +302,11 @@ class RecordingSpan(_Activatable, Span):
         with self._lock:
             if not self._ended:
                 self._attributes[key] = bounded
+
+    def _remove_attribute_locked(self, key: str) -> None:
+        if key in self._attributes and key not in self._auto_keys:
+            self._user_attribute_count -= 1
+        self._attributes.pop(key, None)
 
     def set_attribute(self, key: str, value: Any) -> "Span":
         if self._mutable("set_attribute"):

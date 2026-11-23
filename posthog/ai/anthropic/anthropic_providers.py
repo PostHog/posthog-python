@@ -9,8 +9,8 @@ from typing import Optional
 
 from posthog.ai.anthropic.anthropic import WrappedMessages
 from posthog.ai.anthropic.anthropic_async import AsyncWrappedMessages
+from posthog.ai.utils import _resolve_ai_client
 from posthog.client import Client as PostHogClient
-from posthog import setup
 
 
 class AnthropicBedrock(anthropic.AnthropicBedrock):
@@ -28,7 +28,7 @@ class AnthropicBedrock(anthropic.AnthropicBedrock):
             **kwargs: Arguments passed to ``anthropic.AnthropicBedrock``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = WrappedMessages(self)
 
 
@@ -47,7 +47,7 @@ class AsyncAnthropicBedrock(anthropic.AsyncAnthropicBedrock):
             **kwargs: Arguments passed to ``anthropic.AsyncAnthropicBedrock``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = AsyncWrappedMessages(self)
 
 
@@ -66,7 +66,7 @@ class AnthropicVertex(anthropic.AnthropicVertex):
             **kwargs: Arguments passed to ``anthropic.AnthropicVertex``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = WrappedMessages(self)
 
 
@@ -85,5 +85,5 @@ class AsyncAnthropicVertex(anthropic.AsyncAnthropicVertex):
             **kwargs: Arguments passed to ``anthropic.AsyncAnthropicVertex``.
         """
         super().__init__(**kwargs)
-        self._ph_client = posthog_client or setup()
+        self._ph_client = _resolve_ai_client(posthog_client)
         self.messages = AsyncWrappedMessages(self)

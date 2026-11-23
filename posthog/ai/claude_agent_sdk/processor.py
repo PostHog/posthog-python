@@ -24,14 +24,17 @@ except ImportError:
         "Please install the Claude Agent SDK to use this feature: 'pip install claude-agent-sdk'"
     )
 
-from posthog import setup
 from posthog.ai.claude_agent_sdk.formatting import (
-    format_assistant_blocks,
-    format_tool_result_content,
+    _append_assistant_output,
+    _format_user_input,
+    format_assistant_blocks as format_assistant_blocks,
+    format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
+    _ai_event_options,
     _capture_processor_event,
+    _resolve_ai_client,
     finalize_ai_content,
     with_privacy_mode as _with_privacy_mode,
 )
@@ -172,6 +175,7 @@ class PostHogClaudeAgentProcessor:
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a Claude Agent SDK query processor.
@@ -183,12 +187,18 @@ class PostHogClaudeAgentProcessor:
             privacy_mode: Whether to redact captured inputs, outputs, and tool data.
             groups: Optional PostHog groups to associate with emitted events.
             properties: Additional properties included on emitted AI events.
+            options: Capture options for emitted AI events, such as
+                ``{"cookieless_mode": True}``. They win over a query's
+                ``posthog_options``, context options and ``super_options``. An
+                event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
-        self._client = client or setup()
+        self._client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
+        self._options = _ai_event_options(options)
 
     def _get_distinct_id(
         self, result: Optional["ResultMessage"] = None
@@ -209,6 +219,8 @@ class PostHogClaudeAgentProcessor:
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
         groups: Optional[Dict[str, Any]] = None,
+        personless: bool = False,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         _capture_processor_event(
             self._client,
@@ -217,6 +229,9 @@ class PostHogClaudeAgentProcessor:
             default_properties=self._properties,
             distinct_id=distinct_id,
             groups=groups if groups is not None else self._groups,
+            personless=personless,
+            options=options,
+            default_options=self._options,
         )
 
     async def query(
@@ -232,6 +247,7 @@ class PostHogClaudeAgentProcessor:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
     ):
         """Drop-in replacement for claude_agent_sdk.query() with PostHog instrumentation.
 
@@ -247,6 +263,9 @@ class PostHogClaudeAgentProcessor:
             posthog_properties: Extra properties merged into all events for this query
             posthog_privacy_mode: Override privacy mode for this query
             posthog_groups: Override groups for this query
+            posthog_options: Capture options for all events of this query, such
+                as ``{"cookieless_mode": True}``. Named so it does not clash with
+                ``options``, the Claude Agent SDK options.
         """
         from dataclasses import replace
 
@@ -254,6 +273,7 @@ class PostHogClaudeAgentProcessor:
         distinct_id_override = posthog_distinct_id or self._distinct_id
         trace_id = posthog_trace_id or str(uuid.uuid4())
         extra_props = posthog_properties or {}
+        extra_options = _ai_event_options(posthog_options)
         # Per-call privacy can enable redaction, but cannot disable the
         # processor-level setting. This preserves the existing precedence.
         privacy = self._privacy_mode or posthog_privacy_mode is True
@@ -281,12 +301,14 @@ class PostHogClaudeAgentProcessor:
 
         # Two-slot input tracking:
         # - current_input: input for the generation currently in progress
-        # - next_input: tool results that arrive mid-turn, queued for the next generation
+        # - next_input: tool results queued for the next generation
         #
-        # Message ordering from the SDK is:
-        #   message_start → content_blocks → AssistantMessage → UserMessage(tool result) → message_stop
-        # So UserMessage arrives *before* message_stop. When message_stop fires we emit
-        # with current_input, then promote next_input → current_input for the next turn.
+        # The CLI sends each content block as its own AssistantMessage before
+        # message_stop, and each tool result as its own UserMessage after it.
+        # Queued input is promoted when the next generation starts, so it
+        # does not matter which side of message_stop the tool results land on.
+        # Input is used by one generation only: a generation with nothing
+        # queued has no input.
         current_input: Optional[List[Dict[str, Any]]] = initial_input or None
         next_input: Optional[List[Dict[str, Any]]] = None
 
@@ -300,6 +322,14 @@ class PostHogClaudeAgentProcessor:
             # never interrupt the underlying Claude Agent SDK query.
             try:
                 if isinstance(message, StreamEvent):
+                    if _starts_generation(message):
+                        if tracker.current_span_id is not None:
+                            # The previous request never finished (it was
+                            # retried), so its partial output is dropped.
+                            pending_output = []
+                        current_input, next_input = _promote_input(
+                            current_input, next_input
+                        )
                     tracker.process_stream_event(message)
 
                     # Emit $ai_generation when a turn completes
@@ -317,10 +347,9 @@ class PostHogClaudeAgentProcessor:
                             extra_props,
                             privacy,
                             groups,
+                            extra_options=extra_options,
                         )
-                        # Promote: tool results from this turn become input for next turn
-                        current_input = next_input
-                        next_input = None
+                        current_input = None
                         pending_output = []
 
                 elif isinstance(message, AssistantMessage):
@@ -340,36 +369,24 @@ class PostHogClaudeAgentProcessor:
                                 extra_props,
                                 privacy,
                                 groups,
+                                extra_options=extra_options,
                             )
-                    output_content = format_assistant_blocks(message.content)
-                    if output_content:
-                        pending_output = [
-                            {"role": "assistant", "content": output_content}
-                        ]
+                    if not _from_subagent(message):
+                        # A subagent's own API calls are not this query's generations.
+                        pending_output = _append_assistant_output(
+                            pending_output, message.content
+                        )
 
-                elif isinstance(message, UserMessage):
-                    # UserMessages carry tool results. They arrive *before* message_stop
-                    # for the current turn, so queue them as input for the *next* generation.
-                    content = message.content
-                    if isinstance(content, str):
-                        next_input = [{"role": "user", "content": content}]
-                    elif isinstance(content, list):
-                        formatted: List[Dict[str, Any]] = []
-                        for block in content:
-                            if hasattr(block, "tool_use_id"):
-                                formatted.append(
-                                    {
-                                        "type": "tool_result",
-                                        "tool_use_id": block.tool_use_id,
-                                        "content": format_tool_result_content(
-                                            block, self._client
-                                        ),
-                                    }
-                                )
-                            elif hasattr(block, "text"):
-                                formatted.append({"type": "text", "text": block.text})
-                        if formatted:
-                            next_input = [{"role": "user", "content": formatted}]
+                elif isinstance(message, UserMessage) and not _from_subagent(message):
+                    # UserMessages carry tool results; queue them as input for the
+                    # *next* generation.
+                    if not tracker.had_any_stream_events:
+                        # Without stream events, a tool result ends the assistant
+                        # turn; the result fallback reports the final turn only.
+                        pending_output = []
+                    next_input = _format_user_input(
+                        message.content, self._client, next_input
+                    )
 
                 elif isinstance(message, ResultMessage):
                     # Fallback: if no StreamEvents were received, emit a single
@@ -386,6 +403,7 @@ class PostHogClaudeAgentProcessor:
                             extra_props,
                             privacy,
                             groups,
+                            extra_options=extra_options,
                         )
 
                     self._emit_trace(
@@ -396,6 +414,7 @@ class PostHogClaudeAgentProcessor:
                         extra_props,
                         privacy,
                         groups,
+                        extra_options=extra_options,
                     )
 
             except Exception as e:
@@ -414,6 +433,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
         latency = (
@@ -468,11 +488,13 @@ class PostHogClaudeAgentProcessor:
         if gen.stop_reason is not None:
             properties["$ai_stop_reason"] = gen.stop_reason
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
         self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
         )
 
     def _emit_generation_from_result(
@@ -487,6 +509,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Fallback: emit a single generation from ResultMessage aggregate data."""
         resolved_id = self._resolve_distinct_id(distinct_id)
@@ -541,11 +564,13 @@ class PostHogClaudeAgentProcessor:
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
         self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
         )
 
     def _emit_tool_span(
@@ -557,6 +582,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
 
@@ -576,10 +602,14 @@ class PostHogClaudeAgentProcessor:
                 _ensure_serializable(block.input), self._client
             )
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event("$ai_span", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_span",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
+        )
 
     def _emit_trace(
         self,
@@ -590,6 +620,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id, result)
         latency = (
@@ -611,10 +642,14 @@ class PostHogClaudeAgentProcessor:
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event("$ai_trace", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_trace",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
+        )
 
         # Flush to ensure events are sent before process exits
         try:
@@ -639,3 +674,24 @@ class PostHogClaudeAgentProcessor:
             return str(override)
         # Fall back to instance default
         return self._get_distinct_id(result)
+
+
+def _from_subagent(message: Any) -> bool:
+    return getattr(message, "parent_tool_use_id", None) is not None
+
+
+def _starts_generation(message: "StreamEvent") -> bool:
+    """Whether a main-agent API call is starting (subagent calls are skipped)."""
+    return (
+        not _from_subagent(message)
+        and isinstance(message.event, dict)
+        and message.event.get("type") == "message_start"
+    )
+
+
+def _promote_input(
+    current_input: Optional[List[Dict[str, Any]]],
+    next_input: Optional[List[Dict[str, Any]]],
+) -> tuple[Optional[List[Dict[str, Any]]], None]:
+    """Make queued input the input of the generation that is starting."""
+    return (current_input if next_input is None else next_input), None

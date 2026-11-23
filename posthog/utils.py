@@ -1,10 +1,11 @@
 import json
 import logging
 import numbers
+import os
 import re
 import threading
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime, timezone, timedelta
 from decimal import Decimal
@@ -21,7 +22,7 @@ log = logging.getLogger("posthog")
 
 def is_naive(dt: datetime) -> bool:
     """Determines if a given datetime.datetime is naive."""
-    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None  # pragma: no mutate
+    return dt.tzinfo is None or dt.tzinfo.utcoffset(dt) is None
 
 
 def total_seconds(delta: timedelta) -> float:
@@ -36,19 +37,41 @@ def guess_timezone(dt: datetime) -> datetime:
         # attempts to guess the datetime.datetime.now() local timezone
         # case, and then defaults to utc
         delta = total_seconds(datetime.now() - dt)
-        if 0 <= delta < 5:  # pragma: no mutate
+        if 0 <= delta < 5:
             # this was created using datetime.datetime.now(),
             # so use the current system local timezone
             # Equivalent to converting the naive value directly because this path
             # only handles values created in the current local timezone.
-            dt = dt.replace(
-                tzinfo=datetime.now().astimezone().tzinfo
-            )  # pragma: no mutate
+            dt = dt.replace(tzinfo=datetime.now().astimezone().tzinfo)
         else:
             # at this point, the best we can do is guess UTC
             dt = dt.replace(tzinfo=timezone.utc)
 
     return dt.astimezone(timezone.utc)
+
+
+def _uuid7() -> UUID:
+    """Return a time-ordered version 7 UUID (RFC 9562).
+
+    Capture generates v7 server-side when a client omits the uuid, so
+    SDK-generated event uuids sort the same way.
+    """
+    unix_ms = time.time_ns() // 1_000_000
+    # Python 3.10 requires the byte order; from 3.11 "big" is the default.
+    random_bits = int.from_bytes(os.urandom(10), "big")  # pragma: no mutate
+    value = ((unix_ms & ((1 << 48) - 1)) << 80) | random_bits
+    value = (value & ~(0xF << 76)) | (0x7 << 76)
+    value = (value & ~(0x3 << 62)) | (0x2 << 62)
+    return UUID(int=value)
+
+
+def _rfc3339_timestamp(dt: datetime) -> str:
+    """Format an aware datetime as a UTC RFC 3339 string for the capture wire.
+
+    The fraction is always six digits, even when zero, because plain
+    ``isoformat()`` drops it for whole seconds.
+    """
+    return dt.astimezone(timezone.utc).isoformat(timespec="microseconds")
 
 
 def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
@@ -62,7 +85,7 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
         try:
             # Python 3.10 needs the replacements; on 3.11+ fromisoformat accepts Z
             # and compact UTC offsets such as +0530.
-            normalized_timestamp = timestamp.replace("Z", "+00:00")  # pragma: no mutate
+            normalized_timestamp = timestamp.replace("Z", "+00:00")
             normalized_timestamp = re.sub(
                 r"([+-]\d{2})(\d{2})$", r"\1:\2", normalized_timestamp
             )
@@ -73,7 +96,7 @@ def _normalize_timestamp(timestamp: Union[datetime, str]) -> str:
             ) from None
     else:
         parsed_timestamp = timestamp
-    return guess_timezone(parsed_timestamp).isoformat()
+    return _rfc3339_timestamp(guess_timezone(parsed_timestamp))
 
 
 def remove_trailing_slash(host: str) -> str:
@@ -89,7 +112,7 @@ def clean(item):
         return str(item)
     if isinstance(item, (str, bool, numbers.Number, datetime, date, type(None))):
         return item
-    if isinstance(item, (set, list, tuple)):
+    if isinstance(item, (set, frozenset, list, tuple, deque)):
         return _clean_list(item)
 
     item = _clean_pydantic_model(item)
@@ -120,16 +143,110 @@ def _clean_list(list_):
     return [clean(item) for item in list_]
 
 
+_warned_reasons: set[str] = set()
+_warned_reasons_lock = threading.Lock()
+
+
+def _warn_once(logger: logging.Logger, reason: str, message: str, *args: Any) -> None:
+    """Log `message` the first time `reason` occurs in this process, then stay silent.
+
+    For drops caused by caller input, which can repeat at event rate.
+    """
+    with _warned_reasons_lock:
+        if reason in _warned_reasons:
+            return
+        _warned_reasons.add(reason)
+    logger.warning(message, *args)
+
+
+def _is_personal_api_key(api_key: str) -> bool:
+    """A personal API key (phx_...) is never a project API key; capture rejects it."""
+    return api_key.startswith("phx_")
+
+
+def _invalid_event_name_reason(event: Any) -> Optional[str]:
+    """Why capture would reject `event` as an event name, or None if it is valid."""
+    if event is None:
+        return "missing"
+    if not isinstance(event, str):
+        return "non-string"
+    if not event:
+        return "empty"
+    return None
+
+
+def _drop_invalid_event_name(logger: logging.Logger, msg: dict) -> bool:
+    """True when `msg` has an event name capture would reject; logs once per reason."""
+    reason = _invalid_event_name_reason(msg.get("event"))
+    if reason is None:
+        return False
+    _warn_once(
+        logger,
+        f"event_name_{reason}",  # pragma: no mutate
+        "Dropping an event with a %s name: event names must be non-empty strings. "
+        "Later events dropped for the same reason are not logged.",
+        reason,
+    )
+    return True
+
+
+def _log_before_send_error(
+    logger: logging.Logger, event_name: Any, error: Exception
+) -> None:
+    """Log a raising before_send hook without its message, which can hold event data."""
+    logger.error(
+        "Error in before_send callback for event %s (%s), dropping the event",
+        event_name,
+        type(error).__name__,
+    )
+    logger.debug("before_send callback traceback", exc_info=error)
+
+
+def _log_before_send_bad_return(
+    logger: logging.Logger, event_name: Any, result: Any
+) -> None:
+    logger.error(
+        "before_send must return a dict or None, not %s, dropping event %s",
+        type(result).__name__,
+        event_name,
+    )
+
+
+def _drop_invalid_distinct_id(logger: logging.Logger, msg: dict) -> bool:
+    """True when `msg` has no string distinct_id; logs once per reason.
+
+    Runs after before_send, which may set any value; the SDK never converts it there.
+    """
+    distinct_id = msg.get("distinct_id")
+    if isinstance(distinct_id, str):
+        return False
+    reason = "missing" if distinct_id is None else "non-string"
+    _warn_once(
+        logger,
+        f"distinct_id_{reason}",  # pragma: no mutate
+        "Dropping an event with a %s distinct_id: distinct IDs must be strings. "
+        "Later events dropped for the same reason are not logged.",
+        reason,
+    )
+    return True
+
+
+# The key types json.dumps can write; it converts the non-string ones to strings.
+_JSON_KEY_TYPES = (str, int, float, bool, type(None))
+
+
 def _clean_dict(dict_):
     data = {}
     for k, v in dict_.items():
+        # Drop only a key json cannot write, so one bad key never costs the event.
+        if not isinstance(k, _JSON_KEY_TYPES):
+            continue
         try:
             data[k] = clean(v)
         except TypeError:
             log.warning(
-                'Dictionary values must be serializeable to JSON "%s" value %s of type %s is unsupported.',
+                'Dictionary value for key "%s" of type %s is not JSON serializable, dropping it.',
                 k,
-                v,
                 type(v),
             )
     return data
@@ -162,7 +279,7 @@ def _coerce_unicode(cmplx: Any) -> Optional[str]:
     item = None
     try:
         if isinstance(cmplx, bytes):
-            item = cmplx.decode("utf-8", "strict")  # pragma: no mutate
+            item = cmplx.decode("utf-8", "strict")
         elif isinstance(cmplx, str):
             item = cmplx
     except Exception as exception:
@@ -569,7 +686,7 @@ class RedisFlagCache:
                 self._delete_keys_with_version(keys, old_version)
 
                 if cursor == 0:
-                    break  # pragma: no mutate
+                    break
 
         except Exception:
             # Redis error - silently fail
@@ -641,7 +758,7 @@ class RedisFlagCache:
                 if keys:
                     self.redis.delete(*keys)
                 if cursor == 0:
-                    break  # pragma: no mutate
+                    break
         except Exception:
             # Redis error - silently fail
             pass

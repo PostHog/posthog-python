@@ -230,11 +230,7 @@ def _clean_attributes(attributes: Any) -> Any:
         return None
     cleaned: Dict[str, Any] = {}
     for key, value in items:
-        if (
-            not isinstance(key, str)
-            or key in _UNSAFE_ATTRIBUTES
-            or key.startswith(_UNSAFE_ATTRIBUTE_PREFIXES)
-        ):
+        if not _safe_attribute_key(key):
             continue
         if isinstance(value, _ATTRIBUTE_VALUE_TYPES):
             cleaned[key] = value
@@ -730,7 +726,7 @@ class DbSpanMetricsProcessor(_SpanProcessorBase):
             )
 
     def _record(self, span):
-        from opentelemetry.trace import SpanKind, StatusCode
+        from opentelemetry.trace import SpanKind
 
         scope = getattr(span, "instrumentation_scope", None)
         if (
@@ -742,42 +738,7 @@ class DbSpanMetricsProcessor(_SpanProcessorBase):
         system = _first_string(attributes, ("db.system.name", "db.system"))
         if not system or span.start_time is None or span.end_time is None:
             return
-        metric_attributes: Dict[str, Any] = {"db.system.name": system}
-        operation = _first_string(attributes, ("db.operation.name", "db.operation"))
-        if operation is None:
-            statement = _first_string(attributes, ("db.query.text", "db.statement"))
-            match = _STATEMENT_KEYWORD.match(statement or "")
-            operation = match.group(1).upper() if match else None
-        else:
-            # Only the leading keyword is bounded, as for a statement.
-            words = operation.split()
-            operation = words[0] if words else None
-        collection = _first_string(
-            attributes,
-            (
-                "db.collection.name",
-                "db.mongodb.collection",
-                "db.sql.table",
-                "db.cassandra.table",
-            ),
-        )
-        namespace = _first_string(attributes, ("db.namespace", "db.name"))
-        address = _first_string(attributes, ("server.address", "net.peer.name"))
-        port = attributes.get("server.port", attributes.get("net.peer.port"))
-        if operation:
-            metric_attributes["db.operation.name"] = operation
-        if collection:
-            metric_attributes["db.collection.name"] = collection
-        if namespace:
-            metric_attributes["db.namespace"] = namespace
-        if address:
-            metric_attributes["server.address"] = address
-        if isinstance(port, int) and not isinstance(port, bool):
-            metric_attributes["server.port"] = port
-        if span.status.status_code == StatusCode.ERROR:
-            metric_attributes["error.type"] = (
-                _first_string(attributes, ("error.type",)) or "_OTHER"
-            )
+        metric_attributes = _db_metric_attributes(span, attributes, system)
         self._histogram.record(
             (span.end_time - span.start_time) / 1e9, metric_attributes
         )
@@ -1103,73 +1064,23 @@ def start_metrics_autocapture(
         instrumentors: List[Any] = []
         stopped = threading.Event()
         try:
-            if not _is_default_provider(
-                metrics_api.get_meter_provider()
-            ) or not _is_default_provider(trace_api.get_tracer_provider()):
-                log.warning(
-                    "OpenTelemetry is already set up in this process, so metrics autocapture does not start. "
-                    "Point your OTLP metrics exporter at PostHog instead: https://posthog.com/docs/metrics"
-                )
+            if not _autocapture_providers_available(metrics_api, trace_api):
                 return None
 
-            # The same resource as `client.metrics`: the OTEL_SERVICE_NAME and
-            # OTEL_RESOURCE_ATTRIBUTES of the app are not read.
-            resource = sdk_resources.Resource(
-                {
-                    **resource_attributes,
-                    "service.name": service_name or "unknown_service",
-                    "telemetry.sdk.language": "python",
-                    "telemetry.sdk.name": "opentelemetry",
-                    "telemetry.sdk.version": _import_module(
-                        "opentelemetry.sdk.version"
-                    ).__version__,
-                    "telemetry.distro.name": "posthog-python",
-                    "telemetry.distro.version": VERSION,
-                }
+            resource = _autocapture_resource(
+                sdk_resources, service_name, resource_attributes
             )
 
             reader = _metric_reader
             if reader is None:
-                exporter_base: Any = otlp.OTLPMetricExporter
-                delta = sdk_metrics_export.AggregationTemporality.DELTA
-                cumulative = sdk_metrics_export.AggregationTemporality.CUMULATIVE
-
-                class _GatedExporter(exporter_base):
-                    # The exporter still sends while the client is disabled unless it is gated here.
-                    def export(self, metrics_data, timeout_millis=10_000, **kwargs):
-                        if not is_enabled():
-                            return sdk_metrics_export.MetricExportResult.SUCCESS
-                        return super().export(
-                            metrics_data, timeout_millis=timeout_millis, **kwargs
-                        )
-
-                exporter = _GatedExporter(
-                    endpoint=f"{host}/i/v1/metrics",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=_EXPORT_TIMEOUT_SECONDS,
-                    compression=_import_module(
-                        "opentelemetry.exporter.otlp.proto.http"
-                    ).Compression.NoCompression,
-                    session=_metrics_export_session(api_key),
-                    # Delta, like the `posthog.metrics` wire shape; values that go
-                    # up and down stay cumulative.
-                    preferred_temporality={
-                        sdk_metrics.Counter: delta,
-                        sdk_metrics.Histogram: delta,
-                        sdk_metrics.ObservableCounter: delta,
-                        sdk_metrics.UpDownCounter: cumulative,
-                        sdk_metrics.ObservableUpDownCounter: cumulative,
-                        sdk_metrics.ObservableGauge: cumulative,
-                    },
-                    preferred_aggregation={
-                        sdk_metrics.Histogram: _import_module(
-                            "opentelemetry.sdk.metrics.view"
-                        ).ExplicitBucketHistogramAggregation(),
-                    },
-                )
-                reader = sdk_metrics_export.PeriodicExportingMetricReader(
-                    exporter,
-                    export_interval_millis=(export_interval_seconds or 10.0) * 1000,
+                reader = _autocapture_metric_reader(
+                    otlp,
+                    sdk_metrics,
+                    sdk_metrics_export,
+                    host,
+                    api_key,
+                    is_enabled,
+                    export_interval_seconds,
                 )
             # The client exports the last window at exit, within its exit budget.
             # The provider's own exit hook waits up to the export timeout, also
@@ -1225,79 +1136,15 @@ def start_metrics_autocapture(
                     )
                 )
 
-            posthog_url_pattern = _posthog_url_pattern(host)
-            wanted = set(_instrumentor_names(areas))
-            with _stable_http_semconv():
-                for entry_point in entry_points(group="opentelemetry_instrumentor"):
-                    if entry_point.name not in wanted:
-                        continue
-                    if (
-                        entry_point.name == "django"
-                        and not _django_settings_configured()
-                    ):
-                        # Without settings, the Django instrumentor configures empty
-                        # ones, and the app's own settings.configure() then fails.
-                        # In AppConfig.ready() the settings are configured.
-                        log.debug(
-                            "Metrics autocapture skipped django: its settings are not configured yet"
-                        )
-                        continue
-                    try:
-                        kwargs: Dict[str, Any] = {
-                            "tracer_provider": tracer_provider
-                            if entry_point.name in _DB_INSTRUMENTORS
-                            else no_op_tracer_provider,
-                            "meter_provider": bounded_meter_provider,
-                        }
-                        environ: Dict[str, Optional[str]] = {}
-                        if entry_point.name in _HTTP_CLIENT_INSTRUMENTORS:
-                            # PostHog's own uploads, including this exporter's, are not app traffic.
-                            variable, excluded = _excluded_urls(
-                                entry_point.name, posthog_url_pattern
-                            )
-                            kwargs["excluded_urls"] = excluded
-                            environ[variable] = excluded
-                        with _patched_environ(environ):
-                            instrumentor_class = entry_point.load()
-                            # Instrumentors are singletons, and creating one runs
-                            # `__init__` again on the existing instance. That would
-                            # reset the config of an instance that the app uses.
-                            existing = getattr(instrumentor_class, "_instance", None)
-                            if (
-                                existing is not None
-                                and existing.is_instrumented_by_opentelemetry
-                            ):
-                                continue
-                            instrumentor = (
-                                instrumentor_class(config=_RUNTIME_CONFIG)
-                                if entry_point.name == "system_metrics"
-                                else instrumentor_class()
-                            )
-                            if instrumentor.is_instrumented_by_opentelemetry:
-                                # The app instrumented this library itself.
-                                continue
-                            instrumentor.instrument(**kwargs)
-                        if instrumentor.is_instrumented_by_opentelemetry:
-                            instrumentors.append(instrumentor)
-                            _disable_propagation(instrumentor_class)
-                            if entry_point.name == "aiohttp-client":
-                                _gate_aiohttp_trace_configs(
-                                    bounded_meter_provider, stopped, posthog_url_pattern
-                                )
-                            if entry_point.name == "flask":
-                                _track_flask_apps(
-                                    instrumentor_class,
-                                    {
-                                        "tracer_provider": no_op_tracer_provider,
-                                        "meter_provider": bounded_meter_provider,
-                                    },
-                                )
-                    except Exception:
-                        log.debug(
-                            "Metrics autocapture skipped %s",
-                            entry_point.name,
-                            exc_info=True,
-                        )
+            _instrument_metrics_libraries(
+                instrumentors,
+                areas,
+                host,
+                tracer_provider,
+                no_op_tracer_provider,
+                bounded_meter_provider,
+                stopped,
+            )
 
             _active = MetricsAutocapture(
                 meter_provider, tracer_provider, instrumentors, reader, stopped
@@ -1310,3 +1157,247 @@ def start_metrics_autocapture(
             _uninstrument(instrumentors)
             _shut_down(tracer_provider, meter_provider or reader)
             return None
+
+
+def _safe_attribute_key(key: Any) -> bool:
+    return (
+        isinstance(key, str)
+        and key not in _UNSAFE_ATTRIBUTES
+        and not key.startswith(_UNSAFE_ATTRIBUTE_PREFIXES)
+    )
+
+
+def _db_operation(attributes: Any) -> Optional[str]:
+    operation = _first_string(attributes, ("db.operation.name", "db.operation"))
+    if operation is None:
+        statement = _first_string(attributes, ("db.query.text", "db.statement"))
+        match = _STATEMENT_KEYWORD.match(statement or "")
+        operation = match.group(1).upper() if match else None
+    else:
+        # Only the leading keyword is bounded, as for a statement.
+        words = operation.split()
+        operation = words[0] if words else None
+    return operation
+
+
+def _db_metric_attributes(span: Any, attributes: Any, system: str) -> Dict[str, Any]:
+    from opentelemetry.trace import StatusCode
+
+    metric_attributes: Dict[str, Any] = {"db.system.name": system}
+    operation = _db_operation(attributes)
+    collection = _first_string(
+        attributes,
+        (
+            "db.collection.name",
+            "db.mongodb.collection",
+            "db.sql.table",
+            "db.cassandra.table",
+        ),
+    )
+    namespace = _first_string(attributes, ("db.namespace", "db.name"))
+    address = _first_string(attributes, ("server.address", "net.peer.name"))
+    port = attributes.get("server.port", attributes.get("net.peer.port"))
+    if operation:
+        metric_attributes["db.operation.name"] = operation
+    if collection:
+        metric_attributes["db.collection.name"] = collection
+    if namespace:
+        metric_attributes["db.namespace"] = namespace
+    if address:
+        metric_attributes["server.address"] = address
+    if isinstance(port, int) and not isinstance(port, bool):
+        metric_attributes["server.port"] = port
+    if span.status.status_code == StatusCode.ERROR:
+        metric_attributes["error.type"] = (
+            _first_string(attributes, ("error.type",)) or "_OTHER"
+        )
+    return metric_attributes
+
+
+def _instrument_metrics_libraries(
+    instrumentors: List[Any],
+    areas: Dict[str, bool],
+    host: str,
+    tracer_provider: Any,
+    no_op_tracer_provider: Any,
+    bounded_meter_provider: Any,
+    stopped: threading.Event,
+) -> None:
+    posthog_url_pattern = _posthog_url_pattern(host)
+    wanted = set(_instrumentor_names(areas))
+    with _stable_http_semconv():
+        for entry_point in entry_points(group="opentelemetry_instrumentor"):
+            if entry_point.name not in wanted:
+                continue
+            if entry_point.name == "django" and not _django_settings_configured():
+                # Without settings, the Django instrumentor configures empty
+                # ones, and the app's own settings.configure() then fails.
+                # In AppConfig.ready() the settings are configured.
+                log.debug(
+                    "Metrics autocapture skipped django: its settings are not configured yet"
+                )
+                continue
+            try:
+                _instrument_metric_library(
+                    entry_point,
+                    instrumentors,
+                    tracer_provider,
+                    no_op_tracer_provider,
+                    bounded_meter_provider,
+                    stopped,
+                    posthog_url_pattern,
+                )
+            except Exception:
+                log.debug(
+                    "Metrics autocapture skipped %s",
+                    entry_point.name,
+                    exc_info=True,
+                )
+
+
+def _instrument_metric_library(
+    entry_point: Any,
+    instrumentors: List[Any],
+    tracer_provider: Any,
+    no_op_tracer_provider: Any,
+    bounded_meter_provider: Any,
+    stopped: threading.Event,
+    posthog_url_pattern: str,
+) -> None:
+    kwargs: Dict[str, Any] = {
+        "tracer_provider": tracer_provider
+        if entry_point.name in _DB_INSTRUMENTORS
+        else no_op_tracer_provider,
+        "meter_provider": bounded_meter_provider,
+    }
+    environ: Dict[str, Optional[str]] = {}
+    if entry_point.name in _HTTP_CLIENT_INSTRUMENTORS:
+        # PostHog's own uploads, including this exporter's, are not app traffic.
+        variable, excluded = _excluded_urls(entry_point.name, posthog_url_pattern)
+        kwargs["excluded_urls"] = excluded
+        environ[variable] = excluded
+    with _patched_environ(environ):
+        instrumentor_class = entry_point.load()
+        instrumentor = _new_metric_instrumentor(instrumentor_class, entry_point.name)
+        if instrumentor is None:
+            return
+        instrumentor.instrument(**kwargs)
+    if instrumentor.is_instrumented_by_opentelemetry:
+        instrumentors.append(instrumentor)
+        _disable_propagation(instrumentor_class)
+        if entry_point.name == "aiohttp-client":
+            _gate_aiohttp_trace_configs(
+                bounded_meter_provider, stopped, posthog_url_pattern
+            )
+        if entry_point.name == "flask":
+            _track_flask_apps(
+                instrumentor_class,
+                {
+                    "tracer_provider": no_op_tracer_provider,
+                    "meter_provider": bounded_meter_provider,
+                },
+            )
+
+
+def _new_metric_instrumentor(instrumentor_class: Any, name: str) -> Any:
+    # Instrumentors are singletons, and creating one runs
+    # `__init__` again on the existing instance. That would
+    # reset the config of an instance that the app uses.
+    existing = getattr(instrumentor_class, "_instance", None)
+    if existing is not None and existing.is_instrumented_by_opentelemetry:
+        return None
+    instrumentor = (
+        instrumentor_class(config=_RUNTIME_CONFIG)
+        if name == "system_metrics"
+        else instrumentor_class()
+    )
+    if instrumentor.is_instrumented_by_opentelemetry:
+        # The app instrumented this library itself.
+        return None
+    return instrumentor
+
+
+def _autocapture_metric_reader(
+    otlp: Any,
+    sdk_metrics: Any,
+    sdk_metrics_export: Any,
+    host: str,
+    api_key: str,
+    is_enabled: Callable[[], bool],
+    export_interval_seconds: Optional[float],
+) -> Any:
+    exporter_base: Any = otlp.OTLPMetricExporter
+    delta = sdk_metrics_export.AggregationTemporality.DELTA
+    cumulative = sdk_metrics_export.AggregationTemporality.CUMULATIVE
+
+    class _GatedExporter(exporter_base):
+        # The exporter still sends while the client is disabled unless it is gated here.
+        def export(self, metrics_data, timeout_millis=10_000, **kwargs):
+            if not is_enabled():
+                return sdk_metrics_export.MetricExportResult.SUCCESS
+            return super().export(metrics_data, timeout_millis=timeout_millis, **kwargs)
+
+    exporter = _GatedExporter(
+        endpoint=f"{host}/i/v1/metrics",
+        headers={"Authorization": f"Bearer {api_key}"},
+        timeout=_EXPORT_TIMEOUT_SECONDS,
+        compression=_import_module(
+            "opentelemetry.exporter.otlp.proto.http"
+        ).Compression.NoCompression,
+        session=_metrics_export_session(api_key),
+        # Delta, like the `posthog.metrics` wire shape; values that go
+        # up and down stay cumulative.
+        preferred_temporality={
+            sdk_metrics.Counter: delta,
+            sdk_metrics.Histogram: delta,
+            sdk_metrics.ObservableCounter: delta,
+            sdk_metrics.UpDownCounter: cumulative,
+            sdk_metrics.ObservableUpDownCounter: cumulative,
+            sdk_metrics.ObservableGauge: cumulative,
+        },
+        preferred_aggregation={
+            sdk_metrics.Histogram: _import_module(
+                "opentelemetry.sdk.metrics.view"
+            ).ExplicitBucketHistogramAggregation(),
+        },
+    )
+    reader = sdk_metrics_export.PeriodicExportingMetricReader(
+        exporter,
+        export_interval_millis=(export_interval_seconds or 10.0) * 1000,
+    )
+    return reader
+
+
+def _autocapture_resource(
+    sdk_resources: Any, service_name: Optional[str], resource_attributes: Dict[str, Any]
+) -> Any:
+    # The same resource as `client.metrics`: the OTEL_SERVICE_NAME and
+    # OTEL_RESOURCE_ATTRIBUTES of the app are not read.
+    resource = sdk_resources.Resource(
+        {
+            **resource_attributes,
+            "service.name": service_name or "unknown_service",
+            "telemetry.sdk.language": "python",
+            "telemetry.sdk.name": "opentelemetry",
+            "telemetry.sdk.version": _import_module(
+                "opentelemetry.sdk.version"
+            ).__version__,
+            "telemetry.distro.name": "posthog-python",
+            "telemetry.distro.version": VERSION,
+        }
+    )
+
+    return resource
+
+
+def _autocapture_providers_available(metrics_api: Any, trace_api: Any) -> bool:
+    if not _is_default_provider(
+        metrics_api.get_meter_provider()
+    ) or not _is_default_provider(trace_api.get_tracer_provider()):
+        log.warning(
+            "OpenTelemetry is already set up in this process, so metrics autocapture does not start. "
+            "Point your OTLP metrics exporter at PostHog instead: https://posthog.com/docs/metrics"
+        )
+        return False
+
+    return True

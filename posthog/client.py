@@ -2,8 +2,11 @@ import atexit
 import hashlib as _hashlib
 import inspect
 import json
+from contextlib import contextmanager
 import logging
+import math
 import os
+import re
 import sys
 import threading
 import time
@@ -11,14 +14,33 @@ import warnings
 import weakref
 from contextvars import ContextVar
 from datetime import datetime, timedelta, timezone
-from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union, cast
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    NamedTuple,
+    Optional,
+    Set,
+    Tuple,
+    Union,
+    cast,
+)
 from uuid import UUID, uuid4
 
 from typing_extensions import Unpack
 
 from posthog._async_utils import _BackgroundEventLoopRunner
 from posthog._disabled_lane_queue import _DisabledLaneQueue
-from posthog.args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from posthog.args import (
+    ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    _PinnedProperties,
+)
 from posthog.metrics_capture import (
     _DEFAULT_FLUSH_INTERVAL_SECONDS,
     PostHogMetrics,
@@ -34,10 +56,22 @@ from posthog.tracing.span import Span
 from posthog.tracing._span import inert_span as _inert_span
 from posthog.capture_compression import (
     CaptureCompression,
+    _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
-from posthog.capture_mode import CaptureMode, _resolve_capture_mode
-from posthog.capture_v1 import _send_v1_batch
+from posthog.capture_event import (
+    _build_event_defaults,
+    _event_options,
+    _fill_event_defaults,
+    _merge_groups,
+    _resolve_event_uuid,
+)
+from posthog.capture_send import (
+    _CAPTURE_AI_V1_PATH,
+    _CAPTURE_V1_PATH,
+    _capture_loss_message,
+    _send_v1_batch,
+)
 from posthog.consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE, Consumer, _DrainSignal
 from posthog.contexts import (
     _get_current_context,
@@ -50,11 +84,13 @@ from posthog.contexts import (
     get_context_device_id,
     get_context_distinct_id,
     get_context_session_id,
+    get_context_options as _context_get_context_options,
     get_tags as _context_get_tags,
     identify_context as _context_identify_context,
     _scoped as _context_scoped,
     new_context,
     set_context_device_id as _context_set_context_device_id,
+    set_context_option as _context_set_context_option,
     set_context_session as _context_set_context_session,
     tag as _context_tag,
 )
@@ -69,10 +105,11 @@ from posthog.exception_utils import (
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
+    _exception_level,
     _get_current_otel_span_properties,
     handle_in_app,
     mark_exception_as_captured,
-    _normalize_exception_level,
+    _without_reserved_exception_properties,
     try_attach_code_variables_to_frames,
 )
 from posthog.feature_flag_evaluations import (
@@ -86,6 +123,7 @@ from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
     _get_definition_unresolved_reason,
+    _group_key_to_string,
     match_feature_flag_properties,
     resolve_bucketing_value,
 )
@@ -96,16 +134,11 @@ from posthog.flag_definition_cache import (
 from posthog.poller import Poller
 from posthog.release_id import _resolve_release_id
 from posthog.request import (
-    AI_EVENTS_ENDPOINT,
-    EVENTS_ENDPOINT,
-    USER_AGENT as _USER_AGENT,
     APIError,
+    DatetimeSerializer as _DatetimeSerializer,
     QuotaLimitError,
     RequestsConnectionError,
     RequestsTimeout,
-    _get as _get_with_identity,
-    _remote_config as _remote_config_with_identity,
-    batch_post,
     determine_server_host,
     flags,
     get,
@@ -133,11 +166,18 @@ from .types import (
     to_values,
 )
 from posthog.utils import (
+    _uuid7,
     FlagCache,
     RedisFlagCache,
     SizeLimitedDict,
     clean,
     _normalize_timestamp,
+    _rfc3339_timestamp,
+    _is_personal_api_key,
+    _drop_invalid_distinct_id,
+    _drop_invalid_event_name,
+    _log_before_send_bad_return,
+    _log_before_send_error,
     guess_timezone as guess_timezone,
     system_context,
 )
@@ -155,6 +195,9 @@ _ATEXIT_FLUSH_TIMEOUT_SECONDS = 1.0
 # overrun it by up to the client's request timeout.
 _TRACES_SHUTDOWN_FLUSH_SECONDS = 30.0
 _atexit_deadline: Optional[float] = None
+# Marks a thread that is running a sync-mode `on_error`, so a capture that fails
+# inside the callback logs instead of re-entering it.
+_on_error_state = threading.local()
 _atexit_deadline_lock = threading.Lock()
 
 
@@ -236,37 +279,59 @@ def _get_atexit_deadline() -> float:
         return _atexit_deadline
 
 
+def _positive_config_value(
+    name: str, value, *, integer: bool = False, maximum: Optional[int] = None
+):
+    """Return ``value`` if it is finite, positive and no larger than ``maximum``.
+
+    Bad lane config is a programming error, so it raises instead of falling
+    back to a default.
+    """
+    allowed = (int,) if integer else (int, float)
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, allowed)
+        or not math.isfinite(value)
+        or value <= 0
+    ):
+        kind = "integer" if integer else "number"
+        raise ValueError(f"{name} must be a positive {kind}, got {value!r}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"{name} must be at most {maximum}, got {value!r}")
+    return value
+
+
+def _explicit_distinct_id(passed) -> Optional[str]:
+    """The caller's distinct id, or None when it is missing, empty or whitespace."""
+    stringified = stringify_id(passed)
+    if stringified and stringified.strip():
+        return stringified
+    return None
+
+
 def get_identity_state(passed) -> tuple[str, bool]:
     """Returns the distinct id to use, and whether this is a personless event or not"""
-    stringified = stringify_id(passed)
-    if stringified and len(stringified):
-        return (stringified, False)
+    explicit = _explicit_distinct_id(passed)
+    if explicit:
+        return (explicit, False)
 
     context_id = get_context_distinct_id()
     if context_id:
         return (context_id, False)
 
-    return (str(uuid4()), True)
+    return (str(_uuid7()), True)
 
 
-def _stringify_event_uuid(value) -> str:
-    if isinstance(value, UUID):
-        return str(value)
+def _group_identify_distinct_id(passed, group_type, group_key) -> str:
+    """The caller's id, else the context id, else one stable id per group.
 
-    stringified = stringify_id(value)
-    if not stringified:
-        raise ValueError(
-            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
-        )
-
-    try:
-        UUID(stringified)
-    except ValueError:
-        raise ValueError(
-            f"Invalid event uuid {value!r}. Expected a valid UUID string or uuid.UUID instance."
-        ) from None
-
-    return stringified
+    Ingestion creates a person for each new distinct id, so a random id
+    would add a person on every call.
+    """
+    distinct_id, personless = get_identity_state(passed)
+    if personless:
+        return f"${group_type}_{group_key}"
+    return distinct_id
 
 
 def add_context_tags(properties):
@@ -279,10 +344,22 @@ def add_context_tags(properties):
         context_tags.update(properties)
         properties = context_tags
 
+    return _add_context_session_id(properties)
+
+
+def _add_context_session_id(properties):
     if "$session_id" not in properties and get_context_session_id():
         properties["$session_id"] = get_context_session_id()
-
     return properties
+
+
+def _context_tag_defaults() -> dict[str, Any]:
+    """The current context's tags, as event property defaults."""
+    current_context = _get_current_context()
+    if not current_context:
+        return {}
+    context_tags = current_context.collect_tags()
+    return {**context_tags, "$context_tags": set(context_tags.keys())}
 
 
 def no_throw(default_return=None):
@@ -336,8 +413,14 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
         # Correctness-required
         "$groups",
         "$process_person_profile",
+        # Option sources: legacy properties move into options after this
+        # allowlist runs, so dropping them would drop the option.
+        "$cookieless_mode",
+        "$ignore_sent_at",
+        "$product_tour_id",
         # Linkage / SDK identity
         "$session_id",
+        "$window_id",
         "$lib",
         "$lib_version",
         "$is_server",
@@ -353,6 +436,20 @@ _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = frozenset(
     }
 )
 
+# A config version 2 event also keeps its attribution when minimized. Only those
+# events use this wider allowlist, so a config version 1 event is trimmed as before,
+# even when super properties happen to use these names.
+_MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES: frozenset[str] = (
+    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+    | {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant_key",
+    }
+)
+
 
 def _parse_has_experiment(value: Any) -> Optional[bool]:
     """Server-reported experiment linkage; anything but an explicit bool means unknown."""
@@ -363,6 +460,401 @@ def _metadata_has_experiment(metadata: Any) -> Optional[bool]:
     """Server-reported experiment linkage from flag metadata; ``None`` when absent
     (e.g. ``LegacyFlagMetadata``, which doesn't carry the field)."""
     return metadata.has_experiment if isinstance(metadata, FlagMetadata) else None
+
+
+# The reason code and rule type of the one outcome that sends ``$experiment_exposure``:
+# a variant assigned by an experiment rule.
+_EXPERIMENT_SPLIT_REASON = "experiment_split"
+_EXPERIMENT_RULE_TYPE = "experiment"
+
+# The reason codes of a config version 2 record that report the rule that produced
+# the result, and the rule types each one allows. Any other reason code, and any
+# failed record, reports no rule, even if the record names one.
+_RULE_TYPES_BY_REASON_CODE: Dict[str, FrozenSet[str]] = {
+    "targeting_match": frozenset({"targeted_release", "percentage_rollout"}),
+    _EXPERIMENT_SPLIT_REASON: frozenset({_EXPERIMENT_RULE_TYPE}),
+    "rollout_miss": frozenset({"percentage_rollout", _EXPERIMENT_RULE_TYPE}),
+    "experiment_paused": frozenset({_EXPERIMENT_RULE_TYPE}),
+    "holdout": frozenset({_EXPERIMENT_RULE_TYPE}),
+}
+
+# Properties a super property must not add to, or change on, a config version 2
+# ``$feature_flag_called``: the attribution, which is set again from the record
+# after super properties are merged, and the fields such an event never carries.
+# The flag identity of the read is set again with the attribution.
+_V2_FLAG_CALLED_PINNED = frozenset(
+    {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_id",
+        "$feature_flag_rule_type",
+        "$feature_flag_variant_key",
+        "$feature_flag_reason",
+        "$feature_flag_forced_variant",
+        "$feature_flag_experiment_id",
+    }
+)
+
+# Properties an ``$experiment_exposure`` never carries, even from a super property.
+_EXPOSURE_FORBIDDEN = frozenset(
+    {
+        "$feature_flag_config_version",
+        "$feature_flag_reason_code",
+        "$feature_flag_rule_type",
+        "$experiment_exposure_source",
+        "$feature_flag_experiment_id",
+        "$feature_flag_forced_variant",
+    }
+)
+
+# ``$experiment_exposure`` copies these from the ``$feature_flag_called`` of the same
+# read, when it has them.
+_EXPOSURE_PROPERTIES_FROM_FLAG_CALLED = (
+    "$feature_flag_id",
+    "$feature_flag_version",
+    "$feature_flag_request_id",
+    "$feature_flag_evaluated_at",
+)
+
+
+def _v4_field(record: Any, name: str) -> Any:
+    """Read a ``/flags?v=4`` field of a parsed flag record or its metadata, such as
+    ``failed`` or ``config_version``.
+
+    These fields stay private, as ``_failed``, ``_config_version`` and so on, until
+    the typed flag accessors make them public under their wire names. Either spelling
+    is read, so the two changes can land in either order.
+    """
+    return getattr(record, name, getattr(record, f"_{name}", None))
+
+
+# The rule ID's wire format: a hyphenated UUID, as the contract's event schemas
+# require.
+_UUID_PATTERN = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+)
+
+
+def _is_uuid(value: Any) -> bool:
+    return isinstance(value, str) and _UUID_PATTERN.fullmatch(value) is not None
+
+
+class _RuleAttribution(NamedTuple):
+    """What a config version 2 flag record reports on its flag events."""
+
+    reason_code: Optional[str]
+    rule_id: Optional[str]
+    rule_type: Optional[str]
+    # Set only for a complete experiment split, the outcome that sends an exposure.
+    variant_key: Optional[str]
+
+    def flag_called_properties(self) -> Dict[str, Any]:
+        properties: Dict[str, Any] = {"$feature_flag_config_version": 2}
+        if self.reason_code is not None:
+            properties["$feature_flag_reason_code"] = self.reason_code
+        if self.rule_id is not None:
+            properties["$feature_flag_rule_id"] = self.rule_id
+        if self.rule_type is not None:
+            properties["$feature_flag_rule_type"] = self.rule_type
+        if self.variant_key is not None:
+            properties["$feature_flag_variant_key"] = self.variant_key
+        return properties
+
+
+def _rule_attribution(details: Optional[FeatureFlag]) -> Optional[_RuleAttribution]:
+    """Read the event attribution of a config version 2 flag record.
+
+    Returns ``None`` for anything else: no record, an unreadable record, a config
+    version 1 record, or a record from a server without typed values. Only the
+    evaluation details are read, never the value a getter returned.
+
+    The config version and reason code are always reported. The rule ID and rule
+    type are reported together or not at all, only for a targeting match, a rollout
+    miss, a paused experiment, a holdout and a complete experiment split, and only
+    with a rule type the reason code allows (``_RULE_TYPES_BY_REASON_CODE``). A
+    record with no rule ID, no rule type or another rule type, such as a targeting
+    match that names an experiment rule, reports neither. A rule ID that is not a
+    UUID counts as missing. So does a failed record or any other reason code,
+    including one this SDK does not know, and a record with no reason code. The
+    variant key is reported only for a complete experiment split: reason
+    ``experiment_split``, rule type ``experiment``, a rule ID and a variant key (any
+    string, including an empty one). A split without all of them is malformed. A
+    record that reports no rule keeps its reason, reports no rule ID, rule type or
+    variant, and sends no exposure. Its identity is never guessed from the value,
+    the key or an earlier result.
+    """
+    if details is None or not isinstance(details.metadata, FlagMetadata):
+        return None
+    metadata = details.metadata
+    if _v4_field(metadata, "config_version") != 2:
+        return None
+    reason_code = (details.reason.code if details.reason else None) or None
+    allowed_rule_types = _RULE_TYPES_BY_REASON_CODE.get(reason_code or "")
+    if _v4_field(details, "failed") is True or allowed_rule_types is None:
+        return _RuleAttribution(reason_code, None, None, None)
+    rule_id = _v4_field(metadata, "rule_id")
+    rule_type = _v4_field(metadata, "rule_type")
+    if not _is_uuid(rule_id) or rule_type not in allowed_rule_types:
+        return _RuleAttribution(reason_code, None, None, None)
+    if reason_code != _EXPERIMENT_SPLIT_REASON:
+        # Only an experiment split assigns a variant.
+        return _RuleAttribution(reason_code, rule_id, rule_type, None)
+    variant_key = _v4_field(metadata, "variant_key")
+    if not isinstance(variant_key, str):
+        return _RuleAttribution(reason_code, None, None, None)
+    return _RuleAttribution(reason_code, rule_id, rule_type, variant_key)
+
+
+_flag_events_log = logging.getLogger("posthog")
+
+# Guards the check and the reservation of config version 2 flag event dedupe keys on
+# both clients. It is held only for the dict and set operations, never while an event
+# is captured.
+_flag_event_keys_lock = threading.Lock()
+
+
+def _reinit_flag_event_keys_lock_after_fork() -> None:
+    global _flag_event_keys_lock
+    # A parent thread can hold the lock at fork time. Replace it, never acquire it.
+    _flag_event_keys_lock = threading.Lock()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reinit_flag_event_keys_lock_after_fork)
+
+
+def _reserve_dedupe_key(
+    reported_by_distinct_id: Dict[Any, Any], distinct_id: Any, dedupe_key: Any
+) -> Optional[Set[Any]]:
+    """Reserve ``dedupe_key`` for ``distinct_id`` unless a read already holds it.
+
+    The check and the reservation are one step, so when concurrent reads have the
+    same key, only one of them gets it. Returns the set that now holds the key, for
+    ``_capture_once``. Returns ``None`` when the key is already there: the event was
+    reported, or another read is capturing it.
+    """
+    with _flag_event_keys_lock:
+        reported = reported_by_distinct_id.get(distinct_id)
+        if reported is None:
+            reported = set()
+            reported_by_distinct_id[distinct_id] = reported
+        if dedupe_key in reported:
+            return None
+        reported.add(dedupe_key)
+        return reported
+
+
+def _capture_once(
+    capture: Callable[..., Any],
+    reported: Set[Any],
+    dedupe_key: Any,
+    event: str,
+    **kwargs: Any,
+) -> None:
+    """Capture one flag event whose key ``_reserve_dedupe_key`` reserved, and keep
+    the key unless capture failed.
+
+    The key stays reserved while capture runs, so concurrent reads do not send the
+    same event twice. It is released when capture raises, or returns ``None``
+    because the event could not be queued (a full or closed queue, opt-out or a
+    disabled client), so a later read tries again. An event that ``before_send``
+    drops keeps its key: the application chose to drop it, and every later read
+    would be dropped the same way. A failure is logged and never reaches the read.
+    """
+    before_send_drops: List[str] = []
+    try:
+        accepted = capture(
+            event, _before_send_drops=before_send_drops, **kwargs
+        ) is not None or bool(before_send_drops)
+    except Exception:
+        _flag_events_log.exception("[FEATURE FLAGS] Failed to capture %s", event)
+        accepted = False
+    if not accepted:
+        with _flag_event_keys_lock:
+            reported.discard(dedupe_key)
+
+
+def _capture_flag_events(
+    capture: Callable[..., Any],
+    flag_calls_reported: Dict[Any, Any],
+    exposures_reported: Dict[Any, Any],
+    *,
+    distinct_id: ID_TYPES,
+    key: str,
+    response: Optional[FlagValue],
+    properties: Dict[str, Any],
+    groups: Optional[Mapping[str, Union[str, int]]],
+    capture_groups: Mapping[str, Any],
+    disable_geoip: Optional[bool],
+    has_experiment: Optional[bool],
+    minimal_flag_called_events: bool,
+    details: Optional[FeatureFlag],
+    value_from_details: bool,
+) -> None:
+    """Send the flag events of one flag read: ``$feature_flag_called`` and, for an
+    experiment split, ``$experiment_exposure``.
+
+    Every read that sends flag events comes here, on both clients: the single-flag
+    getters and the reads of an ``evaluate_flags()`` snapshot. Both events are built
+    from ``details``, the parsed ``/flags`` record supplying the value or failure
+    diagnostics, and the call's ``properties``; the flag is never evaluated again.
+
+    ``$feature_flag_called`` is sent if the (distinct_id, flag, response, groups)
+    tuple hasn't already been reported on this client. Group context is included so
+    that group-scoped flags fire a separate event for each group a user is evaluated
+    under. A config version 2 record supplying the value or failed-record diagnostics
+    (``value_from_details``) adds its attribution to the event and to that tuple, so
+    equal-valued A/A arms, successive experiments of one flag, and holdouts are each
+    reported. Its reason code replaces the human-readable ``$feature_flag_reason``.
+    A failed record keeps its config version and reason code, but no rule tuple or
+    experiment exposure. Config version 1 events and reads reporting a successful
+    caller override or stale cached value keep their existing attribution.
+
+    ``has_experiment`` is the server-reported signal for whether the flag is linked
+    to an experiment (``None`` when the server did not report it). When the
+    server-controlled gate is on and the flag is known non-experiment, the event is
+    trimmed to a strict allowlist; any missing signal sends the full legacy shape,
+    and experiment-linked flags keep the full set for exposure analysis.
+
+    ``minimal_flag_called_events`` is the gate as observed by the evaluation that
+    produced ``response``, not a fresh read of client-wide state: both callers
+    resolve it themselves (the snapshot pins it at construction; the single-flag
+    path reads it from the specific local/remote source that produced the value) so
+    a concurrent poller refresh or another ``/flags`` call can't reshape an event
+    after the fact.
+
+    ``$experiment_exposure`` is sent for a complete config version 2 experiment
+    split whose record supplied the reported value (``value_from_details``), once
+    per distinct ID, groups, flag, rule and variant. It has its own dedupe, so a
+    ``$feature_flag_called`` already reported never suppresses it.
+
+    Both config version 2 events are attempted independently: a failed capture of
+    one does not stop the other, and keeps no dedupe key, so a later read tries
+    again. An event that ``before_send`` drops keeps its key. Each key is reserved
+    before its capture, in the same step as the check, so concurrent reads of one
+    outcome send each event once. Their attribution is pinned after super properties
+    are merged, so a super property can neither change it nor add a field the event
+    never carries. The flag key, the response and the evaluation source are pinned
+    the same way on both events, so the pair always reports the same read.
+    Config version 1 events are sent and deduped as before.
+    """
+    groups_key = (
+        tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
+    )
+    # A failed record still reports its config version and reason code. A successful
+    # caller override or stale cached value has no config version 2 attribution.
+    attribution = _rule_attribution(details) if value_from_details else None
+    # What both config version 2 events report about the read itself. Each event
+    # pins it, so a super property cannot make the pair disagree.
+    flag_identity = {
+        "$feature_flag": key,
+        "$feature_flag_response": response,
+        "locally_evaluated": properties.get("locally_evaluated") is True,
+    }
+    feature_flag_reported_key: Tuple[Any, ...] = (key, response, groups_key)
+    if attribution is not None:
+        feature_flag_reported_key += (2, *attribution)
+
+    # The set this read records its $feature_flag_called key in, or None when the
+    # read sends no $feature_flag_called.
+    reported_flags: Optional[Set[Any]]
+    if attribution is None:
+        reported_flags = flag_calls_reported.get(distinct_id)
+        if reported_flags is None:
+            reported_flags = set()
+            flag_calls_reported[distinct_id] = reported_flags
+        if feature_flag_reported_key in reported_flags:
+            reported_flags = None
+    else:
+        reported_flags = _reserve_dedupe_key(
+            flag_calls_reported, distinct_id, feature_flag_reported_key
+        )
+
+    if reported_flags is not None:
+        if attribution is not None:
+            properties.pop("$feature_flag_reason", None)
+            properties.update(attribution.flag_called_properties())
+        # Record the server's experiment signal when known, so minimization's impact
+        # can be measured by segmenting on it.
+        if has_experiment is not None:
+            properties["$feature_flag_has_experiment"] = has_experiment
+
+        # Minimize iff the server-controlled gate is on AND the flag is known to have
+        # no linked experiment. Any missing signal (gate absent, has_experiment
+        # missing) fails safe to the full legacy shape.
+        should_minimize = minimal_flag_called_events and has_experiment is False
+        # Only thread the internal allowlist through when minimizing, so the
+        # full-property path's capture() call signature stays unchanged.
+        extra_capture_kwargs: Dict[str, Any] = {}
+        if should_minimize:
+            extra_capture_kwargs["_property_allowlist"] = (
+                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
+                if attribution is None
+                else _MINIMAL_V2_FLAG_CALLED_EVENT_PROPERTIES
+            )
+
+        if attribution is None:
+            # Config version 1 events are sent and deduped as before.
+            capture(
+                "$feature_flag_called",
+                distinct_id=distinct_id,
+                properties=properties,
+                groups=capture_groups,
+                disable_geoip=disable_geoip,
+                **extra_capture_kwargs,
+            )
+            reported_flags.add(feature_flag_reported_key)
+        else:
+            _capture_once(
+                capture,
+                reported_flags,
+                feature_flag_reported_key,
+                "$feature_flag_called",
+                distinct_id=distinct_id,
+                properties=properties,
+                groups=capture_groups,
+                disable_geoip=disable_geoip,
+                _pinned_properties=_PinnedProperties(
+                    _V2_FLAG_CALLED_PINNED,
+                    {**attribution.flag_called_properties(), **flag_identity},
+                ),
+                **extra_capture_kwargs,
+            )
+
+    if attribution is None or attribution.variant_key is None:
+        return
+
+    # The value, request ID, evaluation time and evaluation source are left out, so
+    # one assignment is one exposure however often it is read.
+    exposure_key = (key, groups_key, 2, attribution.rule_id, attribution.variant_key)
+    reported_exposures = _reserve_dedupe_key(
+        exposures_reported, str(distinct_id), exposure_key
+    )
+    if reported_exposures is None:
+        return
+
+    exposure_properties: Dict[str, Any] = {
+        name: properties[name]
+        for name in _EXPOSURE_PROPERTIES_FROM_FLAG_CALLED
+        if name in properties
+    }
+    exposure_identity = {
+        **flag_identity,
+        "$feature_flag_variant_key": attribution.variant_key,
+        "$feature_flag_rule_id": attribution.rule_id,
+    }
+    exposure_properties.update(exposure_identity)
+    _capture_once(
+        capture,
+        reported_exposures,
+        exposure_key,
+        "$experiment_exposure",
+        distinct_id=distinct_id,
+        properties=exposure_properties,
+        groups=capture_groups,
+        disable_geoip=disable_geoip,
+        _pinned_properties=_PinnedProperties(_EXPOSURE_FORBIDDEN, exposure_identity),
+    )
 
 
 class _Lane:
@@ -388,13 +880,11 @@ class _Lane:
         send,
         flush_at,
         flush_interval,
-        gzip,
         max_retries,
         timeout,
         historical_migration,
         endpoint,
         max_msg_size,
-        capture_mode,
         capture_compression,
         sdk_info,
         eager_start,
@@ -406,13 +896,11 @@ class _Lane:
         self.send = send
         self.flush_at = flush_at
         self.flush_interval = flush_interval
-        self.gzip = gzip
         self.max_retries = max_retries
         self.timeout = timeout
         self.historical_migration = historical_migration
         self.endpoint = endpoint
         self.max_msg_size = max_msg_size
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         self.sdk_info = sdk_info
         self._max_queue_size = max_queue_size
@@ -441,13 +929,11 @@ class _Lane:
                 on_error=self.on_error,
                 flush_at=self.flush_at,
                 flush_interval=self.flush_interval,
-                gzip=self.gzip,
                 retries=self.max_retries,
                 timeout=self.timeout,
                 historical_migration=self.historical_migration,
                 endpoint=self.endpoint,
                 max_msg_size=self.max_msg_size,
-                capture_mode=self.capture_mode,
                 capture_compression=self.capture_compression,
             )
             consumer._sdk_info = self.sdk_info
@@ -685,13 +1171,13 @@ class Client(object):
         self,
         project_api_key: str,
         host=None,
+        *,
         debug=False,
         max_queue_size=10000,
         send=True,
         on_error=None,
         flush_at=100,
         flush_interval=5.0,
-        gzip=False,
         max_retries=3,
         sync_mode=False,
         timeout: float = 15,
@@ -705,6 +1191,7 @@ class Client(object):
         feature_flags_request_timeout_seconds: float = 3,
         feature_flags_request_max_retries=1,
         super_properties=None,
+        super_options=None,
         enable_exception_autocapture=False,
         log_captured_exceptions=False,
         project_root=None,
@@ -723,13 +1210,14 @@ class Client(object):
         exception_autocapture_bucket_size=ExceptionCapture.DEFAULT_BUCKET_SIZE,
         exception_autocapture_refill_rate=ExceptionCapture.DEFAULT_REFILL_RATE,
         exception_autocapture_refill_interval_seconds=ExceptionCapture.DEFAULT_REFILL_INTERVAL_SECONDS,
-        capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_max_queue_size: int = 1000,
+        capture_ai_timeout: float = 30,
+        capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE,
         secret_key=None,
         metrics: Optional[dict] = None,
         enable_full_ai_capture=False,
-        # Appended rather than grouped with the other `capture_*` options so
-        # existing positional arguments keep their slots.
         capture_trace_context=False,
         _use_ai_lane=False,
         _enable_multimodal_capture=False,
@@ -749,17 +1237,21 @@ class Client(object):
                 the corresponding ingestion host.
             debug: Enable verbose SDK logging and re-raise errors from public
                 API methods.
-            max_queue_size: Maximum number of events buffered before upload.
+            max_queue_size: Maximum number of analytics events buffered before
+                upload. AI events use ``capture_ai_max_queue_size``.
             send: If False, queueing succeeds but events are not sent.
-            on_error: Optional callback invoked by background consumers when an
-                upload fails. Keep it short and non-blocking. Calling lifecycle
+            on_error: Optional callback ``(error, batch)`` invoked when an upload
+                fails: by background consumers, or on the calling thread in
+                ``sync_mode``. Capture failures arrive as ``CaptureError``.
+                Without it, each failed batch logs one aggregate line. A capture
+                that fails inside the callback logs that line instead of calling
+                it again. Keep it short and non-blocking. Calling lifecycle
                 methods directly is safe and deferred, but do not start another
                 thread or task that calls ``flush()``, ``join()``, or
                 ``shutdown()`` and then wait for it from the callback.
             flush_at: Number of queued events that triggers a batch upload.
             flush_interval: Maximum seconds a background consumer waits before
                 flushing a partial batch.
-            gzip: Whether to gzip event upload payloads.
             max_retries: Number of upload retries. Values below 0 are treated as 0.
             sync_mode: If True, send each event synchronously instead of using
                 background worker threads. This blocks the calling thread; in
@@ -770,19 +1262,21 @@ class Client(object):
             poll_interval: Seconds between local feature flag definition refreshes.
             secret_key: A Personal API Key or Project Secret API Key, used to
                 authenticate local feature flag evaluation, remote config
-                payloads, and decrypted flag payloads. Example::
-
-                    posthog.Client(project_api_key, secret_key="phx_...")
+                payloads, and decrypted flag payloads. For example,
+                `posthog.Client(project_api_key, secret_key="phx_...")`.
 
             personal_api_key: Deprecated alias for ``secret_key``. Still honored
                 for backwards compatibility; prefer ``secret_key``, which also
                 accepts a Project Secret API Key.
             disabled: If True, disable captures and API requests. Useful in tests.
             disable_geoip: Whether to disable server-side GeoIP enrichment.
-                Defaults to True.
+                Defaults to True. Events get ``$geoip_disable`` only when the
+                event, context tags and ``super_properties`` leave it unset.
             is_server: Whether events are emitted from a server-side runtime.
                 Defaults to True; set to False when using the SDK as a client/CLI
-                so the device OS is attributed to the person normally.
+                so the device OS is attributed to the person normally. Events
+                get ``$is_server`` only when the event, context tags and
+                ``super_properties`` leave it unset.
             historical_migration: Mark events as historical migration imports.
             feature_flags_request_timeout_seconds: Timeout in seconds for feature
                 flag and remote config requests.
@@ -800,7 +1294,19 @@ class Client(object):
                 Set to 0 when a job runner already retries the send.
             migrated_from: The email provider you moved from, such as
                 ``"resend"``. ``emails`` sends it with every request.
-            super_properties: Properties merged into every captured event.
+            super_properties: Properties for every captured event. They fill
+                only keys the event leaves unset, before ``before_send`` runs.
+                ``$set``, ``$set_once``, ``$groups`` and ``$group_set`` fill
+                one level deep. An event's own properties and context tags
+                override them, and ``before_send`` can change or remove them.
+            super_options: Capture options for every captured event, such as
+                ``{"cookieless_mode": True}``. They fill only options the event
+                leaves unset, before ``before_send`` runs. An event's own
+                ``options`` and context options override them, and
+                ``before_send`` can change them. They never set
+                ``process_person_profile`` on identify-style events, such as
+                ``$identify`` or ``$set``, whose distinct ID the SDK did not
+                generate: those default it to ``True``.
             enable_exception_autocapture: Automatically capture uncaught
                 exceptions.
             log_captured_exceptions: Also log exceptions captured by error
@@ -809,13 +1315,17 @@ class Client(object):
                 captured exceptions. Defaults to the current working directory.
             privacy_mode: For AI observability, capture usage metadata without
                 prompt inputs or outputs.
-            enable_full_ai_capture: Route PostHog AI wrapper events through
-                the dedicated AI capture endpoint and capture full AI content:
-                skips string truncation and passes media (base64/data URIs)
-                through unredacted. ``privacy_mode`` always wins. Defaults to
-                False.
+            enable_full_ai_capture: Capture full AI content in PostHog AI
+                wrapper events: skips string truncation and passes media
+                (base64/data URIs) through unredacted. ``privacy_mode`` always
+                wins. Wrapper events use the AI capture endpoint whether or not
+                this is set. Defaults to False.
             before_send: Optional callback that can modify or drop events before
-                upload. Return ``None`` to drop an event.
+                upload. Return ``None`` to drop an event. Context tags,
+                context options, ``super_properties``, ``super_options`` and
+                the values the SDK adds, such as ``$is_server``,
+                ``$geoip_disable`` and ``$os``, fill in before it runs, so it
+                can change or remove them.
             flag_fallback_cache_url: Optional feature flag fallback cache URL,
                 such as ``memory://local/?ttl=300&size=10000`` or a Redis URL.
             enable_local_evaluation: Whether to poll feature flag definitions for
@@ -827,12 +1337,17 @@ class Client(object):
             capture_trace_context: When OpenTelemetry is installed and a valid span is
                 active at capture time, add its trace and span IDs as ``$trace_id`` and
                 ``$span_id`` properties to events captured with ``capture()`` and
-                ``capture_ai()``, so they can be correlated with backend traces. Explicit
-                ``$trace_id``/``$span_id`` values passed in ``properties`` win. Exception
+                ``capture_ai()``, so they can be correlated with backend traces. They fill
+                after context tags and ``super_properties``, before ``before_send``. A
+                ``$trace_id`` or ``$span_id`` from the event, a context tag or
+                ``super_properties`` stops the SDK adding either ID. Exception
                 events (``capture_exception``) always attach these IDs regardless of this
                 setting. Defaults to False.
-            traces: Config dict for distributed tracing: ``service_name``,
-                ``service_version``, ``environment``, ``resource_attributes``,
+            traces: Config dict for distributed tracing. Non-empty string values for
+                ``service.name``, ``service.version`` and ``deployment.environment``
+                in ``resource_attributes`` take precedence over ``service_name``,
+                ``service_version`` and ``environment``, respectively. Options include
+                ``service_name``, ``service_version``, ``environment``, ``resource_attributes``,
                 ``flush_interval`` (5 s), ``max_queue_size`` (2048),
                 ``max_export_batch_size`` (512), ``max_live_spans`` (10000),
                 ``max_span_age`` (3600 s), ``max_attributes_per_span`` (128),
@@ -841,10 +1356,26 @@ class Client(object):
                 list run in order, that receives each finished span as a dict
                 (``trace_id``, ``span_id`` and ``parent_span_id`` are read-only)
                 and returns it, edited, or ``None`` to drop it; a hook that
-                raises drops the span. Tracing is off until this is provided.
-                Spans export on a background timer even with ``sync_mode``;
-                serverless handlers should call ``flush()`` before returning.
-                Defaults to None.
+                raises drops the span. The span dict has ``name``, ``kind``,
+                ``status``, ``attributes``, ``events``, ``start_time_ns``,
+                ``end_time_ns``, ``trace_id``, ``span_id`` and
+                ``parent_span_id``, and its attributes are plain Python values.
+                The hook runs after ``posthogDistinctId`` and ``sessionId`` are
+                attached, so it can scrub them. It must be a regular function.
+                An ``async`` hook drops every span. In a list of hooks, the
+                first one to return ``None`` stops the chain. An entry that
+                isn't callable turns tracing off for the client. Past a
+                per-span cap, the earliest attributes and events are kept and
+                the span reports how many were dropped. ``posthogDistinctId``
+                and ``sessionId`` don't count toward the attribute cap and are
+                never dropped. ``max_attribute_value_length`` also applies to
+                strings nested in lists and dictionaries. All caps are applied
+                again after ``before_span_send``. Spans beyond
+                ``max_queue_size`` are dropped. An invalid value falls back to
+                its default with a warning. Tracing is off until this is
+                provided. Spans export on a background timer even with
+                ``sync_mode``; serverless handlers should call ``flush()``
+                before returning. Defaults to None.
             code_variables_mask_patterns: Variable-name patterns to mask when
                 capturing code variables.
             code_variables_ignore_patterns: Variable-name patterns to omit when
@@ -869,16 +1400,27 @@ class Client(object):
                 interval for each exception type's bucket.
             exception_autocapture_refill_interval_seconds: Seconds between
                 token refills for autocaptured exception rate limiting.
-            capture_mode: Capture wire protocol to use. Defaults to
-                ``CaptureMode.V0`` (legacy ``/batch/``). Set ``CaptureMode.V1``
-                (or pass the string ``"v1"``) to opt into
-                ``/i/v1/analytics/events``. When omitted, the
-                ``POSTHOG_CAPTURE_MODE`` env var is consulted, then ``V0``.
-            capture_compression: Request-body compression for capture-v1 uploads
-                (ignored in V0, which uses ``gzip``). ``CaptureCompression.GZIP``
-                or ``DEFLATE`` (or the strings ``"gzip"``/``"deflate"``). When
-                omitted, the ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted,
-                then the legacy ``gzip`` flag, then no compression.
+            capture_compression: Request-body compression for ``capture()``
+                uploads. ``CaptureCompression.GZIP``, ``DEFLATE`` or ``ZSTD``
+                (or the strings ``"gzip"``, ``"deflate"`` or ``"zstd"``).
+                ``ZSTD`` needs ``pip install posthog[zstd]``. When omitted, the
+                ``POSTHOG_CAPTURE_COMPRESSION`` env var is consulted, then no
+                compression.
+            capture_ai_compression: Request-body compression for
+                ``capture_ai()`` uploads, set independently of
+                ``capture_compression``. Defaults to no compression, and the
+                env var does not apply. ``CaptureCompression.ZSTD`` suits large
+                AI payloads.
+            capture_ai_max_queue_size: Maximum number of AI events buffered
+                before upload. Defaults to 1000, lower than ``max_queue_size``
+                because AI events are much larger.
+            capture_ai_timeout: Seconds allowed for one AI upload request.
+                Defaults to 30, longer than ``timeout`` because AI batches are
+                much larger.
+            capture_ai_max_event_bytes: Largest serialized AI event the SDK
+                sends; a larger one is dropped with an error log. Defaults to
+                the AI endpoint's ceiling plus envelope headroom, and may only
+                be lowered.
 
         Examples:
             ```python
@@ -925,7 +1467,6 @@ class Client(object):
         self.raw_host = normalize_host(host)
         self.host = determine_server_host(host)
         self._duplicate_client_registry_key: Optional[tuple[str, str]] = None
-        self.gzip = gzip
         self.timeout = timeout
         self.max_retries = max(0, max_retries)
         self._feature_flags: Optional[list[Any]] = (
@@ -944,6 +1485,9 @@ class Client(object):
         )
         self.poller: Optional[Poller] = None
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(MAX_DICT_SIZE, set)
         self.flag_fallback_cache_url = flag_fallback_cache_url
         self.flag_cache = self._initialize_flag_cache(flag_fallback_cache_url)
         self.flag_definition_version = 0
@@ -969,7 +1513,9 @@ class Client(object):
             _BackgroundEventLoopRunner
         ] = None
         self._flag_definition_cache_provider_async_runner_lock = threading.Lock()
-        self.disabled = disabled or not self.api_key
+        self.disabled = (
+            disabled or not self.api_key or _is_personal_api_key(self.api_key)
+        )
         self.disable_geoip = disable_geoip
         self._metrics_config = metrics
         self._metrics: Optional[PostHogMetrics] = None
@@ -990,19 +1536,27 @@ class Client(object):
         )
         self.is_server = is_server
         self.historical_migration = historical_migration
-        # Selects the capture wire protocol (V0 legacy `/batch/` vs V1
-        # `/i/v1/analytics/events`). Resolved here so the env-var fallback is
-        # applied once; V0 is the default and keeps upgrades transparent.
-        self.capture_mode = _resolve_capture_mode(capture_mode)
         self._library_id = "posthog-python"
         self._library_version = VERSION
         self._sdk_info = f"{self._library_id}/{self._library_version}"
-        # v1-only request compression; falls back to the legacy `gzip` flag when
-        # neither the kwarg nor POSTHOG_CAPTURE_COMPRESSION is set.
-        self.capture_compression = _resolve_capture_compression(
-            capture_compression, gzip_fallback=gzip
+        self.capture_compression = _resolve_capture_compression(capture_compression)
+        self.capture_ai_compression = _resolve_capture_ai_compression(
+            capture_ai_compression
+        )
+        capture_ai_max_queue_size = _positive_config_value(
+            "capture_ai_max_queue_size", capture_ai_max_queue_size, integer=True
+        )
+        capture_ai_timeout = _positive_config_value(
+            "capture_ai_timeout", capture_ai_timeout
+        )
+        capture_ai_max_event_bytes = _positive_config_value(
+            "capture_ai_max_event_bytes",
+            capture_ai_max_event_bytes,
+            integer=True,
+            maximum=AI_MAX_MSG_SIZE,
         )
         self.super_properties = super_properties
+        self.super_options = super_options
         # Release id from POSTHOG_RELEASE_ID, attached to every event. Resolved
         # here so the env var is read once per client.
         self._release_id = _resolve_release_id()
@@ -1096,6 +1650,11 @@ class Client(object):
             self.log.error(
                 "api_key is empty after trimming whitespace; check your project API key"
             )
+        elif _is_personal_api_key(self.api_key):
+            self.log.error(
+                "api_key is a personal API key (phx_...), not a project API key; "
+                "PostHog is disabled. Use the project API key (phc_...)."
+            )
 
         self._set_before_send(before_send)
 
@@ -1120,39 +1679,34 @@ class Client(object):
             api_key=self.api_key,
             host=self.host,
             on_error=on_error,
-            max_queue_size=max_queue_size,
             thread_count=thread,
             send=send,
             flush_at=flush_at,
             flush_interval=flush_interval,
-            gzip=gzip,
             max_retries=self.max_retries,
-            timeout=timeout,
             historical_migration=historical_migration,
             sdk_info=self._sdk_info,
         )
         self._analytics_lane = _Lane(
             name="analytics",
             **lane_defaults,
-            endpoint=EVENTS_ENDPOINT,
+            max_queue_size=max_queue_size,
+            timeout=timeout,
+            endpoint=_CAPTURE_V1_PATH,
             max_msg_size=MAX_MSG_SIZE,
-            capture_mode=self.capture_mode,
             capture_compression=self.capture_compression,
             eager_start=not sync_mode,
         )
-        # The AI lane is pinned to the v0 submitter: the AI endpoint has no v1
-        # form, and this keeps multi-MB AI events away from capture v1's
-        # smaller caps. The `capture_compression` pin is inert on v0 — its wire
-        # compression is the `gzip` flag, inherited from client config. Lazy
-        # start, so the many clients that never emit AI events pay for no
-        # extra threads.
+        # A separate endpoint keeps multi-MB AI events off the analytics caps.
+        # Lazy start, so clients that never send AI events pay for no threads.
         self._ai_lane = _Lane(
             name="ai",
             **lane_defaults,
-            endpoint=AI_EVENTS_ENDPOINT,
-            max_msg_size=AI_MAX_MSG_SIZE,
-            capture_mode=CaptureMode.V0,
-            capture_compression=CaptureCompression.NONE,
+            max_queue_size=capture_ai_max_queue_size,
+            timeout=capture_ai_timeout,
+            endpoint=_CAPTURE_AI_V1_PATH,
+            max_msg_size=capture_ai_max_event_bytes,
+            capture_compression=self.capture_ai_compression,
             eager_start=False,
         )
         self._lanes = [self._analytics_lane, self._ai_lane]
@@ -1243,19 +1797,6 @@ class Client(object):
             ),
             before_send=before_send,
         )
-
-    def _set_library_identity(self, library_id: str, library_version: str) -> None:
-        """Override the SDK identity stamped on events and outbound requests."""
-        self._library_id = library_id
-        self._library_version = library_version
-        self._sdk_info = f"{library_id}/{library_version}"
-        for lane in self._lanes:
-            lane.sdk_info = self._sdk_info
-            for consumer in lane.consumers:
-                consumer._sdk_info = self._sdk_info
-
-    def _request_identity_kwargs(self) -> Dict[str, str]:
-        return {"_user_agent": self._sdk_info} if self._sdk_info != _USER_AGENT else {}
 
     _emails: Optional[Emails] = None
 
@@ -1383,7 +1924,7 @@ class Client(object):
 
     def new_context(self, fresh=False, capture_exceptions: Optional[bool] = None):
         """
-        Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#contexts).
+        Create a new context for managing shared state. Learn more about [contexts](/docs/libraries/python#posthognew_context).
 
         Args:
             fresh: Whether to create a fresh context that doesn't inherit from parent.
@@ -1443,6 +1984,39 @@ class Client(object):
             Contexts
         """
         return _context_get_tags()
+
+    def set_context_option(self, key: str, value: Any) -> None:
+        """
+        Set a capture option for every event captured within the current context.
+
+        Context options fill options an event leaves unset, before
+        ``before_send`` runs, so the hook sees them. They override
+        ``super_options``. An event's own ``options`` override them, and
+        ``before_send`` can change them. They never set
+        ``process_person_profile`` on identify-style events, such as
+        ``$identify`` or ``$set``, whose distinct ID the SDK did not generate:
+        those default it to ``True``.
+
+        Args:
+            key: The option name, such as ``"process_person_profile"``.
+            value: The option value, sent as given.
+
+        Category:
+            Contexts
+        """
+        _context_set_context_option(key, value)
+
+    def get_context_options(self) -> Dict[str, Any]:
+        """
+        Get all capture options from the current context.
+
+        Returns:
+            Dict of all capture options in the current context.
+
+        Category:
+            Contexts
+        """
+        return _context_get_context_options()
 
     def identify_context(self, distinct_id: str) -> None:
         """
@@ -1718,8 +2292,6 @@ class Client(object):
 
         if flag_keys_to_evaluate:
             request_data["flag_keys_to_evaluate"] = flag_keys_to_evaluate
-        if self._sdk_info != _USER_AGENT:
-            request_data["_user_agent"] = self._sdk_info
 
         resp_data = flags(
             self.api_key,
@@ -1759,14 +2331,27 @@ class Client(object):
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
-            groups: A dictionary of group information.
+            groups: A dictionary of group information. It merges into a
+                ``$groups`` property and wins key by key.
             flags: A FeatureFlagEvaluations snapshot from evaluate_flags(). The
                 exact values from the snapshot are attached with no extra /flags
                 request.
             send_feature_flags: Deprecated. Prefer flags=... from
                 evaluate_flags(). When truthy, evaluates flags during capture and
                 attaches them to the event.
-            disable_geoip: Whether to disable GeoIP for this event.
+            disable_geoip: Whether to disable GeoIP for this event. It wins
+                over a ``$geoip_disable`` in context tags or
+                ``super_properties``. A ``$geoip_disable`` property in this
+                call's ``properties`` wins over it.
+            options: Capture options for this event, such as
+                ``{"process_person_profile": False}``. Sent as given, for
+                PostHog to validate. They override context options and
+                ``super_options``, which fill in before ``before_send`` runs.
+                An option overrides its legacy ``$`` property, such as
+                ``$process_person_profile``. A ``None`` option counts as unset.
+                An identify-style event, such as ``$identify`` or ``$set``,
+                gets ``process_person_profile: True`` when this call leaves it
+                unset, unless the SDK generated its distinct ID.
 
         Examples:
             ```python
@@ -1822,7 +2407,7 @@ class Client(object):
         Category:
             Capture
         """
-        if not event.startswith("$ai_"):
+        if isinstance(event, str) and not event.startswith("$ai_"):
             self.log.debug(
                 "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
                 event,
@@ -1841,22 +2426,24 @@ class Client(object):
         flags_snapshot = kwargs.get("flags", None)
         send_feature_flags = kwargs.get("send_feature_flags", False)
         disable_geoip = kwargs.get("disable_geoip", None)
+        options = _event_options(kwargs.get("options", None))
         # Internal, set for minimal $feature_flag_called events: a strict allowlist
         # applied to the fully-enriched properties dict just before enqueueing.
         property_allowlist = kwargs.get("_property_allowlist", None)
+        pinned_properties = kwargs.get("_pinned_properties", None)
+        before_send_drops = kwargs.get("_before_send_drops", None)
 
-        properties = {**(properties or {}), **system_context()}
+        properties = dict(properties or {})
 
-        if self.capture_trace_context:
-            properties = {**_get_current_otel_span_properties(), **properties}
+        trace_properties = (
+            _get_current_otel_span_properties()
+            if self.capture_trace_context or kwargs.get("_capture_trace_context")
+            else None
+        )
 
-        properties = add_context_tags(properties)
-        assert properties is not None  # Type hint for mypy
+        properties = _add_context_session_id(properties)
 
         (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless and "$process_person_profile" not in properties:
-            properties["$process_person_profile"] = False
 
         msg = {
             "properties": properties,
@@ -1864,10 +2451,11 @@ class Client(object):
             "distinct_id": distinct_id,
             "event": event,
             "uuid": uuid,
+            "options": options,
         }
 
         if groups:
-            properties["$groups"] = groups
+            _merge_groups(properties, groups)
 
         extra_properties: dict[str, Any] = {}
 
@@ -1956,12 +2544,19 @@ class Client(object):
             if active_feature_flags:
                 extra_properties["$active_feature_flags"] = active_feature_flags
 
-        if extra_properties:
-            properties = {**extra_properties, **properties}
-            msg["properties"] = properties
-
         return self._enqueue(
-            msg, disable_geoip, lane, property_allowlist=property_allowlist
+            msg,
+            disable_geoip,
+            lane,
+            property_allowlist=property_allowlist,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
+            personless=personless,
+            system_properties=system_context(),
+            flag_properties=extra_properties,
+            trace_properties=trace_properties,
+            pinned_properties=pinned_properties,
+            before_send_drops=before_send_drops,
         )
 
     def _parse_send_feature_flags(self, send_feature_flags) -> SendFeatureFlagsOptions:
@@ -2049,9 +2644,12 @@ class Client(object):
             "$set": properties,
             "event": "$set",
             "uuid": uuid,
+            "options": _event_options(kwargs.get("options", None)),
         }
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg, disable_geoip, context_options=_context_get_context_options()
+        )
 
     @no_throw()
     def set_once(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -2098,9 +2696,12 @@ class Client(object):
             "$set_once": properties,
             "event": "$set_once",
             "uuid": uuid,
+            "options": _event_options(kwargs.get("options", None)),
         }
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg, disable_geoip, context_options=_context_get_context_options()
+        )
 
     @no_throw()
     def group_identify(
@@ -2112,6 +2713,7 @@ class Client(object):
         uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Identify a group and set its properties.
@@ -2129,6 +2731,10 @@ class Client(object):
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
             distinct_id: The distinct ID of the user performing the action.
+                Falls back to the context distinct ID, then to
+                ``$<group_type>_<group_key>``.
+            options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -2157,8 +2763,7 @@ class Client(object):
 
         properties = properties or {}
 
-        # group_identify is purposefully always personful
-        distinct_id = get_identity_state(distinct_id)[0]
+        distinct_id = _group_identify_distinct_id(distinct_id, group_type, group_key)
 
         msg: Dict[str, Any] = {
             "event": "$groupidentify",
@@ -2170,13 +2775,17 @@ class Client(object):
             "distinct_id": distinct_id,
             "timestamp": timestamp,
             "uuid": uuid,
+            "options": _event_options(options),
         }
 
-        # NOTE - group_identify doesn't generally use context properties - should it?
-        if get_context_session_id():
-            msg["properties"]["$session_id"] = str(get_context_session_id())
-
-        return self._enqueue(msg, disable_geoip)
+        # No context session: this event's distinct id is not the session's
+        # user, and a session takes the person of its latest event.
+        return self._enqueue(
+            msg,
+            disable_geoip,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
+        )
 
     @no_throw()
     def alias(
@@ -2186,6 +2795,7 @@ class Client(object):
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
         disable_geoip: Optional[bool] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         """
         Create an alias between two distinct IDs.
@@ -2193,15 +2803,17 @@ class Client(object):
         Args:
             previous_id: The previous distinct ID. Required - the call is dropped
                 with a warning if it is missing or empty.
-            distinct_id: The new distinct ID to alias to. Falls back to the
-                context distinct ID; the call is dropped with a warning if
-                neither is available.
+            distinct_id: The new distinct ID to alias to. Required - the call is
+                dropped with a warning if it is missing or empty. The context
+                distinct ID is never used here.
             timestamp: The timestamp of the event. UTC is preferred; non-UTC
                 datetimes and parseable ISO timestamp strings are converted to UTC.
             uuid: A unique identifier for the event. If provided, it must be a
                 valid UUID string or uuid.UUID instance; invalid values are
                 ignored and replaced with a newly generated UUID.
             disable_geoip: Whether to disable GeoIP for this event.
+            options: Capture options for this event, sent as given.
+                ``process_person_profile`` is ``True`` unless this call sets it.
 
         Examples:
             ```python
@@ -2220,10 +2832,10 @@ class Client(object):
             )
             return None
 
-        (distinct_id, personless) = get_identity_state(distinct_id)
-
-        if personless:
-            # No alias target was passed and none is available from context.
+        # The alias target always comes from the caller: a context id can come
+        # from a client-controlled request header.
+        distinct_id = _explicit_distinct_id(distinct_id)
+        if not distinct_id:
             self.log.warning(
                 "alias() called without a distinct_id, dropping the $create_alias event"
             )
@@ -2238,30 +2850,41 @@ class Client(object):
             "event": "$create_alias",
             "distinct_id": previous_id,
             "uuid": uuid,
+            "options": _event_options(options),
         }
 
         if get_context_session_id():
             msg["properties"]["$session_id"] = str(get_context_session_id())
 
-        return self._enqueue(msg, disable_geoip)
+        return self._enqueue(
+            msg,
+            disable_geoip,
+            context_properties=_context_tag_defaults(),
+            context_options=_context_get_context_options(),
+        )
 
     def capture_exception(
         self,
         exception: Optional[ExceptionArg],
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
         """
         Capture an exception for error tracking.
 
         When OpenTelemetry is installed and a valid span is active, its trace and
-        span IDs are added as ``$trace_id`` and ``$span_id`` event properties.
+        span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
+        unless the event, a context tag or ``super_properties`` sets either one.
 
         Args:
             exception: The exception to capture.
+            level: The ``$exception_level``, such as ``"warning"`` or ``"fatal"``.
+                Defaults to ``"error"``. An unknown value counts as unset.
             distinct_id: The distinct ID of the user.
-            properties: A dictionary of additional properties. Overriding reserved
-                exception properties is deprecated and will stop working in the next
-                major version.
+            properties: A dictionary of additional properties. Reserved exception
+                properties, such as ``$exception_list`` and ``$exception_level``,
+                are ignored.
             flags: A ``FeatureFlagEvaluations`` snapshot from ``evaluate_flags()``.
                 Attaches those exact flag values to the captured `$exception` event.
             send_feature_flags: Deprecated. Pass ``flags`` from ``evaluate_flags()`` instead.
@@ -2273,7 +2896,7 @@ class Client(object):
                 # Some code that might fail
                 pass
             except Exception as e:
-                posthog.capture_exception(e, 'user_distinct_id', properties=additional_properties)
+                posthog.capture_exception(e, distinct_id='user_distinct_id', properties=additional_properties)
             ```
 
         Category:
@@ -2303,6 +2926,10 @@ class Client(object):
                 self.log.warning("No exception information available")
                 return None
 
+            if exception is None and exception_is_already_captured(exc_info):
+                self.log.debug("Exception already captured, skipping")
+                return None
+
             # Format stack trace for cymbal
             capture_metadata_input = dict(kwargs).get("_capture_metadata")
             capture_metadata = (
@@ -2327,52 +2954,17 @@ class Client(object):
             )
             all_exceptions_with_trace_and_in_app = event["exception"]["values"]
 
-            reserved_properties = {
-                "$exception_list",
-                "$exception_level",
-                "$exception_source",
-                "$debug_images",
-                "$exception_handled",
-                "$exception_types",
-                "$exception_values",
-                "$exception_sources",
-                "$exception_functions",
-                "$exception_fingerprint_version",
-                "$exception_fingerprint_record",
-                "$exception_issue_id",
-                "$exception_release",
-                "$cymbal_errors",
-            }
-            reserved_property_overrides = reserved_properties.intersection(properties)
-            if reserved_property_overrides:
-                try:
-                    warnings.warn(
-                        "Reserved exception properties passed through "
-                        "`capture_exception(properties=...)` currently override "
-                        "SDK-owned metadata, but this behavior is deprecated and will "
-                        "be removed in the next major version: "
-                        + ", ".join(sorted(reserved_property_overrides)),
-                        DeprecationWarning,
-                        stacklevel=2,
-                    )
-                except DeprecationWarning:
-                    # capture_exception must not drop an event when applications
-                    # promote deprecation warnings to errors.
-                    pass
-
             caller_properties = properties
             properties = {
-                **_get_current_otel_span_properties(),
                 "$exception_list": all_exceptions_with_trace_and_in_app,
-                "$exception_level": _normalize_exception_level(
-                    capture_metadata.get("level")
-                )
-                or "error",
+                "$exception_level": _exception_level(
+                    capture_metadata.get("level"), level
+                ),
             }
             source = capture_metadata.get("source")
             if isinstance(source, str) and source:
                 properties["$exception_source"] = source
-            properties.update(caller_properties)
+            properties.update(_without_reserved_exception_properties(caller_properties))
 
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
@@ -2434,11 +3026,14 @@ class Client(object):
                 flags=flags_snapshot,
                 send_feature_flags=send_feature_flags,
                 disable_geoip=disable_geoip,
+                options=kwargs.get("options", None),
+                _capture_trace_context=True,
             )
 
-            # Mark the exception as captured to prevent duplicate captures
-            if exception is not None and res is not None:
-                mark_exception_as_captured(exception, res)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if res is not None:
+                mark_exception_as_captured(exc_info, res)
 
             return res
         except Exception as e:
@@ -2558,19 +3153,43 @@ class Client(object):
     def _normalize_event_uuid(self, msg):
         # type: (...) -> None
         """Ensure `msg["uuid"]` is a valid uuid string, generating one if missing or invalid."""
-        if "uuid" in msg:
-            uuid = msg.pop("uuid")
-            if uuid is not None:
-                try:
-                    msg["uuid"] = _stringify_event_uuid(uuid)
-                except ValueError as e:
-                    self.log.error("%s Falling back to a generated UUID.", e)
+        # Always send a uuid, so we can always return one
+        msg["uuid"] = _resolve_event_uuid(msg.pop("uuid", None))
 
-        if "uuid" not in msg:
-            # Always send a uuid, so we can always return one
-            msg["uuid"] = stringify_id(uuid4())
+    def _report_capture_failure(
+        self, error: Exception, batch: list[dict], endpoint: str
+    ) -> None:
+        """Hand a failed sync-mode send to `on_error`, like the queued path does.
 
-    def _enqueue(self, msg, disable_geoip, lane=None, property_allowlist=None):
+        Without a handler, or when the failed capture ran inside `on_error`,
+        log one aggregate line instead, so the loss stays visible without recursion.
+        """
+        if not self.on_error or getattr(_on_error_state, "active", False):
+            self.log.error(_capture_loss_message(error, len(batch), endpoint))
+            return
+        _on_error_state.active = True
+        try:
+            self.on_error(error, batch)
+        except Exception as callback_error:
+            self.log.error("on_error handler failed: %s", callback_error)
+        finally:
+            _on_error_state.active = False
+
+    def _enqueue(
+        self,
+        msg,
+        disable_geoip,
+        lane=None,
+        property_allowlist=None,
+        context_properties=None,
+        context_options=None,
+        personless=False,
+        system_properties=None,
+        flag_properties=None,
+        trace_properties=None,
+        pinned_properties=None,
+        before_send_drops=None,
+    ):
         # type: (...) -> Optional[str]
         """Push a new `msg` onto a lane's queue (analytics when unspecified), return the event uuid or None."""
 
@@ -2589,39 +3208,43 @@ class Client(object):
             msg["timestamp"] = _normalize_timestamp(timestamp)
         except ValueError:
             self.log.warning(
-                "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+                "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
+                "Falling back to the current UTC time."
             )
-            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+            msg["timestamp"] = _rfc3339_timestamp(datetime.now(tz=timezone.utc))
 
         self._normalize_event_uuid(msg)
 
         if not msg.get("properties"):
             msg["properties"] = {}
-        msg["properties"]["$lib"] = self._library_id
-        msg["properties"]["$lib_version"] = self._library_version
 
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
+        msg["options"] = msg.get("options") or {}
 
-        if disable_geoip:
-            msg["properties"]["$geoip_disable"] = True
+        _fill_event_defaults(
+            msg,
+            _build_event_defaults(
+                super_properties=self.super_properties,
+                super_options=self.super_options,
+                release_id=self._release_id,
+                context_properties=context_properties,
+                context_options=context_options,
+                personless=personless,
+                property_allowlist=property_allowlist,
+                is_server=self.is_server,
+                disable_geoip=self.disable_geoip,
+                call_disable_geoip=disable_geoip,
+                system_properties=system_properties,
+                flag_properties=flag_properties,
+                trace_properties=trace_properties,
+                library_id=self._library_id,
+                library_version=self._library_version,
+                pinned_properties=pinned_properties,
+            ),
+        )
 
-        if self.super_properties:
-            msg["properties"] = {**msg["properties"], **self.super_properties}
-
-        # Set after the super_properties merge so an explicit `$release_id` from
-        # the caller's properties or the super properties wins over the env var.
-        if self._release_id is not None:
-            msg["properties"].setdefault("$release_id", self._release_id)
-
-        # Set after the super_properties merge so this SDK's server classification
-        # can't be silently overridden by a user-provided super property.
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
-
-        # Applied after every enrichment step (system context, context tags, super
-        # properties, $lib/$lib_version) so the final event shape is exactly the
-        # allowlist regardless of where a property came from.
+        # Applied after every enrichment step (system context, $lib/$lib_version,
+        # filled defaults), so the final event shape is exactly the allowlist
+        # regardless of where a property came from.
         if property_allowlist is not None:
             msg["properties"] = {
                 k: v for k, v in msg["properties"].items() if k in property_allowlist
@@ -2632,16 +3255,20 @@ class Client(object):
         msg = clean(msg)
 
         if self.before_send:
+            event_name = msg.get("event")
             try:
                 modified_msg = self.before_send(msg)
                 if modified_msg is None:
                     self.log.debug("Event dropped by before_send callback")
+                    if before_send_drops is not None:
+                        before_send_drops.append(msg["event"])
                     return None
                 if not isinstance(modified_msg, dict):
-                    raise TypeError("before_send must return a dict or None")
+                    _log_before_send_bad_return(self.log, event_name, modified_msg)
+                    return None
                 msg = clean(modified_msg)
             except Exception as e:
-                self.log.exception(f"Error in before_send callback: {e}")
+                _log_before_send_error(self.log, event_name, e)
                 return None
 
         # Re-normalized after before_send, which may have replaced or removed
@@ -2649,7 +3276,12 @@ class Client(object):
         self._normalize_event_uuid(msg)
         sent_uuid = msg["uuid"]
 
-        self.log.debug("queueing: %s", msg)
+        if _drop_invalid_event_name(self.log, msg):
+            return None
+        if _drop_invalid_distinct_id(self.log, msg):
+            return None
+
+        self.log.debug("queueing %s on the %s lane", msg["event"], lane.name)
 
         # if send is False, return msg as if it was successfully queued, unless
         # shutdown has already closed this lane's admission.
@@ -2666,35 +3298,48 @@ class Client(object):
         if self.sync_mode:
             self.log.debug("enqueued with blocking %s.", msg["event"])
 
-            def send_sync() -> None:
-                # Sync mode bypasses the lane's queue but keeps its wire config:
-                # the AI lane is pinned to v0, so its events post to the AI
-                # endpoint regardless of `capture_mode`.
-                if lane.capture_mode == CaptureMode.V1:
-                    _send_v1_batch(
-                        self.api_key,
-                        self.host,
-                        [msg],
-                        compression=self.capture_compression,
-                        timeout=self.timeout,
-                        max_retries=self.max_retries,
-                        historical_migration=self.historical_migration,
-                        sdk_info=self._sdk_info,
-                    )
-                    return
+            try:
+                event_size = len(
+                    json.dumps(msg, cls=_DatetimeSerializer, allow_nan=False).encode()
+                )
+            except Exception:
+                self.log.error("Unable to serialize event for sizing, dropping.")
+                return None
+            if event_size > lane.max_msg_size:
+                # Log only name and size: AI events may carry unredacted
+                # multimodal payloads that must not leak into logs.
+                self.log.error(
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
+                    msg["event"],
+                    event_size,
+                    lane.max_msg_size // 1024,
+                    lane.endpoint,
+                )
+                return None
 
-                batch_post(
+            def send_sync() -> None:
+                # Sync mode bypasses the lane's queue but keeps its wire config,
+                # so AI events still post to the AI endpoint.
+                _send_v1_batch(
                     self.api_key,
                     self.host,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    batch=[msg],
+                    [msg],
+                    compression=lane.capture_compression,
+                    timeout=lane.timeout,
+                    max_retries=self.max_retries,
                     historical_migration=self.historical_migration,
+                    sdk_info=self._sdk_info,
                     path=lane.endpoint,
-                    **self._request_identity_kwargs(),
                 )
 
-            if lane.run_sync_if_open(send_sync):
+            try:
+                admitted = lane.run_sync_if_open(send_sync)
+            except Exception as e:
+                self._report_capture_failure(e, [msg], lane.endpoint)
+                if self.debug:
+                    raise
+                return None
+            if admitted:
                 return sent_uuid
             self.log.warning(
                 "%s lane received event %s after shutdown, dropping it",
@@ -2819,12 +3464,17 @@ class Client(object):
         """
         Start a span for distributed tracing. Alpha.
 
+        The span API is experimental and can change in a minor release. Spans
+        already sent are kept; the SDK API isn't frozen yet.
+
         Returns a span handle. Use it as a context manager to make it the active
         span for the block and end it on exit (recording a raised exception on
         the way out); or call ``end()`` yourself for a span that cannot wrap a
         block. Spans started inside the block nest under it automatically.
         Always returns a usable handle, even when tracing is off, so calling
-        code never branches.
+        code never branches. At ``max_live_spans`` open spans, the SDK first
+        evicts spans open longer than ``max_span_age`` seconds, which are never
+        exported. If it is still at the limit, the returned span isn't recorded.
 
         Args:
             name: A low-cardinality operation name, e.g. ``GET /users/:id``.
@@ -2835,10 +3485,19 @@ class Client(object):
             parent: A span handle, or an inbound W3C ``traceparent`` header
                 value to continue a remote trace. Defaults to the active span.
                 A forked child starts with no active span; pass the parent
-                span to continue a trace across a fork.
+                span to continue a trace across a fork. The active span is
+                tracked with ``contextvars``, so it carries across ``await``.
+                Threads don't reliably inherit it, so pass ``parent=span`` in
+                a thread or a ``ThreadPoolExecutor`` task. A malformed
+                ``traceparent`` starts a new trace and doesn't raise. A
+                continued trace propagates the sampled flag it received.
+                PostHog doesn't sample, so the span is exported whichever way
+                the flag is set.
             tracestate: The inbound ``tracestate`` header accompanying a
                 ``traceparent`` string ``parent``; preserved and propagated.
             start_time: A ``datetime`` or epoch seconds, to backdate the span.
+                PostHog clamps a start time more than 24 hours old to the
+                receive time.
 
         Examples:
             ```python
@@ -2941,13 +3600,14 @@ class Client(object):
                 else None
             )
             deadline: Optional[float] = None
-            if timeout_seconds is None:
-                for lane in self._lanes:
-                    lane.flush(None)
-            else:
-                deadline = time.monotonic() + timeout_seconds
-                for lane in self._lanes:
-                    lane.flush(max(0.0, deadline - time.monotonic()))
+            with self._drain_lanes_together():
+                if timeout_seconds is None:
+                    for lane in self._lanes:
+                        lane.flush(None)
+                else:
+                    deadline = time.monotonic() + timeout_seconds
+                    for lane in self._lanes:
+                        lane.flush(max(0.0, deadline - time.monotonic()))
             if metrics_flush is not None:
                 metrics_flush(
                     None if deadline is None else max(0.0, deadline - time.monotonic())
@@ -3108,7 +3768,36 @@ class Client(object):
             self.log.exception(log_message)
             errors.append(error)
 
+    @contextmanager
+    def _drain_lanes_together(self):
+        """Signal every lane to drain before waiting on any of them.
+
+        Lanes then drain in parallel under one budget. Otherwise a lane keeps
+        batching on its normal cadence while the client waits on the lane before it.
+        """
+        signals: list[_DrainSignal] = []
+        try:
+            for lane in self._lanes:
+                signal = lane._drain_signal
+                signal.request()
+                signals.append(signal)
+            yield
+        finally:
+            for signal in signals:
+                signal.complete()
+
     def _flush_or_discard_queues(self, errors: list[Exception]) -> None:
+        try:
+            with self._drain_lanes_together():
+                self._flush_or_discard_each_lane(errors)
+            return
+        except Exception as error:
+            self.log.exception("Failed to signal lane drains during lifecycle cleanup")
+            errors.append(error)
+        # Each lane's flush signals its own drain, so lanes still drain one by one.
+        self._flush_or_discard_each_lane(errors)
+
+    def _flush_or_discard_each_lane(self, errors: list[Exception]) -> None:
         for lane in self._lanes:
             try:
                 if any(consumer.is_alive() for consumer in lane.consumers):
@@ -3231,6 +3920,11 @@ class Client(object):
         self._run_lifecycle_cleanup(
             "Failed to clear feature flag deduplication state on shutdown",
             self.distinct_ids_feature_flags_reported.clear,
+            errors,
+        )
+        self._run_lifecycle_cleanup(
+            "Failed to clear experiment exposure deduplication state on shutdown",
+            self._experiment_exposures_reported.clear,
             errors,
         )
 
@@ -3393,6 +4087,8 @@ class Client(object):
         flush with up to 30 seconds waiting for an in-flight flush, then a fresh
         30-second drain budget; the last HTTP request is not cut short. Any spans
         it cannot send are discarded with a warning, as are spans still open.
+        A script that exits without calling ``shutdown()`` gets only a brief
+        best-effort span flush, so don't rely on it.
         Lifecycle cleanup is attempted once, and cleanup failures
         are logged without retry. When called directly from an SDK callback such as
         ``on_error``, shutdown is deferred to avoid blocking the worker that
@@ -3669,14 +4365,12 @@ class Client(object):
         cache_data_to_store: Optional[FlagDefinitionCacheData] = None
         old_fingerprint: Optional[str] = None
         try:
-            request_get = _get_with_identity if self._request_identity_kwargs() else get
-            response = request_get(
+            response = get(
                 personal_api_key,
                 f"/flags/definitions?token={self.api_key}&send_cohorts",
                 self.host,
                 timeout=10,
                 etag=request_etag,
-                **self._request_identity_kwargs(),
             )
 
             # Canonical serialization can be expensive; do it before publication.
@@ -3945,7 +4639,7 @@ class Client(object):
                     reason=UnresolvedFlagReason.MISSING_CONTEXT,
                 )
             focused_group_properties = group_properties[group_name]
-            group_key = groups[group_name]
+            group_key = _group_key_to_string(groups[group_name])
             return match_feature_flag_properties(
                 feature_flag,
                 group_key,
@@ -4008,6 +4702,10 @@ class Client(object):
     ) -> Optional[bool]:
         """
         Check if a feature flag is enabled for a user.
+
+        `feature_enabled` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.is_enabled(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
 
         Args:
             key: The feature flag key.
@@ -4103,6 +4801,9 @@ class Client(object):
 
         flag_result = None
         flag_details = None
+        # Whether flag_details supplied the value this read reports. Only then may the
+        # read report config version 2 attribution or send $experiment_exposure.
+        value_from_details = False
         request_id = None
         evaluated_at = None
         feature_flag_error: Optional[str] = None
@@ -4185,6 +4886,8 @@ class Client(object):
                     errors.append(FeatureFlagError.ERRORS_WHILE_COMPUTING)
                 if flag_details is None:
                     errors.append(FeatureFlagError.FLAG_MISSING)
+                elif flag_details._server_marked_failed:
+                    errors.append(FeatureFlagError.EVALUATION_FAILED)
                 if errors:
                     feature_flag_error = ",".join(errors)
 
@@ -4215,6 +4918,11 @@ class Client(object):
 
                 self.log.debug(
                     f"Successfully computed flag remotely: #{key} -> #{flag_result}"
+                )
+                # A successful payload override reports the caller's value. A failed
+                # record keeps its config version and reason code, never the override.
+                value_from_details = flag_details is not None and (
+                    override_match_value is None or flag_details._server_marked_failed
                 )
             except QuotaLimitError as e:
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
@@ -4277,6 +4985,7 @@ class Client(object):
                 minimal_flag_called_events,
                 local_flag_id=local_flag_id,
                 local_flag_version=local_flag_version,
+                value_from_details=value_from_details,
             )
 
         return flag_result
@@ -4298,6 +5007,9 @@ class Client(object):
         Get a FeatureFlagResult object which contains the flag result and payload for a key by evaluating locally or remotely
         depending on whether local evaluation is enabled and the flag can be locally evaluated.
         This also captures the `$feature_flag_called` event unless `send_feature_flag_events` is `False`.
+        When the flag was evaluated remotely and its config version 2 record is a complete experiment
+        split (an experiment rule with a rule ID and a variant key), it also captures the
+        `$experiment_exposure` event, once per distinct ID, groups, flag, rule and variant.
 
         Examples:
             ```python
@@ -4320,7 +5032,9 @@ class Client(object):
             device_id: The device ID for this request.
 
         Returns:
-            Optional[FeatureFlagResult]: The feature flag result or None if disabled/not found.
+            Optional[FeatureFlagResult]: The evaluated result, including a healthy
+                disabled flag, or None when no result is available (for example,
+                a missing flag or a server-marked failure without a successful fallback).
         """
         return self._get_feature_flag_result(
             key,
@@ -4349,6 +5063,10 @@ class Client(object):
     ) -> Optional[FlagValue]:
         """
         Get multivariate feature flag value for a user.
+
+        `get_feature_flag` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
 
         Args:
             key: The feature flag key.
@@ -4452,6 +5170,10 @@ class Client(object):
         """
         Get the payload for a feature flag.
 
+        `get_feature_flag_payload` is deprecated and will be removed in a future major version. Use
+        `posthog.evaluate_flags(distinct_id, ...)` and call `flags.get_flag_payload(key)` instead. This
+        consolidates flag evaluation into a single `/flags` request per incoming request.
+
         Args:
             key: The feature flag key.
             distinct_id: The distinct ID of the user.
@@ -4471,12 +5193,12 @@ class Client(object):
 
         Examples:
             ```python
-            is_my_flag_enabled = posthog.feature_enabled('flag-key', 'distinct_id_of_your_user')
+            flags = posthog.evaluate_flags('distinct_id_of_your_user')
 
-            if is_my_flag_enabled:
+            if flags.is_enabled('flag-key'):
                 # Do something differently for this user
                 # Optional: fetch the payload
-                matched_flag_payload = posthog.get_feature_flag_payload('flag-key', 'distinct_id_of_your_user')
+                matched_flag_payload = flags.get_flag_payload('flag-key')
             ```
 
         Category:
@@ -4568,6 +5290,10 @@ class Client(object):
         minimal_flag_called_events: bool = False,
         local_flag_id: Optional[int] = None,
         local_flag_version: Optional[int] = None,
+        *,
+        # Opt in when the record supplies the value or failed-record diagnostics.
+        # Failed records keep config version and reason code, but send no exposure.
+        value_from_details: bool = False,
     ):
         properties: dict[str, Any] = {
             "$feature_flag": key,
@@ -4608,6 +5334,8 @@ class Client(object):
             disable_geoip=disable_geoip,
             has_experiment=has_experiment,
             minimal_flag_called_events=minimal_flag_called_events,
+            details=flag_details,
+            value_from_details=value_from_details,
         )
 
     def _capture_feature_flag_called_if_needed(
@@ -4621,66 +5349,35 @@ class Client(object):
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[FeatureFlag] = None,
+        value_from_details: bool = False,
     ) -> None:
-        """Fire a ``$feature_flag_called`` event if the (distinct_id, flag, response,
-        groups) tuple hasn't already been reported on this client. Group context is
-        included so that group-scoped flags fire a separate event for each group a user
-        is evaluated under. Shared by the single-flag evaluation path and
-        ``FeatureFlagEvaluations.is_enabled() / get_flag()`` so both paths dedupe
-        identically.
+        """Send the flag events of a flag read: ``$feature_flag_called`` and, for an
+        experiment split, ``$experiment_exposure``. See ``_capture_flag_events``.
 
-        ``has_experiment`` is the server-reported signal for whether the flag is linked
-        to an experiment (``None`` when the server did not report it). When the
-        server-controlled gate is on and the flag is known non-experiment, the event is
-        trimmed to a strict allowlist; any missing signal sends the full legacy shape,
-        and experiment-linked flags keep the full set for exposure analysis.
-
-        ``minimal_flag_called_events`` is the gate as observed by the evaluation that
-        produced ``response``, not a fresh read of client-wide state: both callers
-        resolve it themselves (the snapshot pins it at construction; the single-flag
-        path reads it from the specific local/remote source that produced the value)
-        so a concurrent poller refresh or another ``/flags`` call can't reshape an
-        event after the fact.
+        Shared by the single-flag evaluation path and the reads of a
+        ``FeatureFlagEvaluations`` snapshot, so every read reports and dedupes
+        identically. ``details`` is the parsed ``/flags`` record of the read, or
+        ``None`` for a locally evaluated flag. ``value_from_details`` includes a
+        failed record supplying config-version and reason-code diagnostics despite
+        having no value. Only a successful experiment split sends an exposure.
         """
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        feature_flag_reported_key = (key, response, groups_key)
-
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-
-        if feature_flag_reported_key in reported_flags:
-            return
-
-        # Record the server's experiment signal when known, so minimization's impact
-        # can be measured by segmenting on it.
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-
-        # Minimize iff the server-controlled gate is on AND the flag is known to have
-        # no linked experiment. Any missing signal (gate absent, has_experiment
-        # missing) fails safe to the full legacy shape.
-        should_minimize = minimal_flag_called_events and has_experiment is False
-        # Only thread the internal allowlist through when minimizing, so the
-        # full-property path's capture() call signature stays unchanged.
-        extra_capture_kwargs: dict[str, Any] = {}
-        if should_minimize:
-            extra_capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
-
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=groups or {},
+            groups=groups,
+            capture_groups=groups or {},
             disable_geoip=disable_geoip,
-            **extra_capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(feature_flag_reported_key)
 
     def get_remote_config_payload(self, key: str):
         """
@@ -4711,18 +5408,12 @@ class Client(object):
             return None
 
         try:
-            request_remote_config = (
-                _remote_config_with_identity
-                if self._request_identity_kwargs()
-                else remote_config
-            )
-            return request_remote_config(
+            return remote_config(
                 self.personal_api_key,
                 self.api_key,
                 self.host,
                 key,
                 timeout=self.feature_flags_request_timeout_seconds,
-                **self._request_identity_kwargs(),
             )
         except Exception as e:
             self.log.exception(
@@ -4875,7 +5566,32 @@ class Client(object):
                     flag_keys_to_evaluate=flag_keys_to_evaluate,
                     device_id=device_id,
                 )
-                response = to_flags_and_payloads(decide_response)
+                remote_response = to_flags_and_payloads(decide_response)
+                # A key the server marked failed keeps its locally computed value
+                # and payload. Successful remote records replace local results.
+                failed_keys = {
+                    key
+                    for key, detail in decide_response.get("flags", {}).items()
+                    if detail._server_marked_failed
+                }
+                response = {
+                    "featureFlags": {
+                        **{
+                            k: v
+                            for k, v in (response["featureFlags"] or {}).items()
+                            if k in failed_keys
+                        },
+                        **(remote_response["featureFlags"] or {}),
+                    },
+                    "featureFlagPayloads": {
+                        **{
+                            k: v
+                            for k, v in (response["featureFlagPayloads"] or {}).items()
+                            if k in failed_keys
+                        },
+                        **(remote_response["featureFlagPayloads"] or {}),
+                    },
+                }
             except Exception as e:
                 self.log.exception(
                     f"[FEATURE FLAGS] Unable to get feature flags and payloads: {e}"
@@ -5089,7 +5805,13 @@ class Client(object):
             quota_limited=quota_limited,
             minimal_flag_called_events=minimal_flag_called_events,
             unresolved_flags={
-                key: reason for key, reason in unresolved.items() if key not in records
+                key: reason
+                for key, reason in unresolved.items()
+                if key not in records
+                or (
+                    isinstance(record := records[key], _RemoteFlagRecord)
+                    and record.details._server_marked_failed
+                )
             },
         )
 
@@ -5233,9 +5955,10 @@ class Client(object):
                     redis_url = f"{parsed.scheme}://"
                     if parsed.username or parsed.password:
                         redis_url += f"{parsed.username or ''}:{parsed.password or ''}@"
-                    redis_url += (
-                        f"{parsed.hostname or 'localhost'}:{parsed.port or 6379}"
-                    )
+                    host = parsed.hostname or "localhost"
+                    if ":" in host:
+                        host = f"[{host}]"
+                    redis_url += f"{host}:{parsed.port or 6379}"
                     if parsed.path:
                         redis_url += parsed.path
 

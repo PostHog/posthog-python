@@ -6,12 +6,12 @@ import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
 
-from posthog import get_tags, identify_context, new_context, tag, contexts
+from posthog import get_tags, identify_context, new_context, setup, tag, contexts
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
-from posthog.ai.sanitization import _full_ai_capture_enabled, redact_media
+from posthog.ai.sanitization import redact_media
 from posthog.ai.sanitization import sanitize_messages  # noqa: F401 -- re-exported for back-compat
 from posthog.ai.types import FormattedMessage, StreamingEventData, TokenUsage
-from posthog.client import Client as PostHogClient
+from posthog.client import Client as PostHogClient, _explicit_distinct_id
 
 from ..version import VERSION as _POSTHOG_VERSION
 
@@ -67,22 +67,74 @@ def _get_tokens_source(
     return "sdk"
 
 
-def _ai_lane_enabled(ph_client) -> bool:
-    """The client's full-AI-capture opt-in routes wrapper events onto the AI lane."""
-    return _full_ai_capture_enabled(ph_client)
+def _user_distinct_id(distinct_id: Any) -> Any:
+    """The caller's distinct id as given, or None when it is missing, empty or whitespace."""
+    return distinct_id if _explicit_distinct_id(distinct_id) is not None else None
 
 
-def _capture_ai_event(ph_client, event: str, **kwargs):
-    """Capture a wrapper-emitted AI event with the PostHog AI library identity."""
+def _ai_event_options(value: Any) -> Dict[str, Any]:
+    """Return a copy of a caller's ``posthog_options``, or ``{}`` when it is not a dict."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        logging.getLogger("posthog").warning(
+            "posthog_options must be a dict, got %s. Sending the event without them.",
+            type(value).__name__,
+        )
+        return {}
+    return dict(value)
+
+
+def _capture_ai_event(ph_client, event: str, *, personless: bool = False, **kwargs):
+    """Capture a wrapper-emitted AI event with the PostHog AI library identity.
+
+    ``options`` are the caller's per-event options. ``personless`` marks an
+    event whose distinct ID is a fallback, such as a trace ID, not a real user.
+    """
     kwargs["properties"] = {
         **_AI_LIB_PROPERTIES,
         **(kwargs.get("properties") or {}),
     }
-    if _ai_lane_enabled(ph_client):
-        capture_ai = getattr(ph_client, "capture_ai", None)
-        if callable(capture_ai):
-            return capture_ai(event=event, **kwargs)
-    return ph_client.capture(event=event, **kwargs)
+    options = _ai_event_options(kwargs.pop("options", None))
+    if personless:
+        # Set last, so it beats the caller's options as well as legacy
+        # properties and global or context options: a person profile for a
+        # fallback ID is always wrong. before_send can still change it.
+        options["process_person_profile"] = False
+    if options:
+        kwargs["options"] = options
+    return ph_client.capture_ai(event=event, **kwargs)
+
+
+class _AICaptureDisabled:
+    """Stands in for a client without ``capture_ai``: AI events are dropped, and
+    every other attribute comes from the client."""
+
+    def __init__(self, client: Any) -> None:
+        self._client = client
+
+    def capture_ai(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+def _resolve_ai_client(posthog_client: Optional[PostHogClient]) -> PostHogClient:
+    """Return the client an AI integration sends through, or the global client.
+
+    The check runs when the integration is built, so the error log appears at
+    setup. A client object without ``capture_ai`` turns AI capture off for the
+    integration, and provider calls still work.
+    """
+    client = posthog_client or setup()
+    if not callable(getattr(client, "capture_ai", None)):
+        logging.getLogger("posthog").error(
+            "The PostHog client for an AI integration must implement capture_ai(). "
+            "AI events from this integration are not captured."
+        )
+        return cast(PostHogClient, _AICaptureDisabled(client))
+    return client
 
 
 def _capture_processor_event(
@@ -93,11 +145,17 @@ def _capture_processor_event(
     default_properties: Optional[Dict[str, Any]] = None,
     distinct_id: Optional[str] = None,
     groups: Optional[Dict[str, Any]] = None,
+    personless: bool = False,
+    options: Optional[Dict[str, Any]] = None,
+    default_options: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Apply the shared capture policy used by AI SDK processors."""
+    """Apply the shared capture policy used by AI SDK processors.
+
+    ``default_options`` win over ``options`` key by key, like
+    ``default_properties`` over ``properties``.
+    """
     try:
-        capture = getattr(ph_client, "capture", None)
-        if not callable(capture):
+        if not callable(getattr(ph_client, "capture_ai", None)):
             return
 
         _capture_ai_event(
@@ -106,6 +164,11 @@ def _capture_processor_event(
             distinct_id=distinct_id or "unknown",
             properties={**properties, **(default_properties or {})},
             groups=groups,
+            personless=personless,
+            options={
+                **_ai_event_options(options),
+                **_ai_event_options(default_options),
+            },
         )
     except Exception as exc:
         logging.getLogger("posthog").debug("Failed to capture PostHog event: %s", exc)
@@ -455,6 +518,39 @@ def merge_system_prompt(
     return []
 
 
+# https://docs.anthropic.com/en/api/errors
+_ANTHROPIC_ERROR_TYPE_STATUS = {
+    "invalid_request_error": 400,
+    "authentication_error": 401,
+    "billing_error": 402,
+    "permission_error": 403,
+    "not_found_error": 404,
+    "request_too_large": 413,
+    "rate_limit_error": 429,
+    "api_error": 500,
+    "timeout_error": 504,
+    "overloaded_error": 529,
+}
+
+
+def _stream_error_event_status(exc: BaseException, status: int) -> int:
+    """Status of an error that arrived as an `error` event inside a stream.
+
+    Anthropic sends errors that happen after a stream starts (such as
+    overloaded_error) as an SSE `error` event, and its SDK raises them with the
+    stream's own 200 status. Use the status that the error type stands for, or
+    0 when it is unknown, so the event is not recorded as a 200.
+    """
+    if status < 400:
+        body = getattr(exc, "body", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        error_type = error.get("type") if isinstance(error, dict) else None
+        if isinstance(error_type, str):
+            return _ANTHROPIC_ERROR_TYPE_STATUS.get(error_type, 0)
+        return 0
+    return status
+
+
 def _get_http_status(exc: BaseException) -> int:
     """HTTP status of an SDK exception, 0 when it has none.
 
@@ -463,7 +559,7 @@ def _get_http_status(exc: BaseException) -> int:
     """
     status = getattr(exc, "status_code", None)
     if isinstance(status, int):
-        return status
+        return _stream_error_event_status(exc, status)
     code = getattr(exc, "code", None)
     if isinstance(code, int) and not isinstance(code, bool) and 100 <= code <= 599:
         return code
@@ -480,11 +576,15 @@ def call_llm_and_track_usage(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_method: Callable[..., Any],
+    *,
+    posthog_options: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Any:
     """
     Common usage-tracking logic for both sync and async calls.
     call_method: the llm call method (e.g. openai.chat.completions.create)
+    posthog_options: capture options for the event. They are not passed to
+        ``call_method``.
     """
     start_time = time.time()
     response = None
@@ -518,8 +618,8 @@ def call_llm_and_track_usage(
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+                _user_distinct_id(posthog_distinct_id) is not None
+                or _user_distinct_id(contexts.get_context_distinct_id()) is not None
             )
 
             if not has_person_distinct_id:
@@ -602,9 +702,6 @@ def call_llm_and_track_usage(
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
 
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
             # Process instructions for Responses API
             if provider == "openai" and kwargs.get("instructions") is not None:
                 tag(
@@ -615,7 +712,7 @@ def call_llm_and_track_usage(
                 )
 
             # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+            if callable(getattr(ph_client, "capture_ai", None)):
                 sdk_tags = get_tags()
                 merged_properties = {
                     **sdk_tags,
@@ -631,6 +728,8 @@ def call_llm_and_track_usage(
                     distinct_id=contexts.get_context_distinct_id(),
                     properties=merged_properties,
                     groups=posthog_groups,
+                    personless=not has_person_distinct_id,
+                    options=posthog_options,
                 )
 
         if error:
@@ -649,6 +748,8 @@ async def call_llm_and_track_usage_async(
     posthog_groups: Optional[Dict[str, Any]],
     base_url: str,
     call_async_method: Callable[..., Any],
+    *,
+    posthog_options: Optional[Dict[str, Any]] = None,
     **kwargs: Any,
 ) -> Any:
     start_time = time.time()
@@ -690,8 +791,8 @@ async def call_llm_and_track_usage_async(
 
             # Check if we have a real user distinct_id (from param or outer context)
             has_person_distinct_id = (
-                posthog_distinct_id is not None
-                or contexts.get_context_distinct_id() is not None
+                _user_distinct_id(posthog_distinct_id) is not None
+                or _user_distinct_id(contexts.get_context_distinct_id()) is not None
             )
 
             if not has_person_distinct_id:
@@ -774,9 +875,6 @@ async def call_llm_and_track_usage_async(
             if stop_reason is not None:
                 tag("$ai_stop_reason", stop_reason)
 
-            if not has_person_distinct_id:
-                tag("$process_person_profile", False)
-
             # Process instructions for Responses API
             if provider == "openai" and kwargs.get("instructions") is not None:
                 tag(
@@ -787,7 +885,7 @@ async def call_llm_and_track_usage_async(
                 )
 
             # send the event to posthog
-            if hasattr(ph_client, "capture") and callable(ph_client.capture):
+            if callable(getattr(ph_client, "capture_ai", None)):
                 sdk_tags = get_tags()
                 merged_properties = {
                     **sdk_tags,
@@ -803,6 +901,8 @@ async def call_llm_and_track_usage_async(
                     distinct_id=contexts.get_context_distinct_id(),
                     properties=merged_properties,
                     groups=posthog_groups,
+                    personless=not has_person_distinct_id,
+                    options=posthog_options,
                 )
 
         if error:
@@ -1147,6 +1247,9 @@ def capture_streaming_event(
         cache_creation = event_data["usage_stats"].get("cache_creation_input_tokens", 0)
         event_properties["$ai_cache_read_input_tokens"] = cache_read
         event_properties["$ai_cache_creation_input_tokens"] = cache_creation
+        reasoning = event_data["usage_stats"].get("reasoning_tokens")
+        if isinstance(reasoning, int) and reasoning > 0:
+            event_properties["$ai_reasoning_tokens"] = reasoning
     else:
         optional_token_fields = [
             "cache_read_input_tokens",
@@ -1213,15 +1316,14 @@ def capture_streaming_event(
             event_data["kwargs"]["instructions"],
         )
 
-    if event_data.get("distinct_id") is None:
-        event_properties["$process_person_profile"] = False
-
     # Send event to PostHog
-    if hasattr(ph_client, "capture"):
+    if callable(getattr(ph_client, "capture_ai", None)):
         _capture_ai_event(
             ph_client,
             "$ai_generation",
-            distinct_id=event_data.get("distinct_id") or trace_id,
+            distinct_id=_user_distinct_id(event_data.get("distinct_id")) or trace_id,
             properties=event_properties,
             groups=event_data.get("groups"),
+            personless=_user_distinct_id(event_data.get("distinct_id")) is None,
+            options=event_data.get("options"),
         )

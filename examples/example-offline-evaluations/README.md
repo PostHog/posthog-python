@@ -10,11 +10,16 @@ Offline evaluations must be enabled for your PostHog project. Use the project's 
 | --- | --- |
 | Create experiments, upload results, complete/fail | Personal API key or project secret key with `offline_evaluation_ingestion:write` |
 | Fetch scorers and versions | Personal API key with `llm_analytics:read` |
+| Validate a composite formula without saving | Personal API key with `llm_analytics:read` |
+| Calculate composites using previously stored inputs | Personal API key with ingestion access, `evaluation:read`, and `llm_analytics:read` |
 | Create/update scorers and create versions | Personal API key with `llm_analytics:write` |
 | Fetch datasets, items, and history | Personal API key with `dataset:read` |
 | Create/update/archive/restore datasets and items | Personal API key with `dataset:write` |
 | Read experiment tags | Personal API key with `evaluation:read` |
 | Replace experiment tags | Personal API key with `evaluation:write` |
+| Read an item or result revision | Personal API key with `evaluation:read`. Result reads also require `llm_analytics:read` and access to the scorer. |
+| Update an item or update/delete its payload | Personal API key with `evaluation:write` and evaluation editor access |
+| Delete an item, change/delete a result or its payload | Personal API key with `evaluation:write`, evaluation editor access, `llm_analytics:read`, and access to affected scorers and composite inputs |
 
 A personal key can cover both scorer management and uploads. Project secret keys can upload using a known scorer-version UUID without scorer read access. All operations use the explicit project/environment; scorer names are not unique.
 
@@ -78,7 +83,7 @@ with OfflineEvaluations(
 
 Use one `EvaluationItem` for the application's execution and reuse it across scorer results. `upload_results([EvaluationResult(...), ...])` uploads a finite sequence, eagerly and sequentially. It splits at 1,000 items/results or 5 MiB of UTF-8 JSON per request, whichever comes first. Item payloads are limited to 1 MiB; result payloads to 256 KiB. Payload JSON supports at most 32 nested containers. The SDK raises for invalid values and oversized payloads without truncating them. Memory use scales with the sequence you supply, so submit caller-sized batches for large datasets.
 
-Set `model_version` on each item to compare executions from different models in one experiment. It identifies the application's model and overrides the default supplied to `create_experiment(model_version=...)`. Omit it or pass `None` to inherit that default on the server; without either value, the model remains unknown. Explicit model identifiers must be nonempty strings of at most 255 characters and are preserved without trimming. The declared model is immutable item content: changing, adding, or removing it after acceptance causes a `content_conflict`, even if the effective model is unchanged. Create a new item for a different model execution, and preserve the original declaration for retries.
+Set `model_version` on each item to compare executions from different models in one experiment. It identifies the application's model and overrides the default supplied to `create_experiment(model_version=...)`. Omit it or pass `None` to inherit that default on the server; without either value, the model remains unknown. Explicit model identifiers must be nonempty strings of at most 255 characters and are preserved without trimming. Re-uploading a retained item with a different declaration raises `content_conflict`. Use `update_item` to correct a recorded model, and create a new item for a different execution. Keep the original declaration for upload retries.
 
 `status="ok"` means the evaluator ran successfully. Its boolean, number, or category-list `value` is uploaded with its original polarity. Numeric scores use finite double-precision (binary64) values; integer inputs are rejected if conversion would change their value. Use `error`, `skipped`, or `not_applicable` without a value for other outcomes. `error_code` and a non-null `error_message` are valid only with `status="error"`.
 
@@ -91,6 +96,79 @@ EvaluationItem(input=None)       # Payload contains a null input.
 ```
 
 The client context manager releases connections. Call `complete()` explicitly after uploads succeed, or `fail()` when you deliberately want to close the experiment as failed. Neither exceptions nor async cancellation automatically close an experiment. Expected counts include every outcome status; the server checks them on completion.
+
+## Composite item scores
+
+Composite scorers calculate one score per item on the PostHog server from exact reported scorer versions. They can return numeric, boolean, or categorical values. This requires a backend with composite scorer support; ordinary uploads remain compatible with older backends.
+
+Provision a composite once, using a personal key with scorer write access. This example assumes `correctness_version_id` identifies a reported boolean scorer and `relevance_version_id` a reported numeric scorer:
+
+```python
+from posthog.ai.evaluations import ScorerComposition
+
+composition: ScorerComposition = {
+    "expression": "(number(correct) + relevance) / 2",
+    "inputs": [
+        {"alias": "correct", "scorer_version_id": correctness_version_id},
+        {"alias": "relevance", "scorer_version_id": relevance_version_id},
+    ],
+}
+# Optional; read scope is sufficient and no scorer/version is created.
+evaluations.scorers.validate_composition(
+    kind="numeric", composition=composition, config={"min": 0, "max": 1},
+)
+overall = evaluations.scorers.create(
+    name="Overall",
+    kind="numeric",
+    calculation="composite",
+    config={"min": 0, "max": 1, "passing_rule": {"operator": "gte", "threshold": 0.8}},
+    composition=composition,
+)
+overall_version_id = overall.current_version_id
+```
+
+Save that version UUID for your runs. Creating scorers/versions is not idempotent, so a lost response requires inspecting server state before repeating creation. Update a formula, output configuration, or pinned input through `create_version(scorer_id, config=..., composition=..., base_version=...)`. Supply the complete composition each time. New source versions never update a composite automatically.
+
+Upload the reported inputs and explicitly request the calculation:
+
+```python
+experiment = evaluations.create_experiment(
+    name="Composite example", expected_item_count=1, expected_result_count=3,
+)
+item = EvaluationItem(input="Capital of France?", output="Paris")
+receipt = experiment.upload_results([
+    EvaluationResult(item=item, scorer_version_id=correctness_version_id, value=True),
+    EvaluationResult(item=item, scorer_version_id=relevance_version_id, value=0.8),
+    EvaluationResult(item=item, scorer_version_id=overall_version_id, calculate=True),
+])
+for chunk in receipt.chunks:
+    for outcome in chunk.results:
+        print(outcome.scorer_version_id, outcome.status, outcome.error_code)
+experiment.complete()
+```
+
+Calculation declarations contain only the item reference, scorer version, and `calculate=True`. Do not supply a value, reasoning, metadata, evaluator trace, or evaluation time. An item may also be referenced by its already accepted UUID.
+
+Project secret keys and ingestion-only personal keys must supply **every pinned input result in the same HTTP request**, including on retries. Previously uploaded inputs may be resubmitted with their original values and metadata. Reusing stored inputs without resubmitting them requires both `evaluation:read` and `llm_analytics:read`, in addition to ingestion access. Composite requests and retries also require current access to the composite and its inputs.
+
+The SDK keeps all supplied results for a composite-bearing item together without fetching scorer definitions. It preserves order, so interleaved composite items can form a larger indivisible group. Group each item's results together for large batches. If a group exceeds 1,000 items/results or 5 MiB, the entire call fails locally before any upload. The SDK cannot check that your supplied inputs match the pinned formula without read access; the server validates this. Missing inputs reject the whole HTTP request. Inputs can appear before or after their composite in that request.
+
+HTTP success acknowledges persistence, not successful calculation. Input errors become `composite_input_error`; formula errors or invalid output values become `composite_formula_error`. Input statuses propagate in the order `error`, `skipped`, `not_applicable`. Check each receipt's `status` and `error_code`; no result-read permission is needed. For ordinary results on an older backend, `status=None` means the backend omitted the outcome. Composite acknowledgments require an outcome.
+
+All accepted composite outcomes count toward `expected_result_count`, including errors and skips. Derived results add no uploaded-result billing usage. Omitting a composite leaves it unrequested. An exact upload retry for a retained result returns its original outcome, even after an edit or experiment completion. The server does not recalculate formulas on retry or read. Persist declarations with `to_dict` and restore them with `from_dict` for exact recovery.
+
+Formulas support 1–16 reported inputs and at most 1,024 characters; aliases start with a lowercase letter and contain lowercase letters, digits, or underscores, up to 32 characters. Nested composites are unsupported. Use `number(flag)` for explicit boolean conversion and `"good" in categories` for categorical membership. Boolean inputs retain their raw meaning regardless of passing rules. Numeric composites support bounds and passing thresholds, but no non-null `step`. Formula syntax, input access, and output types are validated by the server; runtime values and bounds are checked during ingestion.
+
+Read `scorer.calculation`, `scorer.composition`, and `scorer.input_scorers` to inspect saved inputs and their pinned/latest versions. `dependent_composite_count` counts accessible active dependents; `scorers.list(calculation="composite", input_definition_id=source_id)` retrieves them. Historical versions retain their saved composition. All operations also exist on `AsyncOfflineEvaluations`.
+
+The runnable capital-city example can include a composite consuming only its configured boolean scorer version. Provision one with expression `number(correct)`, pin that boolean version as `correct`, and pass its composite version UUID when creating a new state file:
+
+```bash
+uv run python examples/example-offline-evaluations/main.py \
+  --state composite-run.json --composite-version-id 'your-composite-version-uuid'
+```
+
+The state file includes both reported and calculation declarations and the combined expected count. Reusing the file replays that saved run regardless of newly supplied scorer flags.
 
 ## Datasets and reproducible evaluations
 
@@ -349,6 +427,43 @@ experiment.set_tags([])  # Remove all tags.
 Reading and writing experiment tags require the personal-key scopes listed above; an upload-only project secret key cannot manage tags. Tag updates do not change the saved `submission`, lifecycle `receipt`, or scorer versions. They are not retried automatically: after a lost acknowledgment, read the current tags before deciding whether to repeat the replacement, since another caller may have edited them.
 
 The async client exposes the same API: await scorer methods and `experiment.get_tags()` / `experiment.set_tags(...)`.
+
+## Correcting or deleting accepted data
+
+Use the item and result IDs from the upload receipt. You can make corrections while an experiment is uploading or after it completes or fails. With `AsyncOfflineEvaluations`, await each read, update, and delete.
+
+```python
+experiment = evaluations.resume_experiment(experiment_id)
+item_id = receipt.items[0].id
+result_id = receipt.results[0].id
+
+revision = experiment.get_result_revision(result_id)
+revision = experiment.update_result(result_id, revision=revision, status="ok", value=False)
+experiment.update_result_payload(result_id, revision=revision, payload={"reasoning": "Reviewed by hand"})
+
+revision = experiment.get_item_revision(item_id)
+revision = experiment.update_item(item_id, revision=revision, model_version="v2")
+experiment.update_item_payload(item_id, revision=revision, payload={"expected_output": None})
+```
+
+Each update returns the server's current revision, including when a score already has the requested value. A payload shares its owner's revision. Changes to a result or its payload can also advance the item revision. A stale write raises `EvaluationAPIError` with HTTP 409 and code `revision_conflict`. After a conflict or lost response, inspect the current data before deciding whether to write again. The SDK sends each mutation once.
+
+If an update acknowledgment returns a revision below the one you submitted, the SDK raises `EvaluationAPIError` with code `invalid_response` and `persistence="unknown"`.
+
+Payload updates replace only the supplied top-level fields. Use `None` to store JSON null. Edits keep the original 30-day retention deadline. Editing an item's input, output, or expected output can mark existing scores stale. To correct a composite, edit its reported inputs and the server recomputes dependent scores.
+
+Passing `payload={}` stores an empty first payload or preserves the fields of an existing payload. Either write advances the owner's revision. A deleted or expired payload raises HTTP 409 `payload_unavailable` even for `{}`. When you change a result's status from `error` to another status, the server removes any stored `error_message` from its payload.
+
+| Method | What it permanently removes |
+| --- | --- |
+| `delete_item(item_id, revision=...)` | The item, its results, and their payloads |
+| `delete_result(result_id, revision=...)` | The result, its payload, and dependent composites |
+| `delete_item_payload(item_id, revision=...)` | The stored item payload |
+| `delete_result_payload(result_id, revision=...)` | The stored result payload |
+
+Deletes return `None` on acknowledgment. Deleting a payload advances its owner's revision. Deleting a result or its payload also advances the parent item's revision. Before editing an affected record that still exists, read its new revision with `get_item_revision` or `get_result_revision`.
+
+A deleted or expired payload cannot be restored on that record. Re-uploading a deleted item or result can recreate it while the experiment is open. A recreated reported result counts toward usage again.
 
 ## Receipts, errors, and recovery
 

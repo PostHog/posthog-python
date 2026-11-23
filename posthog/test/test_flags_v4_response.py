@@ -1,8 +1,8 @@
-"""Reading the ``/flags?v=4`` response, checked against the released wire contract.
+"""Reading the ``/flags?v=4`` response, checked against the harness wire contract.
 
-The files in ``fixtures/feature_flag_rules_v2`` are copied unchanged from a released
-``PostHog/posthog-sdk-test-harness`` contract. ``SOURCE.json`` records the release and
-the digest of each file.
+The files in ``fixtures/feature_flag_rules_v2`` are copied unchanged from a
+``PostHog/posthog-sdk-test-harness`` contract. ``SOURCE.json`` records the revision,
+its release and the digest of each file.
 """
 
 from __future__ import annotations
@@ -83,8 +83,9 @@ def _evaluate(client: Client, response: Dict[str, Any]) -> FeatureFlagEvaluation
 
 def test_vendored_fixtures_match_the_recorded_release_digests():
     source = _load("SOURCE.json")
-    assert source["release"] == "1.22.0"
-    assert source["contract_version"] == "7.0.0"
+    assert source["release"] == "1.30.0"
+    assert source["revision"] == "6414114501396d96aadf2412fdd8054a03076782"
+    assert source["contract_version"] == "10.0.0"
     for name, entry in source["files"].items():
         digest = hashlib.sha256((FIXTURES / name).read_bytes()).hexdigest()
         assert digest == entry["sha256"], name
@@ -210,8 +211,8 @@ def test_a_failed_record_never_renders_its_value(client):
     response["flags"]["garden-layout"]["value"] = "compact"
     snapshot = _evaluate(client, response)
 
-    assert snapshot.get_flag("garden-layout") is False
-    assert snapshot.is_enabled("garden-layout", True) is False
+    assert snapshot.get_flag("garden-layout") is None
+    assert snapshot.is_enabled("garden-layout", True) is True
 
 
 @pytest.mark.parametrize(
@@ -763,7 +764,7 @@ def _failed_with_payload(shape: str) -> Dict[str, Any]:
 
 @pytest.mark.parametrize("shape", ["v4", "older"])
 def test_a_failed_record_has_no_payload_on_any_read(shape, client):
-    # A failed flag reads as disabled, so a payload on it would surprise the caller.
+    # A failed flag has no evaluated result or payload.
     response = _failed_with_payload(shape)
     [flag] = normalize_flags_response(copy.deepcopy(response))["flags"].values()
     assert flag._failed is True
@@ -771,7 +772,7 @@ def test_a_failed_record_has_no_payload_on_any_read(shape, client):
 
     with mock.patch("posthog.client.flags", return_value=copy.deepcopy(response)):
         result = client.get_feature_flag_result("garden-layout", DISTINCT_ID)
-        assert result is not None and result.payload is None
+        assert result is None
         assert client.get_feature_flag_payload("garden-layout", DISTINCT_ID) is None
         assert (
             client.get_feature_flag_payload(
@@ -950,7 +951,8 @@ def test_v1_flags_render_the_same_legacy_values_from_both_shapes(case):
         "flags": v4_flags,
     }
     expected = {
-        "featureFlags": v1_maps["featureFlags"],
+        # Flat legacy maps retain their interpretation, but detailed failures do not.
+        "featureFlags": {} if outcome["failed"] else v1_maps["featureFlags"],
         "featureFlagPayloads": {
             key: json.loads(value)
             for key, value in v1_maps["featureFlagPayloads"].items()
@@ -1112,11 +1114,27 @@ def _parity_response(shape: str) -> Dict[str, Any]:
     }
 
 
+# A config version 2 record adds these to its flag events, and leaves out
+# $feature_flag_reason. A v2-shaped response has no config version 2 records, so they
+# are left out of the comparison of the v2-* flags and checked in
+# test_experiment_exposure.py.
+_CONFIG_VERSION_2_EVENT_PROPERTIES = {
+    "$feature_flag_config_version",
+    "$feature_flag_reason_code",
+    "$feature_flag_rule_id",
+    "$feature_flag_rule_type",
+    "$feature_flag_variant_key",
+}
+
+
 def _flag_event_properties(message: Dict[str, Any]) -> Dict[str, Any]:
+    left_out = set(_CONFIG_VERSION_2_EVENT_PROPERTIES)
+    if str(message["properties"].get("$feature_flag", "")).startswith("v2-"):
+        left_out.add("$feature_flag_reason")
     return {
         key: value
         for key, value in message["properties"].items()
-        if key.startswith("$feature")
+        if (key.startswith("$feature") and key not in left_out)
         or key in ("$active_feature_flags", "locally_evaluated")
     }
 
@@ -1130,14 +1148,17 @@ def _legacy_outputs(shape: str) -> Dict[str, Any]:
     def response(*args: Any, **kwargs: Any) -> Dict[str, Any]:
         return _parity_response(shape)
 
-    def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+    # Read the built event in before_send: v1 layers flag properties inside _enqueue.
+    def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append((message["event"], _flag_event_properties(message)))
-        return None
+        # Keep the event, so capture accepts it and returns its UUID as the real
+        # queue does; flag events dedupe only events that were accepted.
+        return message
 
     try:
         with (
             mock.patch("posthog.client.flags", side_effect=response),
-            mock.patch.object(client, "_enqueue", side_effect=enqueue),
+            mock.patch.object(client, "before_send", record),
             pytest.warns(DeprecationWarning),
         ):
             outputs["get_feature_variants"] = client.get_feature_variants(DISTINCT_ID)

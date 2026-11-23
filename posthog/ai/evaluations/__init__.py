@@ -28,6 +28,7 @@ from ._client import (
     OfflineEvaluations,
 )
 from ._errors import EvaluationAPIError
+from ._mutations import ItemUpdate, ResultUpdate
 from ._scorer_types import (
     BooleanScorerConfig,
     CategoricalPassingRule,
@@ -36,7 +37,11 @@ from ._scorer_types import (
     NumericPassingRule,
     NumericScorerConfig,
     Scorer,
+    ScorerCalculation,
+    ScorerComposition,
+    ScorerCompositionInput,
     ScorerConfig,
+    ScorerInput,
     ScorerKind,
     ScorerOrder,
     ScorerPage,
@@ -89,6 +94,7 @@ __all__ = [
     "ExperimentOptions",
     "ExperimentReceipt",
     "ItemReceipt",
+    "ItemUpdate",
     "JSONValue",
     "NumericPassingRule",
     "NumericScorerConfig",
@@ -96,10 +102,15 @@ __all__ = [
     "ResultOptions",
     "ResultReceipt",
     "ResultStatus",
+    "ResultUpdate",
     "RunSource",
     "ScoreValue",
     "Scorer",
+    "ScorerCalculation",
+    "ScorerComposition",
+    "ScorerCompositionInput",
     "ScorerConfig",
+    "ScorerInput",
     "ScorerKind",
     "ScorerOrder",
     "ScorerPage",

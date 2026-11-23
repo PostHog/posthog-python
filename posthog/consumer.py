@@ -6,30 +6,37 @@ from threading import Thread
 
 from posthog._logging import _configure_posthog_logging
 from posthog.capture_compression import CaptureCompression
-from posthog.capture_mode import CaptureMode
-from posthog.capture_v1 import _backoff, _send_v1_batch
+from posthog.capture_send import (
+    _CAPTURE_V1_PATH,
+    _capture_loss_message,
+    _send_v1_batch,
+)
 from posthog.request import (
-    EVENTS_ENDPOINT,
     USER_AGENT as _USER_AGENT,
-    APIError,
     DatetimeSerializer,
-    batch_post,
 )
 
 from queue import Empty
 
 
-MAX_MSG_SIZE = 900 * 1024  # 900KiB per event
+# Capture's request body limit. An analytics event larger than this can never
+# be accepted, so the SDK drops it locally; anything smaller is sent, and
+# capture reports an event over its own per-event limit in the response.
+MAX_MSG_SIZE = 10 * 1024 * 1024
 
-# AI events carry LLM inputs/outputs and post to a dedicated endpoint whose
-# pipeline accepts larger messages than analytics ingestion, so the AI lane
-# grants a higher per-event ceiling. `next()` appends an item before checking
-# BATCH_SIZE_LIMIT, so worst-case request body is BATCH_SIZE_LIMIT +
-# AI_MAX_MSG_SIZE (~13MiB) — keep that sum under the 20MiB server body cap.
-AI_MAX_MSG_SIZE = 8 * 1024 * 1024  # 8MiB per event
+# The AI endpoint's per-event ceiling. The endpoint applies it to the
+# serialized properties alone.
+AI_MAX_PROPERTIES_SIZE = 8 * 1024 * 1024
+# The local guard measures the whole event, not only its properties, so it
+# allows this much more to keep events at the endpoint's ceiling.
+AI_ENVELOPE_HEADROOM = 64 * 1024
+# The AI lane's per-event guard, and the upper bound for
+# `capture_ai_max_event_bytes`.
+AI_MAX_MSG_SIZE = AI_MAX_PROPERTIES_SIZE + AI_ENVELOPE_HEADROOM
 
-# The maximum request body size is currently 20MiB, let's be conservative
-# in case we want to lower it in the future.
+# A batch closes before it appends an event that would take it past this, so
+# a request carries at most this much event data, or one larger event alone.
+# Half of capture's request body limit, which applies before decompression.
 BATCH_SIZE_LIMIT = 5 * 1024 * 1024
 
 _configure_posthog_logging()
@@ -109,13 +116,11 @@ class Consumer(Thread):
         host=None,
         on_error=None,
         flush_interval=5.0,
-        gzip=False,
-        retries=10,
+        retries=3,
         timeout: float = 15,
         historical_migration=False,
-        endpoint=EVENTS_ENDPOINT,
+        endpoint=_CAPTURE_V1_PATH,
         max_msg_size=MAX_MSG_SIZE,
-        capture_mode=CaptureMode.V0,
         capture_compression=CaptureCompression.NONE,
     ):
         """Create a consumer thread."""
@@ -128,10 +133,8 @@ class Consumer(Thread):
         self.host = host
         self.on_error = on_error
         self.queue = queue
-        self.gzip = gzip
         self.endpoint = endpoint
         self.max_msg_size = max_msg_size
-        self.capture_mode = capture_mode
         self.capture_compression = capture_compression
         self._sdk_info = _USER_AGENT
         self._drain_signal: Optional[_DrainSignal] = None
@@ -180,13 +183,14 @@ class Consumer(Thread):
                 self.request(batch)
                 success = True
             except Exception as e:
-                self.log.error("error uploading: %s", e)
                 success = False
                 if self.on_error:
                     try:
                         self.on_error(e, batch)
-                    except Exception as e:
-                        self.log.error("on_error handler failed: %s", e)
+                    except Exception as callback_error:
+                        self.log.error("on_error handler failed: %s", callback_error)
+                else:
+                    self.log.error(_capture_loss_message(e, len(batch), self.endpoint))
         finally:
             # mark items as acknowledged from queue
             for item in batch:
@@ -244,7 +248,9 @@ class Consumer(Thread):
                     pending_items += 1
                     try:
                         item_size = len(
-                            json.dumps(item, cls=DatetimeSerializer).encode()
+                            json.dumps(
+                                item, cls=DatetimeSerializer, allow_nan=False
+                            ).encode()
                         )
                     except Exception:
                         # Callback-modified events can still contain invalid mapping
@@ -268,6 +274,11 @@ class Consumer(Thread):
                         queue.task_done()
                         pending_items -= 1
                         continue
+                    if items and total_size + item_size > BATCH_SIZE_LIMIT:
+                        self._return_to_queue_head(item)
+                        pending_items -= 1
+                        self.log.debug("hit batch size limit (size: %d)", total_size)
+                        break
                     items.append(item)
                     total_size += item_size
                     if total_size >= BATCH_SIZE_LIMIT:
@@ -287,67 +298,29 @@ class Consumer(Thread):
 
         return items
 
-    def request(self, batch):
-        """Upload the batch via the wire protocol selected by `capture_mode`.
+    def _return_to_queue_head(self, item) -> None:
+        """Put a dequeued event back at the head of the queue for the next batch.
 
-        V1 uses the partial-retry submitter (which posts to its own path); V0
-        posts the batch to this consumer's `endpoint`.
+        The event stays counted in ``unfinished_tasks``, because it was never
+        marked done. Keeping it in the queue, not in the consumer, means a
+        stop, a discard or a fork accounts for it like any other queued event.
         """
-        if self.capture_mode == CaptureMode.V1:
-            _send_v1_batch(
-                self.api_key,
-                self.host,
-                batch,
-                compression=self.capture_compression,
-                timeout=self.timeout,
-                max_retries=self.retries,
-                historical_migration=self.historical_migration,
-                sdk_info=self._sdk_info,
-            )
-            return
-        self._send(batch, self.endpoint)
+        queue = self.queue
+        with queue.not_empty:
+            queue.queue.appendleft(item)
+            queue.not_empty.notify()
 
-    def _send(self, batch, path):
-        """Attempt to upload a single batch to `path`, retrying before raising an error"""
-
-        def is_retryable(exc):
-            if isinstance(exc, APIError):
-                # retry on server errors and client errors
-                # with 408 (request timeout) or 429 (rate limited),
-                # don't retry on other client errors
-                if isinstance(exc.status, int):
-                    return not (
-                        (400 <= exc.status < 500) and exc.status not in (408, 429)
-                    )
-                return False
-            else:
-                # retry on all other errors (eg. network)
-                return True
-
-        last_exc = None
-        for attempt in range(self.retries + 1):
-            try:
-                batch_post(
-                    self.api_key,
-                    self.host,
-                    gzip=self.gzip,
-                    timeout=self.timeout,
-                    batch=batch,
-                    historical_migration=self.historical_migration,
-                    path=path,
-                    **(
-                        {"_user_agent": self._sdk_info}
-                        if self._sdk_info != _USER_AGENT
-                        else {}
-                    ),
-                )
-                return
-            except Exception as e:
-                last_exc = e
-                if not is_retryable(e):
-                    raise
-                if attempt < self.retries:
-                    _backoff(attempt, getattr(e, "retry_after", None))
-
-        if last_exc:
-            raise last_exc
+    def request(self, batch):
+        """Upload the batch to this consumer's `endpoint` with the capture v1
+        partial-retry submitter."""
+        _send_v1_batch(
+            self.api_key,
+            self.host,
+            batch,
+            compression=self.capture_compression,
+            timeout=self.timeout,
+            max_retries=self.retries,
+            historical_migration=self.historical_migration,
+            sdk_info=self._sdk_info,
+            path=self.endpoint,
+        )

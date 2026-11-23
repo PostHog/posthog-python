@@ -50,6 +50,12 @@ def _header_text(value: object) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
+def _valid_version_fields(version: str, trailing: Optional[str]) -> bool:
+    if version == "ff" or (version == "00" and trailing):
+        return False
+    return not (trailing and _NON_PRINTABLE_ASCII_RE.search(trailing))
+
+
 def _match_traceparent(value: object) -> Optional[_TraceparentFields]:
     value = _header_text(value)
     if value is None:
@@ -62,9 +68,7 @@ def _match_traceparent(value: object) -> Optional[_TraceparentFields]:
     if match is None:
         return None
     version, trace_id, span_id, flags, trailing = match.group(1, 2, 3, 4, 5)
-    if version == "ff" or (version == "00" and trailing):
-        return None
-    if trailing and _NON_PRINTABLE_ASCII_RE.search(trailing):
+    if not _valid_version_fields(version, trailing):
         return None
     if trace_id == INVALID_TRACE_ID or span_id == INVALID_SPAN_ID:
         return None

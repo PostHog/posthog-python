@@ -14,6 +14,7 @@ import json
 import re
 from typing import Any, Dict, Optional, Tuple
 
+from ._context_parameters import schema_has_param
 from .constants import DEFAULT_CONVERSATION_ID_DESCRIPTION
 from ._ids import _uuid7
 from .logger import log
@@ -39,11 +40,7 @@ def add_conversation_id_to_schema(
     ``$ref``/``oneOf``/``allOf``/``anyOf``.
     """
     schema = input_schema
-    if (
-        schema
-        and isinstance(schema.get("properties"), dict)
-        and CONVERSATION_ID_PARAM_NAME in schema["properties"]
-    ):
+    if schema and schema_has_param(schema, CONVERSATION_ID_PARAM_NAME):
         if _is_our_declaration(schema["properties"][CONVERSATION_ID_PARAM_NAME]):
             return schema
         log(
@@ -151,17 +148,26 @@ def inject_prompt_back(result: Any, conversation_id: str) -> Any:
     if isinstance(result, list):
         return [*result, block]
 
-    target = getattr(result, "root", result)
-    content = getattr(target, "content", None)
-    if not isinstance(content, list):
-        return result
+    return _inject_model_prompt_back(result, block)
+
+
+def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
     try:
-        import mcp.types as mcp_types  # noqa: PLC0415
+        copied = copy.copy(value)
+    except Exception:  # noqa: BLE001 - delivery must not break a tool call
+        return None
+    if copied is value:
+        return None
+    try:
+        setattr(copied, attr, updated)
+    except Exception:  # noqa: BLE001 - read-only objects fail closed
+        return None
+    return copied
 
-        block = mcp_types.TextContent(type="text", text=block["text"])
-    except ImportError:
-        pass
 
+def _copy_prompt_back_result(
+    result: Any, target: Any, content: list, block: Any
+) -> Any:
     copy_model = getattr(target, "model_copy", None)
     if callable(copy_model):
         try:
@@ -185,15 +191,16 @@ def inject_prompt_back(result: Any, conversation_id: str) -> Any:
     return result if wrapped is None else wrapped
 
 
-def _copy_with_attr(value: Any, attr: str, updated: Any) -> Optional[Any]:
+def _inject_model_prompt_back(result: Any, block: Any) -> Any:
+    target = getattr(result, "root", result)
+    content = getattr(target, "content", None)
+    if not isinstance(content, list):
+        return result
     try:
-        copied = copy.copy(value)
-    except Exception:  # noqa: BLE001 - delivery must not break a tool call
-        return None
-    if copied is value:
-        return None
-    try:
-        setattr(copied, attr, updated)
-    except Exception:  # noqa: BLE001 - read-only objects fail closed
-        return None
-    return copied
+        import mcp.types as mcp_types  # noqa: PLC0415
+
+        block = mcp_types.TextContent(type="text", text=block["text"])
+    except ImportError:
+        pass
+
+    return _copy_prompt_back_result(result, target, content, block)

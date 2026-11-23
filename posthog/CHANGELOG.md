@@ -1,5 +1,164 @@
 # posthog
 
+## 8.1.0 — 2026-11-20
+
+### Minor changes
+
+- [7eece541](https://github.com/posthog/posthog-python/commit/7eece541c823ce3f8d3e35516ea1eb801c5c2d94) Update and delete offline experiment items, reported scores, and payloads from sync and async clients using the current revision. — Thanks @Radu-Raicea!
+
+## 8.0.2 — 2026-11-18
+
+### Patch changes
+
+- [f6e999cc](https://github.com/posthog/posthog-python/commit/f6e999cc967d51500169498cbf353a0607e066ee) Use canonical numeric group keys for local feature-flag bucketing and fall back to remote evaluation for unsupported key types. — Thanks @Kayvan-Zahiri for your first contribution 🎉!
+- [e555292f](https://github.com/posthog/posthog-python/commit/e555292f8b776085bc5e2fbaf15f585301a817ba) `posthog.emails` sends emails, uploads attachments and reads email statuses through `/api/messaging/...`, which takes the project from the project secret API key. It no longer calls `/api/projects/@current/messaging/...`, since PostHog is removing the `@current` alias. Needs PostHog Cloud, or a self-hosted PostHog from 2026-11-18 or later. Older self-hosted versions answer these calls with a 404. — Thanks @rafaeelaudibert!
+- [6ee3e333](https://github.com/posthog/posthog-python/commit/6ee3e333cf2fa774833793a076f48458dcce3332) `posthog.exception_utils`: only mark frames as `in_app` when their path is inside the project root directory, so sibling directories sharing the root's name as a prefix (e.g. `/work/app-shared` for root `/work/app`) are no longer treated as application code. — Thanks @MaiAditya!
+
+## 8.0.1 — 2026-11-17
+
+### Patch changes
+
+- [2eb7b9fa](https://github.com/posthog/posthog-python/commit/2eb7b9fa450e3f99916b1b7ee35e933e92408af6) `PostHogSpanProcessor` no longer breaks export of spans started inside a PostHog context on opentelemetry-sdk 1.20 and 1.21. The span copy that carries the context's distinct ID, session ID and tags held plain dicts and tuples, but those SDK versions' OTLP encoder reads `.dropped` from its attributes, events and links and failed with `AttributeError`. The copy now also keeps the counts of attributes, events and links the SDK dropped under its span limits, which it previously reported as 0. — Thanks @fahad2932 for your first contribution 🎉!
+- [ac6a5df4](https://github.com/posthog/posthog-python/commit/ac6a5df465b2cef4999355f82e59b8f00d595325) `posthog.ai.openai`: report OpenAI cache-write tokens as `$ai_cache_creation_input_tokens`, for streaming and non-streaming calls. OpenAI reports them in `input_tokens_details.cache_write_tokens` (Responses) or `prompt_tokens_details.cache_write_tokens` (Chat Completions) and bills them above the input rate, but the wrapper read only `cached_tokens`, so cache writes were costed as plain input tokens. — Thanks @alexeichhorn for your first contribution 🎉!
+
+## 8.0.0 — 2026-11-17
+
+### Major changes
+
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) A `$session_id` or `$window_id` that is not a string is not sent, because capture v1 would reject the whole batch, and the SDK logs a warning for each one. The warning names the key and the value's type, not the value. `None` counts as unset and drops without a warning. An empty string is sent. In posthog-python 7.x.x these values were sent as properties. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture v1 is the only capture path. Events and AI events send to the capture v1 endpoints, and the legacy v0 capture path is removed. See the [migration guide](https://github.com/PostHog/posthog-python/blob/main/docs/migration-7.x-to-8.0.md) for breaking changes. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) The `$trace_id` and `$span_id` that the SDK takes from the active OpenTelemetry span now fill after the call's `properties`, context tags and `super_properties`, and before `before_send`. A `$trace_id` or `$span_id` in a context tag or `super_properties` now replaces the span's IDs, and setting either key stops the SDK adding both. `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) `capture_exception` takes a `level=` argument on `Client`, `AsyncPosthog` and the module, which sets `$exception_level` (default `"error"`). Reserved exception properties passed in `properties`, such as `$exception_list` and `$exception_level`, are now ignored. In posthog-python 7.x.x they overrode the SDK's values with a `DeprecationWarning`. `AsyncPosthog.capture_exception` now sends `$exception_level`. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) The AI integrations no longer fall back to `capture` for a client object without `capture_ai`. Creating an OpenAI, Anthropic or Gemini wrapper, the LangChain `CallbackHandler`, or the OpenAI Agents or Claude Agent SDK processor with such a client now logs one error and captures no AI events. Provider calls still work. The error shows up when you set the integration up, and not after a provider call. A `Client` or `AsyncPosthog` instance, and the default global client, work as before. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Events send `$lib` and `$lib_version` as they are at send time, whoever set them. If no `$lib` is set in the call's `properties`, a context tag or `super_properties`, the SDK sets both to `posthog-python` and the installed version. If `$lib` is `posthog-python` and `$lib_version` is missing, the SDK fills in the version. A `$lib` that names another library is sent with whatever `$lib_version` it has, so set both when you override them. Only a non-empty string counts as set. In posthog-python 7.x.x the SDK overwrote a `$lib` or `$lib_version` set in a call or a context tag. `before_send` can still change or remove both, and `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) An invalid event no longer costs the rest of its batch. An event with a missing, empty or non-string name, or with a non-string `distinct_id` after `before_send`, is dropped locally, an event that cannot be serialized is dropped alone (a non-finite float such as `NaN` is still sent as `null`), and a property key JSON cannot represent is dropped from its event. The analytics per-event limit is now capture's 10 MiB request limit instead of 900 KiB. A personal API key (`phx_...`) disables the client like an empty key. The SDK's own log lines no longer include event content or invalid timestamp values. `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) A `disable_geoip` argument to a call now counts as a value of that event. It wins over a `$geoip_disable` in context tags or `super_properties`, and a `$geoip_disable` in the call's own `properties` still wins over it. `disable_geoip=False` now sends `$geoip_disable: false`, so it turns GeoIP lookup on for that event even when a context tag or `super_properties` turns it off. The client's `disable_geoip` setting keeps its place below every caller value. `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) `group_identify` falls back to the context distinct ID and then to `$<group_type>_<group_key>` instead of a random ID, and no longer adds the context session ID. `alias()` no longer takes its target from the context distinct ID. Context tags and options now apply to `alias` and `group_identify`, but context tags, context options, `super_options` and `super_properties` do not set `process_person_profile` on identify-style events (`$identify`, `$create_alias`, `$merge_dangerously`, `$groupidentify`, `$set` and `$set_once`) whose distinct ID the SDK did not generate. Those events default to `True` unless the call sets it. An empty or whitespace-only `distinct_id` counts as missing, and generated personless distinct IDs are UUIDv7. `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture follows a `307` or `308` redirect only to the origin of `host`, at most 5 times, for the sync and async clients. Any other redirect fails the batch and reaches `on_error`. In posthog-python 7.x.x the sync client followed redirects to any origin and resent the event batch there. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) The parameters after `path` in `posthog.request.post` and after `host` in `posthog.request.flags` are keyword-only. With `gzip` removed, a posthog-python 7.x.x call that passed them by position bound them to the wrong parameter. It now raises `TypeError`. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) An invalid event `uuid` is still replaced with a generated one, but the SDK now logs one warning instead of an error, and the warning no longer includes the value. An empty string `uuid` counts as unset, so the SDK generates one without logging. `AsyncPosthog` follows the same rules. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) MCP instrumentation no longer relabels the whole client. In posthog-python 7.x.x, `posthog.mcp.instrument()` and `PostHogMCP` changed `$lib` on every event the client sent, including the app's own, and the SDK name in its request headers, feature flag requests included. `instrument()` without a client relabeled the global client. Now only MCP analytics events report `posthog-python-mcp`, and everything else reports `posthog-python`. The label is set in each MCP event's own properties, so a `$lib` in `super_properties` no longer replaces it. `before_send` can. — Thanks @eli-r-ph!
+
+### Minor changes
+
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) MCP events take capture options. The `PostHogMCP` capture methods and `McpAnalytics.capture` take an `event_options` argument, and `MCPAnalyticsOptions(event_options=...)` sets options on every event `instrument()` captures automatically, from a function of `(request, extra)` like `event_properties`. An event without an identity still always sends `process_person_profile: False`. `PostHogMCP.capture()` keeps the core client's `options` argument. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) `AsyncPosthog.capture_exception` now adds the active OpenTelemetry span's `$trace_id` and `$span_id`, like `Client.capture_exception`, even when `capture_trace_context` is off. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) The Celery integration propagates context options from the publisher to the worker, like tags. Options set with `set_context_option` before a task is published apply to every event captured while the task runs. `propagate_context=False` sends none of them. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) AI integrations take capture options. Every wrapper method that takes `posthog_properties` also takes `posthog_options` (OpenAI, Anthropic, Gemini, sync and async, and the Claude Agent SDK `query()` and `PostHogClaudeSDKClient`), and the Gemini clients take it as a default for every call. LangChain's `CallbackHandler` and `PostHogMiddleware`, and `instrument()` and the tracing processors for OpenAI Agents and the Claude Agent SDK, take `options=`. LangChain also reads `posthog_options` from run metadata. These options win over context options and `super_options`. An event without a distinct ID still always sends `process_person_profile: False`, and a value that is not a dict is logged and ignored. — Thanks @eli-r-ph!
+
+### Patch changes
+
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) AI integrations (LLM wrappers, embeddings, LangChain and OpenAI Agents) treat an empty or whitespace-only `distinct_id` as missing, as the client does: the event uses its trace or run ID and is personless. Before, an empty ID gave streaming calls, embeddings and LangChain the trace or run ID with person processing on, so PostHog created a person for each trace or run. Non-streaming wrapper calls used a random personless ID, and OpenAI Agents already treated an empty ID as missing. A whitespace-only ID was sent as given. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture timestamps always have six fractional-second digits, even on a whole second: `2026-01-02T03:04:05.000000+00:00`, not `2026-01-02T03:04:05+00:00`. This applies to the event `timestamp`, the batch `created_at` and the `PostHog-Request-Timestamp` header. The `timestamp` that `before_send` receives has the same format. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture retry waits now vary randomly by up to 25%, so many clients do not retry at the same moment. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture retries `404` and `429` responses like `408` and `500`, `502`, `503`, `504`, with the same backoff and `Retry-After` handling. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture makes one connection try per attempt, so every physical request carries its own attempt number and request timestamp. posthog-python 7.x.x also retried a failed connection up to twice inside each attempt, reusing the request timestamp, which shifted the events' stored time by the time spent connecting.
+  
+  When `before_send` raises, the error line names the event and the exception type, not the exception message. The traceback is logged at debug level.
+  
+  Events without `NaN` or `Infinity` are encoded once, without first copying them to replace non-finite numbers. Events that contain them still send those values as `null`. — Thanks @eli-r-ph!
+- [cacdb6f6](https://github.com/posthog/posthog-python/commit/cacdb6f65024e12d648deec7d388c0c414b9d36e) Capture keeps the first event for each uuid in a request and drops the later copies. `on_error` now reports each dropped copy in `CaptureError.drops` as `(uuid, "duplicate_event_uuid")`, and the SDK does not resend it. Each entry of `CaptureError.drops` is a `CaptureDroppedEvent` from `posthog.capture_send`, a tuple that also has `uuid` and `details` fields. `verdict_summary()` counts each drop by its own reason. — Thanks @eli-r-ph!
+
+## 7.91.4 — 2026-11-17
+
+### Patch changes
+
+- [8a88a289](https://github.com/posthog/posthog-python/commit/8a88a289fe530d9983ddc5531480e3c84490d1ae) Exception autocapture now sends a truncated string for source lines over 1024 bytes in a frame's `context_line`, `pre_context` and `post_context`. Before, those lines were sent as `null`. — Thanks @Toraastrta for your first contribution 🎉!
+
+## 7.91.3 — 2026-11-17
+
+### Patch changes
+
+- [5b7a91a3](https://github.com/posthog/posthog-python/commit/5b7a91a31f167090565c2934afa6c99a33207898) `capture_exception()` called without an exception now marks the exception it takes from `sys.exc_info()` as captured, so a later automatic capture of the same exception no longer sends a second `$exception` event. — Thanks @MaiAditya for your first contribution 🎉!
+
+## 7.91.2 — 2026-11-16
+
+### Patch changes
+
+- [84158304](https://github.com/posthog/posthog-python/commit/84158304ab1a30f1868e5526560bb1b91fa1b1be) Honor `GEMINI_API_KEY` when initializing the synchronous and asynchronous Gemini clients, after `GOOGLE_API_KEY` and before the legacy `API_KEY` fallback. — Thanks @pcbeingused333!
+- [ade1ff99](https://github.com/posthog/posthog-python/commit/ade1ff990b3f334a41e284ca32e3241499019d80) `posthog.ai.anthropic`: `messages.stream()` (sync and async) now captures an `$ai_generation` event with `$ai_is_error` when the initial request fails, for example with a 401 or a connection error. Before, only `messages.create(stream=True)` captured that failure, so errors raised on entering the `stream()` context manager were never reported. — Thanks @pcbeingused333!
+- [92fae510](https://github.com/posthog/posthog-python/commit/92fae510c34dd1d1514b9b3b78791c159ab4dc1a) An Anthropic error that arrives as an `error` event inside a stream, such as `overloaded_error`, is no longer recorded with `$ai_http_status: 200`. The anthropic SDK raises it with the stream's 200 status, so `$ai_http_status` now comes from the error type (529 for `overloaded_error`, 429 for `rate_limit_error`), or is 0 for an unknown type. This applies to the LangChain callback handler and to every capture that reads the status through `_get_http_status`. — Thanks @jaeminbird!
+- [53405145](https://github.com/posthog/posthog-python/commit/534051451fd5d242a50974577bcd4f2c00ca5f74) Claude Agent SDK: give each generation the tool results it was called with, and keep every text and tool-use block of a response in its `$ai_output_choices`. — Thanks @MaiAditya for your first contribution 🎉!
+
+## 7.91.1 — 2026-11-13
+
+### Patch changes
+
+- [3511570b](https://github.com/posthog/posthog-python/commit/3511570b4d19f84589b59dcd677df0c7b0d05cfe) Treat server-marked failed feature flag records as unevaluated: direct result, value, enabled and payload getters return None rather than a disabled False result or placeholder payload. Snapshot value and payload reads return None, enablement honors the caller's default, and failed keys are omitted from enumeration and capture enrichment. Bulk value and payload maps omit failed remote records while preserving successful locally computed values and payloads for those keys. Preserve selected or accessed failure diagnostics through snapshot filters and report local_evaluation_inconclusive alongside evaluation_failed after an unresolved failed fallback; healthy False and malformed-record compatibility are unchanged. — Thanks @marandaneto!
+
+## 7.91.0 — 2026-11-13
+
+### Minor changes
+
+- [cd821fbe](https://github.com/posthog/posthog-python/commit/cd821fbe07f4ee8db9509ecb2bd54f128cdf31c6) A code send with `posthog.emails.send` takes `cc`, `bcc` and `attachments`: at most 10 files and 40 MB per message after Base64 encoding, about 29 MB of files, with the HTML counted twice when there is no `text`, since PostHog derives the text from it. An attachment is a `filename` and its `content`, as bytes or a Base64 string, with an optional `content_type` and `content_id`. The client checks the limits before any request, uploads each file PostHog doesn't hold yet straight to PostHog's file storage over https, never following a redirect, then sends the email with each file's SHA-256. A refused or redirected upload raises `EmailError` with the code `attachment_upload_failed`, and an unreachable storage `network_error` with `field` naming the attachment. Either way no email is sent. — Thanks @Silthus!
+
+## 7.90.0 — 2026-11-13
+
+### Minor changes
+
+- [dd7577bc](https://github.com/posthog/posthog-python/commit/dd7577bccbe22cf4b2da970b1373d6f16bafeb20) `posthog.mcp`: a failed tool call now sets `$mcp_error_status` to the HTTP status behind it, read from the raised exception or its cause chain (`status_code`, `statusCode` or `status`, on the exception or its `response`, as `httpx.HTTPStatusError` and `requests.HTTPError` carry it). Failures from an upstream API now group by status in MCP Analytics instead of landing in "unknown". — Thanks @lucasheriques!
+
+### Patch changes
+
+- [9e4935f7](https://github.com/posthog/posthog-python/commit/9e4935f7036f03905f6e0475d7d3ab3b4cc9dbff) `posthog.mcp`: on mcp 1.x (1.10 and later), a tool registered with the low-level `Server`'s `@server.call_tool()` decorator that raises now reports the exception it raised, with its cause chain, stack frames and `$mcp_error_status`, and `$mcp_error_type` names its class. Before, the decorator converted the exception into an error result first, so the failure was a generic `Error` with no frames and no status. — Thanks @lucasheriques!
+- [01398616](https://github.com/posthog/posthog-python/commit/013986168a131efed4a86d75a222e554f2f542d8) `posthog.mcp`: a failed tool call on a standalone FastMCP server now reports the exception the tool raised, with its cause chain and stack frames, and `$mcp_error_type` names its class. Before, FastMCP converted the exception into an error result first, so the failure was a generic `Error` with no frames. — Thanks @lucasheriques!
+
+## 7.89.0 — 2026-11-12
+
+### Minor changes
+
+- [ac25b4bf](https://github.com/posthog/posthog-python/commit/ac25b4bf287794288dc25b0c10a5cc04c39c7a16) A send with `template_key` now takes `tracking` and `sensitive`. The template form doesn't take either one.
+  
+  `tracking` chooses what PostHog tracks for the email. `tracking=True` turns on opens, clicks and engagement events. `tracking=False` turns them all off. A dict such as `{"clicks": True}` or `{"engagement": False}` turns each kind on or off, and a key you leave out keeps its default. Without it, PostHog counts opens, captures engagement events, and counts clicks only when the email isn't sensitive.
+  
+  `sensitive` marks an email that carries login links, reset tokens or codes. A sensitive email keeps its links as they are unless `tracking` turns clicks on, leaves its subject off engagement events, and keeps its content out of PostHog's logs. Without it, a send whose `template_key` matches a template saved in PostHog follows that template's setting, and any other send is sensitive. A send that sets neither option works exactly as before.
+  
+  ```python
+  posthog.emails.send(
+      to="user@example.com",
+      template_key="newsletter",
+      subject="What's new at Acme",
+      html=rendered_html,
+      sensitive=False,
+  )
+  ```
+  
+  `capture_engagement` is deprecated in favor of `tracking={"engagement": False}`. It keeps working, but PostHog refuses a send that sets both.
+  
+  `tracking` and `sensitive` need PostHog's API support, which is rolling out. Until it reaches your PostHog instance, PostHog refuses a send that sets either one. — Thanks @Silthus!
+
+## 7.88.0 — 2026-11-12
+
+### Minor changes
+
+- [9636fa20](https://github.com/posthog/posthog-python/commit/9636fa20e4ea4315e8b6b6fd43c0ee63ec9bf054) Support versioned composite scorers for offline evaluations, including formula validation, dependency metadata, explicit server calculations, stored outcome receipts, and composite-safe bulk uploads. — Thanks @Radu-Raicea!
+
+## 7.87.2 — 2026-11-12
+
+### Patch changes
+
+- [5378ece8](https://github.com/posthog/posthog-python/commit/5378ece8efd17c9ca626346b8c1f7136dc1eb8cb) Keep `frozenset` and `deque` property values when cleaning events instead of replacing them with `None`. — Thanks @Ishkirat-Singh for your first contribution 🎉!
+
+## 7.87.1 — 2026-11-11
+
+### Patch changes
+
+- [c28716c2](https://github.com/posthog/posthog-python/commit/c28716c20d75b4ca5dfe2aaedd4f14ff7086a769) Fix `flag_fallback_cache_url` for Redis URLs with an IPv6 host: the brackets are kept, so the Redis flag cache is no longer disabled. — Thanks @ioannisj!
+
+## 7.87.0 — 2026-11-11
+
+### Minor changes
+
+- [5febfd9b](https://github.com/posthog/posthog-python/commit/5febfd9b13d9d78e2f0cd253356badabf4e51c65) Send `$experiment_exposure` for config version 2 experiment splits, and send the reason code and rule attribution on `$feature_flag_called` for config version 2 flags in place of `$feature_flag_reason`. — Thanks @andehen!
+
+## 7.86.6 — 2026-11-10
+
+### Patch changes
+
+- [4d732304](https://github.com/posthog/posthog-python/commit/4d732304a94f06f12ad61ec538832c9a671ceeb1) The Anthropic wrapper now reports `$ai_reasoning_tokens` from `usage.output_tokens_details.thinking_tokens`, for both regular and streaming responses. — Thanks @pcbeingused333!
+- [1342bb0b](https://github.com/posthog/posthog-python/commit/1342bb0bac0de26c81bcef95206a2a3db36b9025) Treat NaN exception rate-limit settings as invalid numbers so autocapture keeps working and bucket limits remain finite. — Thanks @peterolkhov for your first contribution 🎉!
+- [8c6b328d](https://github.com/posthog/posthog-python/commit/8c6b328d3440409887636ccd96d6e19b9825eb55) Local evaluation of relative date filters now clamps the day after every month or year subtracted, as the SDK spec requires. A `2m` filter evaluated on March 31 resolved to January 31 and now resolves to January 28, and `4y` on February 29 resolves to February 28 of the target year. — Thanks @luantaraschi!
+
 ## 7.86.5 — 2026-11-10
 
 ### Patch changes

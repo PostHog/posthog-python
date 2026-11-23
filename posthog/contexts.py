@@ -29,6 +29,7 @@ class ContextScope:
         self.distinct_id: Optional[str] = None
         self.device_id: Optional[str] = None
         self.tags: Dict[str, Any] = {}
+        self.options: Dict[str, Any] = {}
         self.capture_exception_code_variables: Optional[bool] = None
         self.code_variables_mask_patterns: Optional[list] = None
         self.code_variables_ignore_patterns: Optional[list] = None
@@ -46,6 +47,9 @@ class ContextScope:
 
     def add_tag(self, key: str, value: Any):
         self.tags[key] = value
+
+    def add_option(self, key: str, value: Any):
+        self.options[key] = value
 
     def set_capture_exception_code_variables(self, enabled: bool):
         self.capture_exception_code_variables = enabled
@@ -94,6 +98,13 @@ class ContextScope:
             tags.update(self.tags)
             return tags
         return self.tags.copy()
+
+    def collect_options(self) -> Dict[str, Any]:
+        if self.parent and not self.fresh:
+            options = self.parent.collect_options()
+            options.update(self.options)
+            return options
+        return self.options.copy()
 
     def get_capture_exception_code_variables(self) -> Optional[bool]:
         if self.capture_exception_code_variables is not None:
@@ -302,6 +313,54 @@ def get_tags() -> Dict[str, Any]:
     current_context = _get_current_context()
     if current_context:
         return current_context.collect_tags()
+    return {}
+
+
+def set_context_option(key: str, value: Any) -> None:
+    """
+    Set a capture option for every event captured within the current context.
+
+    Context options fill options an event leaves unset, before ``before_send``
+    runs, so the hook sees them. They override the client's ``super_options``.
+    An event's own ``options`` override them, and ``before_send`` can change
+    them. Child contexts inherit them unless they are fresh. They never set
+    ``process_person_profile`` on identify-style events, such as ``$identify``
+    or ``$set``, whose distinct ID the SDK did not generate: those default it
+    to ``True``.
+
+    Args:
+        key: The option name, such as ``"process_person_profile"``
+        value: The option value, sent as given
+
+    Example:
+        ```python
+        with posthog.new_context():
+            posthog.set_context_option("process_person_profile", False)
+            posthog.capture("health_check")
+        ```
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        current_context.add_option(key, value)
+
+
+def get_context_options() -> Dict[str, Any]:
+    """
+    Get all capture options from the current context. Note, modifying
+    the returned dictionary will not affect the current context.
+
+    Returns:
+        Dict of all capture options in the current context
+
+    Category:
+        Contexts
+    """
+    current_context = _get_current_context()
+    if current_context:
+        return current_context.collect_options()
     return {}
 
 

@@ -18,7 +18,7 @@ uv sync --extra dev --extra test
 
 ## CI-aligned checks
 
-Run the smallest relevant tests first, for example `pytest posthog/test/test_capture_v1.py --timeout=30` for v1 transport changes. Then run these core CI-aligned checks from the repository root in the activated `.venv` populated by the setup commands above:
+Run the smallest relevant tests first, for example `pytest posthog/test/test_capture_send.py --timeout=30` for v1 transport changes. Then run these core CI-aligned checks from the repository root in the activated `.venv` populated by the setup commands above:
 
 ```bash
 ruff format --check .

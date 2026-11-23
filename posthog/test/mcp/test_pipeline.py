@@ -1,5 +1,9 @@
 """Unit tests for the MCP analytics core pipeline (Milestone 1, no server)."""
 
+import copy
+import json
+import random
+import re
 from datetime import datetime, timezone
 
 import pytest
@@ -9,6 +13,7 @@ from posthog.mcp.constants import (
     PostHogMCPAnalyticsEvent,
     PostHogMCPAnalyticsProperty,
 )
+import posthog.mcp._sanitization as sanitization
 from posthog.mcp._event_types import MCPAnalyticsEventType
 from posthog.mcp._exceptions import capture_exception
 from posthog.mcp._ids import deterministic_prefixed_id, new_prefixed_id
@@ -19,8 +24,25 @@ from posthog.mcp._sanitization import (
     sanitize_captured_value,
     sanitize_event,
 )
-from posthog.mcp._sink import McpCaptureOptions, process_mcp_event
+from posthog.capture_event import _to_v1_event
+from posthog.client import Client
+from posthog.mcp._sink import McpCaptureOptions, McpEventSink, process_mcp_event
+from posthog.test.capture_helpers import patch_capture_send, sent_events
 from posthog.mcp._truncation import MAX_EVENT_BYTES, normalize, truncate_event
+from posthog.mcp import McpAnalytics, _NoopAnalytics
+from posthog.mcp._instrumentation import (
+    _maybe_emit_initialize,
+    record_feedback,
+    record_initialize,
+    record_missing_capability,
+    record_resource_request,
+    record_tool_call,
+    record_tools_list,
+)
+from posthog.mcp._internal import MCPAnalyticsData, set_server_tracking_data
+from posthog.mcp.logger import set_logger
+from posthog.mcp.types import FeedbackReport, MCPAnalyticsOptions, UserIdentity
+from posthog.test.mcp._helpers import FakeClient, flush_background
 
 # --- ids ---------------------------------------------------------------------
 
@@ -71,6 +93,138 @@ def test_sanitize_redacts_sensitive_keys():
     assert out["authorization"] == "[redacted]"
     assert out["api_key"] == "[redacted]"
     assert out["safe"] == "keep"
+
+
+@pytest.mark.parametrize(
+    "value, expected",
+    [
+        pytest.param(
+            '{"user":"ada","password":"hunter2"}',
+            '{"user":"ada","password":"[redacted]"}',
+            id="string",
+        ),
+        pytest.param(
+            '{\n  "Password" : "hun\\"ter2",\n  "n": 1\n}',
+            '{\n  "Password" : "[redacted]",\n  "n": 1\n}',
+            id="escaped quote and spacing",
+        ),
+        pytest.param('{"api_key":12345}', '{"api_key":"[redacted]"}', id="number"),
+        pytest.param(
+            '{"access-token":true}', '{"access-token":"[redacted]"}', id="boolean"
+        ),
+        pytest.param(
+            '{"refresh_token":"abcdefgh',
+            '{"refresh_token":"[redacted]"',
+            id="cut off at the end of the text",
+        ),
+        pytest.param(
+            '{"private_key":"abc\\',
+            '{"private_key":"[redacted]"',
+            id="cut off after an escape",
+        ),
+        pytest.param(
+            '{"Authorization":["Bearer x"]}',
+            '{"Authorization":"[redacted]"}',
+            id="array",
+        ),
+        pytest.param(
+            '{"cookie": [\n  "a=1",\n  "b=2"\n]}',
+            '{"cookie": "[redacted]"}',
+            id="indented array",
+        ),
+        pytest.param(
+            '{"set-cookie":["a=1","b=2',
+            '{"set-cookie":"[redacted]"',
+            id="array cut off",
+        ),
+        pytest.param(
+            'retry failed: "token": "abc"',
+            'retry failed: "token": "[redacted]"',
+            id="inside prose",
+        ),
+        pytest.param(
+            '"token": "abc\nnext "line"',
+            '"token": "[redacted]"\nnext "line"',
+            id="unclosed in prose stops at the line",
+        ),
+        pytest.param(
+            '{"pass\\u0077ord":"hunter2"}',
+            '{"pass\\u0077ord":"[redacted]"}',
+            id="escaped key",
+        ),
+        pytest.param(
+            '        credentials = {"password": "hunter2", "account": "reader"}',
+            '        credentials = {"password": "[redacted]", "account": "reader"}',
+            id="source line",
+        ),
+        pytest.param(
+            '{"password_hint":"pet"}',
+            '{"password_hint":"pet"}',
+            id="key only contains a sensitive word",
+        ),
+        pytest.param('{"token":null}', '{"token":null}', id="null"),
+        pytest.param(
+            '{"secret":{"v":"x"}}',
+            '{"secret":{"v":"x"}}',
+            id="out of scope: nested object",
+        ),
+        pytest.param(
+            '{"body":"{\\"password\\":\\"x\\"}"}',
+            '{"body":"{\\"password\\":\\"x\\"}"}',
+            id="out of scope: JSON inside a JSON string",
+        ),
+    ],
+)
+def test_sanitize_redacts_sensitive_json_members_inside_strings(value, expected):
+    assert sanitize_captured_value(value) == expected
+
+
+@pytest.mark.timeout(5)
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param('{"note":[' + "1" * 40 + "!", id="digits"),
+        pytest.param('{"note":[' + "1 " * 40 + "!", id="spaced digits"),
+        pytest.param('{"note":[' + "1," * 20_000 + "!", id="long array"),
+        pytest.param('\\"' * 32_000, id="escaped quotes"),
+        pytest.param(json.dumps('"' * 32_000), id="JSON-encoded quotes"),
+    ],
+)
+def test_json_member_redaction_runs_in_linear_time_on_adversarial_text(value):
+    assert sanitize_captured_value(value) == value
+
+
+# The pattern posthog-go and posthog-rs match JSON members with (with every
+# array item after the first needing its comma), run on Python's re. The SDK's
+# scanner must find exactly its members, only without its quadratic retries.
+_JSON_STRING_ORACLE = r'"(?:[^"\\\n]|\\.)*(?:"|\\?(?m:$))'
+_JSON_SCALAR_ORACLE = _JSON_STRING_ORACLE + r"|-?\d[\d.eE+-]*|true|false"
+_JSON_ITEM_ORACLE = r"(?:" + _JSON_SCALAR_ORACLE + r"|null)\s*"
+_JSON_MEMBER_ORACLE = re.compile(
+    r'("((?:[^"\\\n]|\\.)*)"\s*:\s*)(?:'
+    + _JSON_SCALAR_ORACLE
+    + r"|\[\s*(?:"
+    + _JSON_ITEM_ORACLE
+    + r"(?:,\s*"
+    + _JSON_ITEM_ORACLE
+    + r")*(?:,\s*)?)?(?:\]|$))"
+)
+
+
+def test_json_member_scan_finds_what_the_reference_pattern_finds(monkeypatch):
+    monkeypatch.setattr(sanitization, "_should_redact_key", lambda key: True)
+    rng = random.Random(1223)
+    alphabet = ['"', '"', "\\", ":", ",", "[", "]", " ", "\n", "1", "-", "e", "x"]
+    words = ["true", "false", "null", '"k"', '"k": ', "[1, 2]", '\\"']
+    texts = [
+        "".join(rng.choice(alphabet + words) for _ in range(rng.randrange(16)))
+        for _ in range(30_000)
+    ]
+    for text in texts:
+        expected = _JSON_MEMBER_ORACLE.sub(
+            lambda member: member.group(1) + '"[redacted]"', text
+        )
+        assert sanitization._redact_json_members(text) == expected, repr(text)
 
 
 def test_sanitize_redacts_large_base64():
@@ -891,7 +1045,8 @@ def test_build_tool_call_event_properties():
     assert props[PostHogMCPAnalyticsProperty.LLM_MODEL_SOURCE] == "client_metadata"
     assert props[PostHogMCPAnalyticsProperty.SESSION_ID] == "ses_abc"
     # anonymous (no identity) => person processing disabled
-    assert props["$process_person_profile"] is False
+    assert capture["options"] == {"process_person_profile": False}
+    assert "$process_person_profile" not in props
 
 
 def test_protocol_version_on_primary_and_exception_events():
@@ -922,14 +1077,37 @@ def test_identity_enables_person_processing_and_set():
         "identify_actor_given_id": "user_1",
         "identify_actor_data": {"email": "a@b.com"},
         "groups": {"organization": "org_1"},
+        "properties": {"$groups": {"organization": "custom", "project": "p1"}},
         "timestamp": datetime.now(timezone.utc),
     }
     [capture] = build_posthog_capture_events(event)
     props = capture["properties"]
     assert capture["distinct_id"] == "user_1"
-    assert "$process_person_profile" not in props
+    assert capture["options"] == {}
     assert props["$set"] == {"email": "a@b.com"}
-    assert props["$groups"] == {"organization": "org_1"}
+    assert props["$groups"] == {"organization": "org_1", "project": "p1"}
+
+
+def test_typed_groups_win_on_primary_and_exception_events():
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "is_error": True,
+        "error": {"$exception_list": [{"type": "ValueError", "value": "boom"}]},
+        "groups": {"organization": "org_1"},
+        "properties": {"$groups": {"organization": "custom", "project": "p1"}},
+        "timestamp": datetime.now(timezone.utc),
+    }
+    captures = build_posthog_capture_events(event)
+    assert [c["event"] for c in captures] == [
+        PostHogMCPAnalyticsEvent.TOOL_CALL,
+        PostHogMCPAnalyticsEvent.EXCEPTION,
+    ]
+    for capture in captures:
+        assert capture["properties"]["$groups"] == {
+            "organization": "org_1",
+            "project": "p1",
+        }
 
 
 def test_listed_tool_names_only_on_tools_list():
@@ -1105,3 +1283,373 @@ async def test_before_send_can_mutate_event_async():
     result = await process_mcp_event(event, McpCaptureOptions(before_send=before_send))
     _, captures = result
     assert captures[0]["properties"]["added"] is True
+
+
+def _opt_in(e):
+    return {**e, "options": {"process_person_profile": True}}
+
+
+@pytest.mark.parametrize(
+    "before_send, expected",
+    [(None, False), (_opt_in, True)],
+    ids=["sdk_option_wins", "before_send_can_change_it"],
+)
+async def test_anonymous_event_sends_personless_option(before_send, expected):
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "properties": {"$process_person_profile": True},
+        "timestamp": datetime.now(timezone.utc),
+    }
+    with patch_capture_send("client") as send:
+        client = Client(
+            "test-key",
+            sync_mode=True,
+            super_options={"process_person_profile": True},
+        )
+        await McpEventSink(client).capture(
+            event, McpCaptureOptions(before_send=before_send)
+        )
+    [wire] = [_to_v1_event(msg) for msg in sent_events(send)]
+    assert wire["options"] == {"process_person_profile": expected}
+
+
+# --- event options -----------------------------------------------------------
+
+
+def _options_event(identified, **fields):
+    event = {
+        "event_type": MCPAnalyticsEventType.MCP_TOOLS_CALL,
+        "session_id": "ses_abc",
+        "resource_name": "broken_tool",
+        "is_error": True,
+        "error": capture_exception(ValueError("boom")),
+        "timestamp": datetime.now(timezone.utc),
+        **fields,
+    }
+    if identified:
+        event["identify_actor_given_id"] = "user_1"
+    return event
+
+
+@pytest.mark.parametrize(
+    "identified, callback, per_call, expected",
+    [
+        (True, None, None, {}),
+        (True, None, {"cookieless_mode": True}, {"cookieless_mode": True}),
+        (True, {"cookieless_mode": True}, None, {"cookieless_mode": True}),
+        (
+            True,
+            {"product_tour_id": "callback", "cookieless_mode": True},
+            {"product_tour_id": "call"},
+            {"product_tour_id": "call", "cookieless_mode": True},
+        ),
+        (
+            True,
+            {"process_person_profile": False},
+            {"process_person_profile": True},
+            {"process_person_profile": True},
+        ),
+        (False, None, None, {"process_person_profile": False}),
+        (
+            False,
+            None,
+            {"process_person_profile": True, "cookieless_mode": True},
+            {"process_person_profile": False, "cookieless_mode": True},
+        ),
+        (
+            False,
+            {"process_person_profile": True},
+            None,
+            {"process_person_profile": False},
+        ),
+    ],
+    ids=[
+        "identified_without_options",
+        "identified_per_call",
+        "identified_callback",
+        "per_call_beats_callback_key_by_key",
+        "identified_keeps_user_values",
+        "anonymous_without_options",
+        "anonymous_personless_beats_per_call",
+        "anonymous_personless_beats_callback",
+    ],
+)
+def test_event_options_layering(identified, callback, per_call, expected):
+    callers = copy.deepcopy((callback, per_call))
+    event = _options_event(
+        identified, callback_event_options=callback, event_options=per_call
+    )
+    captures = build_posthog_capture_events(event)
+
+    assert [c["event"] for c in captures] == [
+        PostHogMCPAnalyticsEvent.TOOL_CALL,
+        PostHogMCPAnalyticsEvent.EXCEPTION,
+    ]
+    assert [c["options"] for c in captures] == [expected, expected]
+    # Each event gets its own copy, so before_send can change one alone.
+    assert captures[0]["options"] is not captures[1]["options"]
+    assert not any(k.startswith("$") for k in captures[0]["options"])
+    # The caller's dicts are copied, never changed.
+    assert (callback, per_call) == callers
+
+
+@pytest.mark.parametrize(
+    "field, message",
+    [
+        (
+            "event_options",
+            "event_options must be a dict, got str. Sending the event without them.",
+        ),
+        (
+            "callback_event_options",
+            "The event_options callback result must be a dict, got list. "
+            "Sending the event without them.",
+        ),
+    ],
+)
+def test_non_dict_event_options_are_logged_and_ignored(field, message, caplog):
+    value = "process_person_profile" if field == "event_options" else ["x"]
+    event = _options_event(True, **{field: value})
+
+    with caplog.at_level("WARNING", logger="posthog.mcp"):
+        captures = build_posthog_capture_events(event)
+
+    assert [c["options"] for c in captures] == [{}, {}]
+    # Checked once per event, not once per payload.
+    assert [r.getMessage() for r in caplog.records] == [message]
+
+
+async def test_before_send_sees_merged_event_options():
+    seen = []
+
+    def before_send(capture):
+        seen.append(dict(capture["options"]))
+        return capture
+
+    event = _options_event(
+        False,
+        callback_event_options={"cookieless_mode": True},
+        event_options={"process_person_profile": True, "product_tour_id": "t"},
+    )
+    await process_mcp_event(event, McpCaptureOptions(before_send=before_send))
+
+    expected = {
+        "cookieless_mode": True,
+        "product_tour_id": "t",
+        "process_person_profile": False,
+    }
+    assert seen == [expected, expected]
+
+
+@pytest.mark.parametrize(
+    "identified, expected",
+    [
+        (True, {"cookieless_mode": True, "process_person_profile": True}),
+        (False, {"cookieless_mode": True, "process_person_profile": False}),
+    ],
+    ids=["identified", "anonymous"],
+)
+async def test_event_options_reach_the_v1_payload(identified, expected):
+    event = _options_event(
+        identified,
+        is_error=False,
+        error=None,
+        event_options={"cookieless_mode": True, "process_person_profile": True},
+    )
+    with patch_capture_send("client") as send:
+        client = Client("test-key", sync_mode=True)
+        await McpEventSink(client).capture(event, McpCaptureOptions())
+    [wire] = [_to_v1_event(msg) for msg in sent_events(send)]
+    assert wire["options"] == expected
+    assert not any(k.startswith("$") for k in wire["options"])
+    assert "$process_person_profile" not in wire["properties"]
+    assert "$cookieless_mode" not in wire["properties"]
+
+
+async def _record_every_event_type(data, session_id):
+    """Drive every auto-capture call site that runs ``event_properties``."""
+    now = datetime.now(timezone.utc)
+    await record_initialize(
+        data,
+        session_id=session_id,
+        params={"clientInfo": {"name": "c"}},
+        result=None,
+        extra=None,
+        timestamp=now,
+    )
+    # The first-request stand-in for an initialize nothing observed.
+    await _maybe_emit_initialize(data, "ses_first", "generated", None, None, None)
+    await record_tool_call(
+        data, session_id, name="broken", arguments={}, error=RuntimeError("boom")
+    )
+    await record_missing_capability(
+        data, session_id, tool_name="get_more_tools", context="csv", arguments={}
+    )
+    await record_feedback(
+        data,
+        session_id,
+        report=FeedbackReport(summary="good"),
+        tool_name="send_feedback",
+        arguments={},
+    )
+    await record_tools_list(
+        data, session_id, names=["a"], request={"method": "tools/list"}
+    )
+    for event_type, method in (
+        (MCPAnalyticsEventType.MCP_RESOURCES_LIST, "resources/list"),
+        (MCPAnalyticsEventType.MCP_RESOURCES_READ, "resources/read"),
+    ):
+        await record_resource_request(
+            data,
+            session_id,
+            event_type=event_type,
+            request={"method": method, "params": {"uri": "file:///a"}},
+        )
+    await flush_background()
+
+
+_EVERY_AUTO_CAPTURED_EVENT = [
+    PostHogMCPAnalyticsEvent.INITIALIZE,
+    PostHogMCPAnalyticsEvent.INITIALIZE,
+    PostHogMCPAnalyticsEvent.TOOL_CALL,
+    PostHogMCPAnalyticsEvent.EXCEPTION,
+    PostHogMCPAnalyticsEvent.MISSING_CAPABILITY,
+    PostHogMCPAnalyticsEvent.FEEDBACK,
+    PostHogMCPAnalyticsEvent.TOOLS_LIST,
+    PostHogMCPAnalyticsEvent.RESOURCES_LIST,
+    PostHogMCPAnalyticsEvent.RESOURCE_READ,
+]
+
+
+def _sync_options(request, extra):
+    return {"process_person_profile": True, "cookieless_mode": True}
+
+
+async def _async_options(request, extra):
+    return _sync_options(request, extra)
+
+
+@pytest.mark.parametrize("callback", [_sync_options, _async_options])
+@pytest.mark.parametrize(
+    "identified, expected",
+    [
+        (True, {"process_person_profile": True, "cookieless_mode": True}),
+        (False, {"process_person_profile": False, "cookieless_mode": True}),
+    ],
+    ids=["identified", "anonymous"],
+)
+async def test_event_options_callback_applies_to_every_auto_captured_event(
+    callback, identified, expected
+):
+    requests = []
+
+    def recording(request, extra):
+        requests.append(request.get("method"))
+        return callback(request, extra)
+
+    client = FakeClient()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(event_options=recording),
+        sink=McpEventSink(client),
+    )
+    if identified:
+        for session_id in ("ses_abc", "ses_first"):
+            data.identified_sessions.set(session_id, UserIdentity("user_1"))
+
+    await _record_every_event_type(data, "ses_abc")
+
+    assert [e["event"] for e in client.events] == _EVERY_AUTO_CAPTURED_EVENT
+    assert [e["options"] for e in client.events] == [expected] * len(client.events)
+    # One call per MCP request, with that request.
+    assert requests == [
+        "initialize",
+        "initialize",
+        "tools/call",
+        "tools/call",
+        "tools/call",
+        "tools/list",
+        "resources/list",
+        "resources/read",
+    ]
+
+
+def _raise(request, extra):
+    raise RuntimeError("callback failed")
+
+
+@pytest.mark.parametrize(
+    "callback, log_line",
+    [
+        (
+            lambda request, extra: "nope",
+            "The event_options callback result must be a dict, got str. "
+            "Sending the event without them.",
+        ),
+        (
+            lambda request, extra: 0,
+            "The event_options callback result must be a dict, got int. "
+            "Sending the event without them.",
+        ),
+        (_raise, "event_options callback error: callback failed"),
+    ],
+    ids=["non_dict", "falsy_non_dict", "raises"],
+)
+async def test_failed_event_options_callback_still_sends_events(callback, log_line):
+    logged = []
+    set_logger(logged.append)
+    try:
+        client = FakeClient()
+        data = MCPAnalyticsData(
+            options=MCPAnalyticsOptions(event_options=callback),
+            sink=McpEventSink(client),
+        )
+        await _record_every_event_type(data, "ses_abc")
+    finally:
+        set_logger(None)
+
+    assert [e["event"] for e in client.events] == _EVERY_AUTO_CAPTURED_EVENT
+    assert [e["options"] for e in client.events] == [
+        {"process_person_profile": False}
+    ] * len(client.events)
+    assert log_line in logged
+
+
+class _ServerKey:
+    """A weakly referenceable stand-in for an instrumented server."""
+
+
+@pytest.mark.parametrize(
+    "identified, expected",
+    [
+        (True, {"cookieless_mode": True, "process_person_profile": True}),
+        (False, {"cookieless_mode": True, "process_person_profile": False}),
+    ],
+    ids=["identified", "anonymous"],
+)
+async def test_analytics_capture_sends_event_options(identified, expected):
+    client = FakeClient()
+    key = _ServerKey()
+    data = MCPAnalyticsData(
+        options=MCPAnalyticsOptions(), sink=McpEventSink(client), session_id="ses"
+    )
+    if identified:
+        data.identified_sessions.set("ses", UserIdentity("user_1"))
+    set_server_tracking_data(key, data)
+
+    await McpAnalytics(key).capture(
+        "feedback_submitted",
+        {"rating": 5},
+        event_options={"cookieless_mode": True, "process_person_profile": True},
+    )
+
+    [event] = client.events
+    assert event["event"] == "feedback_submitted"
+    assert event["options"] == expected
+
+
+async def test_noop_analytics_capture_accepts_event_options():
+    assert (
+        await _NoopAnalytics().capture("e", event_options={"cookieless_mode": True})
+        is None
+    )

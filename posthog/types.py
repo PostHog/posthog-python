@@ -84,6 +84,11 @@ class FeatureFlagEvaluationRuntime(str, Enum):
     ``ALL`` means the flag suits both client-side and server-side evaluation, so
     it matches either runtime. Inheriting from ``str`` keeps the members directly
     comparable to their ``"all"`` / ``"client"`` / ``"server"`` values.
+
+    Values:
+        ALL: The flag suits both client-side and server-side evaluation.
+        CLIENT: The flag is meant for client-side evaluation.
+        SERVER: The flag is meant for server-side evaluation.
     """
 
     ALL = "all"
@@ -270,6 +275,11 @@ class FeatureFlag:
     # server marks failed has ``_failed`` set and this ``None``.
     _malformed_field: ClassVar[Optional[str]] = None
 
+    @property
+    def _server_marked_failed(self) -> bool:
+        """Whether a readable record reports a server evaluation failure."""
+        return self._failed and self._malformed_field is None
+
     def __post_init__(self) -> None:
         object.__setattr__(
             self,
@@ -278,6 +288,7 @@ class FeatureFlag:
         )
 
     def get_value(self) -> FlagValue:
+        """Return the variant for a multivariate flag, otherwise whether the flag is enabled."""
         return self.variant or self.enabled
 
     @classmethod
@@ -294,6 +305,7 @@ class FeatureFlag:
     def from_value_and_payload(
         cls, key: str, value: FlagValue, payload: Any
     ) -> "FeatureFlag":
+        """Build a flag from its value and payload. A string value is a variant, so the flag is enabled."""
         enabled, variant = (True, value) if isinstance(value, str) else (value, None)
         return cls(
             key=key,
@@ -351,6 +363,24 @@ def _legacy_rendering(value: Any) -> tuple[bool, Optional[str], Optional[str]]:
     return True, None, json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def _parse_typed_reason(value: Any) -> Optional[FlagReason]:
+    reason = None
+    raw_reason = _read_typed(value, "reason", dict)
+    if raw_reason is not None:
+        reason = FlagReason(
+            code=_read_typed(raw_reason.get("code"), "reason.code", str) or "",
+            condition_index=_read_int(
+                raw_reason.get("condition_index"), "reason.condition_index"
+            ),
+            description=_read_typed(
+                raw_reason.get("description"), "reason.description", str
+            )
+            or "",
+        )
+
+    return reason
+
+
 def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
     """Parse a ``/flags?v=4`` record, which carries a typed ``value``.
 
@@ -365,19 +395,7 @@ def _parse_typed_record(cls: Type[_F], key: str, resp: Any) -> _F:
         value = _read_value(resp.get("value"))
         failed = _read_typed(resp.get("failed"), "failed", bool) is True
 
-        reason = None
-        raw_reason = _read_typed(resp.get("reason"), "reason", dict)
-        if raw_reason is not None:
-            reason = FlagReason(
-                code=_read_typed(raw_reason.get("code"), "reason.code", str) or "",
-                condition_index=_read_int(
-                    raw_reason.get("condition_index"), "reason.condition_index"
-                ),
-                description=_read_typed(
-                    raw_reason.get("description"), "reason.description", str
-                )
-                or "",
-            )
+        reason = _parse_typed_reason(resp.get("reason"))
 
         if failed:
             # A failed record has no value, whatever it carries.
@@ -548,7 +566,12 @@ class FlagsResponse(TypedDict, total=False):
 
 
 class FlagsAndPayloads(TypedDict, total=True):
-    """Feature flag values and payloads keyed by feature flag key."""
+    """Feature flag values and payloads keyed by feature flag key.
+
+    Attributes:
+        featureFlags: Each flag's value, keyed by flag key.
+        featureFlagPayloads: Each flag's payload, keyed by flag key.
+    """
 
     featureFlags: Optional[dict[str, FlagValue]]
     featureFlagPayloads: Optional[dict[str, Any]]
@@ -622,12 +645,15 @@ class FeatureFlagResult:
             details (Union[FeatureFlag, None]): The FeatureFlag object to convert.
             override_match_value (Optional[FlagValue]): If provided, this value will be used to populate
                 the enabled and variant fields instead of the values from the FeatureFlag.
+                A server-marked failure returns None even when this override is provided.
 
         Returns:
-            FeatureFlagResult | None: A new FeatureFlagResult instance, or None if details is None.
+            FeatureFlagResult | None: A new result, or None when details is absent or
+                the server marked the record failed. Unreadable records are not
+                treated as server-marked failures.
         """
 
-        if details is None:
+        if details is None or details._server_marked_failed:
             return None
 
         if override_match_value is not None:
@@ -707,7 +733,7 @@ def to_values(response: FlagsResponse) -> Optional[dict[str, FlagValue]]:
     return {
         key: value.get_value()
         for key, value in flags.items()
-        if isinstance(value, FeatureFlag)
+        if isinstance(value, FeatureFlag) and not value._server_marked_failed
     }
 
 
@@ -719,6 +745,7 @@ def to_payloads(response: FlagsResponse) -> Optional[dict[str, str]]:
         key: value.metadata.payload
         for key, value in response.get("flags", {}).items()
         if isinstance(value, FeatureFlag)
+        and not value._server_marked_failed
         and value.enabled
         and value.metadata.payload is not None
     }
@@ -733,6 +760,7 @@ class FeatureFlagError:
 
     Error values:
         ERRORS_WHILE_COMPUTING: Server returned errorsWhileComputingFlags=true
+        EVALUATION_FAILED: Server marked the requested flag failed, with no evaluated value
         FLAG_MISSING: Requested flag not in API response
         LOCAL_EVALUATION_INCONCLUSIVE: Requested flag has a loaded definition but
             local evaluation was inconclusive and no remote value filled the gap
@@ -746,6 +774,7 @@ class FeatureFlagError:
     """
 
     ERRORS_WHILE_COMPUTING = "errors_while_computing_flags"
+    EVALUATION_FAILED = "evaluation_failed"
     FLAG_MISSING = "flag_missing"
     LOCAL_EVALUATION_INCONCLUSIVE = "local_evaluation_inconclusive"
     QUOTA_LIMITED = "quota_limited"

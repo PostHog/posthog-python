@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import numbers
 import threading
 import unittest
 
@@ -120,6 +121,100 @@ class TestCohortMatching(unittest.TestCase):
                         {"country": country},
                         {},
                     )
+
+
+class _NumpyLikeInt:
+    def __init__(self, value):
+        self.value = value
+
+    def __int__(self):
+        return self.value
+
+    def __str__(self):
+        return f"np.int64({self.value})"
+
+
+numbers.Integral.register(_NumpyLikeInt)
+
+
+class TestGroupKeyBucketing(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, send=False)
+        self.client.group_type_mapping = {"0": "company"}
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    def set_group_flag(self, mixed=False, rollout=50):
+        condition = {"properties": [], "rollout_percentage": rollout}
+        filters = {"groups": [condition]}
+        if mixed:
+            condition["aggregation_group_type_index"] = 0
+        else:
+            filters["aggregation_group_type_index"] = 0
+        self.client.feature_flags = [
+            {"id": 1, "key": "group-beta", "active": True, "filters": filters}
+        ]
+
+    @parameterized.expand([(False,), (True,)])
+    @mock.patch("posthog.client.flags")
+    def test_numeric_group_keys_use_server_representation(self, mixed, patch_flags):
+        self.set_group_flag(mixed)
+        # For this flag, "0.00001" hashes below 50%, but Python's "1e-05"
+        # hashes above it. Integer keys should keep their existing bucketing.
+        for group_key in (0.00001, "0.00001", 42, "42", _NumpyLikeInt(42)):
+            with self.subTest(group_key=group_key):
+                self.assertTrue(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        only_evaluate_locally=True,
+                        send_feature_flag_events=False,
+                    )
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups={"company": group_key},
+                    only_evaluate_locally=True,
+                )
+                self.assertTrue(flags.get_flag("group-beta"))
+        patch_flags.assert_not_called()
+
+    @parameterized.expand([(False,), (True,)])
+    @mock.patch("posthog.client.flags")
+    def test_unsupported_group_keys_require_remote_evaluation(self, mixed, patch_flags):
+        self.set_group_flag(mixed, rollout=100)
+        patch_flags.return_value = {"featureFlags": {"group-beta": "remote"}}
+        for group_key in (True, False, None, [], {}, float("inf"), float("nan")):
+            with self.subTest(group_key=group_key):
+                self.assertIsNone(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        only_evaluate_locally=True,
+                        send_feature_flag_events=False,
+                    )
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups={"company": group_key},
+                    only_evaluate_locally=True,
+                )
+                self.assertNotIn("group-beta", flags.keys)
+                patch_flags.assert_not_called()
+                self.assertEqual(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        send_feature_flag_events=False,
+                    ),
+                    "remote",
+                )
+                patch_flags.assert_called_once()
+                patch_flags.reset_mock()
 
 
 class TestNumericOrderingLocalEvaluation(unittest.TestCase):
@@ -506,6 +601,9 @@ class TestLocalEvaluation(unittest.TestCase):
                                     "rollout_percentage": 100,
                                 },
                                 {"properties": [], "rollout_percentage": 0},
+                                # Early exit must stop before this conclusive match,
+                                # preserving the earlier missing-context fallback.
+                                {"properties": [], "rollout_percentage": 100},
                             ],
                         },
                     }
@@ -7246,6 +7344,40 @@ class TestRelativeDateParsing(unittest.TestCase):
             assert relative_date_parse_for_feature_flag_matching(
                 "1y"
             ) == now - relativedelta(years=1)
+
+    def test_month_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2025-03-31T12:00:00Z", "2m", (2025, 1, 28)),
+            ("2024-03-31T12:00:00Z", "2m", (2024, 1, 29)),
+            ("2025-05-31T12:00:00Z", "2m", (2025, 3, 30)),
+            ("2025-05-31T12:00:00Z", "4m", (2025, 1, 28)),
+            ("2025-01-31T12:00:00Z", "11m", (2024, 2, 29)),
+            ("2025-03-30T12:00:00Z", "13m", (2024, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_year_parsing_clamps_after_every_step(self):
+        cases = [
+            ("2024-02-29T12:00:00Z", "4y", (2020, 2, 28)),
+            ("2024-02-29T12:00:00Z", "2y", (2022, 2, 28)),
+            ("2024-03-31T12:00:00Z", "4y", (2020, 3, 31)),
+            ("2024-02-28T12:00:00Z", "4y", (2020, 2, 28)),
+        ]
+        for now, value, expected in cases:
+            with self.subTest(now=now, value=value), freeze_time(now):
+                assert relative_date_parse_for_feature_flag_matching(
+                    value
+                ) == datetime.datetime(*expected, 12, tzinfo=datetime.timezone.utc)
+
+    def test_month_and_year_parsing_with_zero_keeps_the_date(self):
+        with freeze_time("2024-02-29T12:00:00Z"):
+            now = datetime.datetime.now(datetime.timezone.utc)
+            assert relative_date_parse_for_feature_flag_matching("0m") == now
+            assert relative_date_parse_for_feature_flag_matching("0y") == now
 
     def test_year_parsing(self):
         with freeze_time("2020-01-01T12:01:20.1340Z"):

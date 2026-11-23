@@ -9,16 +9,19 @@ import sys
 import threading
 import warnings
 import weakref
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Mapping, Optional, Union
-from uuid import UUID, uuid4
+from uuid import UUID
 
 from typing_extensions import Unpack
 
 from ._async_consumer import (
     _STOP,
     _AsyncConsumer,
+    _AsyncLane,
     _invoke_callback,
+    _report_capture_failure,
     _is_processing_event,
     _QueuedEvent,
     _run_outside_processing_event,
@@ -26,20 +29,39 @@ from ._async_consumer import (
 )
 from ._async_request import (
     _build_client,
-    _require_httpx,
     async_flags as _async_flags,
     async_remote_config as _async_remote_config,
 )
-from .args import ID_TYPES, ExceptionArg, OptionalCaptureArgs, OptionalSetArgs
+from .args import (
+    ID_TYPES,
+    ExceptionArg,
+    OptionalCaptureArgs,
+    OptionalSetArgs,
+    _PinnedProperties,
+)
 from .capture_compression import (
     CaptureCompression,
+    _resolve_capture_ai_compression,
     _resolve_capture_compression,
 )
-from .capture_mode import CaptureMode, _resolve_capture_mode
+from .capture_event import (
+    _build_event_defaults,
+    _event_options,
+    _EventDefaults,
+    _fill_event_defaults,
+    _merge_groups,
+    _resolve_event_uuid,
+)
+from .capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from .client import (
     MAX_DICT_SIZE as _MAX_DICT_SIZE,
-    _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES,
     Client as _SyncClient,
+    _add_context_session_id,
+    _capture_flag_events,
+    _context_tag_defaults,
+    _explicit_distinct_id,
+    _group_identify_distinct_id,
+    _positive_config_value,
     add_context_tags as _add_context_tags,
     get_identity_state as _get_identity_state,
     stringify_id as _stringify_id,
@@ -52,6 +74,7 @@ from .contexts import (
     get_code_variables_mask_url_credentials_context,
     get_context_device_id as _get_context_device_id,
     get_context_distinct_id as _get_context_distinct_id,
+    get_context_options as _get_context_options,
     get_context_session_id as _get_context_session_id,
 )
 from .exception_utils import (
@@ -59,7 +82,9 @@ from .exception_utils import (
     DEFAULT_CODE_VARIABLES_IGNORE_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_PATTERNS,
     DEFAULT_CODE_VARIABLES_MASK_URL_CREDENTIALS,
+    _exception_level,
     _get_current_otel_span_properties,
+    _without_reserved_exception_properties,
     exc_info_from_error,
     exception_is_already_captured,
     exceptions_from_error_tuple,
@@ -67,7 +92,7 @@ from .exception_utils import (
     mark_exception_as_captured,
     try_attach_code_variables_to_frames,
 )
-from .consumer import MAX_MSG_SIZE
+from .consumer import AI_MAX_MSG_SIZE, MAX_MSG_SIZE
 from .emails import AsyncEmails, _client_emails, _validate_options
 from .feature_flag_evaluations import (
     FeatureFlagEvaluations,
@@ -77,13 +102,25 @@ from .feature_flag_evaluations import (
 )
 from .release_id import _resolve_release_id
 from .request import QuotaLimitError, determine_server_host, normalize_host
+from .types import FeatureFlag as _FeatureFlag
 from .types import (
     FlagValue,
     _has_untyped_flag_records,
     _UNTYPED_FLAGS_RESPONSE_MESSAGE,
     normalize_flags_response,
 )
-from .utils import SizeLimitedDict, _normalize_timestamp, clean, system_context
+from .utils import (
+    SizeLimitedDict,
+    _is_personal_api_key,
+    _normalize_timestamp,
+    _rfc3339_timestamp,
+    clean,
+    _drop_invalid_distinct_id,
+    _drop_invalid_event_name,
+    _log_before_send_bad_return,
+    _log_before_send_error,
+    system_context,
+)
 from .version import VERSION
 
 __all__ = ["AsyncClient", "AsyncPosthog"]
@@ -94,7 +131,13 @@ class AsyncClient:
 
     ``capture()`` is a synchronous, non-blocking queue write. Use
     ``await capture_immediate()`` when the caller must wait for delivery.
+    ``capture_ai()`` and ``await capture_ai_immediate()`` do the same for AI
+    events, on a separate queue that posts to the AI capture endpoint.
     ``flush()``, ``join()``, and ``shutdown()`` are awaitable lifecycle methods.
+    Leaving an ``async with`` block on the client calls ``shutdown()``.
+
+    The ``capture_ai_*``, ``privacy_mode`` and ``enable_full_ai_capture``
+    options work the same way as on :class:`posthog.Client`.
     """
 
     log = logging.getLogger("posthog")
@@ -103,13 +146,13 @@ class AsyncClient:
         self,
         project_api_key: str,
         host: Optional[str] = None,
+        *,
         debug: bool = False,
         max_queue_size: int = 10000,
         send: bool = True,
         on_error=None,
         flush_at: int = 100,
         flush_interval: float = 5.0,
-        gzip: bool = False,
         max_retries: int = 3,
         timeout: float = 15,
         thread: int = 1,
@@ -118,6 +161,7 @@ class AsyncClient:
         is_server: bool = True,
         historical_migration: bool = False,
         super_properties: Optional[dict[str, Any]] = None,
+        super_options: Optional[dict[str, Any]] = None,
         before_send=None,
         log_captured_exceptions: bool = False,
         project_root: Optional[str] = None,
@@ -127,8 +171,13 @@ class AsyncClient:
         code_variables_mask_url_credentials=None,
         code_variables_detect_secrets=None,
         in_app_modules: Optional[list[str]] = None,
-        capture_mode: Optional[Union[CaptureMode, str]] = None,
         capture_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_compression: Optional[Union[CaptureCompression, str]] = None,
+        capture_ai_max_queue_size: int = 1000,
+        capture_ai_timeout: float = 30,
+        capture_ai_max_event_bytes: int = AI_MAX_MSG_SIZE,
+        privacy_mode: bool = False,
+        enable_full_ai_capture: bool = False,
         capture_trace_context: bool = False,
         secret_key: Optional[str] = None,
         personal_api_key: Optional[str] = None,
@@ -143,6 +192,18 @@ class AsyncClient:
             raise ValueError("flush_at must be greater than zero")
         if flush_interval <= 0:
             raise ValueError("flush_interval must be greater than zero")
+        capture_ai_max_queue_size = _positive_config_value(
+            "capture_ai_max_queue_size", capture_ai_max_queue_size, integer=True
+        )
+        capture_ai_timeout = _positive_config_value(
+            "capture_ai_timeout", capture_ai_timeout
+        )
+        capture_ai_max_event_bytes = _positive_config_value(
+            "capture_ai_max_event_bytes",
+            capture_ai_max_event_bytes,
+            integer=True,
+            maximum=AI_MAX_MSG_SIZE,
+        )
 
         self.api_key = (project_api_key or "").strip()
         self.raw_host = normalize_host(host)
@@ -150,20 +211,24 @@ class AsyncClient:
         self.debug = debug
         self.send = send
         self.on_error = on_error
-        self.gzip = gzip
         self.max_retries = max(0, max_retries)
         self.timeout = timeout
-        self.disabled = disabled or not self.api_key
+        self.disabled = (
+            disabled or not self.api_key or _is_personal_api_key(self.api_key)
+        )
         self.disable_geoip = disable_geoip
         self.is_server = is_server
         self.historical_migration = historical_migration
         self.super_properties = super_properties
+        self.super_options = super_options
         self._release_id = _resolve_release_id()
-        self.capture_mode = _resolve_capture_mode(capture_mode)
-        self.capture_compression = _resolve_capture_compression(
-            capture_compression, gzip_fallback=gzip
+        self.capture_compression = _resolve_capture_compression(capture_compression)
+        self.capture_ai_compression = _resolve_capture_ai_compression(
+            capture_ai_compression
         )
         self.capture_trace_context = capture_trace_context
+        self.privacy_mode = privacy_mode
+        self.enable_full_ai_capture = enable_full_ai_capture is True
         if personal_api_key is not None and secret_key is None:
             warnings.warn(
                 "`personal_api_key` is deprecated; use `secret_key` instead.",
@@ -196,6 +261,9 @@ class AsyncClient:
             0, feature_flags_request_max_retries
         )
         self.distinct_ids_feature_flags_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
+        # $experiment_exposure dedupe, kept apart from $feature_flag_called's so that a
+        # reported call never suppresses its exposure. Same bound and eviction.
+        self._experiment_exposures_reported = SizeLimitedDict(_MAX_DICT_SIZE, set)
         self._feature_flag_evaluations_host_cache: Optional[
             _FeatureFlagEvaluationsHost
         ] = None
@@ -246,13 +314,35 @@ class AsyncClient:
             self.log.error(
                 "api_key is empty after trimming whitespace; check your project API key"
             )
+        elif _is_personal_api_key(self.api_key):
+            self.log.error(
+                "api_key is a personal API key (phx_...), not a project API key; "
+                "PostHog is disabled. Use the project API key (phc_...)."
+            )
 
-        self._queue: asyncio.Queue[Any] = asyncio.Queue(max_queue_size)
+        self._analytics_lane = _AsyncLane(
+            name="analytics",
+            max_queue_size=max_queue_size,
+            endpoint=_CAPTURE_V1_PATH,
+            max_msg_size=MAX_MSG_SIZE,
+            timeout=timeout,
+            capture_compression=self.capture_compression,
+        )
+        # AI events post to their own endpoint, so multi-MB events stay off the
+        # analytics endpoint's smaller caps. Its workers start on the first AI
+        # event, so clients that never send one pay nothing.
+        self._ai_lane = _AsyncLane(
+            name="ai",
+            max_queue_size=capture_ai_max_queue_size,
+            endpoint=_CAPTURE_AI_V1_PATH,
+            max_msg_size=capture_ai_max_event_bytes,
+            timeout=capture_ai_timeout,
+            capture_compression=self.capture_ai_compression,
+        )
+        self._lanes = (self._analytics_lane, self._ai_lane)
         self._worker_count = max(1, thread)
         self._flush_at = flush_at
         self._flush_interval = flush_interval
-        self._consumers: list[_AsyncConsumer] = []
-        self._worker_tasks: list[asyncio.Task[None]] = []
         self._immediate_callers: dict[asyncio.Task[Any], int] = {}
         self._inflight_operations: set[asyncio.Future[None]] = set()
         self._http_client: Optional[Any] = None
@@ -310,7 +400,7 @@ class AsyncClient:
         return lambda: self._finish_inflight_operation(completion)
 
     async def __aenter__(self) -> AsyncClient:
-        self._ensure_workers_started()
+        self._ensure_workers_started(self._analytics_lane)
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> bool:
@@ -371,44 +461,47 @@ class AsyncClient:
             self._http_client = _build_client(self.host)
         return self._http_client
 
-    def _new_consumer(self) -> _AsyncConsumer:
-        http_client = (
-            self._get_http_client() if self.capture_mode == CaptureMode.V0 else None
-        )
+    def _new_consumer(self, lane: _AsyncLane) -> _AsyncConsumer:
         return _AsyncConsumer(
-            self._queue,
+            lane.queue,
             self.api_key,
             host=self.host,
             on_error=self.on_error,
             process_event=self._process_event,
             flush_at=self._flush_at,
             flush_interval=self._flush_interval,
-            gzip=self.gzip,
             retries=self.max_retries,
-            timeout=self.timeout,
+            timeout=lane.timeout,
             historical_migration=self.historical_migration,
-            capture_mode=self.capture_mode,
-            capture_compression=self.capture_compression,
-            http_client=http_client,
+            capture_compression=lane.capture_compression,
+            endpoint=lane.endpoint,
+            max_msg_size=lane.max_msg_size,
         )
 
-    def _validate_transport_available(self) -> None:
-        if self.capture_mode == CaptureMode.V0:
-            _require_httpx()
-
-    def _ensure_workers_started(self) -> None:
-        if self.disabled or not self.send or self._closed or self._worker_tasks:
+    def _ensure_workers_started(self, lane: _AsyncLane) -> None:
+        if self.disabled or not self.send or self._closed or lane.worker_tasks:
             return
         self._bind_loop()
         for _ in range(self._worker_count):
-            consumer = self._new_consumer()
-            self._consumers.append(consumer)
-            self._worker_tasks.append(asyncio.create_task(consumer.run()))
+            consumer = self._new_consumer(lane)
+            lane.consumers.append(consumer)
+            lane.worker_tasks.append(asyncio.create_task(consumer.run()))
 
-    def _enqueue_prepared_event(self, prepared: dict[str, Any]) -> bool:
+    def _all_worker_tasks(self) -> list[asyncio.Task[None]]:
+        return [task for lane in self._lanes for task in lane.worker_tasks]
+
+    def _enqueue_prepared_event(
+        self, prepared: dict[str, Any], lane: _AsyncLane, defaults: _EventDefaults
+    ) -> bool:
         if not self._accepting or self._closed:
             return False
-        queued_event = _QueuedEvent(prepared, contextvars.copy_context())
+        # Shallow copy, as 7.x merged super_properties into a new dict at capture.
+        defaults = replace(
+            defaults,
+            property_layers=tuple(dict(layer) for layer in defaults.property_layers),
+            option_layers=tuple(dict(layer) for layer in defaults.option_layers),
+        )
+        queued_event = _QueuedEvent(prepared, contextvars.copy_context(), defaults)
         try:
             running_loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -416,13 +509,13 @@ class AsyncClient:
 
         if self._loop is None:
             if running_loop is not None:
-                self._ensure_workers_started()
-            self._queue.put_nowait(queued_event)
+                self._ensure_workers_started(lane)
+            lane.queue.put_nowait(queued_event)
             return True
 
         if running_loop is self._loop:
-            self._ensure_workers_started()
-            self._queue.put_nowait(queued_event)
+            self._ensure_workers_started(lane)
+            lane.queue.put_nowait(queued_event)
             return True
         if running_loop is not None:
             raise RuntimeError("AsyncClient cannot be shared across event loops")
@@ -436,8 +529,8 @@ class AsyncClient:
                 if not self._accepting or self._closed:
                     admitted.set_result(False)
                     return
-                self._ensure_workers_started()
-                self._queue.put_nowait(queued_event)
+                self._ensure_workers_started(lane)
+                lane.queue.put_nowait(queued_event)
             except BaseException as error:
                 admitted.set_exception(error)
             else:
@@ -447,27 +540,15 @@ class AsyncClient:
         return admitted.result()
 
     def _normalize_uuid(self, msg: dict[str, Any]) -> str:
-        raw_uuid = msg.pop("uuid", None)
-        if raw_uuid is not None:
-            try:
-                normalized = str(UUID(str(raw_uuid)))
-            except (TypeError, ValueError, AttributeError):
-                self.log.error(
-                    "Invalid UUID %r. Falling back to a generated UUID.", raw_uuid
-                )
-            else:
-                msg["uuid"] = normalized
-                return normalized
-
-        normalized = str(uuid4())
+        normalized = _resolve_event_uuid(msg.pop("uuid", None))
         msg["uuid"] = normalized
         return normalized
 
     def _prepare_event(
         self,
         msg: dict[str, Any],
-        disable_geoip: Optional[bool],
         property_allowlist=None,
+        pinned_properties=None,
     ) -> tuple[Optional[dict[str, Any]], Optional[str]]:
         if self.disabled or not self._accepting:
             return None, None
@@ -479,26 +560,15 @@ class AsyncClient:
             msg["timestamp"] = _normalize_timestamp(timestamp)
         except ValueError:
             self.log.warning(
-                "Invalid timestamp %r. Falling back to the current UTC time.",
-                timestamp,
+                "Invalid timestamp; it must be a datetime or an ISO 8601 string. "
+                "Falling back to the current UTC time."
             )
-            msg["timestamp"] = datetime.now(tz=timezone.utc).isoformat()
+            msg["timestamp"] = _rfc3339_timestamp(datetime.now(tz=timezone.utc))
 
         sent_uuid = self._normalize_uuid(msg)
-        properties = msg.setdefault("properties", {})
-        properties["$lib"] = "posthog-python"
-        properties["$lib_version"] = VERSION
+        msg.setdefault("properties", {})
 
-        if disable_geoip is None:
-            disable_geoip = self.disable_geoip
-        if disable_geoip:
-            properties["$geoip_disable"] = True
-        if self.super_properties:
-            msg["properties"] = {**properties, **self.super_properties}
-        if self._release_id is not None:
-            msg["properties"].setdefault("$release_id", self._release_id)
-        if self.is_server:
-            msg["properties"]["$is_server"] = True
+        msg["options"] = msg.get("options") or {}
         if property_allowlist is not None:
             msg["properties"] = {
                 key: value
@@ -510,45 +580,87 @@ class AsyncClient:
         cleaned = clean(msg)
         return cleaned, sent_uuid
 
-    async def _process_event(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
+    async def _process_event(
+        self, msg: dict[str, Any], defaults: Optional[_EventDefaults]
+    ) -> Optional[dict[str, Any]]:
+        _fill_event_defaults(msg, defaults)
+        processed = await self._run_before_send(msg)
+        if (
+            processed is None
+            or _drop_invalid_event_name(self.log, processed)
+            or _drop_invalid_distinct_id(self.log, processed)
+        ):
+            return None
+        return processed
+
+    async def _run_before_send(self, msg: dict[str, Any]) -> Optional[dict[str, Any]]:
         if self.before_send is None:
             return msg
 
         original_uuid = msg["uuid"]
+        event_name = msg.get("event")
         try:
             result = await _invoke_callback(self.before_send, msg)
             if result is None:
                 self.log.debug("event dropped by before_send callback")
                 return None
             if not isinstance(result, dict):
-                raise TypeError("before_send must return a dict or None")
+                _log_before_send_bad_return(self.log, event_name, result)
+                return None
             processed = clean(result)
             processed["uuid"] = original_uuid
             return processed
         except Exception as error:
-            self.log.error("Error in before_send callback (%s)", type(error).__name__)
+            _log_before_send_error(self.log, event_name, error)
             return None
+
+    def _event_defaults(
+        self,
+        context_properties: Optional[dict[str, Any]] = None,
+        context_options: Optional[dict[str, Any]] = None,
+        personless: bool = False,
+        property_allowlist=None,
+        disable_geoip: Optional[bool] = None,
+        system_properties: Optional[dict[str, Any]] = None,
+        flag_properties: Optional[dict[str, Any]] = None,
+        trace_properties: Optional[dict[str, Any]] = None,
+        pinned_properties: Optional[_PinnedProperties] = None,
+    ) -> _EventDefaults:
+        return _build_event_defaults(
+            super_properties=self.super_properties,
+            super_options=self.super_options,
+            release_id=self._release_id,
+            context_properties=context_properties,
+            context_options=context_options,
+            personless=personless,
+            property_allowlist=property_allowlist,
+            is_server=self.is_server,
+            disable_geoip=self.disable_geoip,
+            call_disable_geoip=disable_geoip,
+            system_properties=system_properties,
+            flag_properties=flag_properties,
+            trace_properties=trace_properties,
+            library_id="posthog-python",
+            library_version=VERSION,
+            pinned_properties=pinned_properties,
+        )
 
     def _build_capture_event(
         self, event: str, kwargs: OptionalCaptureArgs
-    ) -> tuple[dict[str, Any], Optional[bool], Any]:
-        properties = {**(kwargs.get("properties") or {}), **system_context()}
-        if self.capture_trace_context:
-            properties = {**_get_current_otel_span_properties(), **properties}
-        properties = _add_context_tags(properties)
-        assert properties is not None
+    ) -> tuple[dict[str, Any], Any, _EventDefaults]:
+        properties = dict(kwargs.get("properties") or {})
+        properties = _add_context_session_id(properties)
 
         distinct_id, personless = _get_identity_state(kwargs.get("distinct_id"))
-        if personless and "$process_person_profile" not in properties:
-            properties["$process_person_profile"] = False
         groups = kwargs.get("groups")
         if groups:
-            properties["$groups"] = groups
+            _merge_groups(properties, groups)
 
         flags_snapshot = kwargs.get("flags")
         send_feature_flags = kwargs.get("send_feature_flags")
+        flag_properties = None
         if flags_snapshot is not None:
-            properties = {**flags_snapshot._get_event_properties(), **properties}
+            flag_properties = flags_snapshot._get_event_properties()
         elif send_feature_flags:
             warnings.warn(
                 "AsyncClient does not support deprecated send_feature_flags. Pass a "
@@ -564,34 +676,69 @@ class AsyncClient:
                 "distinct_id": distinct_id,
                 "event": event,
                 "uuid": kwargs.get("uuid"),
+                "options": _event_options(kwargs.get("options")),
             },
-            kwargs.get("disable_geoip"),
             kwargs.get("_property_allowlist"),
+            self._event_defaults(
+                context_properties=_context_tag_defaults(),
+                context_options=_get_context_options(),
+                personless=personless,
+                property_allowlist=kwargs.get("_property_allowlist"),
+                disable_geoip=kwargs.get("disable_geoip"),
+                system_properties=system_context(),
+                flag_properties=flag_properties,
+                pinned_properties=kwargs.get("_pinned_properties"),
+                trace_properties=(
+                    _get_current_otel_span_properties()
+                    if self.capture_trace_context
+                    or kwargs.get("_capture_trace_context")
+                    else None
+                ),
+            ),
         )
 
     def capture(
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Queue an event without blocking for network delivery."""
+        return self._capture(event, self._analytics_lane, kwargs)
+
+    def capture_ai(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Queue an AI event for the AI capture endpoint without blocking.
+
+        Takes the same arguments and returns the same value as ``capture()``.
+        The event uses a separate queue with a larger per-event size cap. The
+        payload is sent as given, with no redaction or truncation.
+        """
+        self._log_non_ai_event(event)
+        return self._capture(event, self._ai_lane, kwargs)
+
+    def _log_non_ai_event(self, event: str) -> None:
+        if isinstance(event, str) and not event.startswith("$ai_"):
+            self.log.debug(
+                "capture_ai called with non-AI event name %r; routing it to the AI endpoint anyway.",
+                event,
+            )
+
+    def _capture(
+        self, event: str, lane: _AsyncLane, kwargs: OptionalCaptureArgs
+    ) -> Optional[str]:
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
-            )
-            prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
-            )
+            msg, property_allowlist, defaults = self._build_capture_event(event, kwargs)
+            prepared, sent_uuid = self._prepare_event(msg, property_allowlist)
             if prepared is None or sent_uuid is None:
                 return None
             if not self.send:
                 return sent_uuid
 
-            self._validate_transport_available()
-            if not self._enqueue_prepared_event(prepared):
+            if not self._enqueue_prepared_event(prepared, lane, defaults):
                 return None
             self.log.debug("queued async event %s", event)
             return sent_uuid
         except asyncio.QueueFull:
-            self.log.warning("PostHog async capture queue is full")
+            self.log.warning("PostHog async %s capture queue is full", lane.name)
             return None
         except Exception as error:
             if self.debug:
@@ -613,6 +760,21 @@ class AsyncClient:
         self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
     ) -> Optional[str]:
         """Capture one event and wait until its delivery attempt completes."""
+        return await self._capture_immediate(event, self._analytics_lane, kwargs)
+
+    async def capture_ai_immediate(
+        self, event: str, **kwargs: Unpack[OptionalCaptureArgs]
+    ) -> Optional[str]:
+        """Capture one AI event and wait until its delivery attempt completes.
+
+        Uses the AI capture endpoint and the ``capture_ai_*`` settings.
+        """
+        self._log_non_ai_event(event)
+        return await self._capture_immediate(event, self._ai_lane, kwargs)
+
+    async def _capture_immediate(
+        self, event: str, lane: _AsyncLane, kwargs: OptionalCaptureArgs
+    ) -> Optional[str]:
         current = asyncio.current_task()
         if current is None:  # pragma: no cover - async functions always have a task
             return None
@@ -622,15 +784,11 @@ class AsyncClient:
         self._immediate_callers[current] = self._immediate_callers.get(current, 0) + 1
         error_batch: list[dict[str, Any]] = []
         try:
-            msg, disable_geoip, property_allowlist = self._build_capture_event(
-                event, kwargs
-            )
-            prepared, sent_uuid = self._prepare_event(
-                msg, disable_geoip, property_allowlist
-            )
+            msg, property_allowlist, defaults = self._build_capture_event(event, kwargs)
+            prepared, sent_uuid = self._prepare_event(msg, property_allowlist)
             if prepared is None or sent_uuid is None:
                 return None
-            processed = await self._process_event(prepared)
+            processed = await self._process_event(prepared, defaults)
             if processed is None:
                 return None
             error_batch = [processed]
@@ -643,33 +801,25 @@ class AsyncClient:
                     "unable to serialize immediate event for sizing, dropping"
                 )
                 return None
-            if event_size > MAX_MSG_SIZE:
+            if event_size > lane.max_msg_size:
                 self.log.error(
-                    "Event %s (%d bytes) exceeds the %dKiB limit, dropping.",
+                    "Event %s (%d bytes) exceeds the %dKiB limit for %s, dropping.",
                     processed.get("event"),
                     event_size,
-                    MAX_MSG_SIZE // 1024,
+                    lane.max_msg_size // 1024,
+                    lane.endpoint,
                 )
                 return None
 
-            consumer = self._new_consumer()
+            consumer = self._new_consumer(lane)
             await consumer.request(error_batch)
             return sent_uuid
         except Exception as error:
-            if self.on_error:
-                try:
-                    await _invoke_callback(self.on_error, error, error_batch)
-                except Exception as callback_error:
-                    self.log.error(
-                        "on_error handler failed (%s)", type(callback_error).__name__
-                    )
+            await _report_capture_failure(
+                self.on_error, self.log, error, error_batch, lane.endpoint
+            )
             if self.debug:
                 raise
-            self.log.error(
-                "Immediate async capture failed (%s, status=%s)",
-                type(error).__name__,
-                getattr(error, "status", None),
-            )
             return None
         finally:
             remaining_calls = self._immediate_callers[current] - 1
@@ -692,6 +842,7 @@ class AsyncClient:
             property_key: properties,
             "event": event,
             "uuid": kwargs.get("uuid"),
+            "options": _event_options(kwargs.get("options")),
         }
 
     def set(self, **kwargs: Unpack[OptionalSetArgs]) -> Optional[str]:
@@ -699,7 +850,9 @@ class AsyncClient:
             msg = self._build_person_properties_event("$set", "$set", kwargs)
             if msg is None:
                 return None
-            return self._enqueue_built_event(msg, kwargs.get("disable_geoip"))
+            return self._enqueue_built_event(
+                msg, kwargs.get("disable_geoip"), _get_context_options()
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -711,7 +864,9 @@ class AsyncClient:
             msg = self._build_person_properties_event("$set_once", "$set_once", kwargs)
             if msg is None:
                 return None
-            return self._enqueue_built_event(msg, kwargs.get("disable_geoip"))
+            return self._enqueue_built_event(
+                msg, kwargs.get("disable_geoip"), _get_context_options()
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -727,6 +882,7 @@ class AsyncClient:
         uuid: Optional[Union[str, UUID]] = None,
         disable_geoip: Optional[bool] = None,
         distinct_id: Optional[ID_TYPES] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         try:
             if not _stringify_id(group_type):
@@ -740,7 +896,9 @@ class AsyncClient:
                 )
                 return None
 
-            resolved_distinct_id = _get_identity_state(distinct_id)[0]
+            resolved_distinct_id = _group_identify_distinct_id(
+                distinct_id, group_type, group_key
+            )
             msg: dict[str, Any] = {
                 "event": "$groupidentify",
                 "properties": {
@@ -751,11 +909,16 @@ class AsyncClient:
                 "distinct_id": resolved_distinct_id,
                 "timestamp": timestamp,
                 "uuid": uuid,
+                "options": _event_options(options),
             }
-            session_id = _get_context_session_id()
-            if session_id:
-                msg["properties"]["$session_id"] = str(session_id)
-            return self._enqueue_built_event(msg, disable_geoip)
+            # No context session: this event's distinct id is not the session's
+            # user, and a session takes the person of its latest event.
+            return self._enqueue_built_event(
+                msg,
+                disable_geoip,
+                _get_context_options(),
+                context_properties=_context_tag_defaults(),
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -769,14 +932,17 @@ class AsyncClient:
         timestamp: Optional[Union[datetime, str]] = None,
         uuid: Optional[str] = None,
         disable_geoip: Optional[bool] = None,
+        options: Optional[Dict[str, Any]] = None,
     ) -> Optional[str]:
         try:
             resolved_previous_id = _stringify_id(previous_id)
             if not resolved_previous_id:
                 self.log.warning("alias() called without a previous_id, dropping event")
                 return None
-            resolved_distinct_id, personless = _get_identity_state(distinct_id)
-            if personless:
+            # The alias target always comes from the caller: a context id can
+            # come from a client-controlled request header.
+            resolved_distinct_id = _explicit_distinct_id(distinct_id)
+            if not resolved_distinct_id:
                 self.log.warning("alias() called without a distinct_id, dropping event")
                 return None
             msg: dict[str, Any] = {
@@ -788,11 +954,17 @@ class AsyncClient:
                 "event": "$create_alias",
                 "distinct_id": resolved_previous_id,
                 "uuid": uuid,
+                "options": _event_options(options),
             }
             session_id = _get_context_session_id()
             if session_id:
                 msg["properties"]["$session_id"] = str(session_id)
-            return self._enqueue_built_event(msg, disable_geoip)
+            return self._enqueue_built_event(
+                msg,
+                disable_geoip,
+                _get_context_options(),
+                context_properties=_context_tag_defaults(),
+            )
         except Exception as error:
             if self.debug:
                 raise
@@ -800,24 +972,43 @@ class AsyncClient:
             return None
 
     def _enqueue_built_event(
-        self, msg: dict[str, Any], disable_geoip: Optional[bool]
+        self,
+        msg: dict[str, Any],
+        disable_geoip: Optional[bool],
+        context_options: Optional[dict[str, Any]] = None,
+        context_properties: Optional[dict[str, Any]] = None,
     ) -> Optional[str]:
-        prepared, sent_uuid = self._prepare_event(msg, disable_geoip)
+        prepared, sent_uuid = self._prepare_event(msg)
         if prepared is None or sent_uuid is None:
             return None
         if not self.send:
             return sent_uuid
-        self._validate_transport_available()
-        if not self._enqueue_prepared_event(prepared):
+        defaults = self._event_defaults(
+            context_properties=context_properties,
+            context_options=context_options,
+            disable_geoip=disable_geoip,
+        )
+        if not self._enqueue_prepared_event(prepared, self._analytics_lane, defaults):
             return None
         return sent_uuid
 
     def capture_exception(
         self,
         exception: Optional[ExceptionArg] = None,
+        *,
+        level: Optional[str] = None,
         **kwargs: Unpack[OptionalCaptureArgs],
     ) -> Optional[str]:
-        """Capture an exception. This method never raises, including in debug mode."""
+        """Capture an exception. This method never raises, including in debug mode.
+
+        ``level`` sets ``$exception_level`` and defaults to ``"error"``. An unknown
+        value counts as unset. Reserved exception properties in ``properties``,
+        such as ``$exception_list`` and ``$exception_level``, are ignored.
+
+        When OpenTelemetry is installed and a valid span is active, its trace and
+        span IDs are added as ``$trace_id`` and ``$span_id`` event properties,
+        unless the event, a context tag or ``super_properties`` sets either one.
+        """
         try:
             if exception is not None and exception_is_already_captured(exception):
                 self.log.debug("Exception already captured, skipping")
@@ -831,6 +1022,10 @@ class AsyncClient:
                 self.log.warning("No exception information available")
                 return None
 
+            if exception is None and exception_is_already_captured(exc_info):
+                self.log.debug("Exception already captured, skipping")
+                return None
+
             exceptions = exceptions_from_error_tuple(exc_info)
             event = handle_in_app(
                 {"exception": {"values": exceptions}},
@@ -839,8 +1034,9 @@ class AsyncClient:
             )
             exceptions = event["exception"]["values"]
             properties = {
+                **_without_reserved_exception_properties(kwargs.get("properties")),
                 "$exception_list": exceptions,
-                **(kwargs.get("properties") or {}),
+                "$exception_level": _exception_level(None, level),
             }
             context_enabled = get_capture_exception_code_variables_context()
             context_mask = get_code_variables_mask_patterns_context()
@@ -891,9 +1087,13 @@ class AsyncClient:
                 groups=kwargs.get("groups"),
                 flags=kwargs.get("flags"),
                 disable_geoip=kwargs.get("disable_geoip"),
+                options=kwargs.get("options"),
+                _capture_trace_context=True,
             )
-            if exception is not None and result is not None:
-                mark_exception_as_captured(exception, result)
+            # Mark the exception as captured to prevent duplicate captures,
+            # including one taken from sys.exc_info()
+            if result is not None:
+                mark_exception_as_captured(exc_info, result)
             return result
         except Exception as error:
             self.log.exception("Failed to capture exception: %s", error)
@@ -1090,74 +1290,68 @@ class AsyncClient:
         disable_geoip: Optional[bool] = None,
         has_experiment: Optional[bool] = None,
         minimal_flag_called_events: bool = False,
+        details: Optional[_FeatureFlag] = None,
+        value_from_details: bool = False,
     ) -> None:
-        groups_key = (
-            tuple(sorted((str(k), str(v)) for k, v in groups.items())) if groups else ()
-        )
-        reported_key = (key, response, groups_key)
-        reported_flags = self.distinct_ids_feature_flags_reported.get(distinct_id)
-        if reported_flags is None:
-            reported_flags = set()
-            self.distinct_ids_feature_flags_reported[distinct_id] = reported_flags
-        if reported_key in reported_flags:
-            return
-
-        if has_experiment is not None:
-            properties["$feature_flag_has_experiment"] = has_experiment
-        capture_kwargs: dict[str, Any] = {}
-        if minimal_flag_called_events and has_experiment is False:
-            capture_kwargs["_property_allowlist"] = (
-                _MINIMAL_FLAG_CALLED_EVENT_PROPERTIES
-            )
         capture_groups = {
             str(group_type): _stringify_id(group_key)
             for group_type, group_key in (groups or {}).items()
         }
-        self.capture(
-            "$feature_flag_called",
+        _capture_flag_events(
+            self.capture,
+            self.distinct_ids_feature_flags_reported,
+            self._experiment_exposures_reported,
             distinct_id=distinct_id,
+            key=key,
+            response=response,
             properties=properties,
-            groups=capture_groups,
+            groups=groups,
+            capture_groups=capture_groups,
             disable_geoip=disable_geoip,
-            **capture_kwargs,
+            has_experiment=has_experiment,
+            minimal_flag_called_events=minimal_flag_called_events,
+            details=details,
+            value_from_details=value_from_details,
         )
-        reported_flags.add(reported_key)
 
     def _pending_queue_items(self) -> int:
-        return int(getattr(self._queue, "_unfinished_tasks", self._queue.qsize()))
+        return sum(lane.pending_items() for lane in self._lanes)
 
     def _defer_lifecycle_call(self, awaitable) -> None:
         task = asyncio.create_task(_run_outside_processing_event(awaitable))
         self._deferred_lifecycle_tasks.add(task)
         task.add_done_callback(self._deferred_lifecycle_tasks.discard)
 
-    def _discard_undrainable_queue(self) -> None:
+    def _discard_undrainable_queue(self, lane: _AsyncLane) -> None:
         discarded = 0
         while True:
             try:
-                self._queue.get_nowait()
+                lane.queue.get_nowait()
             except asyncio.QueueEmpty:
                 break
-            self._queue.task_done()
+            lane.queue.task_done()
             discarded += 1
 
-        orphaned = self._pending_queue_items()
+        orphaned = lane.pending_items()
         for _ in range(orphaned):
-            self._queue.task_done()
+            lane.queue.task_done()
         discarded += orphaned
         if discarded:
             self.log.warning(
-                "discarded %d async capture items because all workers exited",
+                "discarded %d async %s capture items because all workers exited",
                 discarded,
+                lane.name,
             )
 
-    async def _wait_for_queue_drain(self, deadline: Optional[float]) -> None:
-        live_workers = [task for task in self._worker_tasks if not task.done()]
+    async def _wait_for_queue_drain(
+        self, lane: _AsyncLane, deadline: Optional[float]
+    ) -> None:
+        live_workers = [task for task in lane.worker_tasks if not task.done()]
         if not live_workers:
-            self._discard_undrainable_queue()
+            self._discard_undrainable_queue(lane)
             return
 
-        queue_join = asyncio.create_task(self._queue.join())
+        queue_join = asyncio.create_task(lane.queue.join())
 
         async def wait_for_workers() -> None:
             await asyncio.wait(live_workers, return_when=asyncio.ALL_COMPLETED)
@@ -1180,7 +1374,7 @@ class AsyncClient:
                 await queue_join
                 return
 
-            self._discard_undrainable_queue()
+            self._discard_undrainable_queue(lane)
             await queue_join
         finally:
             for task in (queue_join, workers_finished):
@@ -1189,22 +1383,28 @@ class AsyncClient:
             await asyncio.gather(queue_join, workers_finished, return_exceptions=True)
 
     async def flush(self, timeout_seconds: Optional[float] = 10) -> None:
-        if asyncio.current_task() in self._worker_tasks or _is_processing_event():
+        if asyncio.current_task() in self._all_worker_tasks() or _is_processing_event():
             self._defer_lifecycle_call(self.flush(timeout_seconds))
             return
         if not self.send or self.disabled or self._pending_queue_items() == 0:
             return
-        self._ensure_workers_started()
+        pending_lanes = [lane for lane in self._lanes if lane.pending_items()]
+        for lane in pending_lanes:
+            self._ensure_workers_started(lane)
         deadline = (
             None
             if timeout_seconds is None
             else asyncio.get_running_loop().time() + timeout_seconds
         )
         try:
-            for consumer in self._consumers:
-                consumer.request_flush()
+            # Wake every lane before waiting on any, so one lane's partial
+            # batch does not wait out its flush_interval behind the other.
+            for lane in pending_lanes:
+                for consumer in lane.consumers:
+                    consumer.request_flush()
 
-            await self._wait_for_queue_drain(deadline)
+            for lane in pending_lanes:
+                await self._wait_for_queue_drain(lane, deadline)
         except asyncio.TimeoutError:
             self.log.warning(
                 "flush timed out after %s seconds with %s items pending",
@@ -1221,7 +1421,7 @@ class AsyncClient:
     async def shutdown(self) -> None:
         current = asyncio.current_task()
         if (
-            current in self._worker_tasks
+            current in self._all_worker_tasks()
             or current in self._immediate_callers
             or _is_processing_event()
         ):
@@ -1251,17 +1451,20 @@ class AsyncClient:
                 errors.append(error)
 
             try:
-                live_workers = [task for task in self._worker_tasks if not task.done()]
-                for _ in live_workers:
-                    await self._queue.put(_STOP)
-                if self._worker_tasks:
-                    await asyncio.gather(*self._worker_tasks, return_exceptions=True)
+                for lane in self._lanes:
+                    live_workers = [t for t in lane.worker_tasks if not t.done()]
+                    for _ in live_workers:
+                        await lane.queue.put(_STOP)
+                worker_tasks = self._all_worker_tasks()
+                if worker_tasks:
+                    await asyncio.gather(*worker_tasks, return_exceptions=True)
             except Exception as error:
                 self.log.exception("Failed to stop async capture workers")
                 errors.append(error)
             finally:
-                self._worker_tasks.clear()
-                self._consumers.clear()
+                for lane in self._lanes:
+                    lane.worker_tasks.clear()
+                    lane.consumers.clear()
 
             try:
                 await self._close_transport()
@@ -1283,6 +1486,7 @@ class AsyncClient:
                 errors.append(error)
 
             self.distinct_ids_feature_flags_reported.clear()
+            self._experiment_exposures_reported.clear()
             self._closed = True
             if errors and self.debug:
                 raise errors[0]

@@ -28,6 +28,18 @@ def _enrichment_is_enabled() -> bool:
     return bool((project_api_key or "").strip() or (api_key or "").strip())
 
 
+def _missing_context_attributes(attributes: Mapping) -> dict:
+    context = contexts._get_active_span_context()
+    extra = {}
+    session_id = context["session_id"]
+    distinct_id = context["distinct_id"]
+    if session_id and "sessionId" not in attributes:
+        extra["sessionId"] = session_id
+    if distinct_id and not any(key in attributes for key in _IDENTITY_ATTRIBUTES):
+        extra["posthogDistinctId"] = distinct_id
+    return extra
+
+
 def _enrich_span(span: object) -> None:
     try:
         if not _enrichment_is_enabled() or not getattr(span, "is_recording")():
@@ -35,14 +47,7 @@ def _enrich_span(span: object) -> None:
         attributes = getattr(span, "attributes", None)
         if not isinstance(attributes, Mapping):
             return
-        context = contexts._get_active_span_context()
-        extra = {}
-        session_id = context["session_id"]
-        distinct_id = context["distinct_id"]
-        if session_id and "sessionId" not in attributes:
-            extra["sessionId"] = session_id
-        if distinct_id and not any(key in attributes for key in _IDENTITY_ATTRIBUTES):
-            extra["posthogDistinctId"] = distinct_id
+        extra = _missing_context_attributes(attributes)
         if not extra:
             return
         # The SDK exposes no public capacity getter and evicts old attributes
