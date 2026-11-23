@@ -47,15 +47,23 @@ posthog.emails.send(
 ```
 
 Message categories: an email you send from code is transactional with no
-category unless you pass ``category``. A :class:`MessageCategory` names the
-category by its ``key``: the first send creates it in the project with its
-``name`` and ``description``. A later send leaves the category as it is, so
-change its name or description in PostHog. A marketing send honors the
-recipient's opt-outs, and its body must link ``{{ unsubscribe_url }}``,
-which PostHog fills with the recipient's preferences link. A ``template_key``
-that names a template made in PostHog follows that template's category. A
-template made in PostHog is transactional: PostHog refuses one in a marketing
-category with ``marketing_template``.
+category, or follows the category of the template that ``template_key``
+names (when code-send categories are enabled), unless you pass ``category``.
+A :class:`MessageCategory` names the category by its ``key``: the first send
+creates it in the project (or restores a deleted one) when the project has
+room under its active category limit, using its ``name`` and
+``description``. A later send leaves the category as it is, so change its
+name or description in PostHog. A marketing send honors the recipient's
+opt-outs, and its HTML body must link ``<a href="{{ unsubscribe_url }}">``
+(or its ``text`` body must hold ``{{ unsubscribe_url }}`` when there is no
+``html``), which PostHog fills with the recipient's preferences link. When
+``template_key`` names a template made in PostHog, that template fixes the
+category: it must first be enabled for transactional sends (otherwise
+PostHog raises ``template_not_transactional``), and an enabled template in a
+marketing category is refused with ``marketing_template``. For an
+uncategorized template, omit ``category`` or pass
+:data:`TRANSACTIONAL_CATEGORY`; for a categorized transactional template,
+omit ``category`` or pass its matching ``key`` and ``type``.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -299,10 +307,12 @@ class MessageCategory:
     """A message category of the project, defined in your code.
 
     A send creates the category when the project has no category with
-    ``key``, and restores it when it was deleted. Otherwise the send leaves
-    the category as it is: ``name`` and ``description`` apply only when the
-    send creates the category, and you change them later in PostHog. An
-    existing category must have the same ``type``.
+    ``key``, and restores it when it was deleted, as long as the project has
+    room under its active category limit (otherwise PostHog raises
+    ``too_many_categories``). Otherwise the send leaves the category as it is:
+    ``name`` and ``description`` apply only when the send creates the
+    category, and you change them later in PostHog. An existing category must
+    have the same ``type``.
 
     Args:
         key: The category's key, unique in the project. Recipients' opt-outs
@@ -448,27 +458,38 @@ class CodeEmailArgs(_RecipientArgs):
             key you leave out keeps its default. Turn clicks on for a
             sensitive email only when its links are safe to send through
             PostHog's click tracking. The template form doesn't take it.
-        category: Left out, the email follows the category of the template
-            that ``template_key`` names, or is transactional with no category.
-            A template made in PostHog is transactional, so PostHog raises
-            ``marketing_template`` for a ``template_key`` that names a template
-            in a marketing category.
-            :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``) sends
-            transactional email with no category. A
-            :class:`MessageCategory` files the email under that category, and
-            creates it when the project has none with its key. A marketing
-            send honors the recipient's opt-outs, and its ``html``, or its
-            ``text`` when it has no ``html``, must hold
-            ``{{ unsubscribe_url }}``. PostHog raises
-            ``category_mismatch`` when the project's category with that key
-            has another type, or when ``template_key`` names a template in
-            another category, including :data:`TRANSACTIONAL_CATEGORY` for a
-            template in a category; ``too_many_categories`` when the send would
-            create a category past the project's limit;
+        category: Left out, the email is transactional with no category, or
+            follows the category of the eligible template that
+            ``template_key`` names when code-send categories are enabled. A
+            matching template made in PostHog must first be enabled for
+            transactional sends (otherwise PostHog raises
+            ``template_not_transactional`` before checking its category), and
+            an enabled template in a marketing category is refused with
+            ``marketing_template``. A matching sendable template fixes the
+            category: for an uncategorized template, omit ``category`` or pass
+            :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``); for a
+            categorized transactional template, omit ``category`` or pass a
+            :class:`MessageCategory` with its matching ``key`` and ``type``.
+            When ``template_key`` matches no template,
+            :data:`TRANSACTIONAL_CATEGORY` sends transactional email with no
+            category, and a :class:`MessageCategory` files the email under
+            that category, creating it or restoring a deleted one when the
+            project has room under its active category limit. A marketing send
+            honors the recipient's opt-outs, and its ``html`` must contain a
+            link whose full ``href`` is ``{{ unsubscribe_url }}``
+            (``<a href="{{ unsubscribe_url }}">``), or its ``text`` must hold
+            ``{{ unsubscribe_url }}`` when there is no ``html``. PostHog
+            raises ``category_mismatch`` when the project's category with that
+            key has another type, or when ``category`` differs from a matching
+            sendable template's category (such as passing a
+            :class:`MessageCategory` for an uncategorized template, or
+            :data:`TRANSACTIONAL_CATEGORY` for a template in a transactional
+            category); ``too_many_categories`` when creating or restoring a
+            category would exceed the project's active category limit;
             ``unsubscribe_link_required`` for a marketing body without the
-            link; ``copies_not_allowed`` for a marketing email with copies;
-            and ``recipient_opted_out`` for a recipient who opted out of the
-            category or of all marketing.
+            unsubscribe link; ``copies_not_allowed`` for a marketing email
+            with copies; and ``recipient_opted_out`` for a recipient who opted
+            out of the category or of all marketing.
         distinct_id: The recipient's distinct ID in your product.
         idempotency_key: 1 to 255 visible ASCII characters. Template sends
             and code sends share one set of keys: a key already used for
@@ -1042,7 +1063,6 @@ def _idempotency_error_name(status: int, code: str) -> str:
             if code == "template_outdated"
             else "concurrent_idempotent_requests"
         )
-    # The send route also answers 422 for send checks such as recipient_suppressed and recipient_opted_out.
     return (
         "invalid_idempotent_request"
         if code == "idempotency_key_reused"
