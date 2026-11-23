@@ -1,5 +1,11 @@
 # posthog
 
+## 8.1.1 — 2026-11-23
+
+### Patch changes
+
+- [470a6413](https://github.com/posthog/posthog-python/commit/470a6413ae71a9b19388a4743818f75ed5968857) Use the context's distinct ID for streamed LLM analytics generations when no `posthog_distinct_id` is passed, as non-streamed calls already do. — Thanks @turnipdabeets!
+
 ## 8.1.0 — 2026-11-20
 
 ### Minor changes
