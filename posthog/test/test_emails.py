@@ -1057,323 +1057,6 @@ def test_category_refusals_raise_validation_error_without_retrying(
     assert len(adapter.requests) == 1
 
 
-class _CategorizedAttachmentAdapter(requests.adapters.BaseAdapter):
-    def __init__(self, expected_bytes: bytes, send_replies: list[Reply]) -> None:
-        super().__init__()
-        self._expected_bytes = expected_bytes
-        self._expected_sha256 = hashlib.sha256(expected_bytes).hexdigest()
-        self._expected_checksum = base64.b64encode(
-            hashlib.sha256(expected_bytes).digest()
-        ).decode()
-        self._upload_url = (
-            f"https://files.example.com/team/1/{self._expected_sha256}"
-            "?X-Amz-Expires=900&X-Amz-Signature=sig-1"
-        )
-        self._send_replies = list(send_replies)
-        self._uploaded = False
-        self.routes: list[str] = []
-        self.requests: list[requests.PreparedRequest] = []
-        self.uploaded_bytes: list[bytes] = []
-        self.sent_bodies: list[dict[str, Any]] = []
-
-    def _response(
-        self,
-        request: requests.PreparedRequest,
-        status: int,
-        body: Optional[dict[str, Any]],
-        headers: Optional[dict[str, str]] = None,
-    ) -> requests.Response:
-        reply = requests.Response()
-        reply.status_code = status
-        reply._content = b"" if body is None else json.dumps(body).encode()
-        if headers:
-            reply.headers.update(headers)
-        reply.request = request
-        reply.url = request.url or ""
-        return reply
-
-    def send(
-        self, request: requests.PreparedRequest, **kwargs: Any
-    ) -> requests.Response:
-        self.requests.append(request)
-        url = request.url or ""
-        method = request.method or ""
-        headers = {name.lower(): value for name, value in request.headers.items()}
-        path = urlsplit(url).path
-
-        if method == "POST" and path == "/api/messaging/attachments/uploads/":
-            if (
-                url != "https://us.posthog.com/api/messaging/attachments/uploads/"
-                or headers.get("authorization") != f"Bearer {SECRET_KEY}"
-            ):
-                return self._response(
-                    request,
-                    401,
-                    {
-                        "type": "authentication_error",
-                        "code": "authentication_failed",
-                        "detail": "Bad auth.",
-                    },
-                )
-            payload = (
-                json.loads(request.body)
-                if isinstance(request.body, (bytes, str))
-                else None
-            )
-            if payload != {
-                "files": [
-                    {
-                        "sha256": self._expected_sha256,
-                        "size": len(self._expected_bytes),
-                    }
-                ]
-            }:
-                return self._response(
-                    request,
-                    400,
-                    {
-                        "type": "validation_error",
-                        "code": "invalid_input",
-                        "detail": "Bad upload grant.",
-                        "attr": "files",
-                    },
-                )
-            self.routes.append("uploads")
-            return self._response(
-                request,
-                200,
-                {
-                    "files": [
-                        {
-                            "sha256": self._expected_sha256,
-                            "status": "upload",
-                            "url": self._upload_url,
-                            "method": "PUT",
-                            "headers": {
-                                "content-length": str(len(self._expected_bytes)),
-                                "x-amz-checksum-sha256": self._expected_checksum,
-                            },
-                            "url_expires_at": "2026-11-30T00:00:00Z",
-                        }
-                    ]
-                },
-            )
-
-        if method == "PUT" and url == self._upload_url:
-            if "authorization" in headers:
-                return self._response(
-                    request,
-                    400,
-                    {
-                        "code": "InvalidArgument",
-                        "message": "Authorization header is not allowed on storage PUT.",
-                    },
-                )
-            if (
-                headers.get("content-length") != str(len(self._expected_bytes))
-                or headers.get("x-amz-checksum-sha256") != self._expected_checksum
-                or request.body != self._expected_bytes
-            ):
-                return self._response(
-                    request,
-                    400,
-                    {
-                        "code": "BadDigest",
-                        "message": "Storage PUT headers or bytes did not match.",
-                    },
-                )
-            self.routes.append("put")
-            self.uploaded_bytes.append(request.body)
-            self._uploaded = True
-            return self._response(request, 200, None)
-
-        if method == "POST" and path == "/api/messaging/send/email/":
-            if (
-                url != SEND_URL
-                or headers.get("authorization") != f"Bearer {SECRET_KEY}"
-            ):
-                return self._response(
-                    request,
-                    401,
-                    {
-                        "type": "authentication_error",
-                        "code": "authentication_failed",
-                        "detail": "Bad auth.",
-                    },
-                )
-            if not self._uploaded or not isinstance(request.body, (bytes, str)):
-                return self._response(
-                    request,
-                    400,
-                    {
-                        "type": "invalid_request",
-                        "code": "attachment_not_uploaded",
-                        "detail": "Upload the file before sending.",
-                    },
-                )
-            self.routes.append("send")
-            self.sent_bodies.append(json.loads(request.body))
-            if not self._send_replies:
-                return self._response(
-                    request,
-                    404,
-                    {
-                        "type": "invalid_request",
-                        "code": "not_found",
-                        "detail": "No send reply left.",
-                    },
-                )
-            reply = self._send_replies.pop(0)
-            if isinstance(reply, Exception):
-                raise reply
-            status, body, reply_headers = reply
-            return self._response(request, status, body, reply_headers)
-
-        return self._response(
-            request,
-            404,
-            {
-                "type": "invalid_request",
-                "code": "not_found",
-                "detail": f"Unexpected route {method} {url}",
-            },
-        )
-
-    def close(self) -> None:
-        pass
-
-
-def _attachment_send_client(
-    expected_bytes: bytes, send_replies: list[Reply], **options: Any
-) -> tuple[Emails, _CategorizedAttachmentAdapter]:
-    adapter = _CategorizedAttachmentAdapter(expected_bytes, send_replies)
-    session = requests.Session()
-    session.mount("https://", adapter)
-    return Emails(SECRET_KEY, session=session, **options), adapter
-
-
-def test_categorized_transactional_send_uploads_new_attachment_and_posts_category():
-    content = b"Receipt PDF bytes"
-    sha256 = hashlib.sha256(content).hexdigest()
-    emails, adapter = _attachment_send_client(
-        content, [accepted("msg_cat_attach")], max_retries=2
-    )
-    receipts = MessageCategory(
-        key="receipts",
-        type="transactional",
-        name="Receipts",
-        description="Billing receipts",
-    )
-
-    result = send_code(
-        emails,
-        html=HTML,
-        category=receipts,
-        attachments=[
-            {
-                "filename": "receipt.pdf",
-                "content": content,
-                "content_type": "application/pdf",
-            }
-        ],
-    )
-
-    assert result.id == "msg_cat_attach"
-    assert result.replayed is False
-    assert adapter.routes == ["uploads", "put", "send"]
-    assert len(adapter.requests) == 3
-    assert adapter.uploaded_bytes == [content]
-    assert adapter.sent_bodies == [
-        {
-            "to": "user@example.com",
-            "template_key": "password-reset",
-            "subject": "Reset your password",
-            "html": HTML,
-            "category": {
-                "key": "receipts",
-                "type": "transactional",
-                "name": "Receipts",
-                "description": "Billing receipts",
-            },
-            "attachments": [
-                {
-                    "sha256": sha256,
-                    "filename": "receipt.pdf",
-                    "content_type": "application/pdf",
-                }
-            ],
-        }
-    ]
-
-
-def test_marketing_send_with_attachment_surfaces_workflow_can_wait_without_retrying(
-    no_sleep,
-):
-    content = b"Monthly digest guide"
-    sha256 = hashlib.sha256(content).hexdigest()
-    fix = (
-        "Send files through a workflow whose transactional email step follows "
-        "the trigger directly, or send this email without files."
-    )
-    why = (
-        "A step or a sending rate limit in this workflow can hold the send, so "
-        "its files could expire before the email goes out."
-    )
-    refusal: Reply = (
-        400,
-        {
-            "type": "invalid_request",
-            "code": "workflow_can_wait",
-            "detail": (
-                "This email's workflow can hold a send, so PostHog didn't send "
-                "the email with its files."
-            ),
-            "attr": "attachments",
-            "why": why,
-            "fix": fix,
-        },
-        {},
-    )
-    emails, adapter = _attachment_send_client(
-        content, [refusal, accepted("msg_unexpected_retry")], max_retries=2
-    )
-
-    with pytest.raises(EmailError) as raised:
-        send_code(
-            emails,
-            html=MARKETING_HTML,
-            category=NEWSLETTER,
-            attachments=[{"filename": "guide.txt", "content": content}],
-        )
-
-    assert (
-        raised.value.name,
-        raised.value.code,
-        raised.value.status_code,
-        raised.value.field,
-        raised.value.why,
-        raised.value.fix,
-    ) == ("validation_error", "workflow_can_wait", 400, "attachments", why, fix)
-    assert adapter.routes == ["uploads", "put", "send"]
-    assert len(adapter.requests) == 3
-    assert adapter.uploaded_bytes == [content]
-    assert adapter.sent_bodies == [
-        {
-            "to": "user@example.com",
-            "template_key": "password-reset",
-            "subject": "Reset your password",
-            "html": MARKETING_HTML,
-            "category": {
-                "key": "newsletter",
-                "type": "marketing",
-                "name": "Newsletter",
-                "description": "Monthly product news",
-            },
-            "attachments": [{"sha256": sha256, "filename": "guide.txt"}],
-        }
-    ]
-
-
 class _CaseInsensitiveStr(str):
     def __eq__(self, other: object) -> bool:
         return isinstance(other, str) and str(self).lower() == other.lower()
@@ -1690,6 +1373,7 @@ SEND_FIELDS = frozenset(
         "tracking",
         "distinct_id",
         "attachments",
+        "category",
     }
 )
 REFERENCE_FIELDS = frozenset({"sha256", "filename", "content_type", "content_id"})
@@ -1854,6 +1538,8 @@ class FakePostHog:
         self._content_types: dict[str, Optional[str]] = {}
         self.writes = 0
         self.delivered: list[DeliveredEmail] = []
+        self.routes: list[str] = []
+        self.sent_payloads: list[dict[str, Any]] = []
         self.project_can_send_files = True
         self.send_fields = SEND_FIELDS
         self._sent_by_idempotency_key: dict[str, str] = {}
@@ -1883,6 +1569,7 @@ class FakePostHog:
 
     def handle(self, incoming: Incoming) -> Answer:
         route, handler = self._route(incoming)
+        self.routes.append(route)
         faults = self._faults.get(route)
         if faults:
             return faults.pop(0)(incoming, handler)
@@ -2027,6 +1714,7 @@ class FakePostHog:
             refused = self._refused_reference(index, reference)
             if refused is not None:
                 return refused
+        self.sent_payloads.append(payload)
         message_id = str(uuid4())
         self.delivered.append(self._email(message_id, payload, references))
         if idempotency_key:
@@ -2192,6 +1880,156 @@ def test_delivers_cc_and_bcc_beside_the_files():
         ("audit@example.com", "archive@example.com"),
     )
     assert email.attachments == (DeliveredFile("invite.ics", INVITE),)
+
+
+def test_categorized_transactional_send_uploads_new_attachment_and_posts_category():
+    posthog = FakePostHog()
+    content = b"Receipt PDF bytes"
+    sha256 = hashlib.sha256(content).hexdigest()
+    receipts = MessageCategory(
+        key="receipts",
+        type="transactional",
+        name="Receipts",
+        description="Billing receipts",
+    )
+
+    result = send_code(
+        emails_on(posthog, max_retries=2),
+        html=HTML,
+        category=receipts,
+        attachments=[
+            {
+                "filename": "receipt.pdf",
+                "content": content,
+                "content_type": "application/pdf",
+            }
+        ],
+    )
+
+    [email] = posthog.delivered
+    assert result.id == email.message_id
+    assert result.replayed is False
+    assert posthog.routes == ["uploads", "storage", "send"]
+    assert posthog.writes == 1
+    assert posthog.stored_files == [content]
+    assert email.attachments == (
+        DeliveredFile("receipt.pdf", content, content_type="application/pdf"),
+    )
+    assert posthog.sent_payloads == [
+        {
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            "html": HTML,
+            "category": {
+                "key": "receipts",
+                "type": "transactional",
+                "name": "Receipts",
+                "description": "Billing receipts",
+            },
+            "attachments": [
+                {
+                    "sha256": sha256,
+                    "filename": "receipt.pdf",
+                    "content_type": "application/pdf",
+                }
+            ],
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    "code, attr, detail, why, fix",
+    [
+        pytest.param(
+            "workflow_can_wait",
+            "attachments",
+            (
+                "This email's workflow can hold a send, so PostHog didn't send "
+                "the email with its files."
+            ),
+            (
+                "A step or a sending rate limit in this workflow can hold the "
+                "send, so its files could expire before the email goes out."
+            ),
+            (
+                "Send files through a workflow whose transactional email step "
+                "follows the trigger directly, or send this email without files."
+            ),
+            id="workflow_can_wait",
+        ),
+        pytest.param(
+            "categories_not_enabled",
+            "category",
+            "Message categories for code sends aren't enabled for this project.",
+            None,
+            None,
+            id="categories_not_enabled",
+        ),
+    ],
+)
+def test_marketing_send_with_attachment_surfaces_refusal_without_retrying(
+    code, attr, detail, why, fix, no_sleep
+):
+    posthog = FakePostHog()
+    content = b"Monthly digest guide"
+    sha256 = hashlib.sha256(content).hexdigest()
+    extra: dict[str, Any] = {"attr": attr}
+    if why is not None:
+        extra["why"] = why
+    if fix is not None:
+        extra["fix"] = fix
+    refusal = api_error(400, code, detail, kind="invalid_request", **extra)
+    seen_payloads: list[dict[str, Any]] = []
+
+    def refuse_valid_send(incoming: Incoming, _handle: Handler) -> Answer:
+        assert incoming.is_authorized
+        payload = json_or_none(incoming.body)
+        assert isinstance(payload, dict)
+        assert set(payload) <= posthog.send_fields
+        for index, reference in enumerate(payload.get("attachments", [])):
+            assert posthog._refused_reference(index, reference) is None
+        seen_payloads.append(payload)
+        return refusal
+
+    # Only the first send is refused; a retry would fall through to FakePostHog._send (202).
+    posthog.inject("send", refuse_valid_send)
+
+    with pytest.raises(EmailError) as raised:
+        send_code(
+            emails_on(posthog, max_retries=2),
+            html=MARKETING_HTML,
+            category=NEWSLETTER,
+            attachments=[{"filename": "guide.txt", "content": content}],
+        )
+
+    assert (
+        raised.value.name,
+        raised.value.code,
+        raised.value.status_code,
+        raised.value.field,
+        raised.value.why,
+        raised.value.fix,
+    ) == ("validation_error", code, 400, attr, why, fix)
+    assert posthog.routes == ["uploads", "storage", "send"]
+    assert posthog.writes == 1
+    assert posthog.stored_files == [content]
+    assert posthog.delivered == []
+    assert seen_payloads == [
+        {
+            "to": "user@example.com",
+            "template_key": "password-reset",
+            "subject": "Reset your password",
+            "html": MARKETING_HTML,
+            "category": {
+                "key": "newsletter",
+                "type": "marketing",
+                "name": "Newsletter",
+                "description": "Monthly product news",
+            },
+            "attachments": [{"sha256": sha256, "filename": "guide.txt"}],
+        }
+    ]
 
 
 @parameterized.expand(
