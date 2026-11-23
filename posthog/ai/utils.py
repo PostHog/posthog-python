@@ -74,9 +74,10 @@ def _user_distinct_id(distinct_id: Any) -> Any:
 
 def _resolve_distinct_id(distinct_id: Any) -> Any:
     """The caller's distinct id, else the one from the active PostHog context, else None."""
-    return _user_distinct_id(distinct_id) or _user_distinct_id(
-        contexts.get_context_distinct_id()
-    )
+    resolved = _user_distinct_id(distinct_id)
+    if resolved is not None:
+        return resolved
+    return _user_distinct_id(contexts.get_context_distinct_id())
 
 
 def _ai_event_options(value: Any) -> Dict[str, Any]:

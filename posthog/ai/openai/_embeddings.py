@@ -60,7 +60,9 @@ def _capture_embedding_event(
         _capture_ai_event(
             posthog_client,
             "$ai_embedding",
-            distinct_id=resolved_distinct_id or trace_id,
+            distinct_id=(
+                resolved_distinct_id if resolved_distinct_id is not None else trace_id
+            ),
             properties=event_properties,
             groups=groups,
             personless=resolved_distinct_id is None,

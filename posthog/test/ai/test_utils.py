@@ -164,3 +164,18 @@ def test_merge_usage_stats_invalid_mode_does_not_mutate_target():
     with pytest.raises(ValueError, match="Invalid mode: unknown"):
         merge_usage_stats(target, TokenUsage(input_tokens=4), mode="unknown")
     assert target == {"input_tokens": 10}
+
+
+def test_resolve_distinct_id_precedence_and_blank_values():
+    from posthog import identify_context, new_context
+    from posthog.ai.utils import _resolve_distinct_id
+
+    with new_context(fresh=True):
+        assert _resolve_distinct_id(None) is None
+        identify_context("   ")
+        assert _resolve_distinct_id(None) is None
+        identify_context("context-user")
+        assert _resolve_distinct_id(None) == "context-user"
+        assert _resolve_distinct_id("   ") == "context-user"
+        assert _resolve_distinct_id("explicit-user") == "explicit-user"
+        assert _resolve_distinct_id(0) == 0

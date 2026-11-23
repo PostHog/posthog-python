@@ -480,6 +480,7 @@ def test_embeddings_use_context_distinct_id(mock_client, mock_embedding_response
     call_args = mock_client.capture_ai.call_args[1]
     assert call_args["distinct_id"] == "context-user"
     assert call_args["event"] == "$ai_embedding"
+    assert "options" not in call_args
 
 
 @pytest.mark.parametrize("stream_options", [None, NOT_GIVEN, {"foo": "bar"}])

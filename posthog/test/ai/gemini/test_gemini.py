@@ -1388,6 +1388,7 @@ def test_embed_content_uses_context_distinct_id(
     call_args = mock_client.capture_ai.call_args[1]
     assert call_args["distinct_id"] == "context-user"
     assert call_args["event"] == "$ai_embedding"
+    assert "options" not in call_args
 
 
 def test_embed_content_basic(
