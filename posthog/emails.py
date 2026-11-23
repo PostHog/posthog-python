@@ -59,13 +59,16 @@ in PostHog. A marketing send honors the recipient's
 opt-outs, and its HTML body must link ``<a href="{{ unsubscribe_url }}">``
 (or its ``text`` body must hold ``{{ unsubscribe_url }}`` when there is no
 ``html``), which PostHog fills with the recipient's preferences link. When
-``template_key`` names a template made in PostHog, that template fixes the
-category: it must first be enabled for transactional sends (otherwise
-PostHog raises ``template_not_transactional``), and an enabled template in a
-marketing category is refused with ``marketing_template``. For an
-uncategorized template, omit ``category`` or pass
-:data:`TRANSACTIONAL_CATEGORY`; for a categorized transactional template,
-omit ``category`` or pass its matching ``key`` and ``type``.
+``template_key`` names a saved template in PostHog, a non-email template
+(such as a push template) is refused with ``template_not_sendable`` before
+transactional enablement is checked; a matching saved email template must
+first be enabled for transactional sends (otherwise PostHog raises
+``template_not_transactional``), and an enabled email template in a
+marketing category is refused with ``marketing_template``. Otherwise that
+template fixes the category: for an uncategorized template, omit
+``category`` or pass :data:`TRANSACTIONAL_CATEGORY`; for a categorized
+transactional template, omit ``category`` or pass its matching ``key`` and
+``type``.
 
 ``posthog.emails`` above is the client's property. For async code, use
 ``AsyncPosthog`` or :class:`AsyncEmails` with ``posthog[async]`` installed.
@@ -467,17 +470,19 @@ class CodeEmailArgs(_RecipientArgs):
             Passing any explicit :class:`MessageCategory` requires code-send
             categories to be enabled for the project (otherwise PostHog can
             raise ``categories_not_enabled`` before checking whether a saved
-            template is transactional; omitting ``category`` sends
-            uncategorized while that flag is off). A matching template made in
-            PostHog must first be enabled for transactional sends (otherwise
-            PostHog raises ``template_not_transactional`` before checking its
-            category), and an enabled template in a marketing category is
-            refused with ``marketing_template``. A matching sendable template
-            fixes the category: for an uncategorized template, omit
-            ``category`` or pass :data:`TRANSACTIONAL_CATEGORY`
-            (``"transactional"``); for a categorized transactional template,
-            omit ``category`` or pass a :class:`MessageCategory` with its
-            matching ``key`` and ``type``.
+            template is sendable or transactional; omitting ``category`` sends
+            uncategorized while that flag is off). A matching saved non-email
+            template (such as a push template) is refused with
+            ``template_not_sendable`` before transactional enablement is
+            checked. A matching saved email template must first be enabled for
+            transactional sends (otherwise PostHog raises
+            ``template_not_transactional`` before checking its category), and
+            an enabled email template in a marketing category is refused with
+            ``marketing_template``. A matching sendable email template fixes
+            the category: for an uncategorized template, omit ``category`` or
+            pass :data:`TRANSACTIONAL_CATEGORY` (``"transactional"``); for a
+            categorized transactional template, omit ``category`` or pass a
+            :class:`MessageCategory` with its matching ``key`` and ``type``.
             When ``template_key`` matches no template,
             :data:`TRANSACTIONAL_CATEGORY` sends transactional email with no
             category, and a :class:`MessageCategory` files the email under

@@ -1081,6 +1081,30 @@ class _CaseInsensitiveStr(str):
             ValueError,
         ),
         (
+            "category_type_str_subclass",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="news",
+                    type=_CaseInsensitiveStr("MARKETING"),
+                    name="News",
+                ),
+            },
+            ValueError,
+        ),
+        (
+            "category_type_mock_any",
+            {
+                "html": HTML,
+                "category": MessageCategory(
+                    key="news",
+                    type=mock.ANY,
+                    name="News",
+                ),
+            },
+            ValueError,
+        ),
+        (
             "category_name_not_text",
             {
                 "html": HTML,
