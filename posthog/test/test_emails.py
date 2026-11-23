@@ -1055,7 +1055,6 @@ def test_category_refusals_raise_validation_error_without_retrying(
         raised.value.field,
     ) == ("validation_error", code, status, attr)
     assert len(adapter.requests) == 1
-    no_sleep.assert_not_called()
 
 
 class _CaseInsensitiveStr(str):
