@@ -6280,6 +6280,7 @@ class Client(object):
             group_properties or {},
             person_property_keys_known_absent,
             group_property_keys_known_absent,
+            self.group_type_mapping,
         )
 
     def _add_local_person_and_group_properties(

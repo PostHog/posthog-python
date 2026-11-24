@@ -9,7 +9,11 @@ from parameterized import parameterized
 
 from posthog import AsyncPosthog
 from posthog.client import Client
-from posthog.feature_flags import _KNOWN_ABSENT, InconclusiveMatchError, match_cohort
+from posthog.feature_flags import (
+    InconclusiveMatchError,
+    _mark_known_absent_properties,
+    match_cohort,
+)
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import UnresolvedFlagReason
 
@@ -42,6 +46,18 @@ def _person_filter(operator, value=None, key="plan"):
     if value is not None:
         prop["value"] = value
     return prop
+
+
+def _person_metadata_filter(operator, value=None, key="created_at"):
+    return {**_person_filter(operator, value, key=key), "type": "person_metadata"}
+
+
+def _group_filter(operator, value=None, key="tier", group_type_index=0):
+    return {
+        **_person_filter(operator, value, key=key),
+        "type": "group",
+        "group_type_index": group_type_index,
+    }
 
 
 class TestKnownAbsentLocalEvaluation(unittest.TestCase):
@@ -228,10 +244,107 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         flag = _flag("flag", [prop])
         self.assert_local(flag, expected, person_property_keys_known_absent=["plan"])
 
+    @parameterized.expand(
+        [
+            ("is_not_set", None),
+            ("is_set", None),
+            ("is_date_before", "2024-01-01T00:00:00Z"),
+            ("is_date_after", "2024-01-01T00:00:00Z"),
+        ]
+    )
+    def test_listed_key_does_not_resolve_a_person_metadata_filter(
+        self, operator, value
+    ):
+        flag = _flag(
+            "flag", [_person_metadata_filter(operator, value, key="created_at")]
+        )
+        self.assert_remote(flag, person_property_keys_known_absent=["created_at"])
+
+    @parameterized.expand(
+        [
+            ("is_not_set", None, False),
+            ("is_set", None, True),
+            ("is_date_before", "2024-01-01T00:00:00Z", True),
+            ("is_date_after", "2024-01-01T00:00:00Z", False),
+        ]
+    )
+    def test_person_metadata_filter_on_listed_key_reads_the_supplied_value(
+        self, operator, value, expected
+    ):
+        flag = _flag(
+            "flag", [_person_metadata_filter(operator, value, key="created_at")]
+        )
+        self.assert_local(
+            flag,
+            expected,
+            person_properties={"created_at": "2020-01-01T00:00:00Z"},
+            person_property_keys_known_absent=["created_at"],
+        )
+
+    @parameterized.expand(
+        [
+            ("is_not_set", None),
+            ("is_date_before", "2024-01-01T00:00:00Z"),
+            ("is_date_after", "2024-01-01T00:00:00Z"),
+        ]
+    )
+    def test_listed_key_does_not_resolve_a_person_metadata_cohort_leaf(
+        self, operator, value
+    ):
+        self.client.cohorts = {
+            "5": {
+                "type": "AND",
+                "values": [_person_metadata_filter(operator, value, key="created_at")],
+            }
+        }
+        flag = _flag("flag", [{"key": "id", "value": 5, "type": "cohort"}])
+        self.assert_remote(flag, person_property_keys_known_absent=["created_at"])
+
+    def test_person_keys_do_not_resolve_a_group_filter_in_a_person_flag(self):
+        flag = _flag("flag", [_group_filter("is_not_set", key="tier")])
+        self.assert_remote(flag, person_property_keys_known_absent=["tier"])
+
+    def test_group_keys_do_not_resolve_a_person_filter_in_a_group_flag(self):
+        flag = _flag(
+            "flag", [_person_filter("is_not_set")], aggregation_group_type_index=0
+        )
+        self.assert_remote(
+            flag,
+            groups={"organization": "org-1"},
+            group_property_keys_known_absent={"organization": ["plan"]},
+        )
+
+    def test_group_keys_do_not_resolve_a_person_cohort_leaf_in_a_group_flag(self):
+        self.client.cohorts = {
+            "5": {"type": "AND", "values": [_person_filter("is_not_set")]}
+        }
+        flag = _flag(
+            "flag",
+            [{"key": "id", "value": 5, "type": "cohort"}],
+            aggregation_group_type_index=0,
+        )
+        self.assert_remote(
+            flag,
+            groups={"organization": "org-1"},
+            group_property_keys_known_absent={"organization": ["plan"]},
+        )
+
+    def test_group_keys_do_not_resolve_a_filter_for_another_group_type(self):
+        flag = _flag(
+            "flag",
+            [_group_filter("is_not_set", key="tier", group_type_index=1)],
+            aggregation_group_type_index=0,
+        )
+        self.assert_remote(
+            flag,
+            groups={"organization": "org-1"},
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
     def test_group_key_applies_only_to_its_group_type(self):
         flag = _flag(
             "flag",
-            [{"key": "tier", "operator": "is_not_set", "type": "group"}],
+            [_group_filter("is_not_set", key="tier")],
             aggregation_group_type_index=0,
         )
         groups = {"organization": "org-1", "project": "proj-1"}
@@ -257,7 +370,7 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
     def test_group_key_overrides_the_sdk_added_group_key(self):
         flag = _flag(
             "flag",
-            [{"key": "$group_key", "operator": "is_set", "type": "group"}],
+            [_group_filter("is_set", key="$group_key")],
             aggregation_group_type_index=0,
         )
         self.assert_local(
@@ -270,7 +383,7 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
     def test_person_keys_do_not_apply_to_group_properties(self):
         flag = _flag(
             "flag",
-            [{"key": "tier", "operator": "is_not_set", "type": "group"}],
+            [_group_filter("is_not_set", key="tier")],
             aggregation_group_type_index=0,
         )
         self.assert_remote(
@@ -314,8 +427,11 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             ],
         }
         cohort_filter = {"key": "id", "value": 5, "type": "cohort"}
+        listed_person_properties, _ = _mark_known_absent_properties(
+            {}, {}, ["plan"], None, None
+        )
         with self.assertRaises(InconclusiveMatchError) as ctx:
-            match_cohort(cohort_filter, {"plan": _KNOWN_ABSENT}, {"5": cohort})
+            match_cohort(cohort_filter, listed_person_properties, {"5": cohort})
         self.assertEqual(
             ctx.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
         )
@@ -345,6 +461,68 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         )
         self.assertIs(value, True)
         self.flags.assert_not_called()
+
+    @parameterized.expand(
+        [
+            (
+                "group dependency of a person flag",
+                None,
+                [_group_filter("is_not_set", key="tier")],
+                0,
+                {"person_property_keys_known_absent": ["tier"]},
+            ),
+            (
+                "person dependency of a group flag",
+                0,
+                [_person_filter("is_not_set")],
+                None,
+                {"group_property_keys_known_absent": {"organization": ["plan"]}},
+            ),
+            (
+                "dependency on another group type",
+                0,
+                [_group_filter("is_not_set", key="tier", group_type_index=1)],
+                1,
+                {"group_property_keys_known_absent": {"organization": ["tier"]}},
+            ),
+        ]
+    )
+    def test_flag_dependency_does_not_read_keys_of_another_aggregation(
+        self,
+        _name,
+        parent_aggregation,
+        dependency_properties,
+        dependency_aggregation,
+        listing,
+    ):
+        dependency = _flag(
+            "dependency",
+            dependency_properties,
+            aggregation_group_type_index=dependency_aggregation,
+        )
+        dependency["id"] = 2
+        dependent = _flag(
+            "flag",
+            [
+                {
+                    "key": "dependency",
+                    "operator": "flag_evaluates_to",
+                    "value": True,
+                    "type": "flag",
+                    "dependency_chain": ["dependency"],
+                }
+            ],
+            aggregation_group_type_index=parent_aggregation,
+        )
+        self.client.feature_flags = [dependency, dependent]
+        value = self.client.get_feature_flag(
+            "flag",
+            "user-1",
+            groups={"organization": "org-1", "project": "proj-1"},
+            **listing,
+        )
+        self.assertEqual(value, REMOTE_VALUE)
+        self.assertEqual(self.flags.call_count, 1)
 
     def test_listed_enrollment_key_continues_to_release_conditions(self):
         flag = _flag("beta-feature", [], feature_enrollment=True)

@@ -48,17 +48,51 @@ _KNOWN_ABSENT_MATCHING_OPERATORS = frozenset(
 )
 
 
+_NOT_SUPPLIED = object()
+
+
 class _KnownAbsent:
     """Value of a property the caller listed as known absent, in the property maps
-    used for local evaluation. It replaces any value supplied for the same key."""
+    used for local evaluation.
 
-    __slots__ = ()
+    Only a filter on the listing's own properties reads the key as absent: a
+    ``person`` filter for a person listing, and a ``group`` filter of the same
+    group type for a group listing. Any other filter reads the value the listing
+    replaced, as if the key were not listed.
+    """
+
+    __slots__ = ("filter_type", "group_type_index", "replaced_value")
+
+    def __init__(
+        self,
+        filter_type: str,
+        group_type_index: Optional[str],
+        replaced_value: Any,
+    ):
+        self.filter_type = filter_type
+        self.group_type_index = group_type_index
+        self.replaced_value = replaced_value
+
+    def applies_to(self, prop) -> bool:
+        if prop.get("type") != self.filter_type:
+            return False
+        if self.filter_type == "person":
+            return True
+        return self.group_type_index is not None and self.group_type_index == str(
+            prop.get("group_type_index")
+        )
 
     def __repr__(self) -> str:
         return "<known absent>"
 
 
-_KNOWN_ABSENT = _KnownAbsent()
+def _supplied_value(property_values, key, prop) -> Any:
+    """Return the value local evaluation reads for ``prop``: a ``_KnownAbsent``
+    when the listing applies to it, else the supplied value or ``_NOT_SUPPLIED``."""
+    value = property_values.get(key, _NOT_SUPPLIED)
+    if isinstance(value, _KnownAbsent) and not value.applies_to(prop):
+        return value.replaced_value
+    return value
 
 
 def _known_absent_key_list(keys, field: str) -> Optional[list[str]]:
@@ -115,22 +149,33 @@ def _mark_known_absent_properties(
     group_properties: dict[str, dict[str, Any]],
     person_property_keys_known_absent: Optional[list[str]],
     group_property_keys_known_absent: Optional[dict[str, list[str]]],
+    group_type_mapping: Optional[Mapping[str, str]],
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Return copies of the local evaluation property maps with each listed key
-    set to the known-absent value, replacing supplied and SDK-added values."""
+    set to a ``_KnownAbsent`` that keeps the supplied or SDK-added value."""
     if person_property_keys_known_absent:
         person_properties = dict(person_properties)
         for key in person_property_keys_known_absent:
             # Known absence never hides a persons-table field.
             if not key.startswith(_PERSON_METADATA_KEY_PREFIX):
-                person_properties[key] = _KNOWN_ABSENT
+                person_properties[key] = _KnownAbsent(
+                    "person", None, person_properties.get(key, _NOT_SUPPLIED)
+                )
     if group_property_keys_known_absent:
+        group_type_indexes = {
+            group_type: index
+            for index, group_type in (group_type_mapping or {}).items()
+        }
         group_properties = dict(group_properties)
         for group_type, keys in group_property_keys_known_absent.items():
-            group_properties[group_type] = {
-                **(group_properties.get(group_type) or {}),
-                **{key: _KNOWN_ABSENT for key in keys},
-            }
+            properties = dict(group_properties.get(group_type) or {})
+            for key in keys:
+                properties[key] = _KnownAbsent(
+                    "group",
+                    group_type_indexes.get(group_type),
+                    properties.get(key, _NOT_SUPPLIED),
+                )
+            group_properties[group_type] = properties
     return person_properties, group_properties
 
 
@@ -894,14 +939,14 @@ def _match_feature_enrollment(flag, flag_filters, properties) -> Optional[bool]:
             "Group flag has feature enrollment, which reads person properties",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
-    if properties.get(enrollment_key) is _KNOWN_ABSENT:
+    enrollment = _supplied_value(properties, enrollment_key, {"type": "person"})
+    if isinstance(enrollment, _KnownAbsent):
         return None
-    if enrollment_key not in properties:
+    if enrollment is _NOT_SUPPLIED:
         raise InconclusiveMatchError(
             f"Flag has feature enrollment and '{enrollment_key}' was not passed",
             reason=UnresolvedFlagReason.MISSING_CONTEXT,
         )
-    enrollment = properties[enrollment_key]
     return enrollment is True or enrollment == "true"
 
 
@@ -1575,7 +1620,8 @@ def _match_property_value(
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
-    if key in property_values and property_values[key] is _KNOWN_ABSENT:
+    override_value = _supplied_value(property_values, key, property)
+    if isinstance(override_value, _KnownAbsent):
         # Like the flags service, resolve without parsing, compiling or
         # validating a present condition value. A null value reads as omitted.
         if value is None and operator not in ("is_set", "is_not_set"):
@@ -1585,7 +1631,7 @@ def _match_property_value(
             )
         return operator in _KNOWN_ABSENT_MATCHING_OPERATORS
 
-    if key not in property_values:
+    if override_value is _NOT_SUPPLIED:
         raise InconclusiveMatchError(
             "can't match properties without a given property value",
             reason=UnresolvedFlagReason.MISSING_CONTEXT,
@@ -1593,8 +1639,6 @@ def _match_property_value(
 
     if operator in ("is_set", "is_not_set"):
         return operator == "is_set"
-
-    override_value = property_values[key]
 
     if operator in NUMERIC_OPERATORS:
         return _match_numeric_property(operator, value, override_value)
