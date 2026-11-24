@@ -4,7 +4,7 @@ WORKDIR /app
 
 # Copy the SDK source code
 COPY posthog/ /app/sdk/posthog/
-COPY setup.py pyproject.toml README.md LICENSE /app/sdk/
+COPY pyproject.toml README.md LICENSE /app/sdk/
 
 # Install the SDK from source, with zstd for the zstd compliance job
 RUN cd /app/sdk && pip install --no-cache-dir -e ".[zstd]"

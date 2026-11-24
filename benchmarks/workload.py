@@ -40,7 +40,7 @@ class Workload:
             feature_flags_request_max_retries=0,
             thread=1,
             on_error=lambda error, _batch: self.errors.append(str(error)),
-            **({"personal_api_key": "benchmark-local-only"} if self.flags else {}),
+            **({"secret_key": "benchmark-local-only"} if self.flags else {}),
         )
         self.pool = (
             ThreadPoolExecutor(max_workers=spec["concurrency"])

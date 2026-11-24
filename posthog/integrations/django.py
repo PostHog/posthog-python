@@ -13,9 +13,7 @@ try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 except ImportError:
     # Fallback for older Django versions without asgiref
-    import asyncio
-
-    iscoroutinefunction = asyncio.iscoroutinefunction
+    from inspect import iscoroutinefunction
 
     # No-op fallback for markcoroutinefunction
     # Older Django versions without asgiref typically don't support async middleware anyway

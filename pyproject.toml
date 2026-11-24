@@ -144,15 +144,11 @@ packages = [
     "posthog.ai.otel",
     "posthog.mcp",
     "posthog.tracing",
-    "posthog.test",
-    "posthog.test.ai",
-    "posthog.test.ai.openai_agents",
-    "posthog.test.ai.claude_agent_sdk",
-    "posthog.test.ai.otel",
-    "posthog.test.mcp",
-    "posthog.test.tracing",
     "posthog.integrations",
 ]
+
+[tool.setuptools.exclude-package-data]
+posthog = ["test/**"]
 
 [tool.uv]
 exclude-newer = "7 days"

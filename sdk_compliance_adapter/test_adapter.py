@@ -14,6 +14,11 @@ import posthog.consumer
 import posthog.request
 from posthog.request import APIError, GetResponse
 
+# The harness protocol exposes the legacy single-flag getters.
+pytestmark = pytest.mark.filterwarnings(
+    r"ignore:`(get_feature_flag|get_feature_flag_payload)` is deprecated:DeprecationWarning"
+)
+
 
 @pytest.fixture
 def adapter(monkeypatch):
