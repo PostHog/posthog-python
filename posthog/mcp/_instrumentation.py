@@ -1190,15 +1190,22 @@ def read_tool_category(tool: Any) -> Optional[str]:
 
 
 def collect_listed_tools(data: MCPAnalyticsData, tools: list) -> tuple[List[str], bool]:
-    """Cache common tool metadata and return the pre-injection listing summary."""
+    """Cache common tool metadata and return the pre-injection listing summary.
+
+    A tool listed with no description or category drops the value an earlier
+    listing cached, so a later tool call doesn't report it."""
     names = []
     for tool in tools:
         names.append(tool.name)
         if getattr(tool, "description", None):
             data.tool_descriptions[tool.name] = tool.description
+        else:
+            data.tool_descriptions.pop(tool.name, None)
         category = read_tool_category(tool)
         if category:
             data.tool_categories[tool.name] = category
+        else:
+            data.tool_categories.pop(tool.name, None)
     return names, not tools
 
 

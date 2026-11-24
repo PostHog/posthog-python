@@ -360,3 +360,57 @@ async def test_a_failed_registry_lookup_delegates_instead_of_swallowing():
     assert "real tool ran" in str(out)
     assert _events(client, "$mcp_missing_capability") == []
     assert any("delegating the call to your server" in m for m in messages)
+
+
+# --- tool metadata from a later listing --------------------------------------
+
+
+async def test_tool_call_drops_description_and_category_a_later_listing_removed():
+    server = FastMCP("test-server")
+
+    @server.tool(meta={"category": "Math"})
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    client = FakeClient()
+    instrument(server, client)
+    await _list_tools(server)
+
+    # The server stops advertising a description and a category for the tool.
+    tool = server._tool_manager.get_tool("add")
+    tool.description = ""
+    tool.meta = None
+    await _list_tools(server)
+
+    await server._tool_manager.call_tool(
+        "add", {"a": 1, "b": 2, "context": "adding numbers for a report"}
+    )
+    await _flush()
+
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert "$mcp_tool_description" not in props
+    assert "$mcp_tool_category" not in props
+
+
+async def test_tool_call_keeps_description_and_category_while_listings_serve_them():
+    server = FastMCP("test-server")
+
+    @server.tool(meta={"category": "Math"})
+    def add(a: int, b: int) -> int:
+        """Add two numbers."""
+        return a + b
+
+    client = FakeClient()
+    instrument(server, client)
+    await _list_tools(server)
+    await _list_tools(server)
+
+    await server._tool_manager.call_tool(
+        "add", {"a": 1, "b": 2, "context": "adding numbers for a report"}
+    )
+    await _flush()
+
+    props = _events(client, "$mcp_tool_call")[0]["properties"]
+    assert props["$mcp_tool_description"] == "Add two numbers."
+    assert props["$mcp_tool_category"] == "Math"
