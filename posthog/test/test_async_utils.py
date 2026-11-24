@@ -231,7 +231,7 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
 
     # Python 3.14 deprecates the event loop policy API exercised here.
     @pytest.mark.filterwarnings(
-        r"ignore:'asyncio\.\w+' is deprecated:DeprecationWarning"
+        r"ignore:'asyncio\.(get_event_loop_policy|set_event_loop_policy|DefaultEventLoopPolicy)' is deprecated:DeprecationWarning"
     )
     def test_runner_preserves_configured_event_loop_policy(self):
         runner = _BackgroundEventLoopRunner()
@@ -258,7 +258,7 @@ class TestBackgroundEventLoopRunner(unittest.TestCase):
 
     # Python 3.14 deprecates the event loop policy API exercised here.
     @pytest.mark.filterwarnings(
-        r"ignore:'asyncio\.\w+' is deprecated:DeprecationWarning"
+        r"ignore:'asyncio\.(get_event_loop_policy|set_event_loop_policy|DefaultEventLoopPolicy)' is deprecated:DeprecationWarning"
     )
     def test_runner_uses_context_aware_fallback_for_read_only_policy_loop(self):
         runner = _BackgroundEventLoopRunner()
