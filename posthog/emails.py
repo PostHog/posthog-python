@@ -1151,7 +1151,7 @@ def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
     return (
         fields.get("status") == "scheduled"
         and isinstance(answered, str)
-        and _timestamp(answered) == requested
+        and _schedule_time(answered) == requested
     )
 
 
