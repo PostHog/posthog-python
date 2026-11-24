@@ -158,8 +158,10 @@ Check each result's ``status``:
 More than 100 recipients raises ``ValueError`` before anything is sent. A request
 that fails as a whole, such as a rate limit past its retries, raises
 :class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
-``content_too_large`` (413) means the request was too large for PostHog: split
-the recipients into smaller batches, or send less data for a lone recipient. ``batch_unavailable`` (409) means the project
+``content_too_large`` on a 413 means the request was too large for PostHog:
+split the recipients into smaller batches. On a 400 it means the shared content
+or ``template_data`` is too large, which splitting doesn't help. Each error's
+``fix`` carries PostHog's own advice. ``batch_unavailable`` (409) means the project
 can't send batches yet, and a 404 that the template doesn't exist or batch sends
 are off for the project: send each email the batch didn't queue with ``send``
 and its recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
@@ -2245,9 +2247,11 @@ class Emails(_EmailsBase):
 
         Raises:
             EmailBatchError: The request failed as a whole. ``results`` holds
-                every recipient. ``code`` is ``content_too_large`` (413) when
+                every recipient. ``code`` is ``content_too_large`` on a 413 when
                 the request was too large for PostHog: split the recipients
-                into smaller batches, or send less data for a lone recipient. ``batch_unavailable`` means the project
+                into smaller batches. On a 400 the shared content or
+                ``template_data`` is too large, and ``fix`` says what to send
+                less of. ``batch_unavailable`` means the project
                 can't send batches yet: send each email the batch didn't
                 queue with :meth:`send` and its recipient's
                 ``idempotency_key``. ``client_closed`` means the client shut

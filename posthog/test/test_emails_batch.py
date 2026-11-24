@@ -388,6 +388,34 @@ def test_a_batch_the_server_finds_too_large_raises_its_413_with_its_fix():
     assert len(posthog.requests) == 1
 
 
+def test_a_400_content_too_large_keeps_its_own_fix_and_no_split_advice():
+    emails, _ = emails_on(
+        [
+            (
+                400,
+                {
+                    "code": "content_too_large",
+                    "detail": "The shared data is too large.",
+                    "fix": "Send less shared template_data.",
+                },
+                {},
+            ),
+            (400, {"code": "content_too_large", "detail": "Too large."}, {}),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as with_fix:
+        batch(emails, recipients(2))
+    with pytest.raises(EmailBatchError) as without_fix:
+        batch(emails, recipients(2))
+
+    assert (with_fix.value.status_code, with_fix.value.fix) == (
+        400,
+        "Send less shared template_data.",
+    )
+    assert "smaller batches" not in (without_fix.value.fix or "")
+
+
 @pytest.mark.parametrize(
     "count, says",
     [(2, "smaller batches"), (1, "template_data")],
