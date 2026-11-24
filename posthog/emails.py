@@ -581,7 +581,8 @@ class BatchRecipient(TypedDict):
             same key and the same email replay each other. Never
             reuse a key for another email: PostHog refuses a key it saw
             with a different recipient, template or data with
-            ``idempotency_key_reused``.
+            ``idempotency_key_reused``, but two such sends at the same moment
+            can both read ``queued`` while only one email goes out.
         template_data: Only with ``template_id``: values for this recipient,
             merged over the batch's ``template_data``. A top-level key set here
             replaces the same key there.
@@ -2043,7 +2044,12 @@ class _BatchRun:
             )
         elif answer.code in _UNCONFIRMED_SLOT_CODES:
             self._maybe_queued.add(index)
-            self._set(index, "unconfirmed", message_id=message_id, error=answer)
+            self._set(
+                index,
+                "unconfirmed",
+                message_id=message_id,
+                error=_unconfirmed(message_id, answer),
+            )
         else:
             self._set(index, "failed", message_id=message_id, error=answer)
 

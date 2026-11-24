@@ -479,6 +479,8 @@ def test_a_slot_the_pipeline_did_not_confirm_is_unconfirmed():
 
     assert (result.status, result.message_id) == ("unconfirmed", "m0")
     assert result.error is not None and result.error.code == "delivery_unavailable"
+    assert result.error.fix is not None
+    assert "same idempotency_key" in result.error.fix
 
 
 def test_a_slot_another_request_still_holds_is_unconfirmed():
@@ -491,6 +493,8 @@ def test_a_slot_another_request_still_holds_is_unconfirmed():
     assert (result.status, result.message_id) == ("unconfirmed", "m0")
     assert result.error is not None
     assert result.error.code == "idempotency_key_in_flight"
+    assert result.error.fix is not None
+    assert "same idempotency_key" in result.error.fix
 
 
 def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
