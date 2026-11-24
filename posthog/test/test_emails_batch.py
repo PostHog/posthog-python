@@ -416,6 +416,31 @@ def test_a_400_content_too_large_keeps_its_own_fix_and_no_split_advice():
     assert "smaller batches" not in (without_fix.value.fix or "")
 
 
+def test_a_body_over_4_mib_goes_out_whole_in_one_request():
+    big = "x" * (5 * 1024 * 1024)
+    emails, posthog = emails_on(
+        [
+            (
+                413,
+                {
+                    "code": "content_too_large",
+                    "detail": "Too big.",
+                    "fix": "Split the recipients into smaller batches.",
+                },
+                {},
+            )
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2), template_data={"note": big})
+
+    [body] = posthog.batch_bodies()
+    assert body["message_data"] == {"note": big}
+    assert len(body["recipients"]) == 2
+    assert (raised.value.status_code, raised.value.code) == (413, "content_too_large")
+
+
 @pytest.mark.parametrize(
     "count, says",
     [(2, "smaller batches"), (1, "template_data")],
@@ -722,20 +747,22 @@ def test_a_whole_call_in_flight_answer_leaves_the_batch_unconfirmed():
     assert len(posthog.requests) == 1
 
 
-def test_a_503_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
+def test_a_refusal_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
     emails, posthog = emails_on(
         [
             whole_call(409, "idempotency_key_in_flight"),
-            whole_call(503, "delivery_unavailable"),
+            whole_call(429, "quota_limited"),
         ]
     )
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(1), max_retries=1)
 
-    assert raised.value.code == "delivery_unavailable"
+    assert raised.value.code == "quota_limited"
     [result] = raised.value.results
     assert result.status == "unconfirmed"
+    assert result.error is not None and result.error.code == "quota_limited"
+    assert result.error.fix is not None and "same idempotency_key" in result.error.fix
     assert len(posthog.requests) == 2
 
 
@@ -870,9 +897,9 @@ def test_a_refused_recipient_field_names_its_position_in_recipients():
                 400,
                 {
                     "type": "validation_error",
-                    "code": "max_length",
-                    "detail": "Ensure this field has no more than 255 characters.",
-                    "attr": "recipients__1__idempotency_key",
+                    "code": "invalid",
+                    "detail": "Enter a valid email address.",
+                    "attr": "recipients__1__to",
                 },
                 {},
             ),
@@ -882,7 +909,7 @@ def test_a_refused_recipient_field_names_its_position_in_recipients():
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(2))
 
-    assert raised.value.field == "recipients__1__idempotency_key"
+    assert raised.value.field == "recipients__1__to"
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
 
 
