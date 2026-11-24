@@ -112,11 +112,12 @@ Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 few seconds after the send.
 
 Scheduling: pass ``scheduled_at``, an aware ``datetime`` or an ISO 8601 string
-ending in ``Z`` or an offset such as ``+02:00``, to send the email up to 7 days
-later. Only PostHog Cloud
+such as ``2026-12-01T09:00:00Z`` or ``2026-12-01 11:00:00.5+02:00``, to send the
+email up to 7 days later. Only PostHog Cloud
 schedules emails: on any other app host, such as a reverse proxy or a custom
 domain, a send with ``scheduled_at`` raises ``scheduling_requires_cloud``
-before any request. A naive ``datetime`` or a string without an offset raises
+before any request. A naive ``datetime``, or a string that isn't a date, a
+``T`` or a space, a time and ``Z`` or a ``+HH:MM`` offset, raises
 ``ValueError`` before any request. The client rounds the time up to the next
 millisecond, so the email never goes out early. A result with ``status``
 ``"scheduled"`` carries the confirmed ``scheduled_at``; ``get`` reads
@@ -1174,8 +1175,8 @@ def _requested_time(value: Any) -> Optional[datetime]:
             )
         return _ceil_to_millisecond(value)
     if isinstance(value, str):
-        parsed = _timestamp(value)
-        if parsed is None or parsed.utcoffset() is None:
+        parsed = _schedule_time(value)
+        if parsed is None:
             raise ValueError(_TIME_NEEDS_OFFSET)
         return _ceil_to_millisecond(parsed)
     raise TypeError(
@@ -1205,6 +1206,8 @@ def _ceil_to_millisecond_in_utc(when: datetime) -> datetime:
         utc.microsecond,
         tzinfo=timezone.utc,
     )
+    if getattr(when, "nanosecond", 0):
+        plain += timedelta(microseconds=1)
     below_a_millisecond = plain.microsecond % 1000
     if below_a_millisecond:
         plain += timedelta(microseconds=1000 - below_a_millisecond)
@@ -1397,23 +1400,37 @@ def _parse_warnings(warnings: Any) -> tuple[EmailWarning, ...]:
     )
 
 
-_TIME_WITH_OFFSET = re.compile(
-    r"(?P<time>[^.,]+?)"
-    r"(?:(?<=[0-9]{2}:[0-9]{2}:[0-9]{2})[.,](?P<fraction>[0-9]+))?"
+def _timestamp(value: Any) -> Optional[datetime]:
+    text = _text(value)
+    if text is None:
+        return None
+    try:
+        # fromisoformat reads a trailing Z only from Python 3.11.
+        return datetime.fromisoformat(
+            text[:-1] + "+00:00" if text.endswith("Z") else text
+        )
+    except ValueError:
+        return None
+
+
+_SCHEDULE_TIME = re.compile(
+    r"(?P<date>[0-9]{4}-[0-9]{2}-[0-9]{2})[T ]"
+    r"(?P<hour_and_minute>(?:[01][0-9]|2[0-3]):[0-5][0-9])"
+    r"(?::(?P<second>[0-5][0-9])(?:[.,](?P<fraction>[0-9]+))?)?"
     r"(?P<offset>Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
 )
 
 
-def _timestamp(value: Any) -> Optional[datetime]:
-    text = _text(value)
-    written = _TIME_WITH_OFFSET.fullmatch(text) if text is not None else None
+def _schedule_time(text: str) -> Optional[datetime]:
+    written = _SCHEDULE_TIME.fullmatch(text)
     if written is None:
         return None
     offset = "+00:00" if written["offset"] == "Z" else written["offset"]
     try:
-        return datetime.fromisoformat(written["time"] + offset) + _fraction_rounded_up(
-            written["fraction"] or ""
-        )
+        return datetime.fromisoformat(
+            f"{written['date']}T{written['hour_and_minute']}:"
+            f"{written['second'] or '00'}{offset}"
+        ) + _fraction_rounded_up(written["fraction"] or "")
     except (ValueError, OverflowError):
         return None
 

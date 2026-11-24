@@ -588,6 +588,18 @@ def test_get_reads_the_status_of_a_sent_email_from_the_app_host():
     assert "Idempotency-Key" not in request.headers
 
 
+def test_get_reads_a_status_time_with_an_offset_in_seconds():
+    emails, _adapter = emails_with(
+        [status_reply(created_at="2026-10-28T18:27:44.364000+02:00:30")]
+    )
+
+    status = emails.get(MESSAGE_ID)
+
+    assert status.created_at == datetime(
+        2026, 10, 28, 16, 27, 14, 364000, tzinfo=timezone.utc
+    )
+
+
 @parameterized.expand(
     [
         (
@@ -2856,6 +2868,8 @@ def sent_body(adapter: FakeAdapter, index: int = 0) -> dict[str, Any]:
         ),
         ("short_fraction_string", "2026-12-01T09:00:00.1Z", "2026-12-01T09:00:00.100Z"),
         ("comma_fraction_string", "2026-12-01T09:00:00,5Z", "2026-12-01T09:00:00.500Z"),
+        ("space_separator_string", "2026-12-01 11:00:00+02:00", DUE),
+        ("minutes_only_string", "2026-12-01T11:00+02:00", DUE),
     ]
 )
 def test_a_scheduled_send_posts_its_time_as_utc_milliseconds(_name, when, wire):
@@ -2896,6 +2910,19 @@ def test_a_datetime_subclass_comes_back_as_the_time_on_the_wire():
     assert result.scheduled_at == datetime(
         2026, 12, 1, 9, 0, 0, 124000, tzinfo=timezone.utc
     )
+
+
+def test_a_time_with_nanoseconds_past_its_microseconds_rounds_up():
+    class NanosecondTime(datetime):
+        nanosecond = 1
+
+    emails, adapter = emails_with([scheduled(scheduled_at="2026-12-01T09:00:00.124Z")])
+    when = NanosecondTime(2026, 12, 1, 9, 0, 0, 123000, tzinfo=timezone.utc)
+
+    result = send(emails, scheduled_at=when)
+
+    assert sent_body(adapter)["scheduled_at"] == "2026-12-01T09:00:00.124Z"
+    assert result.status == "scheduled"
 
 
 @parameterized.expand([("template", send), ("code", send_code)])
@@ -2958,6 +2985,10 @@ def test_a_send_without_scheduled_at_keeps_todays_result():
         ),
         ("latest_time_string", "9999-12-31T23:59:59.9999Z", ValueError, "7 days"),
         ("non_ascii_digits", "２０２６-12-01T09:00:00Z", ValueError, "offset"),
+        ("emoji_separator", "2026-12-01\U0001f35509:00:00Z", ValueError, "offset"),
+        ("basic_format", "20261201T090000Z", ValueError, "offset"),
+        ("hour_24", "2026-12-01T24:00:00Z", ValueError, "offset"),
+        ("lowercase_separator", "2026-12-01t09:00:00Z", ValueError, "offset"),
         ("unix_seconds", 1796115600, TypeError, "datetime"),
         ("date_object", datetime(2026, 12, 1).date(), TypeError, "datetime"),
     ]
