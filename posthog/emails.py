@@ -657,8 +657,9 @@ class BatchEmailResult:
       email, such as after a lost answer. It may still go out. Send it again
       with the same ``idempotency_key`` within 24 hours, so it goes out once.
       ``later_error`` holds what a retry in the same call answered, which
-      describes only that retry, or a status read by key that reads
-      ``failed``, which PostHog also records for a recipient it refused.
+      describes only that retry. At the end of the batch the client reads
+      each one without a ``message_id`` by its key, which fills in only the
+      ``message_id``: read its status with :meth:`Emails.get`.
     - ``not_attempted``: an earlier request of the batch failed, so the client
       sent nothing for this recipient.
 
@@ -673,9 +674,7 @@ class BatchEmailResult:
         error: Why the email is not ``queued``. For an ``unconfirmed``
             email, ``code`` is ``delivery_unavailable``,
             ``idempotency_key_in_flight`` or ``api_error``.
-        later_error: For an ``unconfirmed`` email, a later answer about it,
-            such as a status read by key that reads ``failed``, whose
-            ``code`` is the status's ``reason``.
+        later_error: For an ``unconfirmed`` email, a later answer about it.
     """
 
     index: int
@@ -1901,17 +1900,6 @@ def _unconfirmed(message_id: Optional[str]) -> EmailError:
     )
 
 
-def _failed_status(status: EmailStatus) -> EmailError:
-    reason = status.reason
-    return EmailError(
-        name="application_error",
-        code=reason or "failed",
-        message="PostHog's status of this email reads failed"
-        + (f" ({reason})" if reason else "")
-        + ", so it may not have gone out.",
-    )
-
-
 class _BatchRun:
     """The recipients of one batch call, split into requests, and what PostHog answered for each."""
 
@@ -2087,17 +2075,7 @@ class _BatchRun:
         ]
 
     def found(self, index: int, status: EmailStatus) -> None:
-        if status.status == "failed":
-            self._set(
-                index,
-                "unconfirmed",
-                message_id=status.id,
-                error=self._current(index).error,
-                later_error=_failed_status(status),
-            )
-            return
-        self._maybe_queued.discard(index)
-        self._set(index, "queued", message_id=status.id)
+        self.results[index] = replace(self._current(index), message_id=status.id)
 
     def outcome(self) -> tuple[BatchEmailResult, ...]:
         return tuple(self._current(index) for index in range(len(self.members)))
@@ -2428,6 +2406,7 @@ class Emails(_EmailsBase):
                     run.stop(position, error)
                     self._read_lost(run, secret_key)
                     raise run.failure(error) from error
+            self._read_lost(run, secret_key)
         finally:
             finish()
         result = run.result()
@@ -2727,6 +2706,7 @@ class AsyncEmails(_EmailsBase):
                     run.stop(position, error)
                     await self._read_lost(run, secret_key)
                     raise run.failure(error) from error
+            await self._read_lost(run, secret_key)
         finally:
             finish()
         result = run.result()
