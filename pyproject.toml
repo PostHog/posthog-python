@@ -6,8 +6,14 @@ build-backend = "setuptools.build_meta"
 name = "posthog"
 version = "8.2.1"
 description = "Integrate PostHog into any python application."
-authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
-maintainers = [{ name = "PostHog", email = "engineering@posthog.com" }]
+authors = [
+    { name = "Posthog" },
+    { name = "PostHog", email = "engineering@posthog.com" },
+]
+maintainers = [
+    { name = "PostHog" },
+    { name = "PostHog", email = "engineering@posthog.com" },
+]
 license = "MIT"
 readme = "README.md"
 requires-python = ">=3.10"
