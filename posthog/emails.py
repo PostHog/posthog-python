@@ -1814,7 +1814,6 @@ def _batch_response_error(
 
 
 def _ascii_digits(text: str) -> bool:
-    # str.isdigit() also takes digits such as "²" that int() refuses.
     return text.isascii() and text.isdigit()
 
 
