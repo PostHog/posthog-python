@@ -159,9 +159,9 @@ More than 100 recipients raises ``ValueError`` before anything is sent. A reques
 that fails as a whole, such as a rate limit past its retries, raises
 :class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
 ``content_too_large`` on a 413 means the request was too large for PostHog:
-split the recipients into smaller batches. On a 400 it means the shared content
-or ``template_data`` is too large, which splitting doesn't help. Each error's
-``fix`` carries PostHog's own advice. ``batch_unavailable`` (409) means the project
+split the recipients into smaller batches, as its ``fix`` says. On a 400 it means
+the shared content or ``template_data`` is too large, which splitting doesn't
+help, and its ``message`` says what to send less of. ``batch_unavailable`` (409) means the project
 can't send batches yet, and a 404 that the template doesn't exist or batch sends
 are off for the project: send each email the batch didn't queue with ``send``
 and its recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
@@ -1833,12 +1833,12 @@ def _batch_response_error(
             "with send() and its recipient's idempotency_key.",
             **answered,
         }
-    if status == 413:
+    if status == 413 and not _text(fields.get("fix")):
         fields = {
+            **fields,
             "fix": "Split the recipients into smaller batches and send each with batch()."
             if recipient_count > 1
             else "Send less template_data or content for this recipient.",
-            **fields,
         }
     if fields.get("code") == "batch_unavailable":
         fields = {
@@ -2250,8 +2250,8 @@ class Emails(_EmailsBase):
                 every recipient. ``code`` is ``content_too_large`` on a 413 when
                 the request was too large for PostHog: split the recipients
                 into smaller batches. On a 400 the shared content or
-                ``template_data`` is too large, and ``fix`` says what to send
-                less of. ``batch_unavailable`` means the project
+                ``template_data`` is too large, and ``message`` says what to
+                send less of. ``batch_unavailable`` means the project
                 can't send batches yet: send each email the batch didn't
                 queue with :meth:`send` and its recipient's
                 ``idempotency_key``. ``client_closed`` means the client shut

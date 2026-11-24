@@ -421,8 +421,12 @@ def test_a_400_content_too_large_keeps_its_own_fix_and_no_split_advice():
     [(2, "smaller batches"), (1, "template_data")],
     ids=["many", "one"],
 )
-def test_a_413_without_a_fix_says_to_split_or_send_less(count, says):
-    emails, _ = emails_on([(413, {"code": "content_too_large", "detail": "Big."}, {})])
+@pytest.mark.parametrize("fix", [None, "", ["split"]], ids=["absent", "empty", "list"])
+def test_a_413_without_a_usable_fix_says_to_split_or_send_less(count, says, fix):
+    body: dict[str, Any] = {"code": "content_too_large", "detail": "Big."}
+    if fix is not None:
+        body["fix"] = fix
+    emails, _ = emails_on([(413, body, {})])
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(count))
@@ -552,6 +556,32 @@ def test_a_shutdown_during_a_retry_wait_sends_no_retry():
     assert statuses == ["failed", "failed"]
     assert raised.value.results[0].error is not None
     assert raised.value.results[0].error.code == "client_closed"
+
+
+def test_a_shutdown_during_a_retry_wait_after_a_503_leaves_recipients_unconfirmed():
+    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+    posthog = BatchPostHog([whole_call(503, "delivery_unavailable"), all_queued])
+
+    def shutdown_during_the_wait(delay: float) -> None:
+        client.shutdown()
+
+    with (
+        on_the_wire(posthog),
+        mock.patch("posthog.emails.time.sleep", side_effect=shutdown_during_the_wait),
+        pytest.raises(EmailBatchError) as raised,
+    ):
+        batch(client.emails, recipients(2))
+
+    assert raised.value.code == "client_closed"
+    assert len(posthog.requests) == 1
+    results = raised.value.results
+    assert [(r.status, r.idempotency_key) for r in results] == [
+        ("unconfirmed", "key-0"),
+        ("unconfirmed", "key-1"),
+    ]
+    error = results[0].error
+    assert error is not None and error.fix is not None
+    assert "same idempotency_key" in error.fix
 
 
 def test_a_whole_call_error_raises_with_every_recipient_failed():
