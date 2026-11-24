@@ -28,6 +28,7 @@ FIRST_SEEN_FILTER = {
 IN_COHORT = [{"key": "id", "value": 7, "type": "cohort"}]
 NOT_IN_COHORT = [{"key": "id", "value": 7, "type": "cohort", "operator": "not_in"}]
 CREATED_IN_2026 = {"created_at": "2026-06-01"}
+PLAN_PAID = {"key": "plan", "type": "person", "operator": "exact", "value": "paid"}
 VARIANTS = {
     "variants": [
         {"key": "new-user", "rollout_percentage": 50},
@@ -36,8 +37,8 @@ VARIANTS = {
 }
 
 
-def _cohort(*filters):
-    return {"7": {"type": "AND", "values": list(filters)}}
+def _cohort(*filters, group_type="AND"):
+    return {"7": {"type": group_type, "values": list(filters)}}
 
 
 FIRST_SEEN_COHORT = _cohort(FIRST_SEEN_FILTER)
@@ -208,10 +209,70 @@ class TestPersonMetadataFilters(unittest.TestCase):
             self.assertEqual(snapshot.get_flag("target"), remote)
             self.assertEqual(patch_flags.call_count, 1)
 
+    @parameterized.expand(
+        [
+            ("and", "AND", IN_COHORT, "free", False),
+            ("and_not_in", "AND", NOT_IN_COHORT, "free", True),
+            ("or", "OR", IN_COHORT, "paid", True),
+            ("or_not_in", "OR", NOT_IN_COHORT, "paid", False),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_another_filter_still_decides_the_cohort(
+        self, _, group_type, flag_properties, plan, expected, patch_flags
+    ):
+        dependency = _flag(_condition([FIRST_SEEN_FILTER]), key="dependency")
+        for filters in (
+            (PLAN_PAID, FIRST_SEEN_FILTER),
+            (FIRST_SEEN_FILTER, PLAN_PAID),
+            ({"type": "AND", "values": [FIRST_SEEN_FILTER]}, PLAN_PAID),
+            (DEPENDS_ON_FIRST_SEEN, PLAN_PAID),
+        ):
+            client = self._client(
+                [_flag(_condition(flag_properties)), dependency],
+                _cohort(*filters, group_type=group_type),
+            )
+            for created_at in (CREATED_IN_2026, {}):
+                with self.subTest(filters=filters, created_at=created_at):
+                    snapshot = client.evaluate_flags(
+                        "user-123",
+                        person_properties={"plan": plan, **created_at},
+                        flag_keys=["first-seen-flag"],
+                    )
+                    self.assertIs(snapshot.get_flag("first-seen-flag"), expected)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @parameterized.expand(
+        [
+            ("and", "AND", "paid"),
+            ("or", "OR", "free"),
+        ]
+    )
+    @mock.patch("posthog.client.flags")
+    def test_undecided_cohort_blocks_later_conditions(
+        self, _, group_type, plan, patch_flags
+    ):
+        patch_flags.return_value = {"featureFlags": {"target": "new-user"}}
+        for filters in (
+            (PLAN_PAID, FIRST_SEEN_FILTER),
+            (FIRST_SEEN_FILTER, PLAN_PAID),
+        ):
+            patch_flags.reset_mock()
+            client = self._client(
+                SERVER_ONLY_FIRST_CONDITION[0][1],
+                _cohort(*filters, group_type=group_type),
+            )
+
+            snapshot = client.evaluate_flags(
+                "user-123", person_properties={"plan": plan}, flag_keys=["target"]
+            )
+
+            self.assertEqual(snapshot.get_flag("target"), "new-user")
+            self.assertEqual(patch_flags.call_count, 1)
+
     @mock.patch("posthog.client.flags")
     def test_another_filter_still_rules_the_condition_out(self, patch_flags):
-        plan = {"key": "plan", "type": "person", "operator": "exact", "value": "paid"}
-        client = self._client([_flag(_condition([FIRST_SEEN_FILTER, plan]))])
+        client = self._client([_flag(_condition([FIRST_SEEN_FILTER, PLAN_PAID]))])
 
         snapshot = client.evaluate_flags("user-123", person_properties={"plan": "free"})
 

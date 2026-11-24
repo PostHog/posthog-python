@@ -133,6 +133,14 @@ class RequiresServerEvaluation(Exception):
             self.reason = reason
 
 
+class _RequiresServerFilter(RequiresServerEvaluation):
+    """
+    Raised for a single filter that only the server can check. Like any
+    RequiresServerEvaluation it stops later conditions from deciding the flag, but in a
+    cohort another filter can still make the result certain.
+    """
+
+
 # When several causes apply to one flag, the spec reports the first reason in this
 # order, so every SDK picks the same reason whatever order it inspects filters in.
 _UNRESOLVED_REASON_PRECEDENCE = (
@@ -458,8 +466,9 @@ def _evaluate_dependency(
     except RequiresServerEvaluation as e:
         # The dependent flag needs the server too, so its later conditions must
         # not resolve it locally. Nothing is cached, so another filter on this
-        # dependency also raises this error.
-        raise RequiresServerEvaluation(
+        # dependency also raises this error. The type is kept, so a cohort treats the
+        # dependency like the filter that stopped it.
+        raise type(e)(
             f"Cannot evaluate flag dependency '{dep_flag_key}': {e}",
             reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
         ) from e
@@ -799,15 +808,15 @@ def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
 # and flag filters have their own matching. Any other type, such as "person_metadata"
 # (a value /flags reads from the persons table, not from person properties), can't be
 # evaluated locally: matching it against a caller property with the same key could
-# disagree with /flags. No caller can supply the value, so like a static cohort it must
-# not let a later condition decide the flag.
+# disagree with /flags. No caller can supply the value, so a later condition must not
+# decide the flag either.
 _PROPERTY_FILTER_TYPES = ("person", "group")
 
 
 def _assert_property_filter_type_supported(prop) -> None:
     property_type = prop.get("type")
     if property_type and property_type not in _PROPERTY_FILTER_TYPES:
-        raise RequiresServerEvaluation(
+        raise _RequiresServerFilter(
             f"Can't evaluate a '{property_type}' filter on '{prop.get('key')}' locally",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
@@ -1734,6 +1743,7 @@ def match_property_group(
 
     decisive_result = None
     inconclusive_reason: Optional[UnresolvedFlagReason] = None
+    server_filter_error: Optional[_RequiresServerFilter] = None
 
     for prop in properties:
         try:
@@ -1749,6 +1759,8 @@ def match_property_group(
             )
             if effective_match != is_and:
                 decisive_result = effective_match
+        except _RequiresServerFilter as e:
+            server_filter_error = server_filter_error or e
         except RequiresServerEvaluation:
             # Static/missing cohorts and malformed definitions always require server evaluation,
             # even when another branch would otherwise resolve the group locally.
@@ -1759,6 +1771,8 @@ def match_property_group(
 
     if decisive_result is not None:
         return decisive_result
+    if server_filter_error is not None:
+        raise server_filter_error
     if inconclusive_reason is not None:
         raise InconclusiveMatchError(
             "Can't match cohort without a given cohort property value",
