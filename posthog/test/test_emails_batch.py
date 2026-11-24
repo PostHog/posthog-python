@@ -358,7 +358,7 @@ def test_100_recipients_go_out_in_one_request():
     ]
 
 
-def test_a_batch_the_server_finds_too_large_raises_its_413():
+def test_a_batch_the_server_finds_too_large_raises_its_413_with_its_fix():
     emails, posthog = emails_on(
         [
             (
@@ -367,6 +367,7 @@ def test_a_batch_the_server_finds_too_large_raises_its_413():
                     "type": "invalid_request",
                     "code": "content_too_large",
                     "detail": "Too big.",
+                    "fix": "Split the recipients into smaller batches.",
                 },
                 {},
             )
@@ -377,25 +378,28 @@ def test_a_batch_the_server_finds_too_large_raises_its_413():
         batch(emails, recipients(2))
 
     error = raised.value
-    assert (error.code, error.status_code, error.message) == (
+    assert (error.code, error.status_code, error.message, error.fix) == (
         "content_too_large",
         413,
         "Too big.",
+        "Split the recipients into smaller batches.",
     )
-    assert error.fix is not None and "smaller batches" in error.fix
     assert [r.status for r in error.results] == ["failed", "failed"]
     assert len(posthog.requests) == 1
 
 
-def test_a_413_for_one_recipient_says_to_send_less_data():
+@pytest.mark.parametrize(
+    "count, says",
+    [(2, "smaller batches"), (1, "template_data")],
+    ids=["many", "one"],
+)
+def test_a_413_without_a_fix_says_to_split_or_send_less(count, says):
     emails, _ = emails_on([(413, {"code": "content_too_large", "detail": "Big."}, {})])
 
     with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(1))
+        batch(emails, recipients(count))
 
-    fix = raised.value.fix
-    assert fix is not None and "smaller batches" not in fix
-    assert "template_data" in fix
+    assert raised.value.fix is not None and says in raised.value.fix
 
 
 def test_a_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
@@ -538,6 +542,22 @@ def test_a_whole_call_error_raises_with_every_recipient_failed():
         "Nope.",
     )
     assert error.results[2].idempotency_key == "key-2"
+
+
+def test_a_429_after_a_lost_answer_leaves_every_recipient_unconfirmed():
+    emails, posthog = emails_on(
+        [requests.ConnectionError("reset"), whole_call(429, "rate_limited")]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2), max_retries=1)
+
+    assert raised.value.code == "rate_limited"
+    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2
+    error = raised.value.results[1].error
+    assert error is not None and error.code == "rate_limited"
+    assert error.fix is not None and "same idempotency_key" in error.fix
+    assert len(posthog.requests) == 2
 
 
 def test_a_whole_call_refusal_after_a_503_leaves_every_recipient_unconfirmed():

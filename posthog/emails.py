@@ -1833,10 +1833,10 @@ def _batch_response_error(
         }
     if status == 413:
         fields = {
-            **fields,
             "fix": "Split the recipients into smaller batches and send each with batch()."
             if recipient_count > 1
             else "Send less template_data or content for this recipient.",
+            **fields,
         }
     if fields.get("code") == "batch_unavailable":
         fields = {
