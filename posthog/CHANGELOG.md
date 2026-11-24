@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.3 — 2026-11-24
+
+### Patch changes
+
+- [82c9004c](https://github.com/posthog/posthog-python/commit/82c9004c0f64dc0d437dbcc6a59ae73a63699c8b) `posthog.ai.langchain`: stop double-counting Gemini thinking tokens. langchain-google-genai reports `usage_metadata.output_tokens` with reasoning included (it adds `thoughts_token_count`), and PostHog prices Gemini 2.5/3 reasoning on top of `$ai_output_tokens`, so thinking was billed twice. For Gemini models whose output includes reasoning (input plus output reach `total_tokens`), the handler now reports `$ai_output_tokens` without it, as the Gemini wrapper does. Integrations that already report candidates only, such as ChatVertexAI, are unchanged. — Thanks @MaiAditya!
+
 ## 8.2.2 — 2026-11-24
 
 ### Patch changes
