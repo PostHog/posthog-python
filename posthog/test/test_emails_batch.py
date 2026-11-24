@@ -5,7 +5,6 @@ import json
 import logging
 from typing import Any, Optional
 from unittest import mock
-from urllib.parse import parse_qs, urlsplit
 
 import httpx
 import pytest
@@ -23,7 +22,6 @@ from posthog.emails import (
 SECRET_KEY = "phs_test_secret"
 TEMPLATE_ID = "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b"
 BATCH_URL = "https://us.posthog.com/api/messaging/send/email_batch/"
-STATUS_BY_KEY_URL = "https://us.posthog.com/api/messaging/emails/status/"
 FOUR_MIB = 4 * 1024 * 1024
 
 Answer = Any  # an Exception, or (status, body, headers)
@@ -136,33 +134,6 @@ def whole_call(status: int, code: Optional[str] = None, **headers: str) -> Answe
         {"type": "invalid_request", "code": code, "detail": "Nope."} if code else None
     )
     return (status, body, headers)
-
-
-def status_found(message_id: str) -> Answer:
-    return (
-        200,
-        {
-            "id": message_id,
-            "status": "sent",
-            "created_at": "2026-11-22T10:00:00Z",
-            "status_at": "2026-11-22T10:00:01Z",
-        },
-        {},
-    )
-
-
-def status_failed(message_id: str, reason: str) -> Answer:
-    return (
-        200,
-        {
-            "id": message_id,
-            "status": "failed",
-            "reason": reason,
-            "created_at": "2026-11-22T10:00:00Z",
-            "status_at": "2026-11-22T10:00:00Z",
-        },
-        {},
-    )
 
 
 def recipients(count: int, **extra: Any) -> list[dict[str, Any]]:
@@ -562,23 +533,6 @@ def test_a_shutdown_during_a_retry_wait_sends_no_retry():
     assert raised.value.results[0].error.code == "client_closed"
 
 
-def test_a_shutdown_before_a_lost_answer_reads_no_email_by_its_key():
-    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
-
-    def shutdown_then_unavailable(request: requests.PreparedRequest) -> Answer:
-        client.shutdown()
-        return whole_call(503, "delivery_unavailable")
-
-    posthog = BatchPostHog([shutdown_then_unavailable, status_found("m0")])
-
-    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
-        batch(client.emails, recipients(2), max_retries=0)
-
-    assert raised.value.code == "delivery_unavailable"
-    assert len(posthog.requests) == 1
-    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2
-
-
 def test_a_whole_call_error_raises_with_the_results_so_far():
     emails, posthog = emails_on([all_queued, whole_call(429, "quota_limited")])
 
@@ -602,59 +556,26 @@ def test_a_whole_call_error_raises_with_the_results_so_far():
     assert error.results[249].idempotency_key == "key-249"
 
 
-def test_a_lost_answer_after_retries_reads_each_email_by_its_key():
-    def status_by_key(request: requests.PreparedRequest) -> Answer:
-        key = parse_qs(urlsplit(request.url).query)["idempotency_key"][0]
-        if key == "key-0":
-            return status_found("m0")
-        return whole_call(404, "not_found")
-
-    emails, posthog = emails_on(
-        [
-            requests.ConnectionError("reset"),
-            requests.ConnectionError("reset"),
-            requests.ConnectionError("reset"),
-            status_by_key,
-            status_by_key,
-        ]
-    )
+def test_a_lost_answer_after_retries_leaves_each_email_unconfirmed_without_a_read():
+    emails, posthog = emails_on([requests.ConnectionError("reset")] * 3)
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(2))
 
     error = raised.value
     assert error.code == "network_error"
-    reads = [r for r in posthog.requests if r.url.startswith(STATUS_BY_KEY_URL)]
-    assert [parse_qs(urlsplit(r.url).query)["idempotency_key"] for r in reads] == [
-        ["key-0"],
-        ["key-1"],
-    ]
+    assert [r.url for r in posthog.requests] == [BATCH_URL] * 3
     assert [(r.status, r.message_id) for r in error.results] == [
-        ("unconfirmed", "m0"),
+        ("unconfirmed", None),
         ("unconfirmed", None),
     ]
+    assert [r.idempotency_key for r in error.results] == ["key-0", "key-1"]
     assert error.results[1].error is not None
     assert error.results[1].error.code == "delivery_unavailable"
+    assert "same idempotency_key" in error.results[1].error.message
 
 
-@pytest.mark.parametrize(
-    "read",
-    [status_found("m0"), status_failed("m0", "recipient_suppressed")],
-    ids=["sent", "failed"],
-)
-def test_a_status_read_by_key_fills_in_only_the_id(read):
-    emails, _ = emails_on([requests.ConnectionError("reset"), read])
-
-    with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(1), max_retries=0)
-
-    [result] = raised.value.results
-    assert (result.status, result.message_id) == ("unconfirmed", "m0")
-    assert result.error is not None and result.error.code == "delivery_unavailable"
-    assert result.later_error is None
-
-
-def test_a_batch_that_succeeds_reads_each_unconfirmed_email_without_an_id():
+def test_a_batch_that_succeeds_reads_no_unconfirmed_email_back():
     unconfirmed_slot = {
         "error": {
             "code": "delivery_unavailable",
@@ -663,55 +584,15 @@ def test_a_batch_that_succeeds_reads_each_unconfirmed_email_without_an_id():
             "retryable": True,
         }
     }
-    emails, posthog = emails_on(
-        [ok(queued("m0"), unconfirmed_slot), status_found("m1")]
-    )
+    emails, posthog = emails_on([ok(queued("m0"), unconfirmed_slot)])
 
     result = batch(emails, recipients(2), max_retries=0)
 
     assert [(r.status, r.message_id) for r in result.results] == [
         ("queued", "m0"),
-        ("unconfirmed", "m1"),
-    ]
-    [read] = posthog.requests[1:]
-    assert parse_qs(urlsplit(read.url).query) == {"idempotency_key": ["key-1"]}
-
-
-@pytest.mark.parametrize(
-    "failure", [RuntimeError("hook"), RecursionError("deep")], ids=["hook", "deep"]
-)
-def test_a_lookup_that_raises_keeps_a_successful_batch_result(failure):
-    unconfirmed_slot = {
-        "error": {
-            "code": "delivery_unavailable",
-            "detail": "Not confirmed.",
-            "status": 503,
-            "retryable": True,
-        }
-    }
-    emails, posthog = emails_on(
-        [ok(queued("m0"), unconfirmed_slot, unconfirmed_slot), failure]
-    )
-
-    result = batch(emails, recipients(3), max_retries=0)
-
-    assert [(r.status, r.message_id) for r in result.results] == [
-        ("queued", "m0"),
-        ("unconfirmed", None),
         ("unconfirmed", None),
     ]
-    assert len(posthog.requests) == 2
-
-
-def test_a_lookup_that_raises_after_a_lost_answer_keeps_the_batch_error():
-    emails, _ = emails_on([requests.ConnectionError("reset"), RuntimeError("hook")])
-
-    with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(1), max_retries=0)
-
-    assert [(r.status, r.message_id) for r in raised.value.results] == [
-        ("unconfirmed", None)
-    ]
+    assert [r.url for r in posthog.requests] == [BATCH_URL]
 
 
 def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
@@ -720,7 +601,6 @@ def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
             whole_call(503, "delivery_unavailable"),
             whole_call(409, "idempotency_key_in_flight"),
             whole_call(503, "delivery_unavailable"),
-            whole_call(404, "not_found"),
         ]
     )
 
@@ -731,28 +611,51 @@ def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
     assert result.status == "unconfirmed"
     assert result.later_error is not None
     assert result.later_error.code == "idempotency_key_in_flight"
-    assert len(posthog.requests) == 4
+    assert len(posthog.requests) == 3
 
 
 def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
-    emails, posthog = emails_on(
-        [
-            whole_call(409, "idempotency_key_in_flight"),
-            status_found("m0"),
-            whole_call(404, "not_found"),
-        ]
-    )
+    emails, posthog = emails_on([whole_call(409, "idempotency_key_in_flight")])
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(2), max_retries=0)
 
     assert raised.value.code == "idempotency_key_in_flight"
     assert [(r.status, r.message_id) for r in raised.value.results] == [
-        ("unconfirmed", "m0"),
+        ("unconfirmed", None),
         ("unconfirmed", None),
     ]
     assert [r.later_error for r in raised.value.results] == [None, None]
-    assert len(posthog.requests) == 3
+    assert len(posthog.requests) == 1
+
+
+def test_a_first_in_flight_answer_stays_the_error_after_a_503():
+    emails, posthog = emails_on(
+        [
+            whole_call(409, "idempotency_key_in_flight"),
+            whole_call(503, "delivery_unavailable"),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=1)
+
+    assert raised.value.code == "delivery_unavailable"
+    [result] = raised.value.results
+    assert result.status == "unconfirmed"
+    assert result.error is not None
+    assert result.error.code == "idempotency_key_in_flight"
+    assert len(posthog.requests) == 2
+
+
+def test_an_in_flight_code_on_a_status_other_than_409_is_failed():
+    emails, posthog = emails_on([whole_call(401, "idempotency_key_in_flight")])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    assert [r.status for r in raised.value.results] == ["failed", "failed"]
+    assert len(posthog.requests) == 1
 
 
 def test_an_in_flight_retry_after_a_503_is_the_later_error():
@@ -760,7 +663,6 @@ def test_an_in_flight_retry_after_a_503_is_the_later_error():
         [
             whole_call(503, "delivery_unavailable"),
             whole_call(409, "idempotency_key_in_flight"),
-            whole_call(404, "not_found"),
         ]
     )
 
@@ -772,7 +674,7 @@ def test_an_in_flight_retry_after_a_503_is_the_later_error():
     assert result.error is not None and result.error.code == "delivery_unavailable"
     assert result.later_error is not None
     assert result.later_error.code == "idempotency_key_in_flight"
-    assert len(posthog.requests) == 3
+    assert len(posthog.requests) == 2
 
 
 @pytest.mark.parametrize("code", [[], {}], ids=["list", "object"])
@@ -785,37 +687,6 @@ def test_a_whole_call_answer_with_a_code_that_is_not_text_is_a_batch_error(code)
     assert raised.value.code == "api_error"
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
     assert len(posthog.requests) == 1
-
-
-def test_reading_by_key_stops_when_posthog_stays_unreachable():
-    emails, posthog = emails_on(
-        [whole_call(503, "delivery_unavailable")] * 3
-        + [requests.ConnectionError("down")]
-    )
-
-    with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(3), max_retries=2)
-
-    assert (
-        len(posthog.requests) == 4
-    )  # three batch attempts, one status read, then it stops
-    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 3
-
-
-def test_a_key_with_reserved_characters_is_encoded_in_the_status_read():
-    emails, posthog = emails_on(
-        [requests.ConnectionError("reset"), whole_call(404, "not_found")]
-    )
-
-    with pytest.raises(EmailBatchError):
-        batch(
-            emails,
-            [{"to": "a@example.com", "idempotency_key": "order#1&x=2"}],
-            max_retries=0,
-        )
-
-    read = posthog.requests[1]
-    assert parse_qs(urlsplit(read.url).query) == {"idempotency_key": ["order#1&x=2"]}
 
 
 def test_batch_unavailable_is_not_retried_and_says_to_send_singly():
@@ -853,20 +724,14 @@ def test_a_404_says_batch_sends_are_unavailable(body):
 
 
 def test_an_answer_without_a_result_per_recipient_leaves_the_chunk_unconfirmed():
-    emails, posthog = emails_on(
-        [ok(queued("m0")), whole_call(404, "not_found"), whole_call(404, "not_found")]
-    )
+    emails, posthog = emails_on([ok(queued("m0"))])
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(2), max_retries=0)
 
     assert raised.value.code == "api_error"
     assert [r.status for r in raised.value.results] == ["unconfirmed", "unconfirmed"]
-    assert [r.url.startswith(STATUS_BY_KEY_URL) for r in posthog.requests] == [
-        False,
-        True,
-        True,
-    ]
+    assert [r.url for r in posthog.requests] == [BATCH_URL]
 
 
 def test_warnings_reach_the_caller_once(caplog):
@@ -1033,10 +898,8 @@ async def test_async_batch_waits_for_a_slow_answer_whatever_the_client_timeout()
 
 
 @pytest.mark.asyncio
-async def test_async_batch_reads_a_lost_email_by_its_key():
-    emails, seen = async_emails_on(
-        [httpx.ConnectError("reset"), httpx.Response(404, json={"code": "not_found"})]
-    )
+async def test_async_batch_reads_no_lost_email_back():
+    emails, seen = async_emails_on([httpx.ConnectError("reset")])
 
     with pytest.raises(EmailBatchError) as raised:
         await emails.batch(
@@ -1044,12 +907,14 @@ async def test_async_batch_reads_a_lost_email_by_its_key():
         )
 
     assert raised.value.code == "network_error"
-    assert [r.status for r in raised.value.results] == ["unconfirmed"]
-    assert str(seen[-1].url) == STATUS_BY_KEY_URL + "?idempotency_key=key-0"
+    assert [(r.status, r.message_id) for r in raised.value.results] == [
+        ("unconfirmed", None)
+    ]
+    assert [str(r.url) for r in seen] == [BATCH_URL]
 
 
 @pytest.mark.asyncio
-async def test_async_batch_that_succeeds_reads_an_unconfirmed_email_by_its_key():
+async def test_async_batch_that_succeeds_reads_no_unconfirmed_email_back():
     unconfirmed_slot = {
         "error": {
             "code": "delivery_unavailable",
@@ -1059,46 +924,15 @@ async def test_async_batch_that_succeeds_reads_an_unconfirmed_email_by_its_key()
         }
     }
     emails, seen = async_emails_on(
-        [
-            httpx.Response(200, json={"results": [unconfirmed_slot]}),
-            httpx.Response(200, json=status_found("m0")[1]),
-        ]
+        [httpx.Response(200, json={"results": [unconfirmed_slot]})]
     )
 
     result = await emails.batch(
         recipients=recipients(1), template_id=TEMPLATE_ID, max_retries=0
     )
 
-    assert [(r.status, r.message_id) for r in result.results] == [("unconfirmed", "m0")]
-    assert str(seen[-1].url) == STATUS_BY_KEY_URL + "?idempotency_key=key-0"
-
-
-@pytest.mark.asyncio
-async def test_async_lookup_that_raises_keeps_a_successful_batch_result():
-    unconfirmed_slot = {
-        "error": {
-            "code": "delivery_unavailable",
-            "detail": "Not confirmed.",
-            "status": 503,
-            "retryable": True,
-        }
-    }
-    emails, seen = async_emails_on(
-        [
-            httpx.Response(200, json={"results": [queued("m0"), unconfirmed_slot]}),
-            RuntimeError("hook"),
-        ]
-    )
-
-    result = await emails.batch(
-        recipients=recipients(2), template_id=TEMPLATE_ID, max_retries=0
-    )
-
-    assert [(r.status, r.message_id) for r in result.results] == [
-        ("queued", "m0"),
-        ("unconfirmed", None),
-    ]
-    assert len(seen) == 2
+    assert [(r.status, r.message_id) for r in result.results] == [("unconfirmed", None)]
+    assert [str(r.url) for r in seen] == [BATCH_URL]
 
 
 @pytest.mark.asyncio
@@ -1162,34 +996,3 @@ async def test_async_shutdown_during_a_retry_wait_sends_no_retry():
     assert raised.value.code == "client_closed"
     assert len(seen) == 1
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
-
-
-@pytest.mark.asyncio
-async def test_async_shutdown_before_a_lost_answer_reads_no_email_by_its_key():
-    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
-    seen: list[httpx.Request] = []
-    shutting_down: list[asyncio.Task[None]] = []
-
-    async def wire(
-        transport: httpx.AsyncHTTPTransport, request: httpx.Request
-    ) -> httpx.Response:
-        seen.append(request)
-        if shutting_down:
-            return httpx.Response(200, json=status_found("m0")[1])
-        shutting_down.append(asyncio.create_task(client.shutdown()))
-        for _ in range(5):
-            await asyncio.sleep(0)
-        return httpx.Response(503, json={"code": "delivery_unavailable"})
-
-    with (
-        mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
-        pytest.raises(EmailBatchError) as raised,
-    ):
-        await client.emails.batch(
-            recipients=recipients(2), template_id=TEMPLATE_ID, max_retries=0
-        )
-    await shutting_down[0]
-
-    assert raised.value.code == "delivery_unavailable"
-    assert len(seen) == 1
-    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2

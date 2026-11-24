@@ -217,7 +217,6 @@ from typing import (
     Union,
     overload,
 )
-from urllib.parse import urlencode
 from uuid import UUID, uuid4
 
 import requests
@@ -258,7 +257,6 @@ _SEND_PATH = "/api/messaging/send/email/"
 _UPLOADS_PATH = "/api/messaging/attachments/uploads/"
 _STATUS_PATH = "/api/messaging/emails/{message_id}/"
 _BATCH_PATH = "/api/messaging/send/email_batch/"
-_STATUS_BY_KEY_PATH = "/api/messaging/emails/status/"
 _BATCH_MAX_RECIPIENTS = 100
 _BATCH_MAX_BODY_BYTES = 4 * 1024 * 1024
 _POSTHOG_PIPELINE_WAIT = 30.0
@@ -581,9 +579,8 @@ class BatchRecipient(TypedDict):
             within 24 hours replays the emails that went out instead of
             sending them twice. A single send and a batch recipient with the
             same key and the same email replay each other. Never
-            reuse a key for another email: after a lost answer, the client
-            reads the email by its key, and an earlier email with that key
-            gives this one its ``message_id``.
+            reuse a key for another email: a send with the key of an earlier
+            email replays that email instead of sending this one.
         template_data: Only with ``template_id``: values for this recipient,
             merged over the batch's ``template_data``. A top-level key set here
             replaces the same key there.
@@ -657,9 +654,7 @@ class BatchEmailResult:
       email, such as after a lost answer. It may still go out. Send it again
       with the same ``idempotency_key`` within 24 hours, so it goes out once.
       ``later_error`` holds what a retry in the same call answered, which
-      describes only that retry. At the end of the batch the client reads
-      each one without a ``message_id`` by its key, which fills in only the
-      ``message_id``: read its status with :meth:`Emails.get`.
+      describes only that retry.
     - ``not_attempted``: an earlier request of the batch failed, so the client
       sent nothing for this recipient.
 
@@ -1619,6 +1614,10 @@ def _response_error(
     )
 
 
+def _held_by_another_request(error: EmailError) -> bool:
+    return error.status_code == 409 and error.code in _IN_FLIGHT_CODES
+
+
 def _is_retryable(error: EmailError) -> bool:
     # A send carries an idempotency key, so a retry can't queue a second email. A status read changes nothing.
     if error.status_code is None:
@@ -1626,7 +1625,7 @@ def _is_retryable(error: EmailError) -> bool:
     if error.code == "attachment_upload_failed":
         return error.status_code in _STORAGE_RETRY_STATUSES
     if error.status_code == 409:
-        return error.code in _IN_FLIGHT_CODES
+        return _held_by_another_request(error)
     if error.status_code == 429:
         return error.code not in _QUOTA_CODES | _DAILY_QUOTA_CODES
     return error.status_code == 503
@@ -1952,17 +1951,15 @@ class _BatchRun:
         assert result is not None
         return result
 
-    def lost(
-        self, chunk: _BatchChunk, later_error: Optional[EmailError] = None
-    ) -> None:
+    def lost(self, chunk: _BatchChunk, cause: Optional[EmailError] = None) -> None:
         """An attempt that may have queued some of the chunk got no usable answer."""
         for index in chunk.indices:
             earlier = self.results[index]
             message_id = earlier.message_id if earlier is not None else None
             if index in self._maybe_queued:
-                if later_error is not None:
+                if cause is not None:
                     self.results[index] = replace(
-                        self._current(index), later_error=later_error
+                        self._current(index), later_error=cause
                     )
                 continue
             self._maybe_queued.add(index)
@@ -1970,7 +1967,7 @@ class _BatchRun:
                 index,
                 "unconfirmed",
                 message_id=message_id,
-                error=_unconfirmed(message_id),
+                error=cause or _unconfirmed(message_id),
             )
 
     def answer(
@@ -1987,8 +1984,8 @@ class _BatchRun:
             )
             if status >= 500:
                 self.lost(chunk)
-            elif failure.code in _IN_FLIGHT_CODES:
-                self.lost(chunk, later_error=failure)
+            elif _held_by_another_request(failure):
+                self.lost(chunk, failure)
             raise failure
         slots = fields.get("results")
         if not isinstance(slots, list) or len(slots) != len(chunk.indices):
@@ -2038,7 +2035,7 @@ class _BatchRun:
             error
             if error.status_code is not None
             and error.status_code < 500
-            and error.code not in _IN_FLIGHT_CODES
+            and not _held_by_another_request(error)
             else None
         )
         for index in self.chunks[position].indices:
@@ -2077,17 +2074,6 @@ class _BatchRun:
             for index in chunk.indices:
                 self._set(index, "not_attempted", error=error)
 
-    def lost_ids(self) -> list[tuple[int, str]]:
-        """Recipients a lost answer left without a message ID, with their keys."""
-        return [
-            (index, self.members[index].idempotency_key)
-            for index in sorted(self._maybe_queued)
-            if self._current(index).message_id is None
-        ]
-
-    def found(self, index: int, status: EmailStatus) -> None:
-        self.results[index] = replace(self._current(index), message_id=status.id)
-
     def outcome(self) -> tuple[BatchEmailResult, ...]:
         return tuple(self._current(index) for index in range(len(self.members)))
 
@@ -2117,10 +2103,6 @@ def _recipient_too_large() -> EmailError:
         fix="Send this recipient's email with send().",
         field="recipients",
     )
-
-
-def _status_by_key_path(idempotency_key: str) -> str:
-    return f"{_STATUS_BY_KEY_PATH}?{urlencode({'idempotency_key': idempotency_key})}"
 
 
 class _EmailsBase:
@@ -2415,9 +2397,7 @@ class Emails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    self._read_lost(run, secret_key)
                     raise run.failure(error) from error
-            self._read_lost(run, secret_key)
         finally:
             finish()
         result = run.result()
@@ -2441,27 +2421,6 @@ class Emails(_EmailsBase):
                 raise
 
         return attempt
-
-    def _read_lost(self, run: _BatchRun, secret_key: str) -> None:
-        headers = _headers(secret_key, self.migrated_from)
-        for index, key in run.lost_ids():
-            if not self._still_admitted():
-                return
-            try:
-                status = self._call(
-                    self._posthog_request(
-                        "GET", _status_by_key_path(key), None, headers
-                    ),
-                    _parse_status_response,
-                    0,
-                )
-            except EmailError as error:
-                if error.status_code == 404:
-                    continue
-                return
-            except Exception:
-                return
-            run.found(index, status)
 
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
         if prepared.files:
@@ -2717,9 +2676,7 @@ class AsyncEmails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    await self._read_lost(run, secret_key)
                     raise run.failure(error) from error
-            await self._read_lost(run, secret_key)
         finally:
             finish()
         result = run.result()
@@ -2744,27 +2701,6 @@ class AsyncEmails(_EmailsBase):
                 raise
 
         return attempt
-
-    async def _read_lost(self, run: _BatchRun, secret_key: str) -> None:
-        headers = _headers(secret_key, self.migrated_from)
-        for index, key in run.lost_ids():
-            if not self._still_admitted():
-                return
-            try:
-                status = await self._call(
-                    self._posthog_request(
-                        "GET", _status_by_key_path(key), None, headers
-                    ),
-                    _parse_status_response,
-                    0,
-                )
-            except EmailError as error:
-                if error.status_code == 404:
-                    continue
-                return
-            except Exception:
-                return
-            run.found(index, status)
 
     async def _deliver(
         self, prepared: _PreparedSend, secret_key: str
