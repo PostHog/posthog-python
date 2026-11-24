@@ -694,7 +694,40 @@ def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
         ("unconfirmed", "m0"),
         ("unconfirmed", None),
     ]
+    assert [r.later_error for r in raised.value.results] == [None, None]
     assert len(posthog.requests) == 3
+
+
+def test_an_in_flight_retry_after_a_503_is_the_later_error():
+    emails, posthog = emails_on(
+        [
+            whole_call(503, "delivery_unavailable"),
+            whole_call(409, "idempotency_key_in_flight"),
+            whole_call(404, "not_found"),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=1)
+
+    [result] = raised.value.results
+    assert result.status == "unconfirmed"
+    assert result.error is not None and result.error.code == "delivery_unavailable"
+    assert result.later_error is not None
+    assert result.later_error.code == "idempotency_key_in_flight"
+    assert len(posthog.requests) == 3
+
+
+@pytest.mark.parametrize("code", [[], {}], ids=["list", "object"])
+def test_a_whole_call_answer_with_a_code_that_is_not_text_is_a_batch_error(code):
+    emails, posthog = emails_on([(400, {"code": code, "detail": "Nope."}, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    assert raised.value.code == "api_error"
+    assert [r.status for r in raised.value.results] == ["failed", "failed"]
+    assert len(posthog.requests) == 1
 
 
 def test_reading_by_key_stops_when_posthog_stays_unreachable():

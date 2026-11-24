@@ -1952,12 +1952,23 @@ class _BatchRun:
         assert result is not None
         return result
 
-    def lost(self, chunk: _BatchChunk) -> None:
+    def lost(
+        self, chunk: _BatchChunk, later_error: Optional[EmailError] = None
+    ) -> None:
         """An attempt that may have queued some of the chunk got no usable answer."""
         for index in chunk.indices:
-            self._maybe_queued.add(index)
             earlier = self.results[index]
             message_id = earlier.message_id if earlier is not None else None
+            if later_error is not None and index in self._maybe_queued:
+                self._set(
+                    index,
+                    "unconfirmed",
+                    message_id=message_id,
+                    error=self._current(index).error,
+                    later_error=later_error,
+                )
+                continue
+            self._maybe_queued.add(index)
             self._set(
                 index,
                 "unconfirmed",
@@ -1974,11 +1985,14 @@ class _BatchRun:
     ) -> None:
         fields = _json_object(body)
         if not 200 <= status < 300:
-            if status >= 500 or fields.get("code") in _IN_FLIGHT_CODES:
-                self.lost(chunk)
-            raise _batch_response_error(
+            failure = _batch_response_error(
                 fields, status, retry_after_header, chunk.indices
             )
+            if status >= 500:
+                self.lost(chunk)
+            elif failure.code in _IN_FLIGHT_CODES:
+                self.lost(chunk, later_error=failure)
+            raise failure
         slots = fields.get("results")
         if not isinstance(slots, list) or len(slots) != len(chunk.indices):
             self.lost(chunk)
