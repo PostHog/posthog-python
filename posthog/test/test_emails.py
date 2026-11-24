@@ -79,6 +79,17 @@ class FakeAdapter(requests.adapters.BaseAdapter):
         pass
 
 
+def on_the_wire(adapter: FakeAdapter) -> Any:
+    def send(
+        _transport: requests.adapters.HTTPAdapter,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        return adapter.send(request, **kwargs)
+
+    return mock.patch.object(requests.adapters.HTTPAdapter, "send", send)
+
+
 def emails_with(replies: list[Reply], **options: Any) -> tuple[Emails, FakeAdapter]:
     adapter = FakeAdapter(replies)
     session = requests.Session()
@@ -2838,6 +2849,13 @@ def sent_body(adapter: FakeAdapter, index: int = 0) -> dict[str, Any]:
             "2026-12-01T09:00:00.124Z",
         ),
         ("negative_offset_string", "2026-12-01T04:00:00.000-05:00", DUE),
+        (
+            "nanosecond_string_rounds_up",
+            "2026-12-01T11:00:00.123000001+02:00",
+            "2026-12-01T09:00:00.124Z",
+        ),
+        ("short_fraction_string", "2026-12-01T09:00:00.1Z", "2026-12-01T09:00:00.100Z"),
+        ("comma_fraction_string", "2026-12-01T09:00:00,5Z", "2026-12-01T09:00:00.500Z"),
     ]
 )
 def test_a_scheduled_send_posts_its_time_as_utc_milliseconds(_name, when, wire):
@@ -2925,6 +2943,20 @@ def test_a_send_without_scheduled_at_keeps_todays_result():
             ValueError,
             "offset",
         ),
+        (
+            "offset_with_seconds_and_fraction",
+            "2026-12-01T11:00:00+01:60:00,1",
+            ValueError,
+            "offset",
+        ),
+        ("fraction_of_an_hour", "2026-12-01T09.5+02:00", ValueError, "offset"),
+        (
+            "latest_datetime",
+            datetime.max.replace(tzinfo=timezone.utc),
+            ValueError,
+            "7 days",
+        ),
+        ("latest_time_string", "9999-12-31T23:59:59.9999Z", ValueError, "7 days"),
         ("non_ascii_digits", "２０２６-12-01T09:00:00Z", ValueError, "offset"),
         ("unix_seconds", 1796115600, TypeError, "datetime"),
         ("date_object", datetime(2026, 12, 1).date(), TypeError, "datetime"),
@@ -2973,12 +3005,12 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
     )
 
     adapter = FakeAdapter([(202, {"message_id": "m"}, {})])
-    client.emails._get_session().mount("https://", adapter)
 
-    with pytest.raises(EmailError) as raised:
-        send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
-    assert adapter.requests == []
-    assert send(client.emails).id == "m"
+    with on_the_wire(adapter):
+        with pytest.raises(EmailError) as raised:
+            send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
+        assert adapter.requests == []
+        assert send(client.emails).id == "m"
 
     assert raised.value.code == "scheduling_requires_cloud"
     assert raised.value.message == (
@@ -2996,9 +3028,9 @@ def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
 def test_a_client_on_either_cloud_region_schedules(_name, host, app_host):
     client = Posthog("phc_test", host=host, secret_key=SECRET_KEY, sync_mode=True)
     adapter = FakeAdapter([scheduled()])
-    client.emails._get_session().mount("https://", adapter)
 
-    result = send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
+    with on_the_wire(adapter):
+        result = send(client.emails, scheduled_at="2026-12-01T09:00:00Z")
 
     assert result.status == "scheduled"
     assert (adapter.requests[0].url or "").startswith(app_host)
@@ -3045,17 +3077,22 @@ def test_a_time_already_passed_is_an_acceptance_that_goes_out_now():
 
 @parameterized.expand(
     [
-        ("null_time", {"status": "queued", "scheduled_at": None}),
-        ("no_time", {"status": "queued"}),
+        (
+            "null_time_over_a_minute_ahead",
+            {"status": "queued", "scheduled_at": None},
+            61,
+        ),
+        ("no_time_over_a_minute_ahead", {"status": "queued"}, 61),
+        ("no_time_within_a_minute", {"status": "queued"}, 30),
     ]
 )
 def test_a_send_now_answer_for_a_time_over_a_minute_ahead_is_not_confirmed(
-    _name, fields
+    _name, fields, ahead
 ):
     emails, adapter = emails_with([accepted("msg_9", **fields)])
 
     with pytest.raises(EmailError) as raised:
-        send(emails, scheduled_at=NOW + timedelta(seconds=61))
+        send(emails, scheduled_at=NOW + timedelta(seconds=ahead))
 
     assert len(adapter.requests) == 1
     assert (raised.value.code, raised.value.message_id) == (
@@ -3067,7 +3104,6 @@ def test_a_send_now_answer_for_a_time_over_a_minute_ahead_is_not_confirmed(
 @parameterized.expand(
     [
         ("null_time", {"status": "queued", "scheduled_at": None}, 60),
-        ("no_time", {"status": "queued"}, 60),
         ("null_time_already_passed", {"status": "queued", "scheduled_at": None}, -60),
     ]
 )
