@@ -3087,6 +3087,7 @@ def test_retries_send_the_same_time():
         ("same_instant_in_microseconds", "2026-12-01T09:00:00.000000Z"),
         ("same_instant_in_another_offset", "2026-12-01T10:00:00.000+01:00"),
         ("same_instant_without_fraction", "2026-12-01T09:00:00+00:00"),
+        ("same_instant_with_a_short_fraction", "2026-12-01T09:00:00.0Z"),
     ]
 )
 def test_accepts_the_requested_instant_however_it_is_written(_name, answered):
@@ -3157,6 +3158,10 @@ def test_a_send_now_answer_within_a_minute_goes_out_now(_name, fields, ahead):
         ("queued_with_a_time", {"status": "queued", "scheduled_at": DUE}),
         ("no_status", {"scheduled_at": DUE}),
         ("unreadable_time", {"status": "scheduled", "scheduled_at": "soon"}),
+        (
+            "offset_minutes_past_59",
+            {"status": "scheduled", "scheduled_at": "2026-12-01T10:00:00+00:60"},
+        ),
         ("null_time_without_status", {"scheduled_at": None}),
     ]
 )
