@@ -1959,14 +1959,11 @@ class _BatchRun:
         for index in chunk.indices:
             earlier = self.results[index]
             message_id = earlier.message_id if earlier is not None else None
-            if later_error is not None and index in self._maybe_queued:
-                self._set(
-                    index,
-                    "unconfirmed",
-                    message_id=message_id,
-                    error=self._current(index).error,
-                    later_error=later_error,
-                )
+            if index in self._maybe_queued:
+                if later_error is not None:
+                    self.results[index] = replace(
+                        self._current(index), later_error=later_error
+                    )
                 continue
             self._maybe_queued.add(index)
             self._set(
@@ -2462,6 +2459,8 @@ class Emails(_EmailsBase):
                 if error.status_code == 404:
                     continue
                 return
+            except Exception:
+                return
             run.found(index, status)
 
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
@@ -2762,6 +2761,8 @@ class AsyncEmails(_EmailsBase):
             except EmailError as error:
                 if error.status_code == 404:
                     continue
+                return
+            except Exception:
                 return
             run.found(index, status)
 

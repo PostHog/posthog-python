@@ -677,6 +677,63 @@ def test_a_batch_that_succeeds_reads_each_unconfirmed_email_without_an_id():
     assert parse_qs(urlsplit(read.url).query) == {"idempotency_key": ["key-1"]}
 
 
+@pytest.mark.parametrize(
+    "failure", [RuntimeError("hook"), RecursionError("deep")], ids=["hook", "deep"]
+)
+def test_a_lookup_that_raises_keeps_a_successful_batch_result(failure):
+    unconfirmed_slot = {
+        "error": {
+            "code": "delivery_unavailable",
+            "detail": "Not confirmed.",
+            "status": 503,
+            "retryable": True,
+        }
+    }
+    emails, posthog = emails_on(
+        [ok(queued("m0"), unconfirmed_slot, unconfirmed_slot), failure]
+    )
+
+    result = batch(emails, recipients(3), max_retries=0)
+
+    assert [(r.status, r.message_id) for r in result.results] == [
+        ("queued", "m0"),
+        ("unconfirmed", None),
+        ("unconfirmed", None),
+    ]
+    assert len(posthog.requests) == 2
+
+
+def test_a_lookup_that_raises_after_a_lost_answer_keeps_the_batch_error():
+    emails, _ = emails_on([requests.ConnectionError("reset"), RuntimeError("hook")])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=0)
+
+    assert [(r.status, r.message_id) for r in raised.value.results] == [
+        ("unconfirmed", None)
+    ]
+
+
+def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
+    emails, posthog = emails_on(
+        [
+            whole_call(503, "delivery_unavailable"),
+            whole_call(409, "idempotency_key_in_flight"),
+            whole_call(503, "delivery_unavailable"),
+            whole_call(404, "not_found"),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=2)
+
+    [result] = raised.value.results
+    assert result.status == "unconfirmed"
+    assert result.later_error is not None
+    assert result.later_error.code == "idempotency_key_in_flight"
+    assert len(posthog.requests) == 4
+
+
 def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
     emails, posthog = emails_on(
         [
@@ -1014,6 +1071,34 @@ async def test_async_batch_that_succeeds_reads_an_unconfirmed_email_by_its_key()
 
     assert [(r.status, r.message_id) for r in result.results] == [("unconfirmed", "m0")]
     assert str(seen[-1].url) == STATUS_BY_KEY_URL + "?idempotency_key=key-0"
+
+
+@pytest.mark.asyncio
+async def test_async_lookup_that_raises_keeps_a_successful_batch_result():
+    unconfirmed_slot = {
+        "error": {
+            "code": "delivery_unavailable",
+            "detail": "Not confirmed.",
+            "status": 503,
+            "retryable": True,
+        }
+    }
+    emails, seen = async_emails_on(
+        [
+            httpx.Response(200, json={"results": [queued("m0"), unconfirmed_slot]}),
+            RuntimeError("hook"),
+        ]
+    )
+
+    result = await emails.batch(
+        recipients=recipients(2), template_id=TEMPLATE_ID, max_retries=0
+    )
+
+    assert [(r.status, r.message_id) for r in result.results] == [
+        ("queued", "m0"),
+        ("unconfirmed", None),
+    ]
+    assert len(seen) == 2
 
 
 @pytest.mark.asyncio
