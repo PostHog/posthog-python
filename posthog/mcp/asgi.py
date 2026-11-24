@@ -52,7 +52,7 @@ from ._instrumentation import HANDSHAKE_OBSERVER_KEY, record_initialize
 from ._internal import MCPAnalyticsData, get_server_tracking_data, tracking_key
 from .logger import log, warn
 from .session import (  # noqa: F401 - handshake_session_id is public API
-    handshake_session,
+    handshake_session as _handshake_session,
     handshake_session_id,
     new_session_id,
 )
@@ -349,7 +349,7 @@ async def _record_initialize(
         params = _initialize_params(message)[0]
         await record_initialize(
             data,
-            session=await handshake_session(data, header, decode_session_id(header)),
+            session=await _handshake_session(data, header, decode_session_id(header)),
             params=params,
             result=None,
             extra={"session_id": header, "ctx": _InitializeContext(Request(scope))},
