@@ -363,7 +363,11 @@ def test_a_batch_the_server_finds_too_large_raises_its_413():
         [
             (
                 413,
-                {"type": "invalid_request", "code": "too_large", "detail": "Too big."},
+                {
+                    "type": "invalid_request",
+                    "code": "content_too_large",
+                    "detail": "Too big.",
+                },
                 {},
             )
         ]
@@ -374,13 +378,24 @@ def test_a_batch_the_server_finds_too_large_raises_its_413():
 
     error = raised.value
     assert (error.code, error.status_code, error.message) == (
-        "too_large",
+        "content_too_large",
         413,
         "Too big.",
     )
     assert error.fix is not None and "smaller batches" in error.fix
     assert [r.status for r in error.results] == ["failed", "failed"]
     assert len(posthog.requests) == 1
+
+
+def test_a_413_for_one_recipient_says_to_send_less_data():
+    emails, _ = emails_on([(413, {"code": "content_too_large", "detail": "Big."}, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1))
+
+    fix = raised.value.fix
+    assert fix is not None and "smaller batches" not in fix
+    assert "template_data" in fix
 
 
 def test_a_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
@@ -591,9 +606,9 @@ def test_a_batch_that_succeeds_reads_no_unconfirmed_email_back():
 def test_an_unconfirmed_recipient_holds_the_last_answer():
     emails, posthog = emails_on(
         [
-            whole_call(503, "delivery_unavailable"),
+            (503, {"code": "delivery_unavailable", "detail": "First."}, {}),
             whole_call(409, "idempotency_key_in_flight"),
-            whole_call(503, "delivery_unavailable"),
+            (503, {"code": "delivery_unavailable", "detail": "Last."}, {}),
         ]
     )
 
@@ -602,7 +617,11 @@ def test_an_unconfirmed_recipient_holds_the_last_answer():
 
     [result] = raised.value.results
     assert result.status == "unconfirmed"
-    assert result.error is not None and result.error.code == "delivery_unavailable"
+    assert result.error is not None
+    assert (result.error.code, result.error.message) == (
+        "delivery_unavailable",
+        "Last.",
+    )
     assert result.error.fix is not None and "same idempotency_key" in result.error.fix
     assert len(posthog.requests) == 3
 
@@ -621,6 +640,7 @@ def test_a_whole_call_in_flight_answer_leaves_the_batch_unconfirmed():
     first = raised.value.results[0].error
     assert first is not None and first.code == "idempotency_key_in_flight"
     assert first.fix is not None and "same idempotency_key" in first.fix
+    assert "of the first request that used it" in first.fix
     assert len(posthog.requests) == 1
 
 

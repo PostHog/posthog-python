@@ -152,14 +152,14 @@ Check each result's ``status``:
 - ``failed``: PostHog refused it, and ``error`` says why, such as a suppressed
   address.
 - ``unconfirmed``: the client can't tell whether PostHog accepted it, such as
-  after a lost answer. Send it again with the same key within 24 hours, so it
-  goes out once.
+  after a lost answer. Send it again with the same key within 24 hours of the
+  first request that used it, so it goes out once.
 
 More than 100 recipients raises ``ValueError`` before anything is sent. A request
 that fails as a whole, such as a rate limit past its retries, raises
 :class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
-``too_large`` (413) means the request was too large for PostHog: split the
-recipients into smaller batches. ``batch_unavailable`` (409) means the project
+``content_too_large`` (413) means the request was too large for PostHog: split
+the recipients into smaller batches, or send less data for a lone recipient. ``batch_unavailable`` (409) means the project
 can't send batches yet, and a 404 that the template doesn't exist or batch sends
 are off for the project: send each email the batch didn't queue with ``send``
 and its recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
@@ -651,7 +651,8 @@ class BatchEmailResult:
     - ``unconfirmed``: the client can't tell whether PostHog queued the
       email, such as after a lost answer, or a refusal that came after an
       attempt got no answer. It may still go out. Send it again with the same
-      ``idempotency_key`` within 24 hours, so it goes out once.
+      ``idempotency_key`` within 24 hours of the first request that used it,
+      so it goes out once.
 
     Attributes:
         index: The recipient's position in ``recipients``.
@@ -1816,6 +1817,7 @@ def _batch_response_error(
     fields: Mapping[str, Any],
     status: int,
     retry_after_header: Optional[str],
+    recipient_count: int,
 ) -> EmailError:
     answered = {key: value for key, value in fields.items() if value is not None}
     fields = answered
@@ -1832,7 +1834,9 @@ def _batch_response_error(
     if status == 413:
         fields = {
             **fields,
-            "fix": "Split the recipients into smaller batches and send each with batch().",
+            "fix": "Split the recipients into smaller batches and send each with batch()."
+            if recipient_count > 1
+            else "Send less template_data or content for this recipient.",
         }
     if fields.get("code") == "batch_unavailable":
         fields = {
@@ -1867,7 +1871,8 @@ def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
 
 
 _SEND_AGAIN = (
-    "Send it again with the same idempotency_key within 24 hours, so it goes out once."
+    "Send it again with the same idempotency_key within 24 hours of the first request "
+    "that used it, so it goes out once."
 )
 
 
@@ -1927,7 +1932,9 @@ class _BatchRun:
     ) -> None:
         fields = _json_object(body)
         if not 200 <= status < 300:
-            failure = _batch_response_error(fields, status, retry_after_header)
+            failure = _batch_response_error(
+                fields, status, retry_after_header, len(self.members)
+            )
             if status >= 500 or _held_by_another_request(failure):
                 self.lost()
             raise failure
@@ -2238,9 +2245,9 @@ class Emails(_EmailsBase):
 
         Raises:
             EmailBatchError: The request failed as a whole. ``results`` holds
-                every recipient. ``code`` is ``too_large`` (413) when the
-                request was too large for PostHog: split the recipients into
-                smaller batches. ``batch_unavailable`` means the project
+                every recipient. ``code`` is ``content_too_large`` (413) when
+                the request was too large for PostHog: split the recipients
+                into smaller batches, or send less data for a lone recipient. ``batch_unavailable`` means the project
                 can't send batches yet: send each email the batch didn't
                 queue with :meth:`send` and its recipient's
                 ``idempotency_key``. ``client_closed`` means the client shut
