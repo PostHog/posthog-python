@@ -20,11 +20,13 @@ except ImportError:
     # accepts callables marked with `_is_coroutine` by older asgiref versions.
     _legacy_coroutine_marker = getattr(asyncio.coroutines, "_is_coroutine", object())
 
-    def iscoroutinefunction(func):
+    def _iscoroutinefunction(func):
         return (
             inspect.iscoroutinefunction(func)
             or getattr(func, "_is_coroutine", None) is _legacy_coroutine_marker
         )
+
+    iscoroutinefunction = _iscoroutinefunction
 
     # No-op fallback for markcoroutinefunction
     # Older Django versions without asgiref typically don't support async middleware anyway
