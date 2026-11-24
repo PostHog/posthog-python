@@ -1011,7 +1011,7 @@ async def test_async_shutdown_during_a_retry_wait_sends_no_retry():
 
     async def shutdown_during_the_wait(delay: float) -> None:
         if waits:
-            await real_sleep(delay)
+            await real_sleep(0)
             return
         waits.append(delay)
         shutting_down.append(asyncio.create_task(client.shutdown()))
