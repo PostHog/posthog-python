@@ -579,8 +579,9 @@ class BatchRecipient(TypedDict):
             within 24 hours replays the emails that went out instead of
             sending them twice. A single send and a batch recipient with the
             same key and the same email replay each other. Never
-            reuse a key for another email: a send with the key of an earlier
-            email replays that email instead of sending this one.
+            reuse a key for another email: PostHog refuses a key it saw
+            with a different recipient, template or data with
+            ``idempotency_key_reused``.
         template_data: Only with ``template_id``: values for this recipient,
             merged over the batch's ``template_data``. A top-level key set here
             replaces the same key there.
@@ -1889,12 +1890,29 @@ def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
     )
 
 
-def _unconfirmed(message_id: Optional[str]) -> EmailError:
+_SEND_AGAIN = (
+    "Send it again with the same idempotency_key within 24 hours, so it goes out once."
+)
+
+
+def _unconfirmed(
+    message_id: Optional[str], cause: Optional[EmailError] = None
+) -> EmailError:
+    if cause is None:
+        return EmailError(
+            name="service_unavailable",
+            code="delivery_unavailable",
+            message=f"PostHog didn't confirm this email, so it may still go out. {_SEND_AGAIN}",
+            message_id=message_id,
+        )
     return EmailError(
-        name="service_unavailable",
-        code="delivery_unavailable",
-        message="PostHog didn't confirm this email, so it may still go out. Send it again with "
-        "the same idempotency_key within 24 hours, so it goes out once.",
+        name=cause.name,
+        code=cause.code,
+        message=cause.message,
+        status_code=cause.status_code,
+        why=cause.why,
+        fix=_SEND_AGAIN,
+        docs_url=cause.docs_url,
         message_id=message_id,
     )
 
@@ -1967,7 +1985,7 @@ class _BatchRun:
                 index,
                 "unconfirmed",
                 message_id=message_id,
-                error=cause or _unconfirmed(message_id),
+                error=_unconfirmed(message_id, cause),
             )
 
     def answer(

@@ -515,14 +515,16 @@ def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
 
 def test_a_shutdown_during_a_retry_wait_sends_no_retry():
     client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+    posthog = BatchPostHog([whole_call(429), all_queued])
 
-    def shutdown_then_rate_limit(request: requests.PreparedRequest) -> Answer:
+    def shutdown_during_the_wait(delay: float) -> None:
         client.shutdown()
-        return whole_call(429)
 
-    posthog = BatchPostHog([shutdown_then_rate_limit, all_queued])
-
-    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
+    with (
+        on_the_wire(posthog),
+        mock.patch("posthog.emails.time.sleep", side_effect=shutdown_during_the_wait),
+        pytest.raises(EmailBatchError) as raised,
+    ):
         batch(client.emails, recipients(150))
 
     assert raised.value.code == "client_closed"
@@ -626,6 +628,9 @@ def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
         ("unconfirmed", None),
     ]
     assert [r.later_error for r in raised.value.results] == [None, None]
+    first = raised.value.results[0].error
+    assert first is not None and first.code == "idempotency_key_in_flight"
+    assert first.fix is not None and "same idempotency_key" in first.fix
     assert len(posthog.requests) == 1
 
 
@@ -971,23 +976,31 @@ async def test_async_shutdown_during_a_batch_stops_it_before_the_next_request():
 async def test_async_shutdown_during_a_retry_wait_sends_no_retry():
     client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
     seen: list[httpx.Request] = []
-    shutting_down: list[asyncio.Task[None]] = []
-    yield_to_shutdown = asyncio.sleep  # the retry wait below is patched out
+    waits: list[float] = []
+    real_sleep = asyncio.sleep
 
     async def wire(
         transport: httpx.AsyncHTTPTransport, request: httpx.Request
     ) -> httpx.Response:
         seen.append(request)
-        if shutting_down:
+        if waits:
             return async_all_queued(request)
+        return httpx.Response(429)
+
+    shutting_down: list[asyncio.Task[None]] = []
+
+    async def shutdown_during_the_wait(delay: float) -> None:
+        if waits:
+            await real_sleep(delay)
+            return
+        waits.append(delay)
         shutting_down.append(asyncio.create_task(client.shutdown()))
         for _ in range(5):
-            await yield_to_shutdown(0)
-        return httpx.Response(429)
+            await real_sleep(0)
 
     with (
         mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
-        mock.patch("posthog.emails.asyncio.sleep"),
+        mock.patch("posthog.emails.asyncio.sleep", new=shutdown_during_the_wait),
         pytest.raises(EmailBatchError) as raised,
     ):
         await client.emails.batch(recipients=recipients(2), template_id=TEMPLATE_ID)
