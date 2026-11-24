@@ -286,6 +286,7 @@ class PostHogMiddleware(AgentMiddleware[_PostHogMiddlewareState, Any, Any]):
                 run_id,
                 _root_id(request.state),
                 name=name,
+                span_type="tool",
             )
         except Exception:
             log.exception("Failed to prepare PostHog LangChain tool telemetry")

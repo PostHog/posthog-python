@@ -34,6 +34,7 @@ from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
     _ai_event_options,
     _capture_processor_event,
+    _format_tool_error,
     _resolve_ai_client,
     finalize_ai_content,
     with_privacy_mode as _with_privacy_mode,
@@ -72,24 +73,9 @@ class _PendingToolSpan:
     groups: Dict[str, Any]
     extra_options: Optional[Dict[str, Any]] = None
     privacy: bool = False
-
-
-_TOOL_SPAN_CONTENT_PROPERTIES = ("$ai_input_state", "$ai_output_state", "$ai_error")
-
-
-def _tool_error_text(content: Any) -> str:
-    """The `$ai_error` text for an errored tool result's content."""
-    if isinstance(content, str):
-        return content
-    if isinstance(content, list):
-        texts = [
-            item["text"]
-            for item in content
-            if isinstance(item, dict) and isinstance(item.get("text"), str)
-        ]
-        if texts:
-            return "\n".join(texts)
-    return "" if content is None else str(content)
+    # Redacted into `$ai_input_state` when the span is sent, so privacy and
+    # media capture settings changed while the tool ran still apply.
+    tool_input: Any = None
 
 
 class _GenerationTracker:
@@ -654,11 +640,6 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        if _with_privacy_mode(self._client, privacy, True):
-            properties["$ai_input_state"] = finalize_ai_content(
-                _ensure_serializable(block.input), self._client
-            )
-
         span = _PendingToolSpan(
             properties=properties,
             start_time=time.time(),
@@ -666,6 +647,7 @@ class PostHogClaudeAgentProcessor:
             groups=groups,
             extra_options=extra_options,
             privacy=privacy,
+            tool_input=_ensure_serializable(block.input),
         )
         tool_use_id = getattr(block, "id", None)
         if tool_use_id is None:
@@ -693,11 +675,15 @@ class PostHogClaudeAgentProcessor:
         properties["$ai_latency"] = time.time() - span.start_time
         is_error = bool(getattr(block, "is_error", False))
         properties["$ai_is_error"] = is_error
+        output = None
         if _with_privacy_mode(self._client, privacy, True):
-            content = format_tool_result_content(block, self._client)
-            properties["$ai_output_state"] = finalize_ai_content(content, self._client)
-            if is_error:
-                properties["$ai_error"] = _tool_error_text(content)
+            output = finalize_ai_content(
+                format_tool_result_content(block, self._client), self._client
+            )
+            properties["$ai_output_state"] = output
+        if is_error:
+            # In privacy mode this is a fixed label, so output isn't needed.
+            properties["$ai_error"] = _format_tool_error(self._client, privacy, output)
         self._capture_tool_span(span)
 
     def _flush_tool_spans(self, pending: Dict[str, _PendingToolSpan]) -> None:
@@ -709,9 +695,16 @@ class PostHogClaudeAgentProcessor:
     def _capture_tool_span(self, span: _PendingToolSpan) -> None:
         if _with_privacy_mode(self._client, span.privacy, True) is None:
             # Privacy may have been enabled while the tool ran; drop content
-            # buffered before then.
-            for key in _TOOL_SPAN_CONTENT_PROPERTIES:
-                span.properties.pop(key, None)
+            # buffered before then and keep only the error label.
+            span.properties.pop("$ai_output_state", None)
+            if "$ai_error" in span.properties:
+                span.properties["$ai_error"] = _format_tool_error(
+                    self._client, True, None
+                )
+        else:
+            span.properties["$ai_input_state"] = finalize_ai_content(
+                span.tool_input, self._client
+            )
         resolved_id = self._resolve_distinct_id(span.distinct_id)
         trace_id = span.properties["$ai_trace_id"]
         self._capture_event(

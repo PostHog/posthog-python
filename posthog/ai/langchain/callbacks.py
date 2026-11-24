@@ -43,6 +43,7 @@ from pydantic import BaseModel
 
 from posthog.ai.gateway import warn_if_posthog_ai_gateway
 from posthog.ai.utils import (
+    _format_tool_error,
     _ai_event_options,
     _capture_ai_event,
     _extract_cache_creation_ttl_breakdown,
@@ -611,10 +612,8 @@ class CallbackHandler(BaseCallbackHandler):
                 # normally, with the error as a ToolMessage. Only the tool's own
                 # span is the error, not a chain that returns the message.
                 event_properties["$ai_is_error"] = True
-                event_properties["$ai_error"] = with_privacy_mode(
-                    self._ph_client,
-                    self._privacy_mode,
-                    _tool_message_text(outputs),
+                event_properties["$ai_error"] = _format_tool_error(
+                    self._ph_client, self._privacy_mode, outputs.content
                 )
 
         _capture_ai_event(
@@ -868,19 +867,6 @@ def _convert_lc_tool_calls_to_oai(
         ]
     except KeyError:
         return tool_calls
-
-
-def _tool_message_text(message: ToolMessage) -> str:
-    """The text of a ToolMessage, for `$ai_error`."""
-    content = message.content
-    if isinstance(content, str):
-        return content
-    texts = [
-        item if isinstance(item, str) else item.get("text", "")
-        for item in content
-        if isinstance(item, str) or isinstance(item, dict)
-    ]
-    return "\n".join(text for text in texts if text)
 
 
 def _convert_message_to_dict(message: BaseMessage) -> dict[str, Any]:

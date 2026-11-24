@@ -576,6 +576,7 @@ async def test_tool_wrapper_captures_returned_and_raised_errors(
     span = _event(client, "$ai_span")["properties"]
     assert span["$ai_is_error"] is True
     assert "Invalid arguments" in span["$ai_error"]
+    assert span["$ai_span_type"] == "tool"
     assert "$ai_parent_id" in span
 
     client.reset_mock()
