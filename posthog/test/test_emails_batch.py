@@ -339,6 +339,41 @@ def test_names_the_position_of_a_bad_recipient():
         batch(emails, people)
 
 
+def test_more_than_100_recipients_is_refused_before_any_request():
+    emails, posthog = emails_on([])
+
+    with pytest.raises(ValueError, match=r"at most 100 recipients.*101"):
+        batch(emails, recipients(101))
+
+    assert posthog.requests == []
+
+
+def test_100_recipients_go_out_in_one_request():
+    emails, posthog = emails_on([all_queued])
+
+    result = batch(emails, recipients(100))
+
+    assert [len(body["recipients"]) for body in posthog.batch_bodies()] == [100]
+    assert [r.message_id for r in result.results] == [
+        f"msg_key-{i}" for i in range(100)
+    ]
+
+
+def test_a_batch_the_server_finds_too_large_raises_its_413():
+    emails, posthog = emails_on(
+        [(413, {"type": "invalid_request", "code": "too_large", "detail": "Too big."}, {})]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    error = raised.value
+    assert (error.code, error.status_code, error.message) == ("too_large", 413, "Too big.")
+    assert error.fix is not None and "smaller batches" in error.fix
+    assert [r.status for r in error.results] == ["failed", "failed"]
+    assert len(posthog.requests) == 1
+
+
 def test_splits_by_100_recipients_and_sends_the_chunks_in_order():
     emails, posthog = emails_on([all_queued, all_queued, all_queued])
 
