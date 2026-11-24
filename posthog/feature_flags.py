@@ -638,6 +638,7 @@ def _match_flag_conditions(
                 cohort_properties,
                 group_type_mapping,
             )
+            e.reason = _pick_unresolved_reason(inconclusive_reason, e.reason)
             raise
         except InconclusiveMatchError as e:
             # Evaluation error (bad regex, invalid date, missing property, etc.)
@@ -958,6 +959,7 @@ def _raise_condition_errors(feature_flag, server_evaluation_error, inconclusive_
     # Re-raise the original error type: match_feature_flag_properties stops at it
     # and falls back to the server instead of trying later conditions.
     if server_evaluation_error is not None:
+        server_evaluation_error.reason = inconclusive_reason
         raise server_evaluation_error
     if inconclusive_reason is not None:
         raise InconclusiveMatchError(
@@ -1761,9 +1763,11 @@ def match_property_group(
                 decisive_result = effective_match
         except _RequiresServerFilter as e:
             server_filter_error = server_filter_error or e
-        except RequiresServerEvaluation:
+            inconclusive_reason = _pick_unresolved_reason(inconclusive_reason, e.reason)
+        except RequiresServerEvaluation as e:
             # Static/missing cohorts and malformed definitions always require server evaluation,
             # even when another branch would otherwise resolve the group locally.
+            e.reason = _pick_unresolved_reason(inconclusive_reason, e.reason)
             raise
         except InconclusiveMatchError as e:
             log.debug(f"Failed to compute property {prop} locally: {e}")
@@ -1772,6 +1776,9 @@ def match_property_group(
     if decisive_result is not None:
         return decisive_result
     if server_filter_error is not None:
+        server_filter_error.reason = _pick_unresolved_reason(
+            inconclusive_reason, server_filter_error.reason
+        )
         raise server_filter_error
     if inconclusive_reason is not None:
         raise InconclusiveMatchError(

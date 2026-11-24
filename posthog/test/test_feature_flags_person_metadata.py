@@ -15,6 +15,7 @@ from unittest import mock
 from parameterized import parameterized
 
 from posthog.client import Client
+from posthog.feature_flags import RequiresServerEvaluation, match_property_group
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import UnresolvedFlagReason
@@ -70,6 +71,16 @@ DEPENDS_ON_FIRST_SEEN = {
     "value": True,
     "dependency_chain": ["dependency"],
 }
+
+# The regex engines of Python and /flags disagree on this filter for "foo\n", so it is
+# unsupported for that value. The definition alone doesn't tell.
+UNSUPPORTED_REGEX = {
+    "key": "name",
+    "type": "person",
+    "operator": "regex",
+    "value": "foo.*$",
+}
+IN_STATIC_COHORT = {"key": "id", "value": 404, "type": "cohort"}
 
 # Flags whose first condition only /flags can check, and what /flags answers.
 SERVER_ONLY_FIRST_CONDITION = [
@@ -153,6 +164,11 @@ class TestPersonMetadataFilters(unittest.TestCase):
             ("condition", IN_CONDITION_FLAG, {}),
             ("not_in_cohort", _flag(_condition(NOT_IN_COHORT)), FIRST_SEEN_COHORT),
             (
+                "another_unsupported_type",
+                _flag(_condition([{**FIRST_SEEN_FILTER, "type": "behavioral"}])),
+                {},
+            ),
+            (
                 "negated_cohort_leaf",
                 IN_COHORT_FLAG,
                 _cohort({**FIRST_SEEN_FILTER, "negation": True}),
@@ -227,10 +243,14 @@ class TestPersonMetadataFilters(unittest.TestCase):
             (FIRST_SEEN_FILTER, PLAN_PAID),
             ({"type": "AND", "values": [FIRST_SEEN_FILTER]}, PLAN_PAID),
             (DEPENDS_ON_FIRST_SEEN, PLAN_PAID),
+            ({"key": "id", "value": 8, "type": "cohort"}, PLAN_PAID),
         ):
             client = self._client(
                 [_flag(_condition(flag_properties)), dependency],
-                _cohort(*filters, group_type=group_type),
+                {
+                    **_cohort(*filters, group_type=group_type),
+                    "8": {"type": "AND", "values": [FIRST_SEEN_FILTER]},
+                },
             )
             for created_at in (CREATED_IN_2026, {}):
                 with self.subTest(filters=filters, created_at=created_at):
@@ -238,9 +258,135 @@ class TestPersonMetadataFilters(unittest.TestCase):
                         "user-123",
                         person_properties={"plan": plan, **created_at},
                         flag_keys=["first-seen-flag"],
+                        only_evaluate_locally=True,
                     )
                     self.assertIs(snapshot.get_flag("first-seen-flag"), expected)
+                    self.assertEqual(dict(snapshot.unresolved_flags), {})
         self.assertEqual(patch_flags.call_count, 0)
+
+    @parameterized.expand(
+        [
+            ("and", "AND", IN_COHORT, "paid"),
+            ("and_not_in", "AND", NOT_IN_COHORT, "paid"),
+            ("or", "OR", IN_COHORT, "free"),
+            ("or_not_in", "OR", NOT_IN_COHORT, "free"),
+        ]
+    )
+    def test_undecided_cohort_is_unsupported(
+        self, _, group_type, flag_properties, plan
+    ):
+        for filters in (
+            (PLAN_PAID, FIRST_SEEN_FILTER),
+            (FIRST_SEEN_FILTER, PLAN_PAID),
+        ):
+            client = self._client(
+                [_flag(_condition(flag_properties))],
+                _cohort(*filters, group_type=group_type),
+            )
+
+            snapshot = client.evaluate_flags(
+                "user-123",
+                person_properties={"plan": plan},
+                only_evaluate_locally=True,
+            )
+
+            self.assertEqual(
+                dict(snapshot.unresolved_flags),
+                {"first-seen-flag": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+            )
+
+    @parameterized.expand(
+        [
+            (
+                "cohort",
+                [_flag(_condition(IN_COHORT), key="target")],
+                _cohort(DEPENDS_ON_FIRST_SEEN, UNSUPPORTED_REGEX),
+            ),
+            (
+                "cohort_other_order",
+                [_flag(_condition(IN_COHORT), key="target")],
+                _cohort(UNSUPPORTED_REGEX, DEPENDS_ON_FIRST_SEEN),
+            ),
+            (
+                "condition",
+                [
+                    _flag(
+                        _condition([DEPENDS_ON_FIRST_SEEN, UNSUPPORTED_REGEX]),
+                        key="target",
+                    )
+                ],
+                {},
+            ),
+            (
+                "earlier_condition",
+                [
+                    _flag(
+                        _condition([UNSUPPORTED_REGEX]),
+                        _condition([DEPENDS_ON_FIRST_SEEN]),
+                        key="target",
+                    )
+                ],
+                {},
+            ),
+        ]
+    )
+    def test_the_highest_precedence_reason_is_reported(self, _, flags, cohorts):
+        dependency = _flag(_condition([FIRST_SEEN_FILTER]), key="dependency")
+        client = self._client([*flags, dependency], cohorts)
+
+        snapshot = client.evaluate_flags(
+            "user-123",
+            person_properties={"name": "foo\n"},
+            flag_keys=["target"],
+            only_evaluate_locally=True,
+        )
+
+        self.assertEqual(
+            dict(snapshot.unresolved_flags),
+            {"target": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+
+    def test_a_cohort_that_stops_early_keeps_the_higher_reason(self):
+        # A dependency on a static cohort ends the cohort at once, whatever comes after it.
+        flags_by_key = {
+            "dependency": _flag(_condition([IN_STATIC_COHORT]), key="dependency")
+        }
+        with self.assertRaises(RequiresServerEvaluation) as raised:
+            match_property_group(
+                {"type": "AND", "values": [UNSUPPORTED_REGEX, DEPENDS_ON_FIRST_SEEN]},
+                {"name": "foo\n"},
+                {},
+                flags_by_key=flags_by_key,
+                evaluation_cache={},
+                distinct_id="user-123",
+            )
+        self.assertEqual(
+            raised.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+        )
+
+    @parameterized.expand(
+        [
+            ("server_filters", [DEPENDS_ON_FIRST_SEEN, FIRST_SEEN_FILTER]),
+            ("inconclusive_filter", [DEPENDS_ON_FIRST_SEEN, UNSUPPORTED_REGEX]),
+        ]
+    )
+    def test_the_reason_does_not_depend_on_filter_order(self, _, filters):
+        flags_by_key = {
+            "dependency": _flag(_condition([FIRST_SEEN_FILTER]), key="dependency")
+        }
+        for ordered in (filters, filters[::-1]):
+            with self.assertRaises(RequiresServerEvaluation) as raised:
+                match_property_group(
+                    {"type": "AND", "values": ordered},
+                    {"name": "foo\n"},
+                    {},
+                    flags_by_key=flags_by_key,
+                    evaluation_cache={},
+                    distinct_id="user-123",
+                )
+            self.assertEqual(
+                raised.exception.reason, UnresolvedFlagReason.UNSUPPORTED_DEFINITION
+            )
 
     @parameterized.expand(
         [
