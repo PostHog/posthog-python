@@ -799,14 +799,15 @@ def _match_feature_enrollment(flag, flag_filters, properties) -> bool:
 # and flag filters have their own matching. Any other type, such as "person_metadata"
 # (a value /flags reads from the persons table, not from person properties), can't be
 # evaluated locally: matching it against a caller property with the same key could
-# disagree with /flags.
+# disagree with /flags. No caller can supply the value, so like a static cohort it must
+# not let a later condition decide the flag.
 _PROPERTY_FILTER_TYPES = ("person", "group")
 
 
 def _assert_property_filter_type_supported(prop) -> None:
     property_type = prop.get("type")
     if property_type and property_type not in _PROPERTY_FILTER_TYPES:
-        raise InconclusiveMatchError(
+        raise RequiresServerEvaluation(
             f"Can't evaluate a '{property_type}' filter on '{prop.get('key')}' locally",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
@@ -1861,7 +1862,7 @@ def _is_unsupported_property(
         try:
             _assert_property_filter_type_supported(prop)
             _assert_filter_supported(prop)
-        except InconclusiveMatchError:
+        except (InconclusiveMatchError, RequiresServerEvaluation):
             return True
         return False
     cohort_id = str(prop.get("value"))
