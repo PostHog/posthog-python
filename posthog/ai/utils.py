@@ -1318,12 +1318,15 @@ def capture_streaming_event(
 
     # Send event to PostHog
     if callable(getattr(ph_client, "capture_ai", None)):
+        distinct_id = _user_distinct_id(
+            event_data.get("distinct_id")
+        ) or _user_distinct_id(contexts.get_context_distinct_id())
         _capture_ai_event(
             ph_client,
             "$ai_generation",
-            distinct_id=_user_distinct_id(event_data.get("distinct_id")) or trace_id,
+            distinct_id=distinct_id or trace_id,
             properties=event_properties,
             groups=event_data.get("groups"),
-            personless=_user_distinct_id(event_data.get("distinct_id")) is None,
+            personless=distinct_id is None,
             options=event_data.get("options"),
         )

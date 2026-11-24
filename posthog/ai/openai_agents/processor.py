@@ -49,6 +49,13 @@ def _parse_iso_timestamp(iso_str: Optional[str]) -> Optional[float]:
         return None
 
 
+def _usage_count(usage: Any, key: str) -> Optional[int]:
+    """Read a top-level token count from a usage dict or usage object."""
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None) if usage else None
+
+
 def _usage_detail(usage: Any, details_keys: tuple, key: str) -> Optional[int]:
     """Read a token count nested under a usage details field.
 
@@ -733,13 +740,17 @@ class PostHogTracingProcessor(TracingProcessor):
         response = span_data.response
         response_id = response.id if response else None
 
-        # Try to extract usage from response
+        # Try to extract usage from response. With trace_include_sensitive_data
+        # off the SDK leaves the response unset but still records usage on the
+        # span, as a dict of the same shape.
         usage = getattr(response, "usage", None) if response else None
+        if usage is None:
+            usage = getattr(span_data, "usage", None)
         total_cost_usd = getattr(usage, "cost", None) if usage else None
         # None when the response never reported a count: absent means unknown,
         # 0 is a report of nothing.
-        input_tokens = getattr(usage, "input_tokens", None) if usage else None
-        output_tokens = getattr(usage, "output_tokens", None) if usage else None
+        input_tokens = _usage_count(usage, "input_tokens")
+        output_tokens = _usage_count(usage, "output_tokens")
 
         # Try to extract model from response
         model = getattr(response, "model", None) if response else None

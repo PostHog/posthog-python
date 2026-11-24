@@ -1,5 +1,29 @@
 # posthog
 
+## 8.2.1 — 2026-11-23
+
+### Patch changes
+
+- [d390aae7](https://github.com/posthog/posthog-python/commit/d390aae70244586923ed427e926f3a07dfbae63e) `posthog.ai.openai_agents`: report token counts on response spans when the Agents SDK runs with `trace_include_sensitive_data=False`. The SDK then leaves `span_data.response` unset but still records usage on `span_data.usage`, which the processor ignored, so those `$ai_generation` events had no input, output or cache-read tokens. — Thanks @MaiAditya!
+
+## 8.2.0 — 2026-11-23
+
+### Minor changes
+
+- [1186fe64](https://github.com/posthog/posthog-python/commit/1186fe64902754d633b56c0ef1ed5cd04242efa4) Add module-level `max_queue_size`, `max_retries`, `timeout`, `capture_ai_max_queue_size` and `capture_ai_timeout` settings, so the global client can size and tune its analytics and AI capture lanes like an explicit `Posthog` client. — Thanks @eli-r-ph!
+
+## 8.1.1 — 2026-11-23
+
+### Patch changes
+
+- [470a6413](https://github.com/posthog/posthog-python/commit/470a6413ae71a9b19388a4743818f75ed5968857) Use the context's distinct ID for streamed LLM analytics generations when no `posthog_distinct_id` is passed, as non-streamed calls already do. — Thanks @turnipdabeets!
+
+## 8.1.0 — 2026-11-20
+
+### Minor changes
+
+- [7eece541](https://github.com/posthog/posthog-python/commit/7eece541c823ce3f8d3e35516ea1eb801c5c2d94) Update and delete offline experiment items, reported scores, and payloads from sync and async clients using the current revision. — Thanks @Radu-Raicea!
+
 ## 8.0.2 — 2026-11-18
 
 ### Patch changes
