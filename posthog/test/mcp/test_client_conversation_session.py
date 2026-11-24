@@ -567,7 +567,6 @@ async def test_a_call_that_records_nothing_sends_its_custom_events_with_its_conv
 ):
     client = FakeClient()
     key, data = shared_http_server(client)
-    await run_call(data, user="alice", **call)
 
     lifecycle = start_call(data, user="alice", **call)
     with lifecycle.in_tool(await lifecycle.prime_session()):
@@ -681,6 +680,7 @@ async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions
     assert bob["properties"]["$set"] == {"bob_only": "present"}
     assert bob["properties"]["$mcp_session_source"] == "generated"
     assert _events(client, "$mcp_initialize") == []
+    assert data.warned_no_stateless_session is True
 
 
 async def test_a_one_client_connection_keeps_its_session_without_a_client_id():
