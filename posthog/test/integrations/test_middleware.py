@@ -901,17 +901,16 @@ class TestCoroutineDetectionWithoutAsgiref(unittest.TestCase):
         self.assertFalse(iscoroutinefunction(lambda request: request))
 
     def test_detects_callables_marked_by_legacy_asgiref(self):
-        import inspect
-
-        if hasattr(inspect, "markcoroutinefunction"):
-            self.skipTest("Python 3.12+ marks coroutine callables through inspect")
+        marker = getattr(asyncio.coroutines, "_is_coroutine", None)
+        if marker is None:
+            self.skipTest("this Python has no legacy coroutine marker")
 
         class Handler:
             def __call__(self, request):
                 return request
 
         handler = Handler()
-        handler._is_coroutine = asyncio.coroutines._is_coroutine
+        handler._is_coroutine = marker
 
         self.assertTrue(self._load_fallback()(handler))
 
