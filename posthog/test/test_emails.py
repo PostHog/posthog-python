@@ -2912,16 +2912,25 @@ def test_a_datetime_subclass_comes_back_as_the_time_on_the_wire():
     )
 
 
-def test_a_time_with_nanoseconds_past_its_microseconds_rounds_up():
+@parameterized.expand(
+    [
+        ("below_a_microsecond", 1, "2026-12-01T09:00:00.124Z"),
+        ("whole_fraction_past_its_microseconds", 123000001, "2026-12-01T09:00:00.124Z"),
+        ("whole_fraction_on_a_millisecond", 123000000, "2026-12-01T09:00:00.123Z"),
+    ]
+)
+def test_a_time_with_nanoseconds_past_its_microseconds_rounds_up(
+    _name, nanoseconds, wire
+):
     class NanosecondTime(datetime):
-        nanosecond = 1
+        nanosecond = nanoseconds
 
-    emails, adapter = emails_with([scheduled(scheduled_at="2026-12-01T09:00:00.124Z")])
+    emails, adapter = emails_with([scheduled(scheduled_at=wire)])
     when = NanosecondTime(2026, 12, 1, 9, 0, 0, 123000, tzinfo=timezone.utc)
 
     result = send(emails, scheduled_at=when)
 
-    assert sent_body(adapter)["scheduled_at"] == "2026-12-01T09:00:00.124Z"
+    assert sent_body(adapter)["scheduled_at"] == wire
     assert result.status == "scheduled"
 
 
