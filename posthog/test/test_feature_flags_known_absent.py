@@ -68,6 +68,20 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         self.assertEqual(self.evaluate(flag, **kwargs), REMOTE_VALUE)
         self.assertEqual(self.flags.call_count, 1)
 
+    def assert_unresolved_locally(self, flag):
+        self.client.feature_flags = [flag]
+        snapshot = self.client.evaluate_flags(
+            "user-1",
+            person_property_keys_known_absent=["plan"],
+            only_evaluate_locally=True,
+        )
+        self.assertIsNone(snapshot.get_flag("flag"))
+        self.assertEqual(
+            snapshot.unresolved_flags,
+            {"flag": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+        self.flags.assert_not_called()
+
     @parameterized.expand(
         [
             ("is_not_set", None, True),
@@ -132,17 +146,57 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("unknown operator", "icontains_multi", ["pro"]),
-            ("unsupported negated operator", "not_between", [1, 2]),
-            ("malformed numeric value", "gt", "not-a-number"),
-            ("malformed date value", "is_date_before", "not-a-date"),
+            ("icontains_multi", ["pro"]),
+            ("not_icontains_multi", ["pro"]),
+            ("between", [1, 2]),
+            ("not_between", [1, 2]),
+            ("some_future_operator", "pro"),
         ]
     )
-    def test_unsupported_filter_on_listed_key_still_falls_back(
-        self, _name, operator, value
+    def test_unimplemented_operator_on_listed_key_still_falls_back(
+        self, operator, value
     ):
         flag = _flag("flag", [_person_filter(operator, value)])
+        self.assert_unresolved_locally(flag)
         self.assert_remote(flag, person_property_keys_known_absent=["plan"])
+
+    @parameterized.expand(
+        [
+            ("not_regex invalid", "not_regex", "[", True),
+            ("regex invalid", "regex", "[", False),
+            ("not_regex non-portable", "not_regex", r"\p{L}", True),
+            ("regex non-portable", "regex", r"\p{L}", False),
+            ("not_regex inline flag", "not_regex", "(?i)enterprise", True),
+            ("regex inline flag", "regex", "(?i)enterprise", False),
+            ("not_regex word boundary", "not_regex", r"\bpro\b", True),
+            ("gt", "gt", "not-a-number", False),
+            ("gte", "gte", "not-a-number", False),
+            ("lt", "lt", "not-a-number", False),
+            ("lte", "lte", "not-a-number", False),
+            ("semver_eq", "semver_eq", "not-a-version", False),
+            ("semver_neq", "semver_neq", "not-a-version", False),
+            ("semver_gt", "semver_gt", "not-a-version", False),
+            ("semver_tilde", "semver_tilde", "not-a-version", False),
+            ("semver_caret", "semver_caret", "not-a-version", False),
+            ("semver_wildcard", "semver_wildcard", "not-a-version", False),
+            ("is_date_before", "is_date_before", "not-a-date", False),
+            ("is_date_after", "is_date_after", "not-a-date", False),
+        ]
+    )
+    def test_listed_key_resolves_without_reading_the_condition_value(
+        self, _name, operator, value, expected
+    ):
+        flag = _flag("flag", [_person_filter(operator, value)])
+        self.client.feature_flags = [flag]
+        snapshot = self.client.evaluate_flags(
+            "user-1",
+            person_property_keys_known_absent=["plan"],
+            only_evaluate_locally=True,
+        )
+        self.assertIs(snapshot.get_flag("flag"), expected)
+        self.assertEqual(snapshot.unresolved_flags, {})
+
+        self.assert_local(flag, expected, person_property_keys_known_absent=["plan"])
 
     @parameterized.expand(
         [
@@ -150,6 +204,10 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             ("is_not null", "is_not", True),
             ("exact null", "exact", True),
             ("gt null", "gt", True),
+            ("not_regex omitted", "not_regex", False),
+            ("regex null", "regex", True),
+            ("semver_gt null", "semver_gt", True),
+            ("is_date_after omitted", "is_date_after", False),
         ]
     )
     def test_listed_key_with_omitted_or_null_value_stays_inconclusive(
@@ -159,19 +217,7 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         if explicit_null:
             prop["value"] = None
         flag = _flag("flag", [prop])
-        self.client.feature_flags = [flag]
-        snapshot = self.client.evaluate_flags(
-            "user-1",
-            person_property_keys_known_absent=["plan"],
-            only_evaluate_locally=True,
-        )
-        self.assertIsNone(snapshot.get_flag("flag"))
-        self.assertEqual(
-            snapshot.unresolved_flags,
-            {"flag": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
-        )
-        self.flags.assert_not_called()
-
+        self.assert_unresolved_locally(flag)
         self.assert_remote(flag, person_property_keys_known_absent=["plan"])
 
     @parameterized.expand([("is_not_set", True), ("is_set", False)])

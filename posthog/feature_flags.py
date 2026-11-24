@@ -1576,9 +1576,8 @@ def _match_property_value(
         )
 
     if key in property_values and property_values[key] is _KNOWN_ABSENT:
-        # An unusable filter stays inconclusive even for a known-absent key.
-        _assert_filter_supported(property)
-        # The flags service reads a null condition value as omitted.
+        # Like the flags service, resolve without parsing, compiling or
+        # validating a present condition value. A null value reads as omitted.
         if value is None and operator not in ("is_set", "is_not_set"):
             raise InconclusiveMatchError(
                 f"Operator {operator} has no condition value",
