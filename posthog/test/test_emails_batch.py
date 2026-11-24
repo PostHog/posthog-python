@@ -418,6 +418,22 @@ def test_a_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
     assert result.status == "queued"
 
 
+@pytest.mark.parametrize(
+    "client_timeout,answer_after", [(3, 46), (60, 61)], ids=["45s", "60s"]
+)
+def test_a_batch_answer_past_its_timeout_is_unconfirmed(client_timeout, answer_after):
+    emails, posthog = emails_on(
+        [Slow(answer_after, all_queued)], timeout=client_timeout
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=0)
+
+    assert raised.value.code == "network_error"
+    assert [r.status for r in raised.value.results] == ["unconfirmed"]
+    assert len(posthog.requests) == 1
+
+
 def test_a_longer_client_timeout_applies_to_a_batch_too():
     emails, _ = emails_on([Slow(50, all_queued)], timeout=60)
 
