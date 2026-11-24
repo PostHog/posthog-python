@@ -281,6 +281,35 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             person_property_keys_known_absent=["created_at"],
         )
 
+    def test_duplicate_person_key_still_reads_the_supplied_value_outside_its_scope(
+        self,
+    ):
+        flag = _flag(
+            "flag", [_person_metadata_filter("is_set", None, key="created_at")]
+        )
+        self.assert_local(
+            flag,
+            True,
+            person_properties={"created_at": "2020-01-01T00:00:00Z"},
+            person_property_keys_known_absent=["created_at", "created_at"],
+        )
+
+    def test_duplicate_group_key_still_reads_the_supplied_value_outside_its_scope(
+        self,
+    ):
+        flag = _flag(
+            "flag",
+            [_group_filter("is_set", key="tier", group_type_index=1)],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            True,
+            groups={"organization": "org-1"},
+            group_properties={"organization": {"tier": "gold"}},
+            group_property_keys_known_absent={"organization": ["tier", "tier"]},
+        )
+
     @parameterized.expand(
         [
             ("is_not_set", None),

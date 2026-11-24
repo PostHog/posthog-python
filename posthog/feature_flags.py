@@ -156,10 +156,12 @@ def _mark_known_absent_properties(
     group_type_mapping: Optional[Mapping[str, str]],
 ) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
     """Return copies of the local evaluation property maps with each listed key
-    set to a ``_KnownAbsent`` that keeps the supplied or SDK-added value."""
+    set to a ``_KnownAbsent`` that keeps the supplied or SDK-added value.
+
+    Each key is marked once, so a repeated key can't wrap its own marker."""
     if person_property_keys_known_absent:
         person_properties = dict(person_properties)
-        for key in person_property_keys_known_absent:
+        for key in dict.fromkeys(person_property_keys_known_absent):
             # Known absence never hides a persons-table field.
             if not key.startswith(_PERSON_METADATA_KEY_PREFIX):
                 person_properties[key] = _KnownAbsent(
@@ -173,7 +175,7 @@ def _mark_known_absent_properties(
         group_properties = dict(group_properties)
         for group_type, keys in group_property_keys_known_absent.items():
             properties = dict(group_properties.get(group_type) or {})
-            for key in keys:
+            for key in dict.fromkeys(keys):
                 properties[key] = _KnownAbsent(
                     "group",
                     group_type_indexes.get(group_type),
