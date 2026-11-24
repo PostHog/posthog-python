@@ -144,6 +144,44 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         flag = _flag("flag", [_person_filter(operator, value)])
         self.assert_remote(flag, person_property_keys_known_absent=["plan"])
 
+    @parameterized.expand(
+        [
+            ("is_not omitted", "is_not", False),
+            ("is_not null", "is_not", True),
+            ("exact null", "exact", True),
+            ("gt null", "gt", True),
+        ]
+    )
+    def test_listed_key_with_omitted_or_null_value_stays_inconclusive(
+        self, _name, operator, explicit_null
+    ):
+        prop = _person_filter(operator)
+        if explicit_null:
+            prop["value"] = None
+        flag = _flag("flag", [prop])
+        self.client.feature_flags = [flag]
+        snapshot = self.client.evaluate_flags(
+            "user-1",
+            person_property_keys_known_absent=["plan"],
+            only_evaluate_locally=True,
+        )
+        self.assertIsNone(snapshot.get_flag("flag"))
+        self.assertEqual(
+            snapshot.unresolved_flags,
+            {"flag": UnresolvedFlagReason.UNSUPPORTED_DEFINITION},
+        )
+        self.flags.assert_not_called()
+
+        self.assert_remote(flag, person_property_keys_known_absent=["plan"])
+
+    @parameterized.expand([("is_not_set", True), ("is_set", False)])
+    def test_listed_key_with_null_value_resolves_presence_operator(
+        self, operator, expected
+    ):
+        prop = {**_person_filter(operator), "value": None}
+        flag = _flag("flag", [prop])
+        self.assert_local(flag, expected, person_property_keys_known_absent=["plan"])
+
     def test_group_key_applies_only_to_its_group_type(self):
         flag = _flag(
             "flag",

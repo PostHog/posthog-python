@@ -1578,6 +1578,12 @@ def _match_property_value(
     if key in property_values and property_values[key] is _KNOWN_ABSENT:
         # An unusable filter stays inconclusive even for a known-absent key.
         _assert_filter_supported(property)
+        # The flags service reads a null condition value as omitted.
+        if value is None and operator not in ("is_set", "is_not_set"):
+            raise InconclusiveMatchError(
+                f"Operator {operator} has no condition value",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
         return operator in _KNOWN_ABSENT_MATCHING_OPERATORS
 
     if key not in property_values:
