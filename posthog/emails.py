@@ -657,7 +657,8 @@ class BatchEmailResult:
       email, such as after a lost answer. It may still go out. Send it again
       with the same ``idempotency_key`` within 24 hours, so it goes out once.
       ``later_error`` holds what a retry in the same call answered, which
-      describes only that retry.
+      describes only that retry, or a status read by key that reads
+      ``failed``, which PostHog also records for a recipient it refused.
     - ``not_attempted``: an earlier request of the batch failed, so the client
       sent nothing for this recipient.
 
@@ -672,7 +673,9 @@ class BatchEmailResult:
         error: Why the email is not ``queued``. For an ``unconfirmed``
             email, ``code`` is ``delivery_unavailable``,
             ``idempotency_key_in_flight`` or ``api_error``.
-        later_error: For an ``unconfirmed`` email, a later answer about it.
+        later_error: For an ``unconfirmed`` email, a later answer about it,
+            such as a status read by key that reads ``failed``, whose
+            ``code`` is the status's ``reason``.
     """
 
     index: int
@@ -1291,7 +1294,7 @@ def _idempotency_error_name(status: int, code: str) -> str:
     if status == 409:
         return (
             "validation_error"
-            if code == "template_outdated"
+            if code in ("template_outdated", "batch_unavailable")
             else "concurrent_idempotent_requests"
         )
     # The template send route also answers 422 for send checks such as recipient_suppressed.
@@ -1898,6 +1901,17 @@ def _unconfirmed(message_id: Optional[str]) -> EmailError:
     )
 
 
+def _failed_status(status: EmailStatus) -> EmailError:
+    reason = status.reason
+    return EmailError(
+        name="application_error",
+        code=reason or "failed",
+        message="PostHog's status of this email reads failed"
+        + (f" ({reason})" if reason else "")
+        + ", so it may not have gone out.",
+    )
+
+
 class _BatchRun:
     """The recipients of one batch call, split into requests, and what PostHog answered for each."""
 
@@ -1972,7 +1986,7 @@ class _BatchRun:
     ) -> None:
         fields = _json_object(body)
         if not 200 <= status < 300:
-            if status >= 500:
+            if status >= 500 or fields.get("code") in _IN_FLIGHT_CODES:
                 self.lost(chunk)
             raise _batch_response_error(
                 fields, status, retry_after_header, chunk.indices
@@ -2022,7 +2036,11 @@ class _BatchRun:
     def stop(self, position: int, error: EmailError) -> None:
         """The request of chunk ``position`` failed as a whole, so the batch stops there."""
         later = (
-            error if error.status_code is not None and error.status_code < 500 else None
+            error
+            if error.status_code is not None
+            and error.status_code < 500
+            and error.code not in _IN_FLIGHT_CODES
+            else None
         )
         for index in self.chunks[position].indices:
             if index not in self._maybe_queued:
@@ -2068,7 +2086,16 @@ class _BatchRun:
             if self._current(index).message_id is None
         ]
 
-    def accepted(self, index: int, status: EmailStatus) -> None:
+    def found(self, index: int, status: EmailStatus) -> None:
+        if status.status == "failed":
+            self._set(
+                index,
+                "unconfirmed",
+                message_id=status.id,
+                error=self._current(index).error,
+                later_error=_failed_status(status),
+            )
+            return
         self._maybe_queued.discard(index)
         self._set(index, "queued", message_id=status.id)
 
@@ -2442,7 +2469,7 @@ class Emails(_EmailsBase):
                 if error.status_code == 404:
                     continue
                 return
-            run.accepted(index, status)
+            run.found(index, status)
 
     def _deliver(self, prepared: _PreparedSend, secret_key: str) -> SendEmailResult:
         if prepared.files:
@@ -2742,7 +2769,7 @@ class AsyncEmails(_EmailsBase):
                 if error.status_code == 404:
                     continue
                 return
-            run.accepted(index, status)
+            run.found(index, status)
 
     async def _deliver(
         self, prepared: _PreparedSend, secret_key: str

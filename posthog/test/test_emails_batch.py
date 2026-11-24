@@ -151,6 +151,20 @@ def status_found(message_id: str) -> Answer:
     )
 
 
+def status_failed(message_id: str, reason: str) -> Answer:
+    return (
+        200,
+        {
+            "id": message_id,
+            "status": "failed",
+            "reason": reason,
+            "created_at": "2026-11-22T10:00:00Z",
+            "status_at": "2026-11-22T10:00:00Z",
+        },
+        {},
+    )
+
+
 def recipients(count: int, **extra: Any) -> list[dict[str, Any]]:
     return [
         {"to": f"user{i}@example.com", "idempotency_key": f"key-{i}", **extra}
@@ -623,6 +637,45 @@ def test_a_lost_answer_after_retries_reads_each_email_by_its_key():
     assert error.results[1].error.code == "delivery_unavailable"
 
 
+def test_a_lost_email_whose_status_reads_failed_stays_unconfirmed():
+    emails, _ = emails_on(
+        [
+            requests.ConnectionError("reset"),
+            status_failed("m0", "recipient_suppressed"),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(1), max_retries=0)
+
+    [result] = raised.value.results
+    assert (result.status, result.message_id) == ("unconfirmed", "m0")
+    assert result.error is not None and result.error.code == "delivery_unavailable"
+    assert result.later_error is not None
+    assert result.later_error.code == "recipient_suppressed"
+    assert result.later_error.message_id is None
+
+
+def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
+    emails, posthog = emails_on(
+        [
+            whole_call(409, "idempotency_key_in_flight"),
+            status_found("m0"),
+            whole_call(404, "not_found"),
+        ]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2), max_retries=0)
+
+    assert raised.value.code == "idempotency_key_in_flight"
+    assert [(r.status, r.message_id) for r in raised.value.results] == [
+        ("queued", "m0"),
+        ("unconfirmed", None),
+    ]
+    assert len(posthog.requests) == 3
+
+
 def test_reading_by_key_stops_when_posthog_stays_unreachable():
     emails, posthog = emails_on(
         [whole_call(503, "delivery_unavailable")] * 3
@@ -662,6 +715,7 @@ def test_batch_unavailable_is_not_retried_and_says_to_send_singly():
 
     assert len(posthog.requests) == 1
     assert raised.value.code == "batch_unavailable"
+    assert raised.value.name == "validation_error"
     assert raised.value.fix == (
         "Until batch sends are on for the project, send each email the batch didn't "
         "queue with send() and its recipient's idempotency_key."
