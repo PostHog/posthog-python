@@ -1206,7 +1206,8 @@ def _ceil_to_millisecond_in_utc(when: datetime) -> datetime:
         utc.microsecond,
         tzinfo=timezone.utc,
     )
-    if getattr(when, "nanosecond", 0):
+    nanoseconds = getattr(when, "nanosecond", 0)
+    if isinstance(nanoseconds, int) and nanoseconds % 1000:
         plain += timedelta(microseconds=1)
     below_a_millisecond = plain.microsecond % 1000
     if below_a_millisecond:
