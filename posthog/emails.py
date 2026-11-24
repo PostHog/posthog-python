@@ -1880,6 +1880,8 @@ def _unconfirmed(message_id: Optional[str], cause: EmailError) -> EmailError:
         why=cause.why,
         fix=_SEND_AGAIN,
         docs_url=cause.docs_url,
+        field=cause.field,
+        retry_after=cause.retry_after,
         message_id=message_id,
     )
 

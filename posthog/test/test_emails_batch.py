@@ -527,7 +527,14 @@ def test_a_whole_call_error_raises_with_every_recipient_failed():
 
 def test_a_whole_call_refusal_after_a_503_leaves_every_recipient_unconfirmed():
     emails, posthog = emails_on(
-        [whole_call(503, "delivery_unavailable"), whole_call(429, "quota_limited")]
+        [
+            whole_call(503, "delivery_unavailable"),
+            (
+                429,
+                {"code": "quota_limited", "detail": "Nope.", "attr": "recipients"},
+                {"Retry-After": "7"},
+            ),
+        ]
     )
 
     with pytest.raises(EmailBatchError) as raised:
@@ -538,6 +545,7 @@ def test_a_whole_call_refusal_after_a_503_leaves_every_recipient_unconfirmed():
     error = raised.value.results[0].error
     assert error is not None and error.code == "quota_limited"
     assert error.fix is not None and "same idempotency_key" in error.fix
+    assert (error.retry_after, error.field) == (7.0, "recipients")
     assert len(posthog.requests) == 2
 
 
