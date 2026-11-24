@@ -12,8 +12,16 @@ from ._tracing_headers import _apply_tracing_headers, _resolve_capture_tracing_h
 try:
     from asgiref.sync import iscoroutinefunction, markcoroutinefunction
 except ImportError:
-    # Fallback for older Django versions without asgiref
-    from inspect import iscoroutinefunction
+    # Fallback for older Django versions without asgiref. Before Python 3.12,
+    # only asyncio's check recognizes callables marked with `_is_coroutine`.
+    import inspect
+
+    if hasattr(inspect, "markcoroutinefunction"):
+        iscoroutinefunction = inspect.iscoroutinefunction
+    else:
+        import asyncio
+
+        iscoroutinefunction = asyncio.iscoroutinefunction  # type: ignore[assignment]
 
     # No-op fallback for markcoroutinefunction
     # Older Django versions without asgiref typically don't support async middleware anyway
