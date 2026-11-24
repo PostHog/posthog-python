@@ -29,6 +29,23 @@ FOUR_MIB = 4 * 1024 * 1024
 Answer = Any  # an Exception, or (status, body, headers)
 
 
+class Slow:
+    """A server that answers after ``seconds``. A shorter wait times out."""
+
+    def __init__(self, seconds: float, answer: Answer) -> None:
+        self.seconds = seconds
+        self.answer = answer
+
+    def within(self, waited: Optional[float], timed_out: Exception) -> Answer:
+        if waited is not None and waited < self.seconds:
+            return timed_out
+        return self.answer
+
+
+def read_timeout(timeout: Any) -> Optional[float]:
+    return timeout[1] if isinstance(timeout, tuple) else timeout
+
+
 class BatchPostHog(requests.adapters.BaseAdapter):
     """Answers each request with the next answer, or with a callable of the request."""
 
@@ -36,14 +53,16 @@ class BatchPostHog(requests.adapters.BaseAdapter):
         super().__init__()
         self.answers = list(answers)
         self.requests: list[requests.PreparedRequest] = []
-        self.timeouts: list[Any] = []
 
     def send(
         self, request: requests.PreparedRequest, **kwargs: Any
     ) -> requests.Response:
         self.requests.append(request)
-        self.timeouts.append(kwargs.get("timeout"))
         answer = self.answers.pop(0)
+        if isinstance(answer, Slow):
+            answer = answer.within(
+                read_timeout(kwargs.get("timeout")), requests.ReadTimeout("timed out")
+            )
         if callable(answer):
             answer = answer(request)
         if isinstance(answer, Exception):
@@ -65,6 +84,17 @@ class BatchPostHog(requests.adapters.BaseAdapter):
             for request in self.requests
             if request.url == BATCH_URL
         ]
+
+
+def on_the_wire(posthog: BatchPostHog) -> Any:
+    def send(
+        adapter: requests.adapters.HTTPAdapter,
+        request: requests.PreparedRequest,
+        **kwargs: Any,
+    ) -> requests.Response:
+        return posthog.send(request, **kwargs)
+
+    return mock.patch.object(requests.adapters.HTTPAdapter, "send", send)
 
 
 def emails_on(answers: list[Answer], **options: Any) -> tuple[Emails, BatchPostHog]:
@@ -395,20 +425,20 @@ def test_a_chunk_fills_up_to_exactly_4_mib():
     assert [len(b["recipients"]) for b in posthog.batch_bodies()] == [2, 1]
 
 
-def test_each_attempt_waits_45_seconds_whatever_the_client_timeout():
-    emails, posthog = emails_on([all_queued], timeout=3)
+def test_a_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
+    emails, _ = emails_on([Slow(40, all_queued)], timeout=3)
 
-    batch(emails, recipients(1))
+    [result] = batch(emails, recipients(1)).results
 
-    assert posthog.timeouts == [45]
+    assert result.status == "queued"
 
 
 def test_a_longer_client_timeout_applies_to_a_batch_too():
-    emails, posthog = emails_on([all_queued], timeout=60)
+    emails, _ = emails_on([Slow(50, all_queued)], timeout=60)
 
-    batch(emails, recipients(1))
+    [result] = batch(emails, recipients(1)).results
 
-    assert posthog.timeouts == [60]
+    assert result.status == "queued"
 
 
 def test_a_retry_after_a_lost_answer_keeps_a_refused_slot_unconfirmed():
@@ -486,9 +516,8 @@ def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
         return all_queued(request)
 
     posthog = BatchPostHog([shutdown_then_queue, all_queued])
-    client.emails._get_session().mount("https://", posthog)
 
-    with pytest.raises(EmailBatchError) as raised:
+    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
         batch(client.emails, recipients(150))
 
     assert raised.value.code == "client_closed"
@@ -663,9 +692,8 @@ def test_a_client_off_cloud_without_an_app_host_sends_nothing():
         "phc_test", host="https://ph.example.com", secret_key=SECRET_KEY, sync_mode=True
     )
     posthog = BatchPostHog([])
-    client.emails._get_session().mount("https://", posthog)
 
-    with pytest.raises(EmailError) as no_host:
+    with on_the_wire(posthog), pytest.raises(EmailError) as no_host:
         batch(client.emails, recipients(1))
 
     assert no_host.value.code == "missing_app_host"
@@ -729,6 +757,10 @@ def async_emails_on(
     def handler(request: httpx.Request) -> httpx.Response:
         seen.append(request)
         answer = answers.pop(0)
+        if isinstance(answer, Slow):
+            answer = answer.within(
+                request.extensions["timeout"]["read"], httpx.ReadTimeout("timed out")
+            )
         if callable(answer):
             answer = answer(request)
         if isinstance(answer, Exception):
@@ -773,14 +805,12 @@ async def test_async_batch_keeps_a_recipient_unconfirmed_after_a_lost_answer():
 
 
 @pytest.mark.asyncio
-async def test_async_batch_waits_45_seconds_per_attempt():
-    emails, seen = async_emails_on([async_all_queued], timeout=3)
+async def test_async_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
+    emails, _ = async_emails_on([Slow(40, async_all_queued)], timeout=3)
 
-    await emails.batch(recipients=recipients(1), template_id=TEMPLATE_ID)
+    result = await emails.batch(recipients=recipients(1), template_id=TEMPLATE_ID)
 
-    assert seen[0].extensions["timeout"] == dict.fromkeys(
-        ["connect", "read", "write", "pool"], 45
-    )
+    assert [r.status for r in result.results] == ["queued"]
 
 
 @pytest.mark.asyncio
@@ -813,9 +843,15 @@ async def test_async_shutdown_during_a_batch_stops_it_before_the_next_request():
                 await asyncio.sleep(0)
         return async_all_queued(request)
 
-    client.emails._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    async def wire(
+        transport: httpx.AsyncHTTPTransport, request: httpx.Request
+    ) -> httpx.Response:
+        return await handler(request)
 
-    with pytest.raises(EmailBatchError) as raised:
+    with (
+        mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
+        pytest.raises(EmailBatchError) as raised,
+    ):
         await client.emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
     await shutting_down[0]
 

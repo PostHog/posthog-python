@@ -663,8 +663,9 @@ class BatchEmailResult:
         message_id: The email's message ID, when PostHog named it.
         replayed: ``True`` when an earlier send with the same key had already
             queued the email, so no new email was sent.
-        error: Why the email is not ``queued``. ``code`` is
-            ``delivery_unavailable`` for an ``unconfirmed`` email.
+        error: Why the email is not ``queued``. For an ``unconfirmed``
+            email, ``code`` is ``delivery_unavailable``,
+            ``idempotency_key_in_flight`` or ``api_error``.
         later_error: For an ``unconfirmed`` email, a later answer about it.
     """
 
