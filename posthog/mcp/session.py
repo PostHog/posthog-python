@@ -14,8 +14,6 @@ from contextvars import Context, ContextVar, copy_context
 from datetime import datetime, timezone
 from typing import (
     Any,
-    Awaitable,
-    Callable,
     Dict,
     Iterator,
     List,
@@ -64,11 +62,8 @@ class PendingCustomEvents:
         self.events: List[Tuple[Context, Dict[str, Any]]] = []
         self.settled: Optional[ResolvedSession] = None
         self.dropped = 0
-        # Settles with the session the call already knows, for a flush (as before
-        # shutdown) that cannot wait for the call to end. Cleared once the call
-        # starts recording its outcome, which settles it with the right session.
-        self.settle_early: Optional[Callable[[], Awaitable[None]]] = None
-        # A flush may run on another thread than the tool's.
+        self.fallback: Optional[ResolvedSession] = None
+        # A tool's own threads may capture while its call settles.
         self.lock = threading.Lock()
 
     def settle(self, session: ResolvedSession) -> List[Tuple[Context, Dict[str, Any]]]:

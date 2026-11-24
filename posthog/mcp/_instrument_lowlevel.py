@@ -367,7 +367,7 @@ def _wrap_call_tool(
             )
             return result
         finally:
-            lifecycle.settle_left_over_custom_events(session)
+            lifecycle.settle_left_over_custom_events()
 
     setattr(handler, _WRAPPED_FLAG, True)
     handlers[mcp_types.CallToolRequest] = handler

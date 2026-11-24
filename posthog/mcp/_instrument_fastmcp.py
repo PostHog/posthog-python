@@ -204,7 +204,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
             )
             return result
         finally:
-            lifecycle.settle_left_over_custom_events(session)
+            lifecycle.settle_left_over_custom_events()
 
     setattr(wrapped, _WRAPPED_FLAG, True)
     tool_manager.call_tool = wrapped

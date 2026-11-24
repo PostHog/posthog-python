@@ -49,7 +49,9 @@ only from a request whose `User-Agent` or client name identifies that client, an
 every call, so its `tools/list` has no `conversation_id` argument and its results get no handle, even
 with `enable_conversation_id` on. Each event records which source grouped it in
 `$mcp_session_source`: `client_metadata`, `conversation`, `transport`, or `generated`. Custom events
-from `McpAnalytics.capture()` carry the instance's own source. The rules are the sdk-specs "Session
+from `McpAnalytics.capture()` inside a tool call carry that call's session, source and identity,
+and are sent when the call ends, like the call's own event, so a server that stops while a call is
+still running loses both. Calls outside a tool carry the instance's own session and source. The rules are the sdk-specs "Session
 identity" requirement, and posthog-js `docs/adr/0014` records the reasoning.
 
 

@@ -641,40 +641,32 @@ class ToolCallLifecycle:
     @contextmanager
     def in_tool(self, primed: ResolvedSession) -> Iterator[None]:
         """Scope the tool body to this call: its custom events wait in
-        :attr:`pending_custom_events` until the call settles. A flush before then
-        sends them with the session the call already knows: its client id or
-        echoed handle, else the primed one (a minted handle counts only once
-        delivered)."""
-        known = resolve_anchored_session(
-            None if self.minted_conversation_id else self.conversation_id,
-            self.client_conversation,
-        )
+        :attr:`pending_custom_events` until the call settles, like the call's own
+        event."""
         pending = self.pending_custom_events
-
-        async def settle_early() -> None:
-            session = known or primed
-            await handle_identify(
-                self.data, session.session_id, self.request, self.extra
+        # What a call that records nothing settles with: its client id or echoed
+        # handle, else the primed session (a minted handle counts only once delivered).
+        pending.fallback = (
+            resolve_anchored_session(
+                None if self.minted_conversation_id else self.conversation_id,
+                self.client_conversation,
             )
-            self._settle_custom_events(session)
-
-        pending.settle_early = settle_early
-        self.data.calls_holding_custom_events.add(pending)
+            or primed
+        )
         with bind_in_tool_session(self.data, primed, pending):
             yield
 
-    def settle_left_over_custom_events(self, primed: ResolvedSession) -> None:
-        """Adapters call this once the call is over. A call that ended without
-        recording anything (cancelled, or a path that records nothing) sends what
-        it held back with its primed session."""
-        if self.pending_custom_events.settled is None:
-            self._settle_custom_events(primed)
+    def settle_left_over_custom_events(self) -> None:
+        """Adapters call this once the call is over, for a call that ended without
+        recording anything (cancelled, or a path that records nothing)."""
+        pending = self.pending_custom_events
+        if pending.settled is None and pending.fallback is not None:
+            self._settle_custom_events(pending.fallback)
 
     def _settle_custom_events(self, session: ResolvedSession) -> None:
         """Send the custom events this call held back, with its own event's session,
         without making the call wait on them or fail because of them."""
         pending = self.pending_custom_events
-        self.data.calls_holding_custom_events.discard(pending)
         for context, event in pending.settle(session):
             try:
                 capture = capture_event(
@@ -756,7 +748,6 @@ class ToolCallLifecycle:
             return True
         if tool_exists is not False:
             return False
-        self.pending_custom_events.settle_early = None
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         self._settle_custom_events(session)
@@ -774,7 +765,6 @@ class ToolCallLifecycle:
         return True
 
     async def record_error(self, error: Any, duration_ms: float) -> None:
-        self.pending_custom_events.settle_early = None
         # A freshly minted handle cannot anchor or be captured when dispatch
         # raised: no adapter had an opportunity to deliver it to the agent.
         conversation_id = self._anchored_conversation_id(False)
@@ -806,7 +796,6 @@ class ToolCallLifecycle:
         conversation_id_delivered: bool,
         error: Optional[BaseException] = None,
     ) -> None:
-        self.pending_custom_events.settle_early = None
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session = await self.prepare_session(conversation_id)
         self._settle_custom_events(session)

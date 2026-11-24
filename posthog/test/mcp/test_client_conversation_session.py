@@ -548,6 +548,40 @@ async def test_the_first_custom_event_in_a_conversation_carries_its_identity(cal
     assert event["properties"]["$set"] == {"plan": "pro"}
 
 
+@pytest.mark.parametrize(
+    "call, expected",
+    [
+        (
+            {"user_agent": CHATGPT, "meta": CHATGPT_META},
+            (CHATGPT_SESSION, "client_metadata"),
+        ),
+        (
+            {"user_agent": OTHER, "arguments": {"conversation_id": HANDLE}},
+            (HANDLE_SESSION, "conversation"),
+        ),
+    ],
+    ids=["a client id", "an echoed handle"],
+)
+async def test_a_call_that_records_nothing_sends_its_custom_events_with_its_conversation(
+    call, expected
+):
+    client = FakeClient()
+    key, data = shared_http_server(client)
+    await run_call(data, user="alice", **call)
+
+    lifecycle = start_call(data, user="alice", **call)
+    with lifecycle.in_tool(await lifecycle.prime_session()):
+        await McpAnalytics(key).capture("inside_tool")
+    lifecycle.settle_left_over_custom_events()
+    await _flush()
+
+    (event,) = _events(client, "inside_tool")
+    session_id, source = expected
+    assert event["properties"]["$session_id"] == session_id
+    assert event["properties"]["$mcp_session_source"] == source
+    assert event["distinct_id"] == "alice"
+
+
 async def test_a_capture_in_on_feedback_keeps_its_callers_session():
     client = FakeClient()
     key = FakeServer()
