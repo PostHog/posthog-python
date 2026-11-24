@@ -112,18 +112,19 @@ Status: ``emails.get(message_id)`` reads what happened to a sent email, for
 few seconds after the send.
 
 Scheduling: pass ``scheduled_at``, an aware ``datetime`` or an ISO 8601 string
-with an offset, to send the email up to 7 days later. Only PostHog Cloud
+ending in ``Z`` or an offset such as ``+02:00``, to send the email up to 7 days
+later. Only PostHog Cloud
 schedules emails: on any other app host, such as a reverse proxy or a custom
 domain, a send with ``scheduled_at`` raises ``scheduling_requires_cloud``
 before any request. A naive ``datetime`` or a string without an offset raises
 ``ValueError`` before any request. The client rounds the time up to the next
 millisecond, so the email never goes out early. A result with ``status``
 ``"scheduled"`` carries the confirmed ``scheduled_at``; ``get`` reads
-``scheduled`` until the email goes out. A time that has already passed, or is
-at most 60 seconds ahead of the client's clock, sends the email now, and the
-result's ``status`` is ``"queued"``. When PostHog answers that it sends the
-email now for a time further ahead, the client raises ``schedule_not_confirmed``
-instead of reporting the email as sent. Compute the time
+``scheduled`` until the email goes out. A time that has already passed sends
+the email now, and the result's ``status`` is ``"queued"``. The client accepts
+that answer only for a time at most 60 seconds ahead of its clock: for a time
+further ahead it raises ``schedule_not_confirmed``, so an email PostHog didn't
+schedule never reads as scheduled or sent on time. Compute the time
 once and reuse it on your own retries: the idempotency key covers it, so the
 same key with another time raises ``idempotency_key_reused``. To stop scheduled
 emails before they go out, disable the email's workflow in PostHog until they
@@ -347,8 +348,7 @@ class SendEmailResult:
             ``"queued"`` when it goes out now.
         scheduled_at: When a scheduled email goes out, in UTC. ``None`` for
             an email that goes out now, also when ``scheduled_at`` had
-            already passed when PostHog accepted it, or was at most 60
-            seconds ahead of the client's clock.
+            already passed when PostHog accepted it.
     """
 
     id: str
@@ -1184,6 +1184,16 @@ def _requested_time(value: Any) -> Optional[datetime]:
 
 
 def _ceil_to_millisecond(when: datetime) -> datetime:
+    try:
+        return _ceil_to_millisecond_in_utc(when)
+    except OverflowError:
+        raise ValueError(
+            "scheduled_at is past the latest time the client can send. "
+            "PostHog schedules an email up to 7 days ahead."
+        ) from None
+
+
+def _ceil_to_millisecond_in_utc(when: datetime) -> datetime:
     utc = when.astimezone(timezone.utc)
     plain = datetime(
         utc.year,
@@ -1345,7 +1355,11 @@ _SEND_NOW_LEEWAY = timedelta(seconds=60)
 
 
 def _sends_now(fields: Mapping[str, Any]) -> bool:
-    return fields.get("status") == "queued" and fields.get("scheduled_at") is None
+    return (
+        fields.get("status") == "queued"
+        and "scheduled_at" in fields
+        and fields["scheduled_at"] is None
+    )
 
 
 def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
@@ -1383,25 +1397,32 @@ def _parse_warnings(warnings: Any) -> tuple[EmailWarning, ...]:
     )
 
 
-_OFFSET = re.compile(r"[+-]\d{2}(?::?(\d{2})(?::?(\d{2})(?:\.\d+)?)?)?$")
-
-
-def _offset_in_range(text: str) -> bool:
-    offset = _OFFSET.search(text)
-    return offset is None or all(int(part or 0) < 60 for part in offset.groups())
+_TIME_WITH_OFFSET = re.compile(
+    r"(?P<time>[^.,]+?)"
+    r"(?:(?<=[0-9]{2}:[0-9]{2}:[0-9]{2})[.,](?P<fraction>[0-9]+))?"
+    r"(?P<offset>Z|[+-](?:[01][0-9]|2[0-3]):[0-5][0-9])"
+)
 
 
 def _timestamp(value: Any) -> Optional[datetime]:
     text = _text(value)
-    if text is None or not _offset_in_range(text):
+    written = _TIME_WITH_OFFSET.fullmatch(text) if text is not None else None
+    if written is None:
         return None
+    offset = "+00:00" if written["offset"] == "Z" else written["offset"]
     try:
-        # fromisoformat reads a trailing Z only from Python 3.11.
-        return datetime.fromisoformat(
-            text[:-1] + "+00:00" if text.endswith("Z") else text
+        return datetime.fromisoformat(written["time"] + offset) + _fraction_rounded_up(
+            written["fraction"] or ""
         )
-    except ValueError:
+    except (ValueError, OverflowError):
         return None
+
+
+def _fraction_rounded_up(digits: str) -> timedelta:
+    microseconds = int(digits[:6].ljust(6, "0"))
+    if digits[6:].strip("0"):
+        microseconds += 1
+    return timedelta(microseconds=microseconds)
 
 
 def _parse_status_response(
@@ -2250,7 +2271,8 @@ class Emails(_EmailsBase):
                 client's host isn't PostHog Cloud, and
                 ``schedule_not_confirmed`` when PostHog accepted the email
                 without confirming the time, or answered that it goes out now
-                for a time more than 60 seconds ahead. ``message_id`` then
+                for a time more than 60 seconds ahead of the client's clock.
+                ``message_id`` then
                 names the email, which may go out at another time.
             TypeError, ValueError: An argument has the wrong type or format,
                 such as a ``scheduled_at`` without a timezone.
