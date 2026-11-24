@@ -157,7 +157,8 @@ A request that fails as a whole, such as a rate limit past its retries, stops
 the batch and raises :class:`EmailBatchError`, whose ``results`` hold every
 recipient. ``code`` ``batch_unavailable`` (409) means the project can't send
 batches yet, and a 404 that the template doesn't exist or batch sends are off
-for the project: send each email with ``send``. A batch takes no ``cc``, ``bcc``,
+for the project: send each email the batch didn't queue with ``send`` and its
+recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
 ``attachments`` or ``scheduled_at``.
 
 ```python
@@ -571,10 +572,10 @@ class BatchRecipient(TypedDict):
         idempotency_key: 1 to 255 visible ASCII characters, a different one
             for each recipient of the call. Without it, the client makes one
             that covers its own retries but not a second call, so pass keys
-            you store when a batch may be cut off and run again: the rerun
-            then replays the emails that went out instead of sending them
-            twice. A single send and a batch recipient
-            with the same key and the same email replay each other. Never
+            you store when a batch may be cut off and run again: a rerun
+            within 24 hours replays the emails that went out instead of
+            sending them twice. A single send and a batch recipient with the
+            same key and the same email replay each other. Never
             reuse a key for another email: after a lost answer, the client
             reads the email by its key, and an earlier email with that key
             reads as this one, ``queued``.
@@ -1784,20 +1785,27 @@ def _batch_response_error(
             "detail": "PostHog found no batch send for this request, so no email was sent.",
             "why": "The template doesn't exist, or batch sends are off for this project "
             "or this PostHog version.",
-            "fix": "Check template_id, or send each email with send().",
+            "fix": "Check template_id, or send each email the batch didn't queue "
+            "with send() and its recipient's idempotency_key.",
             **answered,
         }
     if fields.get("code") == "batch_unavailable":
         fields = {
             **fields,
-            "fix": "Send each email with send() until batch sends are on for the project.",
+            "fix": "Until batch sends are on for the project, send each email the "
+            "batch didn't queue with send() and its recipient's idempotency_key.",
         }
     return _response_error(fields, status, retry_after_header)
 
 
+def _ascii_digits(text: str) -> bool:
+    # str.isdigit() also takes digits such as "²" that int() refuses.
+    return text.isascii() and text.isdigit()
+
+
 def _recipients_field(attr: str, indices: Sequence[int]) -> str:
     position, separator, rest = attr.removeprefix("recipients__").partition("__")
-    if not attr.startswith("recipients__") or not position.isdigit():
+    if not attr.startswith("recipients__") or not _ascii_digits(position):
         return attr
     if int(position) >= len(indices):
         return "recipients"
@@ -2090,6 +2098,22 @@ class _EmailsBase:
         finish()
         return True
 
+    def _retry_while_admitted(self) -> Callable[[], None]:
+        """Before each retry of a batch request, stop when the client shut down."""
+        attempts = 0
+
+        def check() -> None:
+            nonlocal attempts
+            attempts += 1
+            if attempts > 1 and not self._still_admitted():
+                raise _sdk_error(
+                    "client_closed",
+                    "The PostHog client is shut down, so it didn't retry this "
+                    "request of the batch.",
+                )
+
+        return check
+
     def _secret_key(self, key_needed: str) -> str:
         if self._host_error:
             raise _sdk_error("missing_app_host", self._host_error)
@@ -2282,9 +2306,10 @@ class Emails(_EmailsBase):
             EmailBatchError: A request failed as a whole, so the batch
                 stopped. ``results`` holds every recipient, those not sent as
                 ``not_attempted``. ``code`` is ``batch_unavailable`` when the
-                project can't send batches yet: send each email with
-                :meth:`send`. ``client_closed`` means the client shut down
-                during the batch.
+                project can't send batches yet: send each email the batch
+                didn't queue with :meth:`send` and its recipient's
+                ``idempotency_key``. ``client_closed`` means the client shut
+                down during the batch.
             EmailError: The client sent nothing, such as when it is disabled.
             TypeError, ValueError: An argument has the wrong type or format,
                 such as two recipients with the same ``idempotency_key``.
@@ -2319,7 +2344,8 @@ class Emails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    self._read_lost(run, secret_key)
+                    if error.code != "client_closed":
+                        self._read_lost(run, secret_key)
                     raise run.failure(error) from error
         finally:
             finish()
@@ -2333,8 +2359,10 @@ class Emails(_EmailsBase):
         send = self._posthog_request(
             "POST", _BATCH_PATH, chunk.body, headers, self._batch_timeout()
         )
+        retry = self._retry_while_admitted()
 
         def attempt() -> requests.Response:
+            retry()
             try:
                 return send()
             except requests.exceptions.RequestException:
@@ -2614,7 +2642,8 @@ class AsyncEmails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    await self._read_lost(run, secret_key)
+                    if error.code != "client_closed":
+                        await self._read_lost(run, secret_key)
                     raise run.failure(error) from error
         finally:
             finish()
@@ -2629,8 +2658,10 @@ class AsyncEmails(_EmailsBase):
         send = self._posthog_request(
             "POST", _BATCH_PATH, chunk.body, headers, self._batch_timeout()
         )
+        retry = self._retry_while_admitted()
 
         async def attempt() -> Any:
+            retry()
             try:
                 return await send()
             except httpx.RequestError:

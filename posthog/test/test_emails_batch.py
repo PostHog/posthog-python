@@ -528,6 +528,26 @@ def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
     assert raised.value.results[100].error.code == "client_closed"
 
 
+def test_a_shutdown_during_a_retry_wait_sends_no_retry():
+    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+
+    def shutdown_then_rate_limit(request: requests.PreparedRequest) -> Answer:
+        client.shutdown()
+        return whole_call(429)
+
+    posthog = BatchPostHog([shutdown_then_rate_limit, all_queued])
+
+    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
+        batch(client.emails, recipients(150))
+
+    assert raised.value.code == "client_closed"
+    assert len(posthog.requests) == 1
+    statuses = [r.status for r in raised.value.results]
+    assert statuses == ["failed"] * 100 + ["not_attempted"] * 50
+    assert raised.value.results[0].error is not None
+    assert raised.value.results[0].error.code == "client_closed"
+
+
 def test_a_whole_call_error_raises_with_the_results_so_far():
     emails, posthog = emails_on([all_queued, whole_call(429, "quota_limited")])
 
@@ -625,7 +645,10 @@ def test_batch_unavailable_is_not_retried_and_says_to_send_singly():
 
     assert len(posthog.requests) == 1
     assert raised.value.code == "batch_unavailable"
-    assert raised.value.fix is not None and "send()" in raised.value.fix
+    assert raised.value.fix == (
+        "Until batch sends are on for the project, send each email the batch didn't "
+        "queue with send() and its recipient's idempotency_key."
+    )
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
 
 
@@ -641,7 +664,10 @@ def test_a_404_says_batch_sends_are_unavailable(body):
 
     assert raised.value.code == "not_found"
     assert raised.value.why is not None and "batch sends" in raised.value.why.lower()
-    assert raised.value.fix is not None and "send()" in raised.value.fix
+    assert raised.value.fix == (
+        "Check template_id, or send each email the batch didn't queue with send() "
+        "and its recipient's idempotency_key."
+    )
 
 
 def test_an_answer_without_a_result_per_recipient_leaves_the_chunk_unconfirmed():
@@ -717,7 +743,14 @@ def test_warnings_reach_the_caller_when_a_later_request_fails(caplog):
     assert caplog.text.count("sandbox_sender") == 1
 
 
-def test_a_refused_recipient_field_names_its_position_in_recipients():
+@pytest.mark.parametrize(
+    "attr, field",
+    [
+        ("recipients__37__idempotency_key", "recipients__137__idempotency_key"),
+        ("recipients__\u00b2__idempotency_key", "recipients__\u00b2__idempotency_key"),
+    ],
+)
+def test_a_refused_recipient_field_names_its_position_in_recipients(attr, field):
     emails, _ = emails_on(
         [
             all_queued,
@@ -725,9 +758,9 @@ def test_a_refused_recipient_field_names_its_position_in_recipients():
                 400,
                 {
                     "type": "validation_error",
-                    "code": "invalid_input",
-                    "detail": "Enter a valid email address.",
-                    "attr": "recipients__37__to",
+                    "code": "max_length",
+                    "detail": "Ensure this field has no more than 255 characters.",
+                    "attr": attr,
                 },
                 {},
             ),
@@ -737,7 +770,10 @@ def test_a_refused_recipient_field_names_its_position_in_recipients():
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(150))
 
-    assert raised.value.field == "recipients__137__to"
+    assert raised.value.field == field
+    assert [r.status for r in raised.value.results] == ["queued"] * 100 + [
+        "failed"
+    ] * 50
 
 
 def test_a_code_batch_without_content_names_batch():
@@ -859,3 +895,34 @@ async def test_async_shutdown_during_a_batch_stops_it_before_the_next_request():
     assert len(seen) == 1
     statuses = [r.status for r in raised.value.results]
     assert statuses == ["queued"] * 100 + ["not_attempted"] * 50
+
+
+@pytest.mark.asyncio
+async def test_async_shutdown_during_a_retry_wait_sends_no_retry():
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
+    seen: list[httpx.Request] = []
+    shutting_down: list[asyncio.Task[None]] = []
+    yield_to_shutdown = asyncio.sleep  # the retry wait below is patched out
+
+    async def wire(
+        transport: httpx.AsyncHTTPTransport, request: httpx.Request
+    ) -> httpx.Response:
+        seen.append(request)
+        if shutting_down:
+            return async_all_queued(request)
+        shutting_down.append(asyncio.create_task(client.shutdown()))
+        for _ in range(5):
+            await yield_to_shutdown(0)
+        return httpx.Response(429)
+
+    with (
+        mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
+        mock.patch("posthog.emails.asyncio.sleep"),
+        pytest.raises(EmailBatchError) as raised,
+    ):
+        await client.emails.batch(recipients=recipients(2), template_id=TEMPLATE_ID)
+    await shutting_down[0]
+
+    assert raised.value.code == "client_closed"
+    assert len(seen) == 1
+    assert [r.status for r in raised.value.results] == ["failed", "failed"]
