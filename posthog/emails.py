@@ -119,8 +119,11 @@ before any request. A naive ``datetime`` or a string without an offset raises
 ``ValueError`` before any request. The client rounds the time up to the next
 millisecond, so the email never goes out early. A result with ``status``
 ``"scheduled"`` carries the confirmed ``scheduled_at``; ``get`` reads
-``scheduled`` until the email goes out. A time that has already passed sends
-the email now, and the result's ``status`` is ``"queued"``. Compute the time
+``scheduled`` until the email goes out. A time that has already passed, or is
+at most 60 seconds ahead of the client's clock, sends the email now, and the
+result's ``status`` is ``"queued"``. When PostHog answers that it sends the
+email now for a time further ahead, the client raises ``schedule_not_confirmed``
+instead of reporting the email as sent. Compute the time
 once and reuse it on your own retries: the idempotency key covers it, so the
 same key with another time raises ``idempotency_key_reused``. To stop scheduled
 emails before they go out, disable the email's workflow in PostHog until they
@@ -344,7 +347,8 @@ class SendEmailResult:
             ``"queued"`` when it goes out now.
         scheduled_at: When a scheduled email goes out, in UTC. ``None`` for
             an email that goes out now, also when ``scheduled_at`` had
-            already passed when PostHog accepted it.
+            already passed when PostHog accepted it, or was at most 60
+            seconds ahead of the client's clock.
     """
 
     id: str
@@ -1326,19 +1330,22 @@ def _send_parser(scheduled_at: Optional[datetime]) -> _Parse[SendEmailResult]:
             return result
         if _confirms_schedule(fields, scheduled_at):
             return replace(result, scheduled_at=scheduled_at)
-        if _sends_now(fields):
+        if _sends_now(fields) and scheduled_at - _now() <= _SEND_NOW_LEEWAY:
             return result
         raise _schedule_not_confirmed(message_id, status)
 
     return parse
 
 
+def _now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+_SEND_NOW_LEEWAY = timedelta(seconds=60)
+
+
 def _sends_now(fields: Mapping[str, Any]) -> bool:
-    return (
-        fields.get("status") == "queued"
-        and "scheduled_at" in fields
-        and fields["scheduled_at"] is None
-    )
+    return fields.get("status") == "queued" and fields.get("scheduled_at") is None
 
 
 def _confirms_schedule(fields: Mapping[str, Any], requested: datetime) -> bool:
@@ -1376,9 +1383,17 @@ def _parse_warnings(warnings: Any) -> tuple[EmailWarning, ...]:
     )
 
 
+_OFFSET = re.compile(r"[+-]\d{2}(?::?(\d{2})(?::?(\d{2})(?:\.\d+)?)?)?$")
+
+
+def _offset_in_range(text: str) -> bool:
+    offset = _OFFSET.search(text)
+    return offset is None or all(int(part or 0) < 60 for part in offset.groups())
+
+
 def _timestamp(value: Any) -> Optional[datetime]:
     text = _text(value)
-    if text is None:
+    if text is None or not _offset_in_range(text):
         return None
     try:
         # fromisoformat reads a trailing Z only from Python 3.11.
@@ -2235,8 +2250,9 @@ class Emails(_EmailsBase):
                 ``scheduling_requires_cloud`` before any request when the
                 client's host isn't PostHog Cloud, and
                 ``schedule_not_confirmed`` when PostHog accepted the email
-                without confirming the time. ``message_id`` then names the
-                email, which may go out at another time.
+                without confirming the time, or answered that it goes out now
+                for a time more than 60 seconds ahead. ``message_id`` then
+                names the email, which may go out at another time.
             TypeError, ValueError: An argument has the wrong type or format,
                 such as a ``scheduled_at`` without a timezone.
 

@@ -99,6 +99,15 @@ def send(emails: Emails, **overrides: Any):
     )
 
 
+NOW = datetime(2026, 11, 30, 9, tzinfo=timezone.utc)
+
+
+@pytest.fixture(autouse=True)
+def fixed_clock():
+    with mock.patch("posthog.emails._now", return_value=NOW):
+        yield
+
+
 @pytest.fixture(autouse=True)
 def no_sleep():
     with (
@@ -2901,6 +2910,21 @@ def test_a_send_without_scheduled_at_keeps_todays_result():
         ("natural_language", "in 1 hour", ValueError, "offset"),
         ("bad_month", "2026-13-01T09:00:00Z", ValueError, "offset"),
         ("offset_past_a_day", "2026-12-01T09:00:00+24:00", ValueError, "offset"),
+        ("offset_minutes_past_59", "2026-12-01T09:00:00+01:60", ValueError, "offset"),
+        (
+            "offset_minutes_far_past_59",
+            "2026-12-01T09:00:00+01:99",
+            ValueError,
+            "offset",
+        ),
+        ("compact_offset_minutes", "2026-12-01T09:00:00+0160", ValueError, "offset"),
+        ("negative_offset_minutes", "2026-12-01T09:00:00-00:60", ValueError, "offset"),
+        (
+            "offset_seconds_past_59",
+            "2026-12-01T09:00:00+01:00:60",
+            ValueError,
+            "offset",
+        ),
         ("non_ascii_digits", "２０２６-12-01T09:00:00Z", ValueError, "offset"),
         ("unix_seconds", 1796115600, TypeError, "datetime"),
         ("date_object", datetime(2026, 12, 1).date(), TypeError, "datetime"),
@@ -3021,7 +3045,42 @@ def test_a_time_already_passed_is_an_acceptance_that_goes_out_now():
 
 @parameterized.expand(
     [
-        ("no_scheduled_at_key", {"status": "queued"}),
+        ("null_time", {"status": "queued", "scheduled_at": None}),
+        ("no_time", {"status": "queued"}),
+    ]
+)
+def test_a_send_now_answer_for_a_time_over_a_minute_ahead_is_not_confirmed(
+    _name, fields
+):
+    emails, adapter = emails_with([accepted("msg_9", **fields)])
+
+    with pytest.raises(EmailError) as raised:
+        send(emails, scheduled_at=NOW + timedelta(seconds=61))
+
+    assert len(adapter.requests) == 1
+    assert (raised.value.code, raised.value.message_id) == (
+        "schedule_not_confirmed",
+        "msg_9",
+    )
+
+
+@parameterized.expand(
+    [
+        ("null_time", {"status": "queued", "scheduled_at": None}, 60),
+        ("no_time", {"status": "queued"}, 60),
+        ("null_time_already_passed", {"status": "queued", "scheduled_at": None}, -60),
+    ]
+)
+def test_a_send_now_answer_within_a_minute_goes_out_now(_name, fields, ahead):
+    emails, _ = emails_with([accepted("msg_9", **fields)])
+
+    result = send(emails, scheduled_at=NOW + timedelta(seconds=ahead))
+
+    assert (result.id, result.status, result.scheduled_at) == ("msg_9", "queued", None)
+
+
+@parameterized.expand(
+    [
         ("nothing_but_the_id", {}),
         (
             "another_instant",
