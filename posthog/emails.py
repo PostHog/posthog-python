@@ -583,7 +583,7 @@ class BatchRecipient(TypedDict):
             same key and the same email replay each other. Never
             reuse a key for another email: after a lost answer, the client
             reads the email by its key, and an earlier email with that key
-            reads as this one, ``queued``.
+            gives this one its ``message_id``.
         template_data: Only with ``template_id``: values for this recipient,
             merged over the batch's ``template_data``. A top-level key set here
             replaces the same key there.
