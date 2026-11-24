@@ -98,7 +98,11 @@ def _supplied_value(property_values, key, prop) -> Any:
 def _known_absent_key_list(keys, field: str) -> Optional[list[str]]:
     if keys is None:
         return None
-    if isinstance(keys, (str, bytes)) or not isinstance(keys, Iterable):
+    # A mapping is iterable, so check for it to catch a property map passed by
+    # mistake. A dict's .keys() view is not a mapping and is accepted.
+    if isinstance(keys, (str, bytes, bytearray, Mapping)) or not isinstance(
+        keys, Iterable
+    ):
         raise TypeError(f"{field} must be a collection of strings")
     # Read one key past the limit so an unbounded iterable can't exhaust memory.
     key_list = list(itertools.islice(keys, _MAX_KNOWN_ABSENT_KEYS + 1))

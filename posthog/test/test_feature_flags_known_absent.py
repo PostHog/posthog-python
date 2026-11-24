@@ -740,12 +740,35 @@ class TestKnownAbsentRemoteBody(unittest.TestCase):
             ("group list", {"group_property_keys_known_absent": ["tier"]}),
             ("non-string group type", {"group_property_keys_known_absent": {1: ["t"]}}),
             ("None group keys", {"group_property_keys_known_absent": {"org": None}}),
+            ("bytes", {"person_property_keys_known_absent": b"plan"}),
+            ("bytearray", {"person_property_keys_known_absent": bytearray()}),
+            ("person dict", {"person_property_keys_known_absent": {"plan": "pro"}}),
+            ("empty person dict", {"person_property_keys_known_absent": {}}),
+            (
+                "group dict",
+                {"group_property_keys_known_absent": {"org": {"tier": "gold"}}},
+            ),
+            (
+                "group bytearray",
+                {"group_property_keys_known_absent": {"org": bytearray(b"t")}},
+            ),
         ]
     )
     def test_wrong_type_raises_without_a_request(self, _name, kwargs):
         with self.assertRaises(TypeError):
             self.client.get_feature_flag("flag", "user-1", **kwargs)
         self.flags.assert_not_called()
+
+    def test_dict_keys_view_is_accepted(self):
+        self.client.get_feature_flag(
+            "flag",
+            "user-1",
+            person_property_keys_known_absent={"plan": "pro"}.keys(),
+            group_property_keys_known_absent={"org": {"tier": "gold"}.keys()},
+        )
+        body = self.flags.call_args.kwargs
+        self.assertEqual(body["person_property_keys_known_absent"], ["plan"])
+        self.assertEqual(body["group_property_keys_known_absent"], {"org": ["tier"]})
 
 
 @pytest.mark.asyncio
