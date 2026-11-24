@@ -695,7 +695,9 @@ class PostHogClaudeAgentProcessor:
     def _capture_tool_span(self, span: _PendingToolSpan) -> None:
         if _with_privacy_mode(self._client, span.privacy, True) is None:
             # Privacy may have been enabled while the tool ran; drop content
-            # buffered before then and keep only the error label.
+            # buffered before then (or passed in properties) and keep only
+            # the error label.
+            span.properties.pop("$ai_input_state", None)
             span.properties.pop("$ai_output_state", None)
             if "$ai_error" in span.properties:
                 span.properties["$ai_error"] = _format_tool_error(

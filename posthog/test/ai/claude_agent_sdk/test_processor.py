@@ -811,6 +811,35 @@ class TestPrivacyMode:
         assert properties["$ai_input"] == [{"role": "user", "content": "visible"}]
 
     @pytest.mark.asyncio
+    async def test_privacy_mode_drops_input_state_passed_in_properties(
+        self, mock_client
+    ):
+        proc = PostHogClaudeAgentProcessor(
+            client=mock_client, distinct_id="user", privacy_mode=True
+        )
+        messages = TestToolSpanEmission._tool_turn(
+            ToolResultBlock(tool_use_id="tu_1", content="a.txt")
+        )
+
+        with patch(
+            "posthog.ai.claude_agent_sdk.processor.original_query",
+            side_effect=lambda **kw: _fake_query(messages),
+        ):
+            async for _ in proc.query(
+                prompt="go",
+                options=ClaudeAgentOptions(),
+                posthog_properties={"$ai_input_state": "secret"},
+            ):
+                pass
+
+        [span] = [
+            c.kwargs["properties"]
+            for c in mock_client.capture_ai.call_args_list
+            if c.kwargs["event"] == "$ai_span"
+        ]
+        assert "$ai_input_state" not in span
+
+    @pytest.mark.asyncio
     async def test_privacy_mode_redacts_tool_input(self, mock_client):
         proc = PostHogClaudeAgentProcessor(
             client=mock_client,
