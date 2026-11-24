@@ -22,7 +22,6 @@ from posthog.emails import (
 SECRET_KEY = "phs_test_secret"
 TEMPLATE_ID = "0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b"
 BATCH_URL = "https://us.posthog.com/api/messaging/send/email_batch/"
-FOUR_MIB = 4 * 1024 * 1024
 
 Answer = Any  # an Exception, or (status, body, headers)
 
@@ -361,88 +360,27 @@ def test_100_recipients_go_out_in_one_request():
 
 def test_a_batch_the_server_finds_too_large_raises_its_413():
     emails, posthog = emails_on(
-        [(413, {"type": "invalid_request", "code": "too_large", "detail": "Too big."}, {})]
+        [
+            (
+                413,
+                {"type": "invalid_request", "code": "too_large", "detail": "Too big."},
+                {},
+            )
+        ]
     )
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(2))
 
     error = raised.value
-    assert (error.code, error.status_code, error.message) == ("too_large", 413, "Too big.")
+    assert (error.code, error.status_code, error.message) == (
+        "too_large",
+        413,
+        "Too big.",
+    )
     assert error.fix is not None and "smaller batches" in error.fix
     assert [r.status for r in error.results] == ["failed", "failed"]
     assert len(posthog.requests) == 1
-
-
-def test_splits_by_100_recipients_and_sends_the_chunks_in_order():
-    emails, posthog = emails_on([all_queued, all_queued, all_queued])
-
-    result = batch(emails, recipients(250))
-
-    assert [len(body["recipients"]) for body in posthog.batch_bodies()] == [
-        100,
-        100,
-        50,
-    ]
-    assert [r.index for r in result.results] == list(range(250))
-    assert [r.message_id for r in result.results] == [
-        f"msg_key-{i}" for i in range(250)
-    ]
-    assert all(r.status == "queued" for r in result.results)
-
-
-def test_splits_by_the_4_mib_body_and_fails_only_a_recipient_too_large_alone():
-    big = "x" * (FOUR_MIB // 3)
-    people = recipients(5, template_data={"note": big})
-    people[3]["template_data"] = {"note": "y" * FOUR_MIB}
-    emails, posthog = emails_on([all_queued, all_queued])
-
-    result = batch(emails, people)
-
-    sizes = [len(request.body) for request in posthog.requests]
-    assert all(size <= FOUR_MIB for size in sizes)
-    sent = [
-        [r["idempotency_key"] for r in body["recipients"]]
-        for body in posthog.batch_bodies()
-    ]
-    assert sent == [["key-0", "key-1"], ["key-2", "key-4"]]
-    assert [r.status for r in result.results] == [
-        "queued",
-        "queued",
-        "queued",
-        "failed",
-        "queued",
-    ]
-    too_large = result.results[3]
-    assert too_large.error is not None
-    assert too_large.error.code == "content_too_large"
-    assert "other recipients" not in too_large.error.message
-    assert (too_large.message_id, too_large.idempotency_key) == (None, "key-3")
-
-
-def test_a_chunk_fills_up_to_exactly_4_mib():
-    base = len(
-        json.dumps(
-            {"template_id": TEMPLATE_ID, "message_data": {}, "recipients": []},
-            separators=(",", ":"),
-        ).encode()
-    )
-    one = {"to": "a@example.com", "idempotency_key": "k1", "template_data": {"n": ""}}
-    item = len(
-        json.dumps(
-            {"to": "a@example.com", "idempotency_key": "k1", "message_data": {"n": ""}},
-            separators=(",", ":"),
-        ).encode()
-    )
-    first = dict(one, template_data={"n": "a" * (FOUR_MIB - base - item - 1 - item)})
-    second = dict(one, idempotency_key="k2")
-    third = dict(one, idempotency_key="k3")
-    emails, posthog = emails_on([all_queued, all_queued])
-
-    batch(emails, [first, second, third])
-
-    assert [len(request.body) for request in posthog.requests][0] == FOUR_MIB
-    assert [len(b["recipients"]) for b in posthog.batch_bodies()] == [2, 1]
 
 
 def test_a_batch_waits_for_a_slow_answer_whatever_the_client_timeout():
@@ -492,9 +430,9 @@ def test_a_retry_after_a_lost_answer_keeps_a_refused_slot_unconfirmed():
     first, second = result.results
     assert (first.status, first.message_id, first.replayed) == ("queued", "m0", True)
     assert (second.status, second.message_id) == ("unconfirmed", "m1")
-    assert second.error is not None and second.error.code == "delivery_unavailable"
-    assert second.later_error is not None
-    assert second.later_error.code == "idempotency_key_reused"
+    assert second.error is not None
+    assert second.error.code == "idempotency_key_reused"
+    assert second.error.fix is not None and "same idempotency_key" in second.error.fix
 
 
 def test_a_503_then_a_refusal_also_keeps_the_slot_unconfirmed():
@@ -508,9 +446,7 @@ def test_a_503_then_a_refusal_also_keeps_the_slot_unconfirmed():
     [result] = batch(emails, recipients(1)).results
 
     assert result.status == "unconfirmed"
-    assert (
-        result.later_error is not None and result.later_error.code == "sending_paused"
-    )
+    assert result.error is not None and result.error.code == "sending_paused"
 
 
 def test_a_refusal_without_an_earlier_lost_answer_is_failed():
@@ -518,7 +454,8 @@ def test_a_refusal_without_an_earlier_lost_answer_is_failed():
 
     [result] = batch(emails, recipients(1)).results
 
-    assert (result.status, result.later_error) == ("failed", None)
+    assert result.status == "failed"
+    assert result.error is not None and result.error.code == "sending_paused"
 
 
 def test_a_slot_the_pipeline_did_not_confirm_is_unconfirmed():
@@ -548,26 +485,6 @@ def test_a_slot_another_request_still_holds_is_unconfirmed():
     assert "same idempotency_key" in result.error.fix
 
 
-def test_a_shutdown_during_a_batch_stops_it_before_the_next_request():
-    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
-
-    def shutdown_then_queue(request: requests.PreparedRequest) -> Answer:
-        client.shutdown()
-        return all_queued(request)
-
-    posthog = BatchPostHog([shutdown_then_queue, all_queued])
-
-    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
-        batch(client.emails, recipients(150))
-
-    assert raised.value.code == "client_closed"
-    assert len(posthog.requests) == 1
-    statuses = [r.status for r in raised.value.results]
-    assert statuses == ["queued"] * 100 + ["not_attempted"] * 50
-    assert raised.value.results[100].error is not None
-    assert raised.value.results[100].error.code == "client_closed"
-
-
 def test_a_shutdown_during_a_retry_wait_sends_no_retry():
     client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
     posthog = BatchPostHog([whole_call(429), all_queued])
@@ -580,37 +497,48 @@ def test_a_shutdown_during_a_retry_wait_sends_no_retry():
         mock.patch("posthog.emails.time.sleep", side_effect=shutdown_during_the_wait),
         pytest.raises(EmailBatchError) as raised,
     ):
-        batch(client.emails, recipients(150))
+        batch(client.emails, recipients(2))
 
     assert raised.value.code == "client_closed"
     assert len(posthog.requests) == 1
     statuses = [r.status for r in raised.value.results]
-    assert statuses == ["failed"] * 100 + ["not_attempted"] * 50
+    assert statuses == ["failed", "failed"]
     assert raised.value.results[0].error is not None
     assert raised.value.results[0].error.code == "client_closed"
 
 
-def test_a_whole_call_error_raises_with_the_results_so_far():
-    emails, posthog = emails_on([all_queued, whole_call(429, "quota_limited")])
+def test_a_whole_call_error_raises_with_every_recipient_failed():
+    emails, posthog = emails_on([whole_call(429, "quota_limited")])
 
     with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(250))
+        batch(emails, recipients(3))
 
     error = raised.value
     assert (error.code, error.status_code) == ("quota_limited", 429)
-    assert (
-        len(posthog.requests) == 2
-    )  # a quota refusal is not retried, and the batch stops
-    statuses = [r.status for r in error.results]
-    assert statuses == ["queued"] * 100 + ["failed"] * 100 + ["not_attempted"] * 50
-    assert error.results[150].error is not None
-    assert (error.results[150].error.code, error.results[150].error.message) == (
+    assert len(posthog.requests) == 1  # a quota refusal is not retried
+    assert [r.status for r in error.results] == ["failed"] * 3
+    assert error.results[1].error is not None
+    assert (error.results[1].error.code, error.results[1].error.message) == (
         "quota_limited",
         "Nope.",
     )
-    assert error.results[200].error is not None
-    assert error.results[200].error.code == "not_attempted"
-    assert error.results[249].idempotency_key == "key-249"
+    assert error.results[2].idempotency_key == "key-2"
+
+
+def test_a_whole_call_refusal_after_a_503_leaves_every_recipient_unconfirmed():
+    emails, posthog = emails_on(
+        [whole_call(503, "delivery_unavailable"), whole_call(429, "quota_limited")]
+    )
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2), max_retries=1)
+
+    assert raised.value.code == "quota_limited"
+    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2
+    error = raised.value.results[0].error
+    assert error is not None and error.code == "quota_limited"
+    assert error.fix is not None and "same idempotency_key" in error.fix
+    assert len(posthog.requests) == 2
 
 
 def test_a_lost_answer_after_retries_leaves_each_email_unconfirmed_without_a_read():
@@ -627,9 +555,9 @@ def test_a_lost_answer_after_retries_leaves_each_email_unconfirmed_without_a_rea
         ("unconfirmed", None),
     ]
     assert [r.idempotency_key for r in error.results] == ["key-0", "key-1"]
-    assert error.results[1].error is not None
-    assert error.results[1].error.code == "delivery_unavailable"
-    assert "same idempotency_key" in error.results[1].error.message
+    lost = error.results[1].error
+    assert lost is not None and lost.code == "network_error"
+    assert lost.fix is not None and "same idempotency_key" in lost.fix
 
 
 def test_a_batch_that_succeeds_reads_no_unconfirmed_email_back():
@@ -652,7 +580,7 @@ def test_a_batch_that_succeeds_reads_no_unconfirmed_email_back():
     assert [r.url for r in posthog.requests] == [BATCH_URL]
 
 
-def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
+def test_an_unconfirmed_recipient_holds_the_last_answer():
     emails, posthog = emails_on(
         [
             whole_call(503, "delivery_unavailable"),
@@ -666,12 +594,12 @@ def test_a_lost_answer_after_an_in_flight_retry_keeps_the_later_error():
 
     [result] = raised.value.results
     assert result.status == "unconfirmed"
-    assert result.later_error is not None
-    assert result.later_error.code == "idempotency_key_in_flight"
+    assert result.error is not None and result.error.code == "delivery_unavailable"
+    assert result.error.fix is not None and "same idempotency_key" in result.error.fix
     assert len(posthog.requests) == 3
 
 
-def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
+def test_a_whole_call_in_flight_answer_leaves_the_batch_unconfirmed():
     emails, posthog = emails_on([whole_call(409, "idempotency_key_in_flight")])
 
     with pytest.raises(EmailBatchError) as raised:
@@ -682,14 +610,13 @@ def test_a_whole_call_in_flight_answer_leaves_the_chunk_unconfirmed():
         ("unconfirmed", None),
         ("unconfirmed", None),
     ]
-    assert [r.later_error for r in raised.value.results] == [None, None]
     first = raised.value.results[0].error
     assert first is not None and first.code == "idempotency_key_in_flight"
     assert first.fix is not None and "same idempotency_key" in first.fix
     assert len(posthog.requests) == 1
 
 
-def test_a_first_in_flight_answer_stays_the_error_after_a_503():
+def test_a_503_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
     emails, posthog = emails_on(
         [
             whole_call(409, "idempotency_key_in_flight"),
@@ -703,8 +630,6 @@ def test_a_first_in_flight_answer_stays_the_error_after_a_503():
     assert raised.value.code == "delivery_unavailable"
     [result] = raised.value.results
     assert result.status == "unconfirmed"
-    assert result.error is not None
-    assert result.error.code == "idempotency_key_in_flight"
     assert len(posthog.requests) == 2
 
 
@@ -718,7 +643,7 @@ def test_an_in_flight_code_on_a_status_other_than_409_is_failed():
     assert len(posthog.requests) == 1
 
 
-def test_an_in_flight_retry_after_a_503_is_the_later_error():
+def test_an_in_flight_retry_after_a_503_is_the_error():
     emails, posthog = emails_on(
         [
             whole_call(503, "delivery_unavailable"),
@@ -731,9 +656,8 @@ def test_an_in_flight_retry_after_a_503_is_the_later_error():
 
     [result] = raised.value.results
     assert result.status == "unconfirmed"
-    assert result.error is not None and result.error.code == "delivery_unavailable"
-    assert result.later_error is not None
-    assert result.later_error.code == "idempotency_key_in_flight"
+    assert result.error is not None
+    assert result.error.code == "idempotency_key_in_flight"
     assert len(posthog.requests) == 2
 
 
@@ -783,7 +707,7 @@ def test_a_404_says_batch_sends_are_unavailable(body):
     )
 
 
-def test_an_answer_without_a_result_per_recipient_leaves_the_chunk_unconfirmed():
+def test_an_answer_without_a_result_per_recipient_leaves_the_batch_unconfirmed():
     emails, posthog = emails_on([ok(queued("m0"))])
 
     with pytest.raises(EmailBatchError) as raised:
@@ -799,12 +723,12 @@ def test_warnings_reach_the_caller_once(caplog):
 
     def queued_with_warning(request: requests.PreparedRequest) -> Answer:
         status, body, headers = all_queued(request)
-        return status, {**body, "warnings": [warning]}, headers
+        return status, {**body, "warnings": [warning, warning]}, headers
 
-    emails, _ = emails_on([queued_with_warning, queued_with_warning])
+    emails, _ = emails_on([queued_with_warning])
 
     with caplog.at_level(logging.WARNING, logger="posthog"):
-        result = batch(emails, recipients(150))
+        result = batch(emails, recipients(2))
 
     assert [w.code for w in result.warnings] == ["sandbox_sender"]
     assert caplog.text.count("sandbox_sender") == 1
@@ -833,42 +757,16 @@ def test_a_client_off_cloud_without_an_app_host_sends_nothing():
     assert posthog.requests == []
 
 
-def test_warnings_reach_the_caller_when_a_later_request_fails(caplog):
-    warning = {"code": "sandbox_sender", "detail": "Sent from the test sender."}
-
-    def queued_with_warning(request: requests.PreparedRequest) -> Answer:
-        status, body, headers = all_queued(request)
-        return status, {**body, "warnings": [warning]}, headers
-
-    emails, _ = emails_on([queued_with_warning, whole_call(429, "quota_limited")])
-
-    with caplog.at_level(logging.WARNING, logger="posthog"):
-        with pytest.raises(EmailBatchError) as raised:
-            batch(emails, recipients(150))
-
-    assert [w.code for w in raised.value.warnings] == ["sandbox_sender"]
-    assert caplog.text.count("sandbox_sender") == 1
-
-
-@pytest.mark.parametrize(
-    "attr, field",
-    [
-        ("recipients__37__idempotency_key", "recipients__137__idempotency_key"),
-        ("recipients__\u00b2__idempotency_key", "recipients__\u00b2__idempotency_key"),
-        ("recipients__" + "9" * 5000 + "__idempotency_key", "recipients"),
-    ],
-)
-def test_a_refused_recipient_field_names_its_position_in_recipients(attr, field):
+def test_a_refused_recipient_field_names_its_position_in_recipients():
     emails, _ = emails_on(
         [
-            all_queued,
             (
                 400,
                 {
                     "type": "validation_error",
                     "code": "max_length",
                     "detail": "Ensure this field has no more than 255 characters.",
-                    "attr": attr,
+                    "attr": "recipients__1__idempotency_key",
                 },
                 {},
             ),
@@ -876,12 +774,10 @@ def test_a_refused_recipient_field_names_its_position_in_recipients(attr, field)
     )
 
     with pytest.raises(EmailBatchError) as raised:
-        batch(emails, recipients(150))
+        batch(emails, recipients(2))
 
-    assert raised.value.field == field
-    assert [r.status for r in raised.value.results] == ["queued"] * 100 + [
-        "failed"
-    ] * 50
+    assert raised.value.field == "recipients__1__idempotency_key"
+    assert [r.status for r in raised.value.results] == ["failed", "failed"]
 
 
 def test_a_code_batch_without_content_names_batch():
@@ -921,13 +817,23 @@ def async_all_queued(request: httpx.Request) -> httpx.Response:
 
 
 @pytest.mark.asyncio
-async def test_async_batch_sends_chunks_of_100_in_order():
-    emails, seen = async_emails_on([async_all_queued, async_all_queued])
+async def test_async_batch_sends_100_recipients_in_one_request():
+    emails, seen = async_emails_on([async_all_queued])
 
-    result = await emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
+    result = await emails.batch(recipients=recipients(100), template_id=TEMPLATE_ID)
 
-    assert [len(json.loads(r.content)["recipients"]) for r in seen] == [100, 50]
-    assert [r.status for r in result.results] == ["queued"] * 150
+    assert [len(json.loads(r.content)["recipients"]) for r in seen] == [100]
+    assert [r.status for r in result.results] == ["queued"] * 100
+
+
+@pytest.mark.asyncio
+async def test_async_batch_refuses_more_than_100_recipients_before_any_request():
+    emails, seen = async_emails_on([])
+
+    with pytest.raises(ValueError, match="at most 100 recipients"):
+        await emails.batch(recipients=recipients(101), template_id=TEMPLATE_ID)
+
+    assert seen == []
 
 
 @pytest.mark.asyncio
@@ -944,8 +850,7 @@ async def test_async_batch_keeps_a_recipient_unconfirmed_after_a_lost_answer():
 
     [only] = result.results
     assert only.status == "unconfirmed"
-    assert only.later_error is not None
-    assert only.later_error.code == "sending_paused"
+    assert only.error is not None and only.error.code == "sending_paused"
 
 
 @pytest.mark.asyncio
@@ -993,38 +898,6 @@ async def test_async_batch_that_succeeds_reads_no_unconfirmed_email_back():
 
     assert [(r.status, r.message_id) for r in result.results] == [("unconfirmed", None)]
     assert [str(r.url) for r in seen] == [BATCH_URL]
-
-
-@pytest.mark.asyncio
-async def test_async_shutdown_during_a_batch_stops_it_before_the_next_request():
-    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
-    seen: list[httpx.Request] = []
-    shutting_down: list[asyncio.Task[None]] = []
-
-    async def handler(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
-        if not shutting_down:
-            shutting_down.append(asyncio.create_task(client.shutdown()))
-            for _ in range(5):
-                await asyncio.sleep(0)
-        return async_all_queued(request)
-
-    async def wire(
-        transport: httpx.AsyncHTTPTransport, request: httpx.Request
-    ) -> httpx.Response:
-        return await handler(request)
-
-    with (
-        mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
-        pytest.raises(EmailBatchError) as raised,
-    ):
-        await client.emails.batch(recipients=recipients(150), template_id=TEMPLATE_ID)
-    await shutting_down[0]
-
-    assert raised.value.code == "client_closed"
-    assert len(seen) == 1
-    statuses = [r.status for r in raised.value.results]
-    assert statuses == ["queued"] * 100 + ["not_attempted"] * 50
 
 
 @pytest.mark.asyncio

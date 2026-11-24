@@ -920,7 +920,6 @@ attribute posthog.disabled = False
 attribute posthog.emails.BatchEmailResult.error: Optional[EmailError] = None
 attribute posthog.emails.BatchEmailResult.idempotency_key: str
 attribute posthog.emails.BatchEmailResult.index: int
-attribute posthog.emails.BatchEmailResult.later_error: Optional[EmailError] = None
 attribute posthog.emails.BatchEmailResult.message_id: Optional[str] = None
 attribute posthog.emails.BatchEmailResult.replayed: bool = False
 attribute posthog.emails.BatchEmailResult.status: BatchStatus
@@ -955,7 +954,6 @@ attribute posthog.emails.EmailAttachment.content_id: NotRequired[str]
 attribute posthog.emails.EmailAttachment.content_type: NotRequired[str]
 attribute posthog.emails.EmailAttachment.filename: str
 attribute posthog.emails.EmailBatchError.results = results
-attribute posthog.emails.EmailBatchError.warnings = warnings
 attribute posthog.emails.EmailError.code = code
 attribute posthog.emails.EmailError.docs_url = docs_url
 attribute posthog.emails.EmailError.field = field
@@ -1422,12 +1420,12 @@ class posthog.client.Client(project_api_key: str, host=None, *, debug=False, max
 class posthog.consumer.Consumer(queue, api_key, flush_at=100, host=None, on_error=None, flush_interval=5.0, retries=3, timeout: float = 15, historical_migration=False, endpoint=_CAPTURE_V1_PATH, max_msg_size=MAX_MSG_SIZE, capture_compression=CaptureCompression.NONE)
 class posthog.contexts.ContextScope(parent=None, fresh: bool = False, capture_exceptions: bool = True, client: Optional[Client] = None)
 class posthog.emails.AsyncEmails(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None, migrated_from: Optional[str] = None)
-class posthog.emails.BatchEmailResult(index: int, to: str, idempotency_key: str, status: BatchStatus, message_id: Optional[str] = None, replayed: bool = False, error: Optional[EmailError] = None, later_error: Optional[EmailError] = None)
+class posthog.emails.BatchEmailResult(index: int, to: str, idempotency_key: str, status: BatchStatus, message_id: Optional[str] = None, replayed: bool = False, error: Optional[EmailError] = None)
 class posthog.emails.BatchRecipient 
 class posthog.emails.CodeBatchArgs 
 class posthog.emails.CodeEmailArgs 
 class posthog.emails.EmailAttachment 
-class posthog.emails.EmailBatchError(error: EmailError, results: tuple[BatchEmailResult, ...], warnings: tuple[EmailWarning, ...] = ())
+class posthog.emails.EmailBatchError(error: EmailError, results: tuple[BatchEmailResult, ...])
 class posthog.emails.EmailError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None, message_id: Optional[str] = None)
 class posthog.emails.EmailStatus(id: str, status: str, created_at: datetime, status_at: datetime, reason: Optional[str] = None)
 class posthog.emails.EmailTracking 

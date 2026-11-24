@@ -142,12 +142,11 @@ result = posthog.emails.send(
 print(result.status, result.scheduled_at)  # scheduled, the time in UTC
 ```
 
-Batches: ``emails.batch`` sends the same template or content to many
-recipients, one email each, with ``template_data`` per recipient for a
-template. The client sends at most 100 recipients and 4 MiB of JSON per
-request, one request after another, and waits 45 seconds for each answer. Each
-recipient has its own ``idempotency_key``, given or made by the client, that
-every retry reuses. Check each result's ``status``:
+Batches: ``emails.batch`` sends the same template or content to up to 100
+recipients in one request, one email each, with ``template_data`` per recipient
+for a template. It waits 45 seconds for the answer. Each recipient has its own
+``idempotency_key``, given or made by the client, that every retry reuses.
+Check each result's ``status``:
 
 - ``queued``: PostHog accepted the email.
 - ``failed``: PostHog refused it, and ``error`` says why, such as a suppressed
@@ -155,15 +154,15 @@ every retry reuses. Check each result's ``status``:
 - ``unconfirmed``: the client can't tell whether PostHog accepted it, such as
   after a lost answer. Send it again with the same key within 24 hours, so it
   goes out once.
-- ``not_attempted``: an earlier request of the batch failed, so the client sent
-  nothing for it.
 
-A request that fails as a whole, such as a rate limit past its retries, stops
-the batch and raises :class:`EmailBatchError`, whose ``results`` hold every
-recipient. ``code`` ``batch_unavailable`` (409) means the project can't send
-batches yet, and a 404 that the template doesn't exist or batch sends are off
-for the project: send each email the batch didn't queue with ``send`` and its
-recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
+More than 100 recipients raises ``ValueError`` before anything is sent. A request
+that fails as a whole, such as a rate limit past its retries, raises
+:class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
+``too_large`` (413) means the request was too large for PostHog: split the
+recipients into smaller batches. ``batch_unavailable`` (409) means the project
+can't send batches yet, and a 404 that the template doesn't exist or batch sends
+are off for the project: send each email the batch didn't queue with ``send``
+and its recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
 ``attachments`` or ``scheduled_at``.
 
 ```python
@@ -193,7 +192,6 @@ import base64
 import binascii
 import hashlib
 import importlib
-from functools import partial
 import json
 import logging
 import math
@@ -258,7 +256,6 @@ _UPLOADS_PATH = "/api/messaging/attachments/uploads/"
 _STATUS_PATH = "/api/messaging/emails/{message_id}/"
 _BATCH_PATH = "/api/messaging/send/email_batch/"
 _BATCH_MAX_RECIPIENTS = 100
-_BATCH_MAX_BODY_BYTES = 4 * 1024 * 1024
 _POSTHOG_PIPELINE_WAIT = 30.0
 _BATCH_ATTEMPT_TIMEOUT = _POSTHOG_PIPELINE_WAIT + 15.0
 _TEMPLATE_KEY = re.compile(r"[a-zA-Z0-9_-]{1,400}")
@@ -603,13 +600,12 @@ class TemplateBatchArgs(_BatchArgs):
     """A batch of an email template made in PostHog, named by its ID.
 
     Args:
-        recipients: 1 or more recipients. The client sends at most 100, and
-            at most 4 MiB of JSON, per request.
+        recipients: 1 to 100 recipients, sent in one request.
         template_id: The UUID of a template made transactional in PostHog.
         template_data: Values for the template's ``{{ variables.* }}``
             placeholders, shared by every recipient.
         max_retries: Overrides the client's maximum number of retries for
-            each request of the batch. ``0`` turns retries off.
+            the batch request. ``0`` turns retries off.
     """
 
     template_id: Union[str, UUID]
@@ -640,7 +636,7 @@ class CodeBatchArgs(_BatchArgs):
 _BATCH_RECIPIENT_FIELDS = frozenset(BatchRecipient.__annotations__)
 
 
-BatchStatus = Literal["queued", "failed", "unconfirmed", "not_attempted"]
+BatchStatus = Literal["queued", "failed", "unconfirmed"]
 
 
 @dataclass(frozen=True)
@@ -653,12 +649,9 @@ class BatchEmailResult:
       :meth:`Emails.get` to see whether it went out.
     - ``failed``: PostHog didn't queue the email, and ``error`` says why.
     - ``unconfirmed``: the client can't tell whether PostHog queued the
-      email, such as after a lost answer. It may still go out. Send it again
-      with the same ``idempotency_key`` within 24 hours, so it goes out once.
-      ``later_error`` holds what a retry in the same call answered, which
-      describes only that retry.
-    - ``not_attempted``: an earlier request of the batch failed, so the client
-      sent nothing for this recipient.
+      email, such as after a lost answer, or a refusal that came after an
+      attempt got no answer. It may still go out. Send it again with the same
+      ``idempotency_key`` within 24 hours, so it goes out once.
 
     Attributes:
         index: The recipient's position in ``recipients``.
@@ -669,9 +662,8 @@ class BatchEmailResult:
         replayed: ``True`` when an earlier send with the same key had already
             queued the email, so no new email was sent.
         error: Why the email is not ``queued``. For an ``unconfirmed``
-            email, ``code`` is ``delivery_unavailable``,
-            ``idempotency_key_in_flight`` or ``api_error``.
-        later_error: For an ``unconfirmed`` email, a later answer about it.
+            email, it is the last answer, and ``fix`` says to send it again
+            with the same key.
     """
 
     index: int
@@ -681,7 +673,6 @@ class BatchEmailResult:
     message_id: Optional[str] = None
     replayed: bool = False
     error: Optional[EmailError] = None
-    later_error: Optional[EmailError] = None
 
 
 @dataclass(frozen=True)
@@ -698,24 +689,20 @@ class SendBatchResult:
 
 
 class EmailBatchError(EmailError):
-    """A request of :meth:`Emails.batch` failed as a whole, so the batch stopped.
+    """The request of :meth:`Emails.batch` failed as a whole.
 
     The fields describe that request's error. ``results`` holds every
-    recipient: those of earlier requests as PostHog answered them, those of
-    the failed request as ``failed``, or ``unconfirmed`` where an earlier
-    attempt may have queued them, and the rest as ``not_attempted``.
+    recipient, as ``failed``, or as ``unconfirmed`` when an attempt got no
+    answer and may have queued them.
 
     Attributes:
         results: One result per recipient, in the order of ``recipients``.
-        warnings: Warnings PostHog returned about the requests that went out,
-            each once.
     """
 
     def __init__(
         self,
         error: EmailError,
         results: tuple[BatchEmailResult, ...],
-        warnings: tuple[EmailWarning, ...] = (),
     ) -> None:
         super().__init__(
             name=error.name,
@@ -729,7 +716,6 @@ class EmailBatchError(EmailError):
             retry_after=error.retry_after,
         )
         self.results = results
-        self.warnings = warnings
 
 
 @dataclass(frozen=True)
@@ -1717,13 +1703,7 @@ class _BatchMember:
     index: int
     to: str
     idempotency_key: str
-    wire: bytes
-
-
-@dataclass(frozen=True)
-class _BatchChunk:
-    body: bytes
-    indices: tuple[int, ...]
+    wire: dict[str, Any]
 
 
 def _prepare_batch(args: Mapping[str, Any]) -> _BatchRun:
@@ -1780,6 +1760,12 @@ def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember
         raise TypeError("recipients must be a list of recipients, each a dict with to.")
     if not recipients:
         raise ValueError("recipients must hold at least one recipient.")
+    if len(recipients) > _BATCH_MAX_RECIPIENTS:
+        raise ValueError(
+            f"A batch takes at most {_BATCH_MAX_RECIPIENTS} recipients, and recipients "
+            f"holds {len(recipients)}, so no email was sent. Split them into batches "
+            f"of at most {_BATCH_MAX_RECIPIENTS}."
+        )
     first_with_key: dict[str, int] = {}
     members = []
     for index, recipient in enumerate(recipients):
@@ -1822,7 +1808,7 @@ def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember
                 f"recipients[{index}] has the same idempotency_key as recipients[{first}]. "
                 "Give each recipient its own key."
             )
-        members.append(_BatchMember(index, to, key, _encode(wire)))
+        members.append(_BatchMember(index, to, key, wire))
     return members
 
 
@@ -1830,11 +1816,8 @@ def _batch_response_error(
     fields: Mapping[str, Any],
     status: int,
     retry_after_header: Optional[str],
-    indices: Sequence[int],
 ) -> EmailError:
     answered = {key: value for key, value in fields.items() if value is not None}
-    if isinstance(answered.get("attr"), str):
-        answered["attr"] = _recipients_field(answered["attr"], indices)
     fields = answered
     if status == 404:
         fields = {
@@ -1846,6 +1829,11 @@ def _batch_response_error(
             "with send() and its recipient's idempotency_key.",
             **answered,
         }
+    if status == 413:
+        fields = {
+            **fields,
+            "fix": "Split the recipients into smaller batches and send each with batch().",
+        }
     if fields.get("code") == "batch_unavailable":
         fields = {
             **fields,
@@ -1853,19 +1841,6 @@ def _batch_response_error(
             "batch didn't queue with send() and its recipient's idempotency_key.",
         }
     return _response_error(fields, status, retry_after_header)
-
-
-def _ascii_digits(text: str) -> bool:
-    return text.isascii() and text.isdigit()
-
-
-def _recipients_field(attr: str, indices: Sequence[int]) -> str:
-    position, separator, rest = attr.removeprefix("recipients__").partition("__")
-    if not attr.startswith("recipients__") or not _ascii_digits(position):
-        return attr
-    if len(position) > len(str(len(indices))) or int(position) >= len(indices):
-        return "recipients"
-    return f"recipients__{indices[int(position)]}{separator}{rest}"
 
 
 def _slot_error(error: Any, message_id: Optional[str]) -> EmailError:
@@ -1896,16 +1871,7 @@ _SEND_AGAIN = (
 )
 
 
-def _unconfirmed(
-    message_id: Optional[str], cause: Optional[EmailError] = None
-) -> EmailError:
-    if cause is None:
-        return EmailError(
-            name="service_unavailable",
-            code="delivery_unavailable",
-            message=f"PostHog didn't confirm this email, so it may still go out. {_SEND_AGAIN}",
-            message_id=message_id,
-        )
+def _unconfirmed(message_id: Optional[str], cause: EmailError) -> EmailError:
     return EmailError(
         name=cause.name,
         code=cause.code,
@@ -1919,7 +1885,7 @@ def _unconfirmed(
 
 
 class _BatchRun:
-    """The recipients of one batch call, split into requests, and what PostHog answered for each."""
+    """The one request of a batch call, and what PostHog answered for each recipient."""
 
     def __init__(
         self,
@@ -1929,204 +1895,93 @@ class _BatchRun:
     ) -> None:
         self.members = members
         self.max_retries = max_retries
-        self.results: list[Optional[BatchEmailResult]] = [None] * len(members)
+        self.body = _encode(
+            {**shared, "recipients": [member.wire for member in members]}
+        )
+        self.results: tuple[BatchEmailResult, ...] = ()
         self.warnings: list[EmailWarning] = []
-        self._maybe_queued: set[int] = set()
-        self.chunks = self._split(_encode({**shared, "recipients": []}))
+        self.maybe_queued = False
 
-    def _split(self, empty: bytes) -> list[_BatchChunk]:
-        chunks: list[_BatchChunk] = []
-        current: list[_BatchMember] = []
-        size = len(empty)
-        for member in self.members:
-            if len(empty) + len(member.wire) > _BATCH_MAX_BODY_BYTES:
-                self._set(member.index, "failed", error=_recipient_too_large())
-                continue
-            added = len(member.wire) + (1 if current else 0)
-            if current and (
-                len(current) == _BATCH_MAX_RECIPIENTS
-                or size + added > _BATCH_MAX_BODY_BYTES
-            ):
-                chunks.append(_chunk(empty, current))
-                current, size, added = [], len(empty), len(member.wire)
-            current.append(member)
-            size += added
-        if current:
-            chunks.append(_chunk(empty, current))
-        return chunks
-
-    def _set(self, index: int, status: BatchStatus, **fields: Any) -> None:
-        member = self.members[index]
-        self.results[index] = BatchEmailResult(
-            index=index,
+    def _result(
+        self, member: _BatchMember, status: BatchStatus, **fields: Any
+    ) -> BatchEmailResult:
+        return BatchEmailResult(
+            index=member.index,
             to=member.to,
             idempotency_key=member.idempotency_key,
             status=status,
             **fields,
         )
 
-    def _current(self, index: int) -> BatchEmailResult:
-        result = self.results[index]
-        assert result is not None
-        return result
-
-    def lost(self, chunk: _BatchChunk, cause: Optional[EmailError] = None) -> None:
-        """An attempt that may have queued some of the chunk got no usable answer."""
-        for index in chunk.indices:
-            earlier = self.results[index]
-            message_id = earlier.message_id if earlier is not None else None
-            if index in self._maybe_queued:
-                if cause is not None:
-                    self.results[index] = replace(
-                        self._current(index), later_error=cause
-                    )
-                continue
-            self._maybe_queued.add(index)
-            self._set(
-                index,
-                "unconfirmed",
-                message_id=message_id,
-                error=_unconfirmed(message_id, cause),
-            )
+    def lost(self) -> None:
+        """An attempt got no usable answer, so it may have queued every recipient."""
+        self.maybe_queued = True
 
     def answer(
         self,
-        chunk: _BatchChunk,
         status: int,
         body: bytes,
         retry_after_header: Optional[str],
     ) -> None:
         fields = _json_object(body)
         if not 200 <= status < 300:
-            failure = _batch_response_error(
-                fields, status, retry_after_header, chunk.indices
-            )
-            if status >= 500:
-                self.lost(chunk)
-            elif _held_by_another_request(failure):
-                self.lost(chunk, failure)
+            failure = _batch_response_error(fields, status, retry_after_header)
+            if status >= 500 or _held_by_another_request(failure):
+                self.lost()
             raise failure
         slots = fields.get("results")
-        if not isinstance(slots, list) or len(slots) != len(chunk.indices):
-            self.lost(chunk)
+        if not isinstance(slots, list) or len(slots) != len(self.members):
+            self.lost()
             raise _sdk_error(
                 "api_error",
                 "PostHog answered the batch without a result for each recipient.",
                 status,
             )
-        for index, slot in zip(chunk.indices, slots):
-            self._settle(index, slot if isinstance(slot, dict) else {})
+        self.results = tuple(
+            self._settle(member, slot if isinstance(slot, dict) else {})
+            for member, slot in zip(self.members, slots)
+        )
         for warning in _parse_warnings(fields.get("warnings")):
             if warning not in self.warnings:
                 self.warnings.append(warning)
 
-    def _settle(self, index: int, slot: Mapping[str, Any]) -> None:
+    def _settle(
+        self, member: _BatchMember, slot: Mapping[str, Any]
+    ) -> BatchEmailResult:
         message_id = _text(slot.get("message_id"))
         error = slot.get("error")
         if error is None and slot.get("status") == "queued" and message_id:
-            self._maybe_queued.discard(index)
-            self._set(
-                index,
+            return self._result(
+                member,
                 "queued",
                 message_id=message_id,
                 replayed=slot.get("replayed") is True,
             )
-            return
         answer = _slot_error(error, message_id)
-        if index in self._maybe_queued:
-            earlier = self._current(index)
-            self._set(
-                index,
-                "unconfirmed",
-                message_id=message_id or earlier.message_id,
-                error=earlier.error,
-                later_error=answer,
-            )
-        elif answer.code in _UNCONFIRMED_SLOT_CODES:
-            self._maybe_queued.add(index)
-            self._set(
-                index,
+        if self.maybe_queued or answer.code in _UNCONFIRMED_SLOT_CODES:
+            return self._result(
+                member,
                 "unconfirmed",
                 message_id=message_id,
                 error=_unconfirmed(message_id, answer),
             )
-        else:
-            self._set(index, "failed", message_id=message_id, error=answer)
-
-    def stop(self, position: int, error: EmailError) -> None:
-        """The request of chunk ``position`` failed as a whole, so the batch stops there."""
-        later = (
-            error
-            if error.status_code is not None
-            and error.status_code < 500
-            and not _held_by_another_request(error)
-            else None
-        )
-        for index in self.chunks[position].indices:
-            if index not in self._maybe_queued:
-                self._set(index, "failed", error=error)
-            elif later is not None:
-                earlier = self._current(index)
-                self._set(
-                    index,
-                    "unconfirmed",
-                    message_id=earlier.message_id,
-                    error=earlier.error,
-                    later_error=later,
-                )
-        self.skip_from(
-            position + 1,
-            EmailError(
-                name="application_error",
-                code="not_attempted",
-                message="An earlier request of the batch failed, so the client sent "
-                "nothing for this recipient.",
-            ),
-        )
-
-    def closed_at(self, position: int) -> EmailError:
-        """The client shut down before chunk ``position`` went out."""
-        error = _sdk_error(
-            "client_closed",
-            "The PostHog client is shut down, so the rest of the batch wasn't sent.",
-        )
-        self.skip_from(position, error)
-        return error
-
-    def skip_from(self, position: int, error: EmailError) -> None:
-        for chunk in self.chunks[position:]:
-            for index in chunk.indices:
-                self._set(index, "not_attempted", error=error)
-
-    def outcome(self) -> tuple[BatchEmailResult, ...]:
-        return tuple(self._current(index) for index in range(len(self.members)))
+        return self._result(member, "failed", message_id=message_id, error=answer)
 
     def result(self) -> SendBatchResult:
-        return SendBatchResult(results=self.outcome(), warnings=tuple(self.warnings))
+        return SendBatchResult(results=self.results, warnings=tuple(self.warnings))
 
     def failure(self, error: EmailError) -> EmailBatchError:
-        sent = self.result()
-        _log_warnings(sent)
-        return EmailBatchError(error, sent.results, sent.warnings)
-
-
-def _chunk(empty: bytes, members: Sequence[_BatchMember]) -> _BatchChunk:
-    without_closing_brackets = empty[: -len(b"]}")]
-    body = (
-        without_closing_brackets + b",".join(member.wire for member in members) + b"]}"
-    )
-    return _BatchChunk(body=body, indices=tuple(member.index for member in members))
-
-
-def _recipient_too_large() -> EmailError:
-    return EmailError(
-        name="validation_error",
-        code="content_too_large",
-        message="This recipient's email is larger than one batch request takes, so it "
-        "wasn't sent.",
-        fix="Send this recipient's email with send().",
-        field="recipients",
-    )
+        """The request failed as a whole, so every recipient shares its error."""
+        if self.maybe_queued:
+            results = tuple(
+                self._result(member, "unconfirmed", error=_unconfirmed(None, error))
+                for member in self.members
+            )
+        else:
+            results = tuple(
+                self._result(member, "failed", error=error) for member in self.members
+            )
+        return EmailBatchError(error, results)
 
 
 class _EmailsBase:
@@ -2183,8 +2038,8 @@ class _EmailsBase:
             if attempts > 1 and not self._still_admitted():
                 raise _sdk_error(
                     "client_closed",
-                    "The PostHog client is shut down, so it didn't retry this "
-                    "request of the batch.",
+                    "The PostHog client is shut down, so it didn't retry the "
+                    "batch request.",
                 )
 
         return check
@@ -2353,25 +2208,25 @@ class Emails(_EmailsBase):
     def batch(self, **kwargs: Unpack[CodeBatchArgs]) -> SendBatchResult: ...
 
     def batch(self, **kwargs: Any) -> SendBatchResult:
-        """Queue the same email for up to thousands of recipients, one email each.
+        """Queue the same email for up to 100 recipients, one email each.
 
         Pass the template form, with ``template_id``, or the code form, with
         ``template_key``: see :class:`TemplateBatchArgs` and
-        :class:`CodeBatchArgs`. The client sends the recipients in requests
-        of at most 100 recipients and 4 MiB of JSON, one after another.
+        :class:`CodeBatchArgs`. The client sends every recipient in one
+        request.
 
         Each recipient has an ``idempotency_key``, given or made by the
         client, that every retry reuses, so a retry never queues an email
         twice.
 
         Args:
-            recipients: The recipients, each a :class:`BatchRecipient`.
+            recipients: 1 to 100 recipients, each a :class:`BatchRecipient`.
             template_id: The UUID of a template made transactional in PostHog.
             template_data: Values for the template, shared by every recipient.
             template_key: Names the email of the code form. With it, pass the
                 content as :meth:`send` takes it.
             max_retries: Overrides the client's maximum number of retries for
-                each request. ``0`` turns retries off.
+                the request. ``0`` turns retries off.
 
         Returns:
             A result per recipient, in the order of ``recipients``. Check each
@@ -2380,16 +2235,18 @@ class Emails(_EmailsBase):
             out once.
 
         Raises:
-            EmailBatchError: A request failed as a whole, so the batch
-                stopped. ``results`` holds every recipient, those not sent as
-                ``not_attempted``. ``code`` is ``batch_unavailable`` when the
-                project can't send batches yet: send each email the batch
-                didn't queue with :meth:`send` and its recipient's
+            EmailBatchError: The request failed as a whole. ``results`` holds
+                every recipient. ``code`` is ``too_large`` (413) when the
+                request was too large for PostHog: split the recipients into
+                smaller batches. ``batch_unavailable`` means the project
+                can't send batches yet: send each email the batch didn't
+                queue with :meth:`send` and its recipient's
                 ``idempotency_key``. ``client_closed`` means the client shut
-                down during the batch.
+                down before a retry.
             EmailError: The client sent nothing, such as when it is disabled.
             TypeError, ValueError: An argument has the wrong type or format,
-                such as two recipients with the same ``idempotency_key``.
+                such as more than 100 recipients or two recipients with the
+                same ``idempotency_key``.
 
         Examples:
             ```python
@@ -2410,18 +2267,12 @@ class Emails(_EmailsBase):
         try:
             secret_key = self._secret_key(_SEND_KEY_NEEDED)
             headers = _headers(secret_key, self.migrated_from, has_body=True)
-            for position, chunk in enumerate(run.chunks):
-                if position and not self._still_admitted():
-                    raise run.failure(run.closed_at(position))
-                try:
-                    self._call(
-                        self._batch_attempt(run, chunk, headers),
-                        partial(run.answer, chunk),
-                        run.max_retries,
-                    )
-                except EmailError as error:
-                    run.stop(position, error)
-                    raise run.failure(error) from error
+            try:
+                self._call(
+                    self._batch_attempt(run, headers), run.answer, run.max_retries
+                )
+            except EmailError as error:
+                raise run.failure(error) from error
         finally:
             finish()
         result = run.result()
@@ -2429,10 +2280,10 @@ class Emails(_EmailsBase):
         return result
 
     def _batch_attempt(
-        self, run: _BatchRun, chunk: _BatchChunk, headers: dict[str, str]
+        self, run: _BatchRun, headers: dict[str, str]
     ) -> Callable[[], requests.Response]:
         send = self._posthog_request(
-            "POST", _BATCH_PATH, chunk.body, headers, self._batch_timeout()
+            "POST", _BATCH_PATH, run.body, headers, self._batch_timeout()
         )
         retry = self._retry_while_admitted()
 
@@ -2441,7 +2292,7 @@ class Emails(_EmailsBase):
             try:
                 return send()
             except requests.exceptions.RequestException:
-                run.lost(chunk)
+                run.lost()
                 raise
 
         return attempt
@@ -2689,18 +2540,12 @@ class AsyncEmails(_EmailsBase):
         try:
             secret_key = self._secret_key(_SEND_KEY_NEEDED)
             headers = _headers(secret_key, self.migrated_from, has_body=True)
-            for position, chunk in enumerate(run.chunks):
-                if position and not self._still_admitted():
-                    raise run.failure(run.closed_at(position))
-                try:
-                    await self._call(
-                        self._batch_attempt(run, chunk, headers),
-                        partial(run.answer, chunk),
-                        run.max_retries,
-                    )
-                except EmailError as error:
-                    run.stop(position, error)
-                    raise run.failure(error) from error
+            try:
+                await self._call(
+                    self._batch_attempt(run, headers), run.answer, run.max_retries
+                )
+            except EmailError as error:
+                raise run.failure(error) from error
         finally:
             finish()
         result = run.result()
@@ -2708,11 +2553,11 @@ class AsyncEmails(_EmailsBase):
         return result
 
     def _batch_attempt(
-        self, run: _BatchRun, chunk: _BatchChunk, headers: dict[str, str]
+        self, run: _BatchRun, headers: dict[str, str]
     ) -> Callable[[], Awaitable[Any]]:
         httpx, _ = self._get_client()
         send = self._posthog_request(
-            "POST", _BATCH_PATH, chunk.body, headers, self._batch_timeout()
+            "POST", _BATCH_PATH, run.body, headers, self._batch_timeout()
         )
         retry = self._retry_while_admitted()
 
@@ -2721,7 +2566,7 @@ class AsyncEmails(_EmailsBase):
             try:
                 return await send()
             except httpx.RequestError:
-                run.lost(chunk)
+                run.lost()
                 raise
 
         return attempt

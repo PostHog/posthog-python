@@ -58,13 +58,13 @@ template_batch: SendBatchResult = emails.batch(template_id="0190f6d2-7c1e-7b3a-9
 code_batch: SendBatchResult = emails.batch(template_key="digest", subject="Digest", html="<p>Digest</p>", recipients=[{"to": "ada@example.com"}], max_retries=0)
 first_batch_result: BatchEmailResult = template_batch.results[0]
 batch_status: str = first_batch_result.status
-batch_later_error: EmailError | None = first_batch_result.later_error
+batch_error_field: EmailError | None = first_batch_result.error
 try:
     emails.batch(template_id="0190f6d2-7c1e-7b3a-9f5e-1c2d3e4f5a6b", recipients=[{"to": "ada@example.com"}])
 except EmailBatchError as batch_error:
     failed_results: tuple[BatchEmailResult, ...] = batch_error.results
     _ = failed_results
-_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send, scheduled_status, scheduled_time, code_batch, batch_status, batch_later_error)
+_ = (template_send, rendered_send, invite_send, tracked_send, untracked_send, not_sensitive_send, scheduled_status, scheduled_time, code_batch, batch_status, batch_error_field)
 
 
 async def async_email_types() -> None:
