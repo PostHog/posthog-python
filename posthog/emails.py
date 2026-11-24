@@ -1807,7 +1807,7 @@ def _recipients_field(attr: str, indices: Sequence[int]) -> str:
     position, separator, rest = attr.removeprefix("recipients__").partition("__")
     if not attr.startswith("recipients__") or not _ascii_digits(position):
         return attr
-    if int(position) >= len(indices):
+    if len(position) > len(str(len(indices))) or int(position) >= len(indices):
         return "recipients"
     return f"recipients__{indices[int(position)]}{separator}{rest}"
 
@@ -2344,8 +2344,7 @@ class Emails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    if error.code != "client_closed":
-                        self._read_lost(run, secret_key)
+                    self._read_lost(run, secret_key)
                     raise run.failure(error) from error
         finally:
             finish()
@@ -2374,6 +2373,8 @@ class Emails(_EmailsBase):
     def _read_lost(self, run: _BatchRun, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from)
         for index, key in run.lost_ids():
+            if not self._still_admitted():
+                return
             try:
                 status = self._call(
                     self._posthog_request(
@@ -2642,8 +2643,7 @@ class AsyncEmails(_EmailsBase):
                     )
                 except EmailError as error:
                     run.stop(position, error)
-                    if error.code != "client_closed":
-                        await self._read_lost(run, secret_key)
+                    await self._read_lost(run, secret_key)
                     raise run.failure(error) from error
         finally:
             finish()
@@ -2673,6 +2673,8 @@ class AsyncEmails(_EmailsBase):
     async def _read_lost(self, run: _BatchRun, secret_key: str) -> None:
         headers = _headers(secret_key, self.migrated_from)
         for index, key in run.lost_ids():
+            if not self._still_admitted():
+                return
             try:
                 status = await self._call(
                     self._posthog_request(

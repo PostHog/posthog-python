@@ -548,6 +548,23 @@ def test_a_shutdown_during_a_retry_wait_sends_no_retry():
     assert raised.value.results[0].error.code == "client_closed"
 
 
+def test_a_shutdown_before_a_lost_answer_reads_no_email_by_its_key():
+    client = Posthog("phc_test", secret_key=SECRET_KEY, sync_mode=True)
+
+    def shutdown_then_unavailable(request: requests.PreparedRequest) -> Answer:
+        client.shutdown()
+        return whole_call(503, "delivery_unavailable")
+
+    posthog = BatchPostHog([shutdown_then_unavailable, status_found("m0")])
+
+    with on_the_wire(posthog), pytest.raises(EmailBatchError) as raised:
+        batch(client.emails, recipients(2), max_retries=0)
+
+    assert raised.value.code == "delivery_unavailable"
+    assert len(posthog.requests) == 1
+    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2
+
+
 def test_a_whole_call_error_raises_with_the_results_so_far():
     emails, posthog = emails_on([all_queued, whole_call(429, "quota_limited")])
 
@@ -748,6 +765,7 @@ def test_warnings_reach_the_caller_when_a_later_request_fails(caplog):
     [
         ("recipients__37__idempotency_key", "recipients__137__idempotency_key"),
         ("recipients__\u00b2__idempotency_key", "recipients__\u00b2__idempotency_key"),
+        ("recipients__" + "9" * 5000 + "__idempotency_key", "recipients"),
     ],
 )
 def test_a_refused_recipient_field_names_its_position_in_recipients(attr, field):
@@ -926,3 +944,34 @@ async def test_async_shutdown_during_a_retry_wait_sends_no_retry():
     assert raised.value.code == "client_closed"
     assert len(seen) == 1
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
+
+
+@pytest.mark.asyncio
+async def test_async_shutdown_before_a_lost_answer_reads_no_email_by_its_key():
+    client = AsyncPosthog("phc_test", secret_key=SECRET_KEY)
+    seen: list[httpx.Request] = []
+    shutting_down: list[asyncio.Task[None]] = []
+
+    async def wire(
+        transport: httpx.AsyncHTTPTransport, request: httpx.Request
+    ) -> httpx.Response:
+        seen.append(request)
+        if shutting_down:
+            return httpx.Response(200, json=status_found("m0")[1])
+        shutting_down.append(asyncio.create_task(client.shutdown()))
+        for _ in range(5):
+            await asyncio.sleep(0)
+        return httpx.Response(503, json={"code": "delivery_unavailable"})
+
+    with (
+        mock.patch.object(httpx.AsyncHTTPTransport, "handle_async_request", wire),
+        pytest.raises(EmailBatchError) as raised,
+    ):
+        await client.emails.batch(
+            recipients=recipients(2), template_id=TEMPLATE_ID, max_retries=0
+        )
+    await shutting_down[0]
+
+    assert raised.value.code == "delivery_unavailable"
+    assert len(seen) == 1
+    assert [r.status for r in raised.value.results] == ["unconfirmed"] * 2
