@@ -873,7 +873,7 @@ def start_tool_call_lifecycle(
     # one-client connection keeps the process session.
     request_session_id = (
         new_session_id()
-        if (client_conversation is not None or (minted and handle_free))
+        if (client_conversation is not None or handle_free)
         and not carries_session
         and get_request(extra) is not None
         and not _is_sse_request(extra)

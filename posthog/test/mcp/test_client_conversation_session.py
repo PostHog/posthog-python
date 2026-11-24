@@ -628,14 +628,15 @@ async def test_custom_capture_outside_a_tool_uses_the_servers_session(on_other_s
     assert event["properties"]["$session_id"] == expected
 
 
+@pytest.mark.parametrize("anchoring", [True, False], ids=["anchored", "not anchored"])
 @pytest.mark.parametrize(
     "meta", [None, {"openai/session": ""}], ids=["absent", "empty"]
 )
 async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions(
-    meta,
+    meta, anchoring
 ):
     client = FakeClient()
-    _, data = shared_http_server(client)
+    _, data = shared_http_server(client, enable_conversation_id=anchoring)
 
     for user in ("alice", "bob"):
         await run_call(data, user_agent=CHATGPT, user=user, meta=meta)
