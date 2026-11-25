@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.5 — 2026-11-25
+
+### Patch changes
+
+- [7366e5b2](https://github.com/posthog/posthog-python/commit/7366e5b229a85bb87aff47ebd049775ea6b867ee) `posthog.ai.anthropic`: keep server tool blocks (`server_tool_use`, `web_search_tool_result`, and other block types the wrapper doesn't format) in `$ai_output_choices` for streamed responses, with the server tool's streamed input. Non-streamed responses already recorded these blocks, so a streamed web search generation showed only the final text and lost the query and results. — Thanks @sarankumar1325!
+
 ## 8.2.4 — 2026-11-25
 
 ### Patch changes
