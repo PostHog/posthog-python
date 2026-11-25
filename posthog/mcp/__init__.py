@@ -186,12 +186,16 @@ class McpAnalytics:
             await coro
 
     async def flush(self) -> None:
-        """Await this server's in-flight auto-captures on the current event loop.
-        Call this before ``posthog.shutdown()`` on exit so trailing tool-call events
-        aren't dropped. (Then call ``posthog.flush()``/``shutdown()`` to send them.)"""
+        """Await this server's in-flight auto-captures on the current event loop,
+        then flush the posthog client, which sends every event queued on it. On a
+        per-request runtime (serverless, edge), await this before the request ends.
+        Never raises: a failed client flush is logged."""
         data = get_server_tracking_data(self._key)
-        if data is not None:
-            await drain_pending(data)
+        if data is None:
+            return
+        await drain_pending(data)
+        if data.sink is not None:
+            await data.sink.flush()
 
 
 class _NoopAnalytics(McpAnalytics):

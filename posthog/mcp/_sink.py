@@ -13,6 +13,7 @@ the client lifecycle — the host constructs it and calls ``shutdown()``.
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -116,3 +117,9 @@ class McpEventSink:
             )
         except Exception as err:
             log(f"Failed to capture PostHog event {full_event.get('id')}: {err}")
+
+    async def flush(self) -> None:
+        try:
+            await asyncio.to_thread(self._posthog.flush)
+        except Exception as err:
+            log(f"Failed to flush PostHog events: {err}")

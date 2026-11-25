@@ -8,7 +8,7 @@ import pytest
 import mcp.types as mcp_types
 from mcp.server.fastmcp import FastMCP
 
-from posthog.mcp import instrument
+from posthog.mcp import instrument, set_logger
 from posthog.mcp.types import MCPAnalyticsOptions, UserIdentity
 from posthog.test.mcp._helpers import (
     FakeClient,
@@ -172,7 +172,7 @@ async def test_tool_call_captures_client_model_without_prior_listing():
     assert "llm_model" not in props["$mcp_parameters"]["request"]["params"]["arguments"]
 
 
-async def test_analytics_flush_drains_its_own_captures():
+async def test_analytics_flush_sends_its_captures():
     async def slow_before_send(event):
         await asyncio.sleep(0.05)
         return event
@@ -191,6 +191,26 @@ async def test_analytics_flush_drains_its_own_captures():
     await analytics.flush()
 
     assert len(_events(client, "$mcp_tool_call")) == 1
+    assert client.event_counts_at_flush == [len(client.events)]
+
+
+async def test_analytics_flush_logs_a_failed_client_flush():
+    class FailingFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            raise RuntimeError("network down")
+
+    lines = []
+    try:
+        analytics = instrument(
+            make_server(),
+            FailingFlushClient(),
+            MCPAnalyticsOptions(logger=lines.append),
+        )
+        await analytics.flush()
+    finally:
+        set_logger(None)
+
+    assert any("network down" in line for line in lines)
 
 
 async def test_initialize_emitted_once_per_session():
