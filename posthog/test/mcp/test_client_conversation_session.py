@@ -66,13 +66,14 @@ class FakeServer:
     """A weak-referenceable stand-in for the server key tracking state hangs off."""
 
 
-def http_extra(user_agent=None, **headers):
+def http_extra(user_agent=None, query=None, **headers):
     """An HTTP request's ``extra``, or a stdio one (no request) without a user agent."""
     if not user_agent and not headers:
         return {}
     if user_agent:
         headers["user-agent"] = user_agent
-    return {"ctx": SimpleNamespace(request=SimpleNamespace(headers=headers))}
+    request = SimpleNamespace(headers=headers, query_params=query or {})
+    return {"ctx": SimpleNamespace(request=request)}
 
 
 def fresh_data(client=None, enable_conversation_id=True):
@@ -93,6 +94,7 @@ def start_call(
     mcp_session_id=None,
     token=None,
     user=None,
+    query=None,
 ):
     return start_tool_call_lifecycle(
         data,
@@ -105,7 +107,7 @@ def start_call(
         client_name=client_name,
         client_version=None,
         protocol_version=None,
-        extra=http_extra(user_agent, **({"x-user": user} if user else {})),
+        extra=http_extra(user_agent, query, **({"x-user": user} if user else {})),
     )
 
 
@@ -662,18 +664,21 @@ async def test_custom_capture_outside_a_tool_uses_the_servers_session(on_other_s
     assert event["properties"]["$session_id"] == expected
 
 
+@pytest.mark.parametrize(
+    "query", [None, {"session_id": "anything"}], ids=["no query", "sse-looking query"]
+)
 @pytest.mark.parametrize("anchoring", [True, False], ids=["anchored", "not anchored"])
 @pytest.mark.parametrize(
     "meta", [None, {"openai/session": ""}], ids=["absent", "empty"]
 )
 async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions(
-    meta, anchoring
+    meta, anchoring, query
 ):
     client = FakeClient()
     _, data = shared_http_server(client, enable_conversation_id=anchoring)
 
     for user in ("alice", "bob"):
-        await run_call(data, user_agent=CHATGPT, user=user, meta=meta)
+        await run_call(data, user_agent=CHATGPT, user=user, meta=meta, query=query)
     await _flush()
 
     alice, bob = (e for e in _events(client, "$mcp_tool_call"))
@@ -681,7 +686,7 @@ async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions
     assert bob["properties"]["$set"] == {"bob_only": "present"}
     assert bob["properties"]["$mcp_session_source"] == "generated"
     assert _events(client, "$mcp_initialize") == []
-    assert data.warned_no_stateless_session is True
+    assert data.warned_no_stateless_session is (query is None)
 
 
 async def test_a_one_client_connection_keeps_its_session_without_a_client_id():

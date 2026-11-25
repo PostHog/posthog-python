@@ -860,14 +860,14 @@ def start_tool_call_lifecycle(
     handle_free = client is not None and client.handle_free
     # Over HTTP the process session would mix this call with other clients': one
     # its client id groups (an in-tool event reads it before the call), or one a
-    # handle-free client sends without its id and so with no handle either. A
-    # one-client connection keeps the process session.
+    # handle-free client sends without its id and so with no handle either. Only
+    # stdio, which has no request, keeps the process session; an SSE-style
+    # `session_id` query parameter is the caller's to set, so it earns no exemption.
     request_session_id = (
         new_session_id()
         if (client_conversation is not None or handle_free)
         and not carries_session
         and get_request(extra) is not None
-        and not _is_sse_request(extra)
         else None
     )
     # The client's own id wins, so a handle the agent echoes alongside it is
