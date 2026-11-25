@@ -1455,13 +1455,30 @@ class Emails(_EmailsBase):
             prepared.max_retries,
         )
 
-    def _queue(
-        self, prepared: _PreparedSend, not_done: str, key_needed: str
-    ) -> SendEmailResult:
-        # posthog.push sends through this, so a push gets the same host, key, timeout and retries.
+    def _push_call(
+        self,
+        method: str,
+        path: str,
+        parse: Callable[[int, bytes, Optional[str]], _ResultT],
+        not_done: str,
+        key_needed: str,
+        *,
+        body: Optional[bytes] = None,
+        idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ) -> _ResultT:
+        # posthog.push calls through this, so it gets the same host, key, timeout and retries.
         finish = self._start(not_done)
         try:
-            return self._deliver(prepared, self._secret_key(key_needed))
+            headers = _headers(
+                self._secret_key(key_needed),
+                self.migrated_from,
+                has_body=body is not None,
+                idempotency_key=idempotency_key,
+            )
+            return self._call(
+                self._posthog_request(method, path, body, headers), parse, max_retries
+            )
         finally:
             finish()
 
@@ -1686,12 +1703,30 @@ class AsyncEmails(_EmailsBase):
             prepared.max_retries,
         )
 
-    async def _queue(
-        self, prepared: _PreparedSend, not_done: str, key_needed: str
-    ) -> SendEmailResult:
+    async def _push_call(
+        self,
+        method: str,
+        path: str,
+        parse: Callable[[int, bytes, Optional[str]], _ResultT],
+        not_done: str,
+        key_needed: str,
+        *,
+        body: Optional[bytes] = None,
+        idempotency_key: Optional[str] = None,
+        max_retries: Optional[int] = None,
+    ) -> _ResultT:
+        # posthog.push calls through this, so it gets the same host, key, timeout and retries.
         finish = self._start(not_done)
         try:
-            return await self._deliver(prepared, self._secret_key(key_needed))
+            headers = _headers(
+                self._secret_key(key_needed),
+                self.migrated_from,
+                has_body=body is not None,
+                idempotency_key=idempotency_key,
+            )
+            return await self._call(
+                self._posthog_request(method, path, body, headers), parse, max_retries
+            )
         finally:
             finish()
 
@@ -1864,7 +1899,7 @@ def _client_emails(
     if not is_cloud:
         # A custom host is often an ingestion proxy, which must not receive the secret key.
         emails._host_error = (
-            "The client's host is not PostHog Cloud, so the client can't tell where to send requests. "
+            "The client's host is not PostHog Cloud, so the client can't tell where to send email. "
             "Set app_host to your PostHog app host on the client."
         )
     emails._parent_disabled = is_disabled

@@ -11,7 +11,7 @@ import requests
 from parameterized import parameterized
 
 from posthog import AsyncPosthog, Posthog
-from posthog.push import Push, PushError, SendPushResult
+from posthog.push import AsyncPush, Push, PushError, PushStatus, SendPushResult
 from posthog.test.test_emails import (
     SECRET_KEY,
     TEMPLATE_ID,
@@ -21,7 +21,7 @@ from posthog.test.test_emails import (
 )
 from posthog.version import VERSION
 
-SEND_URL = "https://us.posthog.com/api/projects/@current/messaging/send/push/"
+SEND_URL = "https://us.posthog.com/api/messaging/send/push/"
 
 
 def push_with(replies: list[Reply], **options: Any) -> tuple[Push, FakeAdapter]:
@@ -148,7 +148,7 @@ def test_client_push_goes_where_emails_go_and_refuses_after_shutdown():
     assert request.call_count == 1
     assert (
         request.call_args.args[1]
-        == "https://posthog.example.com/api/projects/@current/messaging/send/push/"
+        == "https://posthog.example.com/api/messaging/send/push/"
     )
 
     client.shutdown()
@@ -201,3 +201,68 @@ def _response(status: int, body: dict[str, Any]) -> requests.Response:
     reply.status_code = status
     reply._content = json.dumps(body).encode()
     return reply
+
+
+MESSAGE_ID = "019e1a2b-3c4d-7e5f-8a9b-0c1d2e3f4a5b"
+STATUS_BODY = {
+    "id": MESSAGE_ID,
+    "status": "not_sent",
+    "created_at": "2026-11-20T16:27:44.364000Z",
+    "reason": "no_device",
+}
+
+
+def test_get_reads_the_status_after_a_retry():
+    push, adapter = push_with([(503, {}, {}), (200, STATUS_BODY, {})])
+
+    assert push.get(MESSAGE_ID.upper()) == PushStatus(
+        id=MESSAGE_ID,
+        status="not_sent",
+        created_at=datetime(2026, 11, 20, 16, 27, 44, 364000, tzinfo=timezone.utc),
+        reason="no_device",
+    )
+    request = adapter.requests[-1]
+    assert request.url == f"https://us.posthog.com/api/messaging/pushes/{MESSAGE_ID}/"
+    assert request.method == "GET"
+    assert request.body is None
+    assert "Idempotency-Key" not in request.headers
+
+
+@parameterized.expand(
+    [
+        ("unknown_id", (404, {"code": "not_found"}, {}), "not_found"),
+        ("no_status", (200, {**STATUS_BODY, "status": None}, {}), "api_error"),
+    ]
+)
+def test_get_raises_a_push_error(_name, reply, code):
+    push, _ = push_with([reply])
+
+    with pytest.raises(PushError) as caught:
+        push.get(MESSAGE_ID)
+
+    assert caught.value.code == code
+
+
+def test_get_refuses_an_id_that_is_not_a_uuid():
+    push, adapter = push_with([])
+
+    with pytest.raises(ValueError):
+        push.get("msg_1")
+
+    assert adapter.requests == []
+
+
+@pytest.mark.asyncio
+async def test_async_get_reads_the_status():
+    paths: list[str] = []
+
+    def reply(request: httpx.Request) -> httpx.Response:
+        paths.append(request.url.path)
+        return httpx.Response(200, json=STATUS_BODY)
+
+    transport = httpx.MockTransport(reply)
+    async with httpx.AsyncClient(transport=transport) as http_client:
+        push = AsyncPush(SECRET_KEY, http_client=http_client)
+        assert (await push.get(MESSAGE_ID)).reason == "no_device"
+
+    assert paths == [f"/api/messaging/pushes/{MESSAGE_ID}/"]

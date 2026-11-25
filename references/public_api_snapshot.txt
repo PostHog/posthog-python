@@ -1201,6 +1201,10 @@ attribute posthog.push.PushError.name = name
 attribute posthog.push.PushError.retry_after = retry_after
 attribute posthog.push.PushError.status_code = status_code
 attribute posthog.push.PushError.why = why
+attribute posthog.push.PushStatus.created_at: datetime
+attribute posthog.push.PushStatus.id: str
+attribute posthog.push.PushStatus.reason: Optional[str] = None
+attribute posthog.push.PushStatus.status: str
 attribute posthog.push.SendPushResult.id: str
 attribute posthog.push.SendPushResult.replayed: bool = False
 attribute posthog.release_id.RELEASE_ID_ENV_VAR = 'POSTHOG_RELEASE_ID'
@@ -1455,6 +1459,7 @@ class posthog.poller.Poller(interval, execute, *args, **kwargs)
 class posthog.push.AsyncPush(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, http_client: Any = None)
 class posthog.push.Push(secret_key: Optional[str], *, host: Optional[str] = None, timeout: float = 15, max_retries: int = 2, disabled: bool = False, session: Optional[requests.Session] = None)
 class posthog.push.PushError(*, name: str, code: str, message: str, status_code: Optional[int] = None, why: Optional[str] = None, fix: Optional[str] = None, docs_url: Optional[str] = None, field: Optional[str] = None, retry_after: Optional[float] = None)
+class posthog.push.PushStatus(id: str, status: str, created_at: datetime, reason: Optional[str] = None)
 class posthog.push.SendPushResult(id: str, replayed: bool = False)
 class posthog.request.APIError(status: Union[int, str], message: str, retry_after: Optional[float] = None)
 class posthog.request.DatetimeSerializer 
@@ -2013,8 +2018,10 @@ method posthog.metrics_capture.PostHogMetrics.reset() -> None
 method posthog.poller.Poller.run()
 method posthog.poller.Poller.stop()
 method posthog.push.AsyncPush.aclose() -> None
+method posthog.push.AsyncPush.get(message_id: Union[str, UUID]) -> PushStatus
 method posthog.push.AsyncPush.send(*, template_id: Union[str, UUID], distinct_id: str, template_data: Optional[Mapping[str, Any]] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendPushResult
 method posthog.push.Push.close() -> None
+method posthog.push.Push.get(message_id: Union[str, UUID]) -> PushStatus
 method posthog.push.Push.send(*, template_id: Union[str, UUID], distinct_id: str, template_data: Optional[Mapping[str, Any]] = None, idempotency_key: Optional[str] = None, max_retries: Optional[int] = None) -> SendPushResult
 method posthog.request.DatetimeSerializer.default(obj: Any)
 method posthog.request.DatetimeSerializer.encode(o: Any) -> str

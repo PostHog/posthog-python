@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from types import TracebackType
 from typing import Any, Mapping, Optional, Union
 from uuid import UUID, uuid4
@@ -53,20 +54,31 @@ from .emails import (
     EmailError,
     Emails,
     _IDEMPOTENCY_KEY,
+    _json_object,
     _PreparedSend,
+    _response_error,
     _retry_limit,
+    _sdk_error,
+    _text,
+    _timestamp,
 )
 from .request import DatetimeSerializer
 from .utils import clean
 
-__all__ = ["AsyncPush", "Push", "PushError", "SendPushResult"]
+__all__ = ["AsyncPush", "Push", "PushError", "PushStatus", "SendPushResult"]
 
-_SEND_PATH = "/api/projects/@current/messaging/send/push/"
+_SEND_PATH = "/api/messaging/send/push/"
+_STATUS_PATH = "/api/messaging/pushes/{message_id}/"
 _MAX_DISTINCT_ID_LENGTH = 400
 _NOT_DONE = "no push notification was sent"
 _KEY_NEEDED = (
     "Sending push notifications needs secret_key, a project secret API key with the "
     "transactional_push:write scope."
+)
+_GET_NOT_DONE = "no push notification status was read"
+_GET_KEY_NEEDED = (
+    "Reading a push notification status needs secret_key, a project secret API key with the "
+    "transactional_push:read or transactional_push:write scope."
 )
 
 
@@ -144,6 +156,76 @@ class SendPushResult:
     replayed: bool = False
 
 
+@dataclass(frozen=True)
+class PushStatus:
+    """What happened to a push notification that ``send()`` queued.
+
+    ``status`` is one of:
+
+    - ``sending``: it is still going out, or PostHog hasn't recorded its outcome yet.
+    - ``sent``: Apple or Google accepted it for at least one of the person's devices.
+    - ``not_sent``: none of the person's devices got it, and ``reason`` says why.
+    - ``failed``: the send stopped with an error.
+
+    Later SDK versions can see values this list does not have yet.
+
+    Attributes:
+        id: The push notification's message ID.
+        status: What happened to it, one of the values above.
+        created_at: When PostHog accepted the send.
+        reason: Why it was not sent or failed, such as ``no_device`` or
+            ``provider_error``. ``None`` otherwise.
+    """
+
+    id: str
+    status: str
+    created_at: datetime
+    reason: Optional[str] = None
+
+
+def _parse_send_response(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> SendPushResult:
+    fields = _json_object(body)
+    if not 200 <= status < 300:
+        raise _response_error(fields, status, retry_after_header)
+    message_id = _text(fields.get("message_id"))
+    if message_id is None:
+        raise _sdk_error("api_error", "PostHog answered without a message ID.", status)
+    return SendPushResult(id=message_id, replayed=fields.get("replayed") is True)
+
+
+def _parse_status_response(
+    status: int, body: bytes, retry_after_header: Optional[str]
+) -> PushStatus:
+    fields = _json_object(body)
+    if not 200 <= status < 300:
+        raise _response_error(fields, status, retry_after_header)
+    message_id = _text(fields.get("id"))
+    push_status = _text(fields.get("status"))
+    created_at = _timestamp(fields.get("created_at"))
+    if message_id is None or push_status is None or created_at is None:
+        raise _sdk_error(
+            "api_error", "PostHog answered without a push notification status.", status
+        )
+    return PushStatus(
+        id=message_id,
+        status=push_status,
+        created_at=created_at,
+        reason=_text(fields.get("reason")),
+    )
+
+
+def _status_path(message_id: Union[str, UUID]) -> str:
+    try:
+        message_uuid = message_id if isinstance(message_id, UUID) else UUID(message_id)
+    except (TypeError, ValueError, AttributeError):
+        raise ValueError(
+            "message_id must be the message ID that send() returned."
+        ) from None
+    return _STATUS_PATH.format(message_id=message_uuid)
+
+
 def _prepare(
     template_id: Union[str, UUID],
     distinct_id: str,
@@ -188,10 +270,6 @@ def _prepare(
         idempotency_key=idempotency_key,
         max_retries=max_retries,
     )
-
-
-def _result(result: Any) -> SendPushResult:
-    return SendPushResult(id=result.id, replayed=result.replayed)
 
 
 class Push:
@@ -271,7 +349,40 @@ class Push:
             template_id, distinct_id, template_data, idempotency_key, max_retries
         )
         try:
-            return _result(self._emails._queue(prepared, _NOT_DONE, _KEY_NEEDED))
+            return self._emails._push_call(
+                "POST",
+                prepared.path,
+                _parse_send_response,
+                _NOT_DONE,
+                _KEY_NEEDED,
+                body=prepared.body,
+                idempotency_key=prepared.idempotency_key,
+                max_retries=prepared.max_retries,
+            )
+        except EmailError as error:
+            raise PushError._from_email_error(error) from error.__cause__
+
+    def get(self, message_id: Union[str, UUID]) -> PushStatus:
+        """Read what happened to a push notification that :meth:`send` queued.
+
+        Args:
+            message_id: The ``id`` of the :class:`SendPushResult` that
+                :meth:`send` returned.
+
+        Returns:
+            The push notification's status, for 30 days after the send.
+
+        Raises:
+            PushError: PostHog did not answer with a status. ``code`` is
+                ``not_found`` for an unknown ID, a send older than 30 days,
+                or for a few seconds after the send.
+            ValueError: ``message_id`` is not a message ID.
+        """
+        path = _status_path(message_id)
+        try:
+            return self._emails._push_call(
+                "GET", path, _parse_status_response, _GET_NOT_DONE, _GET_KEY_NEEDED
+            )
         except EmailError as error:
             raise PushError._from_email_error(error) from error.__cause__
 
@@ -340,7 +451,29 @@ class AsyncPush:
             template_id, distinct_id, template_data, idempotency_key, max_retries
         )
         try:
-            return _result(await self._emails._queue(prepared, _NOT_DONE, _KEY_NEEDED))
+            return await self._emails._push_call(
+                "POST",
+                prepared.path,
+                _parse_send_response,
+                _NOT_DONE,
+                _KEY_NEEDED,
+                body=prepared.body,
+                idempotency_key=prepared.idempotency_key,
+                max_retries=prepared.max_retries,
+            )
+        except EmailError as error:
+            raise PushError._from_email_error(error) from error.__cause__
+
+    async def get(self, message_id: Union[str, UUID]) -> PushStatus:
+        """Read what happened to a push notification that :meth:`send` queued.
+
+        Takes the same argument and raises the same errors as :meth:`Push.get`.
+        """
+        path = _status_path(message_id)
+        try:
+            return await self._emails._push_call(
+                "GET", path, _parse_status_response, _GET_NOT_DONE, _GET_KEY_NEEDED
+            )
         except EmailError as error:
             raise PushError._from_email_error(error) from error.__cause__
 
