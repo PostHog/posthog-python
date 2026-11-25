@@ -325,9 +325,55 @@ def test_gemini_tool_credentials_are_masked(
     )
 
     assert CANARY not in json.dumps(captured, default=str)
+    assert _REDACTED_MCP_CREDENTIAL in json.dumps(captured, default=str)
     assert captured[0].keys() & {"google_maps", "googleMaps", *tool}
     assert captured[1] is function_tool
     assert CANARY in json.dumps(tool)
+
+
+@pytest.mark.parametrize(
+    "make_tool",
+    [
+        pytest.param(
+            lambda types: {"exa_ai_search": {"api_key": CANARY}, "label": "search"},
+            id="extra-key",
+        ),
+        pytest.param(
+            lambda types: {
+                "google_maps": types.GoogleMaps(
+                    auth_config=types.AuthConfig(api_key=CANARY)
+                )
+            },
+            id="nested-model",
+        ),
+        pytest.param(
+            lambda types: {
+                "mcp_servers": (
+                    {
+                        "streamable_http_transport": {
+                            "headers": {"Authorization": CANARY}
+                        }
+                    },
+                )
+            },
+            id="tuple",
+        ),
+        pytest.param(
+            lambda types: type("AppTool", (types.Tool,), {})(
+                exa_ai_search=types.ToolExaAiSearch(api_key=CANARY)
+            ),
+            id="tool-subclass",
+        ),
+    ],
+)
+def test_gemini_tool_variants_are_masked(make_tool: Callable[[Any], Any]) -> None:
+    from google.genai import types
+
+    captured = extract_available_tool_calls(
+        "gemini", {"config": SimpleNamespace(tools=[make_tool(types)])}
+    )
+
+    assert CANARY not in json.dumps(captured, default=str)
 
 
 @pytest.fixture

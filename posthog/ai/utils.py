@@ -3,6 +3,7 @@ import copy
 import functools
 import logging
 import re
+import sys
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
@@ -1118,18 +1119,30 @@ _GEMINI_CREDENTIAL_KEYS = frozenset(
 _GEMINI_SCHEMA_FIELDS = frozenset({"function_declarations", "functionDeclarations"})
 
 
-@functools.lru_cache(maxsize=1)
-def _gemini_tool_fields() -> frozenset:
-    # Read from the installed SDK so tools Google adds later are covered too.
-    try:
-        from google.genai import types
-    except ImportError:
-        return frozenset()
-    fields = types.Tool.model_fields
+def _gemini_tool_class() -> Optional[type]:
+    # Gemini tools only exist once the caller has loaded google-genai, so look it
+    # up instead of importing it on every provider's capture path.
+    return getattr(sys.modules.get("google.genai.types"), "Tool", None)
+
+
+@functools.lru_cache(maxsize=4)
+def _model_field_names(model_class: type) -> frozenset:
+    fields = model_class.model_fields  # type: ignore[attr-defined]
     return frozenset({*fields, *(f.alias for f in fields.values() if f.alias)})
 
 
+def _gemini_tool_fields() -> frozenset:
+    # Read from the SDK so tools Google adds later are covered too.
+    tool_class = _gemini_tool_class()
+    return _model_field_names(tool_class) if tool_class else frozenset()
+
+
 def _without_gemini_credentials(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return _without_gemini_credentials(dumped)
     if isinstance(value, dict):
         return {
             key: (
@@ -1139,22 +1152,28 @@ def _without_gemini_credentials(value: Any) -> Any:
             )
             for key, item in value.items()
         }
-    if isinstance(value, list):
+    if isinstance(value, (list, tuple)):
         return [_without_gemini_credentials(item) for item in value]
     return value
 
 
 def _is_gemini_tool_with_config(tool: Any) -> bool:
-    return type(tool).__module__.startswith("google.genai") and any(
-        value is not None
-        for name, value in getattr(tool, "__dict__", {}).items()
-        if name in _gemini_tool_fields() and name not in _GEMINI_SCHEMA_FIELDS
+    tool_class = _gemini_tool_class()
+    return (
+        tool_class is not None
+        and isinstance(tool, tool_class)
+        and any(
+            getattr(tool, name, None) is not None
+            for name in tool_class.model_fields  # type: ignore[attr-defined]
+            if name not in _GEMINI_SCHEMA_FIELDS
+        )
     )
 
 
 def _is_gemini_tool_dict(tool: Dict[str, Any]) -> bool:
-    return tool.keys() <= _gemini_tool_fields() and not (
-        tool.keys() <= _GEMINI_SCHEMA_FIELDS
+    return any(
+        key in _gemini_tool_fields() and key not in _GEMINI_SCHEMA_FIELDS
+        for key in tool
     )
 
 
