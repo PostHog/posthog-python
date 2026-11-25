@@ -1,5 +1,35 @@
 # posthog
 
+## 8.2.7 — 2026-11-25
+
+### Patch changes
+
+- [71d0e2a4](https://github.com/posthog/posthog-python/commit/71d0e2a4ec578df7eb2c973886fa861fa30f9c34) Record failed OpenAI Responses API stream events as generation errors in the sync and async clients. The original event still reaches the caller, and privacy mode preserves safe provider error codes while redacting the error message. — Thanks @Artyfowl1710 for your first contribution 🎉!
+
+## 8.2.6 — 2026-11-25
+
+### Patch changes
+
+- [b4945ca2](https://github.com/posthog/posthog-python/commit/b4945ca23d0de5db5ccf1a3f55b4009c398b1af0) `$ai_tools` masks the credentials in Gemini tool definitions with `[REDACTED]`, with or without privacy mode: every `api_key`, `api_auth`, `auth_config`, and `headers` inside a tool's config, such as `retrieval.external_api`, `google_maps`, `exa_ai_search`, `parallel_ai_search`, and `mcp_servers`. Function declarations are not masked. The tools you pass in are not modified. — Thanks @bernatixer!
+
+## 8.2.5 — 2026-11-25
+
+### Patch changes
+
+- [7366e5b2](https://github.com/posthog/posthog-python/commit/7366e5b229a85bb87aff47ebd049775ea6b867ee) `posthog.ai.anthropic`: keep server tool blocks (`server_tool_use`, `web_search_tool_result`, and other block types the wrapper doesn't format) in `$ai_output_choices` for streamed responses, with the server tool's streamed input. Non-streamed responses already recorded these blocks, so a streamed web search generation showed only the final text and lost the query and results. — Thanks @sarankumar1325!
+
+## 8.2.4 — 2026-11-25
+
+### Patch changes
+
+- [187b3771](https://github.com/posthog/posthog-python/commit/187b377174b9db1212f84f9a838f33e72d15f607) Spans that `PostHogSpanProcessor` and `PostHogTraceExporter` redact, in privacy mode or to mask remote MCP credentials, now keep the counts of attributes, events and links the SDK dropped under its span limits. The redacted copy previously reported 0, as the context copy did before #1266. — Thanks @fahad2932 for your first contribution 🎉!
+
+## 8.2.3 — 2026-11-24
+
+### Patch changes
+
+- [82c9004c](https://github.com/posthog/posthog-python/commit/82c9004c0f64dc0d437dbcc6a59ae73a63699c8b) `posthog.ai.langchain`: stop double-counting Gemini thinking tokens. langchain-google-genai reports `usage_metadata.output_tokens` with reasoning included (it adds `thoughts_token_count`), and PostHog prices Gemini 2.5/3 reasoning on top of `$ai_output_tokens`, so thinking was billed twice. For Gemini models whose output includes reasoning (input plus output reach `total_tokens`), the handler now reports `$ai_output_tokens` without it, as the Gemini wrapper does. Integrations that already report candidates only, such as ChatVertexAI, are unchanged. — Thanks @MaiAditya!
+
 ## 8.2.2 — 2026-11-24
 
 ### Patch changes

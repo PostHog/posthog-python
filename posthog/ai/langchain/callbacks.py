@@ -1041,6 +1041,31 @@ def _parse_usage_model(
             normalized_usage.input_tokens = max(
                 normalized_usage.input_tokens - cache_tokens, 0
             )
+
+    # PostHog prices Gemini reasoning on top of the output count, as the Gemini
+    # wrapper reports it. langchain-google-genai folds thoughts_token_count into
+    # output_tokens, so take it back out. Other integrations (ChatVertexAI, older
+    # langchain-google-genai) report candidates only, which the totals show:
+    # input and output only reach total_tokens when reasoning is in the output.
+    is_gemini = bool(model and "gemini" in model.lower())
+    total_tokens = usage.get("total_tokens")
+    reasoning_in_output = (
+        isinstance(total_tokens, int)
+        and total_tokens > 0
+        and isinstance(normalized_usage.input_tokens, int)
+        and isinstance(normalized_usage.output_tokens, int)
+        and normalized_usage.input_tokens + normalized_usage.output_tokens
+        >= total_tokens
+    )
+    if (
+        is_gemini
+        and reasoning_in_output
+        and normalized_usage.output_tokens
+        and normalized_usage.reasoning_tokens
+    ):
+        normalized_usage.output_tokens = max(
+            normalized_usage.output_tokens - normalized_usage.reasoning_tokens, 0
+        )
     return normalized_usage
 
 

@@ -1951,6 +1951,85 @@ def test_claude_on_vertex_subtracts_cache_tokens(mock_client):
     assert props["$ai_cache_creation_input_tokens"] == 100
 
 
+def _capture_usage_metadata(mock_client, metadata, usage_metadata):
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata=metadata,
+    )
+    message = AIMessage(content="Response", usage_metadata=usage_metadata)
+    response = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    return mock_client.capture_ai.call_args_list[0][1]["properties"]
+
+
+def test_gemini_output_tokens_exclude_reasoning_tokens(mock_client):
+    """ChatGoogleGenerativeAI folds thoughts_token_count into usage_metadata
+    output_tokens. PostHog prices Gemini reasoning on top of the output count,
+    as the Gemini wrapper reports it, so the handler reports output without it."""
+    # The usage ChatGoogleGenerativeAI.invoke returns for a thinking response
+    # with candidates_token_count=49 and thoughts_token_count=777
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_genai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "input_token_details": {"cache_read": 0},
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_input_tokens"] == 12
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_gemini_output_tokens_already_excluding_reasoning_are_kept(mock_client):
+    """ChatVertexAI (and older langchain-google-genai) report candidates only
+    in output_tokens, so the output count is left as reported."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_vertexai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 49,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_non_gemini_output_tokens_keep_reasoning_tokens(mock_client):
+    """Only Gemini reasoning is priced on top of the output count."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "openai", "ls_model_name": "o4-mini"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 826
+    assert props["$ai_reasoning_tokens"] == 777
+
+
 def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
     """Test that Anthropic provider correctly subtracts cache write tokens from input tokens."""
     from langchain_core.outputs import LLMResult, ChatGeneration
