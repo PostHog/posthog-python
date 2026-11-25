@@ -162,9 +162,12 @@ that fails as a whole, such as a rate limit past its retries, raises
 split the recipients into smaller batches, as its ``fix`` says. On a 400 it means
 the shared content or ``template_data`` is too large, which splitting doesn't
 help, and its ``message`` says what to send less of. ``batch_unavailable`` (409) means the project
-can't send batches yet, and a 404 that the template doesn't exist or batch sends
-are off for the project: send each email the batch didn't queue with ``send``
-and its recipient's ``idempotency_key``. A batch takes no ``cc``, ``bcc``,
+can't send batches yet: send each email the batch didn't queue with ``send``
+and its recipient's ``idempotency_key``. A 404 ``not_found`` that names no
+``field`` means PostHog found no template with that ``template_id``, or batch
+sends aren't available for the project: check the template ID, and if it's
+right, send each recipient on its own with ``send`` until batch sends are
+available. A batch takes no ``cc``, ``bcc``,
 ``attachments`` or ``scheduled_at``.
 
 ```python
@@ -1815,24 +1818,37 @@ def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember
     return members
 
 
+_BATCH_NOT_FOUND = {
+    True: {
+        "detail": "PostHog found no template with this template_id, or batch sends "
+        "aren't available for this project, so it sent no email of this request.",
+        "fix": "Check template_id. If it's right, send each recipient on its own with "
+        "send() and its idempotency_key until batch sends are available.",
+    },
+    False: {
+        "detail": "Batch sends or sending from code aren't available for this project, "
+        "so PostHog sent no email of this request.",
+        "fix": "Send each recipient on its own with send() and its idempotency_key "
+        "until batch sends are available.",
+    },
+}
+
+
 def _batch_response_error(
     fields: Mapping[str, Any],
     status: int,
     retry_after_header: Optional[str],
     recipient_count: int,
+    template_form: bool,
 ) -> EmailError:
-    answered = {key: value for key, value in fields.items() if value is not None}
-    fields = answered
-    if status == 404:
-        fields = {
-            "code": "not_found",
-            "detail": "PostHog found no batch send for this request, so no email was sent.",
-            "why": "The template doesn't exist, or batch sends are off for this project "
-            "or this PostHog version.",
-            "fix": "Check template_id, or send each email the batch didn't queue "
-            "with send() and its recipient's idempotency_key.",
-            **answered,
-        }
+    fields = {key: value for key, value in fields.items() if value is not None}
+    code = _text(fields.get("code"))
+    if (
+        status == 404
+        and code in (None, "not_found", "api_error")
+        and not _text(fields.get("attr"))
+    ):
+        fields = {"code": "not_found", **_BATCH_NOT_FOUND[template_form]}
     if status == 413 and not _text(fields.get("fix")):
         fields = {
             **fields,
@@ -1910,6 +1926,7 @@ class _BatchRun:
         self.results: tuple[BatchEmailResult, ...] = ()
         self.warnings: list[EmailWarning] = []
         self.maybe_queued = False
+        self.template_form = "template_id" in shared
 
     def _result(
         self, member: _BatchMember, status: BatchStatus, **fields: Any
@@ -1935,7 +1952,11 @@ class _BatchRun:
         fields = _json_object(body)
         if not 200 <= status < 300:
             failure = _batch_response_error(
-                fields, status, retry_after_header, len(self.members)
+                fields,
+                status,
+                retry_after_header,
+                len(self.members),
+                self.template_form,
             )
             unreadable_conflict = status == 409 and not _text(fields.get("code"))
             if (

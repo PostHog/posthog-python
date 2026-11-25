@@ -847,22 +847,105 @@ def test_batch_unavailable_is_not_retried_and_says_to_send_singly():
     assert [r.status for r in raised.value.results] == ["failed", "failed"]
 
 
-@pytest.mark.parametrize(
-    "body",
-    [None, {"type": "invalid_request", "code": "not_found", "detail": "Not found."}],
-)
-def test_a_404_says_batch_sends_are_unavailable(body):
+FIELDLESS_404_BODIES = [
+    pytest.param(None, id="no_body"),
+    pytest.param(
+        {
+            "type": "invalid_request",
+            "code": "not_found",
+            "attr": None,
+            "detail": "Not found.",
+        },
+        id="unknown_template_or_batch_off",
+    ),
+    pytest.param(
+        {
+            "type": "invalid_request",
+            "code": "not_found",
+            "detail": "Endpoint not found.",
+        },
+        id="route_missing",
+    ),
+    pytest.param({"code": "", "detail": "Not found."}, id="blank_code"),
+    pytest.param({"code": "api_error"}, id="api_error"),
+]
+
+
+def assert_no_update_advice(error: EmailError) -> None:
+    said = " ".join(filter(None, [error.message, error.why, error.fix])).lower()
+    assert "version" not in said
+    assert "update" not in said
+    assert "server" not in said
+
+
+@pytest.mark.parametrize("body", FIELDLESS_404_BODIES)
+def test_a_404_without_a_field_says_the_template_id_is_wrong_or_batches_are_off(body):
+    emails, posthog = emails_on([(404, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    error = raised.value
+    assert len(posthog.requests) == 1
+    assert (error.code, error.status_code, error.field) == ("not_found", 404, None)
+    assert error.message == (
+        "PostHog found no template with this template_id, or batch sends aren't "
+        "available for this project, so it sent no email of this request."
+    )
+    assert error.fix == (
+        "Check template_id. If it's right, send each recipient on its own with send() "
+        "and its idempotency_key until batch sends are available."
+    )
+    assert_no_update_advice(error)
+    assert [(r.status, r.error and r.error.message) for r in error.results] == [
+        ("failed", error.message),
+        ("failed", error.message),
+    ]
+
+
+@pytest.mark.parametrize("body", FIELDLESS_404_BODIES)
+def test_a_code_batch_404_without_a_field_says_batches_from_code_are_off(body):
+    emails, _ = emails_on([(404, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        emails.batch(
+            template_key="digest",
+            subject="Hi",
+            html="<p>Hi</p>",
+            recipients=recipients(1),
+        )
+
+    error = raised.value
+    assert (error.code, error.status_code, error.field) == ("not_found", 404, None)
+    assert error.message == (
+        "Batch sends or sending from code aren't available for this project, so "
+        "PostHog sent no email of this request."
+    )
+    assert error.fix == (
+        "Send each recipient on its own with send() and its idempotency_key until "
+        "batch sends are available."
+    )
+    assert "template_id" not in " ".join(
+        filter(None, [error.message, error.why, error.fix])
+    )
+    assert_no_update_advice(error)
+    assert [r.status for r in raised.value.results] == ["failed"]
+
+
+def test_a_404_that_names_a_field_keeps_what_posthog_said():
+    body = {"code": "not_found", "attr": "template_id", "detail": "No such template."}
     emails, _ = emails_on([(404, body, {})])
 
     with pytest.raises(EmailBatchError) as raised:
         batch(emails, recipients(1))
 
-    assert raised.value.code == "not_found"
-    assert raised.value.why is not None and "batch sends" in raised.value.why.lower()
-    assert raised.value.fix == (
-        "Check template_id, or send each email the batch didn't queue with send() "
-        "and its recipient's idempotency_key."
+    error = raised.value
+    assert (error.code, error.field, error.message) == (
+        "not_found",
+        "template_id",
+        "No such template.",
     )
+    assert_no_update_advice(error)
 
 
 def test_an_answer_without_a_result_per_recipient_leaves_the_batch_unconfirmed():
