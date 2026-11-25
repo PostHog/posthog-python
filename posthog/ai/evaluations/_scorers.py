@@ -379,7 +379,7 @@ def _version_params(limit: int, cursor: str | None) -> dict[str, str | int]:
 
 
 class Scorers:
-    """Manage scorers using a personal key with ``llm_analytics`` scopes.
+    """Manage scorers using a key with ``llm_analytics`` scopes.
 
     Access through ``OfflineEvaluations.scorers``. Creating a scorer or version
     is not idempotent: mutations are never retried automatically. If a response

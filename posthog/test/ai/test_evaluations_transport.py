@@ -34,6 +34,37 @@ def response(status=200, payload=None, headers=None):
     return result
 
 
+def test_project_secret_key_authenticates_management_requests():
+    page = {"count": 0, "next": None, "previous": None, "results": []}
+    tags = {"id": EXPERIMENT_ID, "tags": ["ci"]}
+    with (
+        OfflineEvaluations(project_id=123, secret_key="phs_example_only") as client,
+        patch.object(
+            requests.Session,
+            "send",
+            side_effect=[
+                response(payload=page),
+                response(payload=page),
+                response(payload=tags),
+            ],
+        ) as send,
+    ):
+        client.datasets.list()
+        client.scorers.list()
+        client.resume_experiment(EXPERIMENT_ID).set_tags(["ci"])
+
+    requests_sent = [call.args[0] for call in send.call_args_list]
+    assert [(req.method, req.path_url.split("?")[0]) for req in requests_sent] == [
+        ("GET", "/api/projects/123/datasets/"),
+        ("GET", "/api/projects/123/llm_analytics/score_definitions/"),
+        ("PATCH", f"{PATH}{EXPERIMENT_ID}/"),
+    ]
+    assert all(
+        req.headers["Authorization"] == "Bearer phs_example_only"
+        for req in requests_sent
+    )
+
+
 @pytest.fixture
 def transport():
     client = SyncTransport(123, "phx_test_secret")
@@ -357,13 +388,14 @@ def test_closed_client_does_not_send(transport):
 
 
 @pytest.mark.asyncio
-async def test_async_native_request_uses_auth_host_and_preserves_bytes():
+@pytest.mark.parametrize("secret_key", ["phx_example_only", "phs_example_only"])
+async def test_async_native_request_uses_auth_host_and_preserves_bytes(secret_key):
     seen = []
 
     async def handle(request):
         seen.append(request)
         if len(seen) == 1:
-            raise httpx.ReadTimeout("phx_test_secret")
+            raise httpx.ReadTimeout(secret_key)
         return httpx.Response(201, json={"id": "stable-id"})
 
     real_client = httpx.AsyncClient
@@ -374,7 +406,7 @@ async def test_async_native_request_uses_auth_host_and_preserves_bytes():
         ),
     ) as factory:
         transport = AsyncTransport(
-            123, "phx_test_secret", host="https://eu.i.posthog.com", timeout=9
+            123, secret_key, host="https://eu.i.posthog.com", timeout=9
         )
     with patch(
         "posthog.ai.evaluations._transport.asyncio.sleep", new_callable=AsyncMock
@@ -383,7 +415,7 @@ async def test_async_native_request_uses_auth_host_and_preserves_bytes():
     assert len(seen) == 2
     assert seen[0].content == seen[1].content == BODY
     assert str(seen[0].url) == "https://eu.posthog.com" + PATH
-    assert seen[0].headers["Authorization"] == "Bearer phx_test_secret"
+    assert seen[0].headers["Authorization"] == f"Bearer {secret_key}"
     assert factory.call_args.kwargs["follow_redirects"] is False
     assert factory.call_args.kwargs["timeout"] == 9
     sleep.assert_awaited_once()
