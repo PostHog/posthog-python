@@ -1,7 +1,9 @@
 import asyncio
 import copy
+import functools
 import logging
 import re
+import sys
 import time
 import uuid
 from typing import Any, Callable, Dict, List, Optional, Tuple, cast
@@ -1108,8 +1110,77 @@ def _is_mcp_provider_tool(tool: Dict[str, Any]) -> bool:
     )
 
 
+# Credential keys in google-genai `Tool` configs, such as retrieval and Maps
+# auth, search provider API keys, and MCP server headers. Function declarations
+# hold the caller's own parameter schemas and are never masked.
+_GEMINI_CREDENTIAL_KEYS = frozenset(
+    {"api_auth", "apiAuth", "auth_config", "authConfig", "api_key", "apiKey", "headers"}
+)
+_GEMINI_SCHEMA_FIELDS = frozenset({"function_declarations", "functionDeclarations"})
+
+
+def _gemini_tool_class() -> Optional[type]:
+    # Gemini tools only exist once the caller has loaded google-genai, so look it
+    # up instead of importing it on every provider's capture path.
+    return getattr(sys.modules.get("google.genai.types"), "Tool", None)
+
+
+@functools.lru_cache(maxsize=4)
+def _model_field_names(model_class: type) -> frozenset:
+    fields = model_class.model_fields  # type: ignore[attr-defined]
+    return frozenset({*fields, *(f.alias for f in fields.values() if f.alias)})
+
+
+def _gemini_tool_fields() -> frozenset:
+    # Read from the SDK so tools Google adds later are covered too.
+    tool_class = _gemini_tool_class()
+    return _model_field_names(tool_class) if tool_class else frozenset()
+
+
+def _without_gemini_credentials(value: Any) -> Any:
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump()
+        if isinstance(dumped, dict):
+            return _without_gemini_credentials(dumped)
+    if isinstance(value, dict):
+        return {
+            key: (
+                _REDACTED_MCP_CREDENTIAL
+                if key in _GEMINI_CREDENTIAL_KEYS and item is not None
+                else _without_gemini_credentials(item)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_gemini_credentials(item) for item in value]
+    return value
+
+
+def _is_gemini_tool_with_config(tool: Any) -> bool:
+    tool_class = _gemini_tool_class()
+    return (
+        tool_class is not None
+        and isinstance(tool, tool_class)
+        and any(
+            getattr(tool, name, None) is not None
+            for name in tool_class.model_fields  # type: ignore[attr-defined]
+            if name not in _GEMINI_SCHEMA_FIELDS
+        )
+    )
+
+
+def _is_gemini_tool_dict(tool: Dict[str, Any]) -> bool:
+    return any(
+        key in _gemini_tool_fields() and key not in _GEMINI_SCHEMA_FIELDS
+        for key in tool
+    )
+
+
 def _redact_mcp_tool(tool: Any) -> Any:
     if not isinstance(tool, dict):
+        if _is_gemini_tool_with_config(tool):
+            return _redact_mcp_tool(tool.model_dump())
         if getattr(tool, "type", None) != "mcp":
             return tool
         model_dump = getattr(tool, "model_dump", None)
@@ -1127,14 +1198,23 @@ def _redact_mcp_tool(tool: Any) -> Any:
         return _without_mcp_credentials(tool)
     if _is_mcp_provider_tool(tool):
         return {**tool, "args": _without_mcp_credentials(tool["args"])}
+    if _is_gemini_tool_dict(tool):
+        return {
+            key: (
+                value
+                if key in _GEMINI_SCHEMA_FIELDS
+                else _without_gemini_credentials(value)
+            )
+            for key, value in tool.items()
+        }
     return tool
 
 
 def _redact_mcp_tool_credentials(tools: Any) -> Any:
     """
-    Mask the `headers` and `authorization` of MCP tool definitions, which carry
-    credentials for the remote server. Returns copies; the caller's tools are
-    left untouched.
+    Mask the credentials in tool definitions: the `headers` and `authorization`
+    of MCP tools, and the API keys, auth configs, and headers in Gemini tool
+    configs. Returns copies; the caller's tools are left untouched.
     """
     if not isinstance(tools, (list, tuple)):
         return tools
