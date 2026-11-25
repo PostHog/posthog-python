@@ -404,6 +404,36 @@ async def test_context_left_in_arguments_for_raw_handlers():
     assert seen["arguments"] == {"x": 1, "context": "raw handlers see everything"}
 
 
+@pytest.mark.parametrize(
+    "round_result, methods",
+    [
+        (
+            {
+                "resultType": "input_required",
+                "inputRequests": {"confirm": {"method": "elicitation/create"}},
+            },
+            ["elicitation/create"],
+        ),
+        (mcp_types.InputRequiredResult(request_state="state-only"), []),
+    ],
+)
+async def test_input_required_round_on_a_raw_server(round_result, methods):
+    async def on_call_tool(ctx, params):
+        return round_result
+
+    server = Server("raw", on_call_tool=on_call_tool)
+    client = FakeClient()
+    instrument(server, client)
+
+    result = await _call_tool(server, "deploy", {})
+    await _flush()
+
+    assert result == round_result
+    assert not _events(client, "$mcp_tool_call")
+    rounds = _events(client, "$mcp_input_required")
+    assert [r["properties"]["$mcp_input_request_methods"] for r in rounds] == [methods]
+
+
 async def test_raised_error_is_captured_and_reraised():
     server = make_server()
     client = FakeClient()

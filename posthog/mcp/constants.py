@@ -48,6 +48,7 @@ class PostHogMCPAnalyticsEvent:
     # Deprecated: the SDK no longer sends `$identify`.
     IDENTIFY = "$identify"
     INITIALIZE = "$mcp_initialize"
+    INPUT_REQUIRED = "$mcp_input_required"
     MISSING_CAPABILITY = "$mcp_missing_capability"
     PROMPT_GET = "$mcp_prompt_get"
     PROMPTS_LIST = "$mcp_prompts_list"
@@ -84,6 +85,7 @@ class PostHogMCPAnalyticsProperty:
     INTENT_SOURCE = "$mcp_intent_source"
     INPUT_ALIASES_USED = "$mcp_input_aliases_used"
     INPUT_KEYS = "$mcp_input_keys"
+    INPUT_REQUEST_METHODS = "$mcp_input_request_methods"
     LLM_MODEL = "$mcp_llm_model"
     LLM_MODEL_SOURCE = "$mcp_llm_model_source"
     LISTED_TOOL_NAMES = "$mcp_listed_tool_names"

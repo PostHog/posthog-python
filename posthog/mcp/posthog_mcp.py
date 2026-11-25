@@ -14,7 +14,7 @@ from __future__ import annotations
 import copy
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple, Union
 
 from typing_extensions import Unpack
 
@@ -34,6 +34,7 @@ from ._conversation_id import (
 )
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception, http_status
+from ._input_required import bound_input_request_methods
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -104,9 +105,9 @@ _NOT_OWNED = _ConversationOwnership(conversation_id=False, output_instructions=F
 class PostHogMCP(Client):
     """A drop-in posthog ``Client`` with ``capture_tool_call`` / ``capture_initialize``
     / ``capture_tools_list`` / ``capture_missing_capability`` / ``capture_feedback``
-    plus ``prepare_tool_list``, ``prepare_tool_call`` and ``prepare_tool_result``
-    helpers. ``capture`` adds the configured server build to custom events.
-    Other inherited methods work unchanged."""
+    / ``capture_input_required`` plus ``prepare_tool_list``, ``prepare_tool_call``
+    and ``prepare_tool_result`` helpers. ``capture`` adds the configured server
+    build to custom events. Other inherited methods work unchanged."""
 
     def __init__(
         self,
@@ -250,6 +251,53 @@ class PostHogMCP(Client):
                 error if error is not None else f"Tool {tool_name} returned an error"
             )
             event["error_status"] = http_status(error)
+        self._emit(event)
+
+    def capture_input_required(
+        self,
+        tool_name: str,
+        *,
+        input_request_methods: Sequence[str] = (),
+        duration_ms: Optional[float] = None,
+        protocol_version: Optional[str] = None,
+        distinct_id: Optional[str] = None,
+        session_id: Optional[str] = None,
+        conversation_id: Optional[str] = None,
+        client_user_agent: Optional[str] = None,
+        vendor_client: Optional[str] = None,
+        set_properties: Optional[JsonRecord] = None,
+        groups: Optional[Dict[str, str]] = None,
+        properties: Optional[JsonRecord] = None,
+        event_options: Optional[Dict[str, Any]] = None,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Capture a round where the tool answered with an ``input_required``
+        result, such as a confirmation form. Emits ``$mcp_input_required``, not
+        ``$mcp_tool_call``: capture the retry that completes the call with
+        :meth:`capture_tool_call`.
+
+        ``input_request_methods`` is the ``method`` of each of the result's
+        ``inputRequests``, ordered by key, such as ``["elicitation/create"]``.
+        Never pass the requests or the user's answers."""
+        event = self._base_event(
+            MCPAnalyticsEventType.MCP_INPUT_REQUIRED,
+            distinct_id,
+            session_id,
+            conversation_id,
+            set_properties,
+            groups,
+            properties,
+            event_options,
+            timestamp,
+            client_user_agent,
+            vendor_client,
+        )
+        event["resource_name"] = tool_name
+        event["protocol_version"] = protocol_version
+        event["duration"] = duration_ms
+        event["input_request_methods"] = bound_input_request_methods(
+            input_request_methods
+        )
         self._emit(event)
 
     def capture_initialize(

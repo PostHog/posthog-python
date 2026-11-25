@@ -40,6 +40,12 @@ from .feedback import (
     resolve_collect_feedback_options,
     resolve_send_feedback_tool_name,
 )
+from ._input_required import (
+    INPUT_REQUIRED_ERROR_TYPE,
+    LEGACY_INPUT_REQUIRED_MESSAGE,
+    input_request_methods,
+    is_legacy_revision,
+)
 from ._intent import resolve_tool_call_intent, set_event_intent
 from ._internal import (
     MCPAnalyticsData,
@@ -693,6 +699,29 @@ class ToolCallLifecycle:
     ) -> None:
         conversation_id = self._anchored_conversation_id(conversation_id_delivered)
         session_id = await self.prepare_session(conversation_id)
+        failure: Any = error
+        error_type: Optional[str] = None
+        methods = input_request_methods(result)
+        if methods is not None and not is_legacy_revision(self.protocol_version):
+            await record_input_required(
+                self.data,
+                session_id,
+                conversation_id=conversation_id,
+                name=self.name,
+                arguments=self.arguments,
+                methods=methods,
+                duration_ms=duration_ms,
+                client_name=self.client_name,
+                client_version=self.client_version,
+                protocol_version=self.protocol_version,
+                extra=self.extra,
+            )
+            return
+        if methods is not None:
+            # A legacy client cannot receive the round, so the framework answers
+            # with an error and the call ends there.
+            result, error_type = None, INPUT_REQUIRED_ERROR_TYPE
+            failure = error or LEGACY_INPUT_REQUIRED_MESSAGE
         await record_tool_call(
             self.data,
             session_id,
@@ -702,7 +731,8 @@ class ToolCallLifecycle:
             allow_self_reported_model=self.allow_self_reported_model,
             analytics_owned_parameters=self.analytics_owned_parameters,
             result=result,
-            error=error,
+            error=failure,
+            error_type=error_type,
             duration_ms=duration_ms,
             client_name=self.client_name,
             client_version=self.client_version,
@@ -781,6 +811,7 @@ async def record_tool_call(
     allow_self_reported_model: bool = False,
     result: Any = None,
     error: Any = None,
+    error_type: Optional[str] = None,
     duration_ms: Optional[float] = None,
     client_name: Optional[str] = None,
     client_version: Optional[str] = None,
@@ -845,6 +876,7 @@ async def record_tool_call(
         if error is not None:
             event["is_error"] = True
             event["error"] = capture_exception(error)
+            event["error_type"] = error_type
             event["error_status"] = http_status(error)
 
         props = await resolve_event_properties(data, request, extra)
@@ -1458,6 +1490,43 @@ async def record_unknown_tool(
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
         log(f"record_unknown_tool failed (event dropped): {err}")
+
+
+async def record_input_required(
+    data: MCPAnalyticsData,
+    session_id: str,
+    *,
+    conversation_id: Optional[str],
+    name: str,
+    arguments: Optional[Dict[str, Any]],
+    methods: List[str],
+    duration_ms: float,
+    client_name: Optional[str],
+    client_version: Optional[str],
+    protocol_version: Optional[str],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Record an ``input_required`` round as ``$mcp_input_required``. The retry
+    that completes the call is its ``$mcp_tool_call``."""
+    try:
+        event: Dict[str, Any] = {
+            "event_type": MCPAnalyticsEventType.MCP_INPUT_REQUIRED,
+            "session_id": session_id,
+            "conversation_id": conversation_id,
+            "resource_name": name,
+            "duration": duration_ms,
+            "input_request_methods": methods,
+            "client_name": client_name,
+            "client_version": client_version,
+            "protocol_version": protocol_version,
+        }
+        await _apply_event_properties(
+            data, event, build_tool_call_request(name, arguments), extra
+        )
+        stamp_transport_identity(event, extra)
+        fire_and_forget(capture_event(data, event), data)
+    except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
+        log(f"record_input_required failed (event dropped): {err}")
 
 
 async def record_feedback(

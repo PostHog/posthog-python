@@ -216,6 +216,27 @@ async def test_capture_missing_capability():
     )
 
 
+async def test_capture_input_required_records_the_round_not_a_call():
+    client, captured = make_client()
+    client.capture_input_required(
+        "delete_project",
+        input_request_methods=["elicitation/create"],
+        duration_ms=12,
+        session_id="ses_abc",
+    )
+    await _flush()
+
+    assert not _events(captured, "$mcp_tool_call")
+    rounds = _events(captured, "$mcp_input_required")
+    assert len(rounds) == 1
+    props = rounds[0]["properties"]
+    assert props["$mcp_tool_name"] == "delete_project"
+    assert props["$mcp_input_request_methods"] == ["elicitation/create"]
+    assert props["$mcp_duration_ms"] == 12
+    assert props["$session_id"] == "ses_abc"
+    assert "$mcp_resource_name" not in props
+
+
 def test_prepare_tool_call_extracts_intent_and_strips_context():
     client, _ = make_client()
     prepared = client.prepare_tool_call(
