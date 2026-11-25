@@ -861,6 +861,28 @@ def _get_condition_context(
     return effective_properties, effective_bucketing
 
 
+def _with_condition_group_type(condition, condition_aggregation):
+    """Return the condition with each group filter that omits group_type_index
+    reading the condition's group type, as the flags service does."""
+    if condition_aggregation is None:
+        return condition
+    properties = condition.get("properties") or []
+    if not any(
+        prop.get("type") == "group" and prop.get("group_type_index") is None
+        for prop in properties
+    ):
+        return condition
+    return {
+        **condition,
+        "properties": [
+            {**prop, "group_type_index": condition_aggregation}
+            if prop.get("type") == "group" and prop.get("group_type_index") is None
+            else prop
+            for prop in properties
+        ],
+    }
+
+
 def _match_flag_condition(
     flag,
     distinct_id,
@@ -894,7 +916,10 @@ def _match_flag_condition(
     match_result = is_condition_match(
         flag,
         distinct_id,
-        condition,
+        _with_condition_group_type(
+            condition,
+            condition.get("aggregation_group_type_index", flag_aggregation),
+        ),
         effective_properties,
         cohort_properties,
         flags_by_key,

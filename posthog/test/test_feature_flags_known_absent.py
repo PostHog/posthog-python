@@ -60,6 +60,12 @@ def _group_filter(operator, value=None, key="tier", group_type_index=0):
     }
 
 
+def _group_filter_without_index(operator, value=None, key="tier"):
+    prop = _group_filter(operator, value, key=key)
+    del prop["group_type_index"]
+    return prop
+
+
 class TestKnownAbsentLocalEvaluation(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
@@ -394,6 +400,66 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             groups=groups,
             group_properties={"organization": {"tier": "gold"}},
             group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
+    @parameterized.expand(
+        [
+            ("exact", "enterprise", False),
+            ("is_not_set", None, True),
+        ]
+    )
+    def test_group_filter_without_index_reads_the_condition_group_type(
+        self, operator, value, expected
+    ):
+        flag = _flag(
+            "flag",
+            [_group_filter_without_index(operator, value)],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            expected,
+            groups={"organization": "acme"},
+            group_properties={"organization": {"tier": "enterprise"}},
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
+    def test_group_filter_without_index_reads_the_condition_level_group_type(self):
+        flag = {
+            "id": 1,
+            "key": "flag",
+            "active": True,
+            "filters": {
+                "aggregation_group_type_index": None,
+                "groups": [
+                    {
+                        "properties": [_group_filter_without_index("is_not_set")],
+                        "rollout_percentage": 100,
+                        "aggregation_group_type_index": 0,
+                    }
+                ],
+            },
+        }
+        self.assert_local(
+            flag,
+            True,
+            groups={"organization": "acme"},
+            group_properties={"organization": {"tier": "enterprise"}},
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
+    def test_group_filter_without_index_ignores_keys_of_another_group_type(self):
+        flag = _flag(
+            "flag",
+            [_group_filter_without_index("is_not_set")],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            False,
+            groups={"organization": "acme", "project": "proj-1"},
+            group_properties={"organization": {"tier": "enterprise"}},
+            group_property_keys_known_absent={"project": ["tier"]},
         )
 
     def test_group_key_overrides_the_sdk_added_group_key(self):
