@@ -740,8 +740,8 @@ def _compute_flag_locally(
                 reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
             )
 
-        if group_name not in groups:
-            # Group flags are never enabled if `groups` aren't passed in.
+        if not _is_usable_group_key(groups.get(group_name)):
+            # Group flags are never enabled without a usable group key.
             # Don't fall back to `/flags`, since the response will be the same.
             message = f"[FEATURE FLAGS] Can't compute group feature flag: {flag['key']} without group names passed in"
             if warn_on_unknown_groups:
@@ -968,7 +968,7 @@ def _get_condition_context(
     if condition_aggregation != flag_aggregation:
         if condition_aggregation is not None:
             group_name = group_type_mapping.get(str(condition_aggregation))
-            if not group_name or group_name not in groups:
+            if not group_name or not _is_usable_group_key(groups.get(group_name)):
                 log.debug(
                     "Skipping group condition for flag '%s': group type index %s not available",
                     flag.get("key", ""),
@@ -1310,6 +1310,14 @@ def _json_object_to_string(value: dict, reason: UnresolvedFlagReason) -> str:
         for key in sorted(value)
     )
     return "{" + ",".join(items) + "}"
+
+
+def _is_usable_group_key(value) -> bool:
+    """A usable group key is a non-empty string or a number. Anything else,
+    including an omitted group type, counts as no group key."""
+    if isinstance(value, str):
+        return value != ""
+    return isinstance(value, numbers.Number) and not isinstance(value, bool)
 
 
 def _group_key_to_string(value) -> str:

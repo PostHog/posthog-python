@@ -20,6 +20,8 @@ from posthog.feature_flags import (
     _UNHANDLED_OPERATOR_MESSAGE,
     InconclusiveMatchError,
     RequiresServerEvaluation,
+    _compute_flag_locally,
+    _FlagEvaluationContext,
     _get_definition_unresolved_reason,
     _pick_unresolved_reason,
     match_cohort,
@@ -183,10 +185,12 @@ class TestGroupKeyBucketing(unittest.TestCase):
 
     @parameterized.expand([(False,), (True,)])
     @mock.patch("posthog.client.flags")
-    def test_unsupported_group_keys_require_remote_evaluation(self, mixed, patch_flags):
+    def test_non_finite_number_group_keys_require_remote_evaluation(
+        self, mixed, patch_flags
+    ):
         self.set_group_flag(mixed, rollout=100)
         patch_flags.return_value = {"featureFlags": {"group-beta": "remote"}}
-        for group_key in (True, False, None, [], {}, float("inf"), float("nan")):
+        for group_key in (float("inf"), float("nan")):
             with self.subTest(group_key=group_key):
                 self.assertIsNone(
                     self.client.get_feature_flag(
@@ -215,6 +219,266 @@ class TestGroupKeyBucketing(unittest.TestCase):
                 )
                 patch_flags.assert_called_once()
                 patch_flags.reset_mock()
+
+
+# A usable group key is a non-empty string or a number; any other value counts as
+# no group key (sdk-specs#250).
+UNUSABLE_GROUP_KEYS = [
+    ("empty_string", ""),
+    ("none", None),
+    ("true", True),
+    ("false", False),
+    ("list", []),
+    ("dict", {}),
+]
+
+
+class TestUnusableGroupKeys(unittest.TestCase):
+    def setUp(self):
+        self.client = Client(FAKE_TEST_API_KEY, send=False)
+        self.client.group_type_mapping = {"0": "company"}
+        self.group_flag = {
+            "id": 1,
+            "key": "group-beta",
+            "active": True,
+            "filters": {
+                "aggregation_group_type_index": 0,
+                "groups": [{"properties": [], "rollout_percentage": 100}],
+            },
+        }
+        self.mixed_flag = {
+            "id": 2,
+            "key": "mixed-flag",
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "aggregation_group_type_index": 0,
+                        "properties": [],
+                        "rollout_percentage": 100,
+                    },
+                    {
+                        "properties": [
+                            {
+                                "key": "email",
+                                "value": "a@example.com",
+                                "operator": "exact",
+                                "type": "person",
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    },
+                ]
+            },
+        }
+        self.dependent_flag = {
+            "id": 3,
+            "key": "depends-on-group",
+            "active": True,
+            "filters": {
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "group-beta",
+                                "operator": "flag_evaluates_to",
+                                "value": False,
+                                "type": "flag",
+                                "dependency_chain": ["group-beta"],
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ]
+            },
+        }
+        self.client.feature_flags = [
+            self.group_flag,
+            self.mixed_flag,
+            self.dependent_flag,
+        ]
+
+    def tearDown(self):
+        self.client.shutdown()
+
+    @parameterized.expand(UNUSABLE_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_group_flag_is_false_without_remote_evaluation(
+        self, _name, group_key, patch_flags
+    ):
+        patch_flags.return_value = {"featureFlags": {"group-beta": "remote"}}
+        groups = {"company": group_key}
+        group_properties = {"company": {"plan": "enterprise"}}
+        # Resolves the mixed flag's person condition, so the bulk calls need no
+        # server fallback for other flags.
+        person_properties = {"email": "b@example.com"}
+        for only_evaluate_locally in (True, False):
+            with self.subTest(only_evaluate_locally=only_evaluate_locally):
+                self.assertIs(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups=groups,
+                        group_properties=group_properties,
+                        only_evaluate_locally=only_evaluate_locally,
+                        send_feature_flag_events=False,
+                    ),
+                    False,
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    only_evaluate_locally=only_evaluate_locally,
+                )
+                self.assertIs(flags.get_flag("group-beta"), False)
+                all_flags = self.client.get_all_flags(
+                    "user-1",
+                    groups=groups,
+                    person_properties=person_properties,
+                    group_properties=group_properties,
+                    only_evaluate_locally=only_evaluate_locally,
+                )
+                self.assertIs(all_flags["group-beta"], False)
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(UNUSABLE_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_mixed_flag_skips_group_condition(self, _name, group_key, patch_flags):
+        groups = {"company": group_key}
+        for email, expected in (("a@example.com", True), ("b@example.com", False)):
+            with self.subTest(email=email):
+                self.assertIs(
+                    self.client.get_feature_flag(
+                        "mixed-flag",
+                        "user-1",
+                        groups=groups,
+                        person_properties={"email": email},
+                        group_properties={"company": {}},
+                        send_feature_flag_events=False,
+                    ),
+                    expected,
+                )
+                flags = self.client.evaluate_flags(
+                    "user-1",
+                    groups=groups,
+                    person_properties={"email": email},
+                    group_properties={"company": {}},
+                )
+                self.assertIs(flags.get_flag("mixed-flag"), expected)
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(UNUSABLE_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_group_dependency_is_false(self, _name, group_key, patch_flags):
+        self.assertIs(
+            self.client.get_feature_flag(
+                "depends-on-group",
+                "user-1",
+                groups={"company": group_key},
+                group_properties={"company": {}},
+                send_feature_flag_events=False,
+            ),
+            True,
+        )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(UNUSABLE_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_compute_flag_locally_returns_false(self, _name, group_key, patch_flags):
+        context = _FlagEvaluationContext(
+            distinct_id="user-1",
+            groups={"company": group_key},
+            person_properties={"email": "b@example.com"},
+            group_properties={"company": {}},
+            group_type_mapping={"0": "company"},
+            device_id=None,
+        )
+        flags_by_key = {flag["key"]: flag for flag in self.client.feature_flags}
+        for flag in (self.group_flag, self.mixed_flag):
+            with self.subTest(flag=flag["key"]):
+                self.assertIs(
+                    _compute_flag_locally(
+                        flag,
+                        context,
+                        cohort_properties={},
+                        flags_by_key=flags_by_key,
+                        property_matching_version=1,
+                        evaluation_cache={},
+                        warn_on_unknown_groups=False,
+                    ),
+                    False,
+                )
+        patch_flags.assert_not_called()
+
+    @parameterized.expand(UNUSABLE_GROUP_KEYS)
+    @mock.patch("posthog.client.flags")
+    def test_capture_with_feature_flags_does_not_raise(
+        self, _name, group_key, patch_flags
+    ):
+        with mock.patch.object(self.client, "_enqueue") as enqueue:
+            self.client.capture(
+                "event",
+                distinct_id="user-1",
+                groups={"company": group_key},
+                send_feature_flags={"only_evaluate_locally": True},
+            )
+        properties = enqueue.call_args.kwargs["flag_properties"]
+        self.assertIs(properties["$feature/group-beta"], False)
+        self.assertIs(properties["$feature/depends-on-group"], True)
+        patch_flags.assert_not_called()
+
+    @mock.patch("posthog.client.flags")
+    def test_usable_group_keys_still_evaluate(self, patch_flags):
+        patch_flags.return_value = {"featureFlags": {"group-beta": "remote"}}
+        for group_key in ("acme", 42, 0):
+            with self.subTest(group_key=group_key):
+                self.assertIs(
+                    self.client.get_feature_flag(
+                        "group-beta",
+                        "user-1",
+                        groups={"company": group_key},
+                        group_properties={"company": {}},
+                        send_feature_flag_events=False,
+                    ),
+                    True,
+                )
+        patch_flags.assert_not_called()
+        # A usable key without the group properties the flag needs is still
+        # inconclusive and falls back to the server.
+        group_with_property = {
+            **self.group_flag,
+            "filters": {
+                "aggregation_group_type_index": 0,
+                "groups": [
+                    {
+                        "properties": [
+                            {
+                                "key": "plan",
+                                "value": "enterprise",
+                                "operator": "exact",
+                                "type": "group",
+                                "group_type_index": 0,
+                            }
+                        ],
+                        "rollout_percentage": 100,
+                    }
+                ],
+            },
+        }
+        self.client.feature_flags = [group_with_property]
+        self.assertEqual(
+            self.client.get_feature_flag(
+                "group-beta",
+                "user-1",
+                groups={"company": "acme"},
+                group_properties={"company": {"name": "Acme"}},
+                send_feature_flag_events=False,
+            ),
+            "remote",
+        )
+        patch_flags.assert_called_once()
 
 
 class TestNumericOrderingLocalEvaluation(unittest.TestCase):
