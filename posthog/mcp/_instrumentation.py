@@ -521,7 +521,7 @@ async def _open_request(
     extra: Optional[Dict[str, Any]],
     protocol_version: Optional[str],
 ) -> None:
-    if session.source == "request":
+    if session.source == "request" and protocol_version != "2026-07-28":
         _warn_stateless_session_not_wired(data)
     await handle_identify(data, session.session_id, request, extra)
     await _maybe_emit_initialize(
@@ -616,6 +616,7 @@ class ToolCallLifecycle:
                 self.mcp_session_id,
                 token=self.token,
                 over_http=get_request(self.extra) is not None,
+                tool_call=True,
             )
         return self.arrival
 

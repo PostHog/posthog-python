@@ -28,7 +28,7 @@ from ._client_conversation import ClientConversation
 from ._ids import deterministic_prefixed_id, new_prefixed_id
 from .logger import log
 from ._internal import MCPAnalyticsData
-from .session_token import SessionTokenPayload, decode_session_id
+from .session_token import SessionTokenPayload
 
 __all__ = [
     "derive_session_id_from_mcp_session",
@@ -166,13 +166,6 @@ def derive_session_id_from_mcp_session(mcp_session_id: str) -> str:
     return deterministic_prefixed_id("ses", mcp_session_id)
 
 
-def transport_session_id(mcp_session_id: str) -> str:
-    token = decode_session_id(mcp_session_id)
-    if token is not None:
-        return token.session_id
-    return derive_session_id_from_mcp_session(mcp_session_id)
-
-
 def derive_session_id_from_conversation(conversation_id: str) -> str:
     """Derive the SDK session id from the agent's conversation handle.
 
@@ -279,6 +272,7 @@ async def resolve_session_id_with_source(
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
     over_http: bool = False,
+    tool_call: bool = False,
 ) -> ResolvedSession:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
@@ -342,11 +336,15 @@ async def resolve_session_id_with_source(
         # Memory fallback (single-owner transports like stdio). A leftover token
         # session must NOT leak to a credential-less request, so anything that
         # isn't already a generated session starts fresh; generated sessions
-        # persist and roll over on inactivity.
-        if data.session_source != "generated" or _is_stale(data, now):
+        # persist and roll over on inactivity between tool calls.
+        rotate = data.session_source != "generated" or (
+            tool_call and _is_stale(data, now)
+        )
+        if rotate:
             data.session_id = new_session_id()
             data.session_source = "generated"
-        data.last_activity = now
+        if rotate or tool_call:
+            data.last_activity = now
         return ResolvedSession(data.session_id, "generated")
 
 

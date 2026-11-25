@@ -34,6 +34,7 @@ from posthog.mcp.session import (
     derive_session_id_from_mcp_session,
     new_session_id,
     resolve_session_id,
+    resolve_session_id_with_source,
 )
 from posthog.mcp.types import (
     CollectFeedbackOptions,
@@ -370,8 +371,8 @@ async def test_resolve_session_id_rolls_over_after_inactivity():
     data = _session_data()
     before = data.session_id
     data.last_activity = datetime.now(timezone.utc) - timedelta(minutes=31)
-    after = await resolve_session_id(data, None)
-    assert after != before and data.session_source == "generated"
+    after = await resolve_session_id_with_source(data, None, tool_call=True)
+    assert after.session_id != before and data.session_source == "generated"
 
 
 # --- identity cache / merge --------------------------------------------------

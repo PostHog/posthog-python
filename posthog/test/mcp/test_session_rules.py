@@ -1,16 +1,17 @@
 from datetime import timedelta
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 from freezegun import freeze_time
 
-from posthog.mcp import McpAnalytics, PostHogMCP
+from posthog.mcp import McpAnalytics
 from posthog.mcp._instrumentation import start_tools_list_lifecycle
 from posthog.mcp._internal import set_server_tracking_data
 from posthog.mcp import request_headers
 from posthog.mcp.session import derive_session_id_from_mcp_session
-from posthog.mcp.session_token import SessionTokenPayload, encode_session_id
 from posthog.test.mcp._helpers import (
+    MCP_MAJOR,
     FakeClient,
     events_named as _events,
     flush_background as _flush,
@@ -132,6 +133,47 @@ async def test_a_one_client_connection_rotates_after_30_idle_minutes(
     assert (first_session != second_session) is rotated
 
 
+async def test_a_listing_does_not_keep_an_idle_connection_alive():
+    client = FakeClient()
+    data = fresh_data(client, enable_conversation_id=False)
+
+    with freeze_time("2026-11-25 12:00:00", real_asyncio=True) as clock:
+        await run_call(data)
+        clock.tick(timedelta(minutes=29))
+        await start_tools_list_lifecycle(
+            data,
+            request={"method": "tools/list", "params": {}},
+            extra={},
+            mcp_session_id=None,
+            token=None,
+            client_name=None,
+            client_version=None,
+            protocol_version=None,
+        )
+        clock.tick(timedelta(minutes=29))
+        await run_call(data)
+    await _flush()
+
+    (first, _), (second, _) = _sessions(client)
+    assert first != second
+
+
+@pytest.mark.skipif(MCP_MAJOR < 2, reason="2026-07-28 requests need mcp 2.x")
+async def test_a_2026_07_28_request_does_not_ask_for_the_session_middleware():
+    from posthog.test.mcp._helpers_v2 import modern_headers, modern_meta
+    from posthog.test.mcp.test_initialize_handshake import BASE_HEADERS, call_add, fleet
+
+    client = FakeClient()
+    headers = {**BASE_HEADERS, **modern_headers("tools/call", "add")}
+    with mock.patch("posthog.mcp._instrumentation.warn") as warn:
+        async with fleet(client, pods=1) as lb:
+            await call_add(lb, headers, 1, _meta=modern_meta())
+        await _flush()
+
+    assert _sessions(client)[0][1] == "generated"
+    warn.assert_not_called()
+
+
 def _request_context(query=None, headers=None, client_params=None):
     return SimpleNamespace(
         request=SimpleNamespace(headers=headers or {}, query_params=query or {}),
@@ -178,20 +220,3 @@ SSE_ID = "0f1e2d3c4b5a69788796a5b4c3d2e1f0"
 )
 def test_the_transport_session_of_a_request(ctx, expected):
     assert request_headers.read_transport_session_id(ctx) == expected
-
-
-@pytest.mark.parametrize(
-    ("session_id", "expected"),
-    [
-        ("transport-a", derive_session_id_from_mcp_session("transport-a")),
-        (encode_session_id(SessionTokenPayload(session_id="ses_token")), "ses_token"),
-        (None, None),
-    ],
-    ids=["a raw transport id", "a PostHog session token", "none"],
-)
-def test_the_manual_call_step_derives_the_transport_session(session_id, expected):
-    posthog_mcp = PostHogMCP("phc_test", send=False, enable_conversation_id=False)
-
-    call = posthog_mcp.prepare_tool_call("search_docs", {}, session_id=session_id)
-
-    assert call.session_id == expected

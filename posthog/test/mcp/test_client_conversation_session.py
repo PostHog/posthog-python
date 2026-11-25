@@ -791,8 +791,8 @@ async def test_custom_events_carry_the_instance_session_source(session_source, w
         ({"headers": {"user-agent": CHATGPT}}, None, False),
         ({"request_meta": CHATGPT_META}, None, True),
         (
-            {"headers": {"user-agent": CHATGPT}, "session_id": "transport-1"},
-            derive_session_id_from_mcp_session("transport-1"),
+            {"headers": {"user-agent": CHATGPT}, "session_id": "ses_carried"},
+            "ses_carried",
             False,
         ),
     ],

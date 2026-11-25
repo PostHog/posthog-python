@@ -297,11 +297,9 @@ Always advertise the returned list and pass the original application tool to
 Pass `request_meta` whenever the request supplies `_meta`, and `headers` (plus `client_info` from a
 handshake bound to the request, if you hold one) so the SDK can recognize the client; this enables
 recognized client metadata and client conversation ids without changing the arguments sent to the
-tool. Pass the same `headers` to `prepare_tool_list()`. Pass the request's transport session id
-(its `Mcp-Session-Id`) as `session_id`: the SDK derives `$session_id` from it as instrumented
-servers do, and a PostHog session token gives its session unchanged. A client conversation id or
-a valid echoed `conversation_id` takes precedence. Otherwise the transport session stays, and no
-new handle is minted. `prepare_tool_result()` appends a new handle to the result's `content` and mirrors it
+tool. Pass the same `headers` to `prepare_tool_list()`. Pass an existing transport or request
+session as `session_id`. A client conversation id or a valid echoed `conversation_id` takes
+precedence. Otherwise the existing session stays, and no new handle is minted. `prepare_tool_result()` appends a new handle to the result's `content` and mirrors it
 into `structuredContent` when the tool declares an output schema. If the result has no channel
 that can carry a new handle, `conversation_id` is `None` and the derived `session_id` is kept.
 Set `enable_conversation_id=False` on `PostHogMCP` to keep the previous custom-dispatcher
