@@ -4772,18 +4772,17 @@ class Client(object):
         return bool(response)
 
     @staticmethod
-    def _fallback_cache_flag_key(
-        key: str,
+    def _known_absent_listing_digest(
         person_keys_known_absent: Optional[list[str]],
         group_keys_known_absent: Optional[dict[str, list[str]]],
-    ) -> str:
-        """Return the flag key the fallback cache stores this evaluation under.
+    ) -> Optional[str]:
+        """Return the digest the fallback cache stores with this evaluation.
 
-        Known-absent keys can change a flag's value, so a listing gets its own
-        entry. Equivalent listings (any order, repeats) share one; an unlisted
-        call keeps the plain flag key."""
+        Known-absent keys can change a flag's value, so a cached result is only
+        served to a call with the same listing. Equivalent listings (any order,
+        repeats) share a digest; an unlisted call has none."""
         if not person_keys_known_absent and not group_keys_known_absent:
-            return key
+            return None
         listing = json.dumps(
             [
                 sorted(set(person_keys_known_absent or [])),
@@ -4794,20 +4793,18 @@ class Client(object):
             ],
             separators=(",", ":"),
         )
-        digest = _hashlib.sha256(listing.encode("utf-8")).hexdigest()
-        return f"{key}:known_absent:{digest}"
+        return _hashlib.sha256(listing.encode("utf-8")).hexdigest()
 
     def _get_stale_flag_fallback(
-        self, distinct_id: ID_TYPES, key: str, cache_flag_key: Optional[str] = None
+        self, distinct_id: ID_TYPES, key: str, listing_digest: Optional[str] = None
     ) -> Optional[FeatureFlagResult]:
         """Returns a stale cached flag value if available, otherwise None."""
         if self.flag_cache:
-            stale_result = self.flag_cache.get_stale_cached_flag(
-                distinct_id, cache_flag_key or key
+            # Only a result cached with the same listing is served.
+            stale_result = self.flag_cache._get_stale_cached_flag(
+                distinct_id, key, listing_digest=listing_digest
             )
-            # A listing's entry key can equal a literal flag key, so check the
-            # result belongs to the requested flag.
-            if isinstance(stale_result, FeatureFlagResult) and stale_result.key == key:
+            if isinstance(stale_result, FeatureFlagResult):
                 self.log.info(
                     f"[FEATURE FLAGS] Using stale cached value for flag {key}"
                 )
@@ -4874,8 +4871,8 @@ class Client(object):
         )
         local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
-        cache_flag_key = self._fallback_cache_flag_key(
-            key, person_keys_known_absent, group_keys_known_absent
+        listing_digest = self._known_absent_listing_digest(
+            person_keys_known_absent, group_keys_known_absent
         )
 
         if flag_value is not None:
@@ -4906,11 +4903,12 @@ class Client(object):
             if self.flag_cache and cached_flag_result:
                 # The cache rejects invalidated generations, including writes
                 # already in flight when new definitions are published.
-                self.flag_cache.set_cached_flag(
+                self.flag_cache._set_cached_flag(
                     distinct_id,
-                    cache_flag_key,
+                    key,
                     cached_flag_result,
                     local_definition_version,
+                    listing_digest=listing_digest,
                 )
         elif only_evaluate_locally:
             if self.feature_flags is None:
@@ -4963,7 +4961,7 @@ class Client(object):
                     request_id = None
                     evaluated_at = None
                     flag_result = (
-                        self._get_stale_flag_fallback(distinct_id, key, cache_flag_key)
+                        self._get_stale_flag_fallback(distinct_id, key, listing_digest)
                         or flag_result
                     )
                 # The request-start generation is an invalidation boundary, not
@@ -4971,9 +4969,10 @@ class Client(object):
                 elif self.flag_cache and flag_result:
                     self.flag_cache._set_cached_remote_flag(
                         distinct_id,
-                        cache_flag_key,
+                        key,
                         flag_result,
                         local_definition_version,
+                        listing_digest=listing_digest,
                     )
 
                 self.log.debug(
@@ -4988,31 +4987,31 @@ class Client(object):
                 self.log.warning(f"[FEATURE FLAGS] Quota limit exceeded: {e}")
                 feature_flag_error = FeatureFlagError.QUOTA_LIMITED
                 flag_result = self._get_stale_flag_fallback(
-                    distinct_id, key, cache_flag_key
+                    distinct_id, key, listing_digest
                 )
             except RequestsTimeout as e:
                 self.log.warning(f"[FEATURE FLAGS] Request timed out: {e}")
                 feature_flag_error = FeatureFlagError.TIMEOUT
                 flag_result = self._get_stale_flag_fallback(
-                    distinct_id, key, cache_flag_key
+                    distinct_id, key, listing_digest
                 )
             except RequestsConnectionError as e:
                 self.log.warning(f"[FEATURE FLAGS] Connection error: {e}")
                 feature_flag_error = FeatureFlagError.CONNECTION_ERROR
                 flag_result = self._get_stale_flag_fallback(
-                    distinct_id, key, cache_flag_key
+                    distinct_id, key, listing_digest
                 )
             except APIError as e:
                 self.log.warning(f"[FEATURE FLAGS] API error: {e}")
                 feature_flag_error = FeatureFlagError.api_error(e.status)
                 flag_result = self._get_stale_flag_fallback(
-                    distinct_id, key, cache_flag_key
+                    distinct_id, key, listing_digest
                 )
             except Exception as e:
                 self.log.exception(f"[FEATURE FLAGS] Unable to get flag remotely: {e}")
                 feature_flag_error = FeatureFlagError.UNKNOWN_ERROR
                 flag_result = self._get_stale_flag_fallback(
-                    distinct_id, key, cache_flag_key
+                    distinct_id, key, listing_digest
                 )
 
         if send_feature_flag_events:

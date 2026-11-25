@@ -933,6 +933,7 @@ class TestFlagCache(unittest.TestCase):
         class StrictEntry:
             flag_result = "stale-result"
             flag_definition_version = 1
+            _listing_digest = None
 
             def is_stale_but_usable(self, current_time, max_stale_age=3600):
                 assert current_time == 1234

@@ -1,6 +1,8 @@
 """Known-absent property keys in local evaluation and the /flags request body."""
 
 import itertools
+import json
+import time
 import unittest
 from unittest import mock
 
@@ -15,8 +17,9 @@ from posthog.feature_flags import (
     _mark_known_absent_properties,
     match_cohort,
 )
-from posthog.test.test_utils import FAKE_TEST_API_KEY
+from posthog.test.test_utils import FAKE_TEST_API_KEY, FakeRedis
 from posthog.types import UnresolvedFlagReason
+from posthog.utils import RedisFlagCache
 
 pytestmark = [
     pytest.mark.filterwarnings(
@@ -1198,8 +1201,92 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
     def test_listed_result_is_not_served_for_a_flag_named_like_its_cache_entry(self):
         self.client.feature_flags = [self._person_flag]
         self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
-        cache_flag_key = Client._fallback_cache_flag_key("flag", ["plan"], None)
-        self.assertIsNone(self.client.get_feature_flag(cache_flag_key, "user-1"))
+        literal_key = "flag:known_absent:" + Client._known_absent_listing_digest(
+            ["plan"], None
+        )
+        self.assertIsNone(self.client.get_feature_flag(literal_key, "user-1"))
+
+    def _use_redis_cache(self):
+        self.client.flag_cache = RedisFlagCache(FakeRedis())
+        # Loaded definitions keep the client from fetching (and fencing) on read.
+        self.client.feature_flags = []
+        return self.client.flag_cache
+
+    def _cached_entry_count(self):
+        cache = self.client.flag_cache
+        if isinstance(cache, RedisFlagCache):
+            return len([key for key in cache.redis.store if key != cache.version_key])
+        return sum(len(user_flags) for user_flags in cache.cache.values())
+
+    @parameterized.expand([("memory",), ("redis",)])
+    def test_distinct_listings_keep_one_entry_per_flag_and_user(self, backend):
+        if backend == "redis":
+            self._use_redis_cache()
+        self.client.feature_flags = [self._person_flag]
+        for index in range(2000):
+            self.assertIs(
+                self.evaluate(person_property_keys_known_absent=["plan", f"k{index}"]),
+                True,
+            )
+        self.assertEqual(self._cached_entry_count(), 1)
+        # Only the latest listing keeps a fallback.
+        self.client.feature_flags = []
+        self.assertIs(
+            self.evaluate(person_property_keys_known_absent=["k1999", "plan"]), True
+        )
+        self.assertIsNone(
+            self.evaluate(person_property_keys_known_absent=["plan", "k0"])
+        )
+
+    @parameterized.expand([("memory",), ("redis",)])
+    def test_different_listing_gets_no_fallback(self, backend):
+        if backend == "redis":
+            self._use_redis_cache()
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        self.client.feature_flags = []
+        self.assertIsNone(
+            self.evaluate(person_property_keys_known_absent=["plan", "region"])
+        )
+        self.assertIsNone(self.evaluate())
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+
+    @parameterized.expand([("memory",), ("redis",)])
+    def test_unlisted_call_gets_its_fallback(self, backend):
+        if backend == "redis":
+            self._use_redis_cache()
+        self.client.feature_flags = []
+        self.flags.side_effect = None
+        self.flags.return_value = {"featureFlags": {"flag": REMOTE_VALUE}}
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+        self.assertEqual(self._cached_entry_count(), 1)
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+        self.assertIsNone(self.evaluate(person_property_keys_known_absent=["plan"]))
+
+    def test_redis_entry_without_a_listing_digest_reads_as_unlisted(self):
+        cache = self._use_redis_cache()
+        # The entry shape written by SDK versions before listing digests.
+        cache.redis.set(
+            cache._get_cache_key("user-1", "flag"),
+            json.dumps(
+                {
+                    "flag_result": {
+                        "key": "flag",
+                        "enabled": True,
+                        "variant": REMOTE_VALUE,
+                        "payload": None,
+                        "reason": None,
+                    },
+                    "flag_version": self.client.flag_definition_version,
+                    "timestamp": time.time(),
+                    "flag_result_type": "FeatureFlagResult",
+                    "flag_result_schema_version": 1,
+                }
+            ),
+        )
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+        self.assertIsNone(self.evaluate(person_property_keys_known_absent=["plan"]))
 
 
 @pytest.mark.asyncio

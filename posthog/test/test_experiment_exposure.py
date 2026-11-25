@@ -1040,7 +1040,7 @@ def test_a_stale_cached_value_sends_no_exposure(client):
     # value instead. That value did not come from the record, even though it is equal.
     cache = mock.Mock()
     cache._set_cached_remote_flag.side_effect = RuntimeError("cache unavailable")
-    cache.get_stale_cached_flag.return_value = FeatureFlagResult(
+    cache._get_stale_cached_flag.return_value = FeatureFlagResult(
         key=FLAG, enabled=True, variant="annual", payload=None, reason=None
     )
     client.flag_cache = cache
@@ -1049,7 +1049,7 @@ def test_a_stale_cached_value_sends_no_exposure(client):
         result = client.get_feature_flag_result(FLAG, DISTINCT_ID)
 
     assert result is not None and result.get_value() == "annual"
-    cache.get_stale_cached_flag.assert_called_once()
+    cache._get_stale_cached_flag.assert_called_once()
     [called] = events
     assert called.name == FLAG_CALLED
     # The stale value is not attributed to the record's rule or variant.

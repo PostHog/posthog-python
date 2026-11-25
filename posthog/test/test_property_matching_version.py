@@ -308,8 +308,8 @@ def test_in_flight_payload_keeps_matching_snapshot(client, refresh, api, overrid
         ),
         mock.patch.object(
             client.flag_cache,
-            "set_cached_flag",
-            wraps=client.flag_cache.set_cached_flag,
+            "_set_cached_flag",
+            wraps=client.flag_cache._set_cached_flag,
         ) as cache_write,
     ):
         if api == "result":

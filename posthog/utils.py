@@ -336,6 +336,9 @@ class FlagCacheEntry:
         self.timestamp = timestamp or time.time()
         self._snapshot_fingerprint: Optional[str] = None
         self._is_remote = False
+        # Digest of the known-absent listing the result was evaluated with.
+        # None means an unlisted evaluation.
+        self._listing_digest: Optional[str] = None
 
     def is_valid(self, current_time, ttl, current_flag_version):
         time_valid = (current_time - self.timestamp) < ttl
@@ -356,10 +359,19 @@ class FlagCache:
         self._write_lock = threading.Lock()
 
     def _set_cached_remote_flag(
-        self, distinct_id, flag_key, flag_result, flag_definition_version
+        self,
+        distinct_id,
+        flag_key,
+        flag_result,
+        flag_definition_version,
+        listing_digest=None,
     ):
-        self.set_cached_flag(
-            distinct_id, flag_key, flag_result, flag_definition_version
+        self._set_cached_flag(
+            distinct_id,
+            flag_key,
+            flag_result,
+            flag_definition_version,
+            listing_digest=listing_digest,
         )
 
     def _advance_generation(self, version, fingerprint=None):
@@ -378,7 +390,7 @@ class FlagCache:
             return None
 
         entry = user_flags.get(flag_key)
-        if entry is None:
+        if entry is None or entry._listing_digest is not None:
             return None
 
         if self._is_version_current(entry.flag_definition_version) and entry.is_valid(
@@ -390,6 +402,13 @@ class FlagCache:
         return None
 
     def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        return self._get_stale_cached_flag(
+            distinct_id, flag_key, max_stale_age=max_stale_age
+        )
+
+    def _get_stale_cached_flag(
+        self, distinct_id, flag_key, max_stale_age=None, listing_digest=None
+    ):
         if max_stale_age is None:
             max_stale_age = CACHE_STALE_TTL
 
@@ -400,7 +419,7 @@ class FlagCache:
             return None
 
         entry = user_flags.get(flag_key)
-        if entry is None:
+        if entry is None or entry._listing_digest != listing_digest:
             return None
 
         if self._is_version_current(
@@ -412,6 +431,18 @@ class FlagCache:
 
     def set_cached_flag(
         self, distinct_id, flag_key, flag_result, flag_definition_version
+    ):
+        self._set_cached_flag(
+            distinct_id, flag_key, flag_result, flag_definition_version
+        )
+
+    def _set_cached_flag(
+        self,
+        distinct_id,
+        flag_key,
+        flag_result,
+        flag_definition_version,
+        listing_digest=None,
     ):
         with self._write_lock:
             if not self._is_version_current(flag_definition_version):
@@ -431,8 +462,9 @@ class FlagCache:
                 if self._is_version_current(entry.flag_definition_version)
             }
 
-            # Store the flag result
+            # One entry per user and flag: a new listing replaces the old one.
             entry = FlagCacheEntry(flag_result, flag_definition_version)
+            entry._listing_digest = listing_digest
             self.cache[distinct_id][flag_key] = entry
             self.access_times[distinct_id] = current_time
 
@@ -530,6 +562,7 @@ class RedisFlagCache:
         timestamp=None,
         fingerprint=None,
         is_remote=False,
+        listing_digest=None,
     ):
         if timestamp is None:
             timestamp = time.time()
@@ -546,6 +579,9 @@ class RedisFlagCache:
             entry["snapshot_fingerprint"] = fingerprint
         if is_remote:
             entry["evaluation_source"] = "remote"
+        if listing_digest is not None:
+            # Optional field: entries without it read as unlisted.
+            entry["known_absent_listing_digest"] = listing_digest
         if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
             entry["flag_result_type"] = _FEATURE_FLAG_RESULT_TYPE
@@ -570,6 +606,7 @@ class RedisFlagCache:
             )
             result._snapshot_fingerprint = entry.get("snapshot_fingerprint")
             result._is_remote = entry.get("evaluation_source") == "remote"
+            result._listing_digest = entry.get("known_absent_listing_digest")
             return result
         except (json.JSONDecodeError, KeyError, TypeError, ValueError):
             # If deserialization fails, treat as cache miss
@@ -582,7 +619,11 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if entry and self._is_entry_current(entry):
+                if (
+                    entry
+                    and entry._listing_digest is None
+                    and self._is_entry_current(entry)
+                ):
                     if self._snapshot is not None:
                         valid = current_flag_version == self._snapshot[
                             0
@@ -600,6 +641,13 @@ class RedisFlagCache:
             return None
 
     def get_stale_cached_flag(self, distinct_id, flag_key, max_stale_age=None):
+        return self._get_stale_cached_flag(
+            distinct_id, flag_key, max_stale_age=max_stale_age
+        )
+
+    def _get_stale_cached_flag(
+        self, distinct_id, flag_key, max_stale_age=None, listing_digest=None
+    ):
         try:
             if max_stale_age is None:
                 max_stale_age = self.stale_ttl
@@ -611,6 +659,7 @@ class RedisFlagCache:
                 entry = self._deserialize_entry(data)
                 if (
                     entry
+                    and entry._listing_digest == listing_digest
                     and self._is_entry_current(entry)
                     and entry.is_stale_but_usable(time.time(), max_stale_age)
                 ):
@@ -629,10 +678,20 @@ class RedisFlagCache:
         )
 
     def _set_cached_remote_flag(
-        self, distinct_id, flag_key, flag_result, flag_definition_version
+        self,
+        distinct_id,
+        flag_key,
+        flag_result,
+        flag_definition_version,
+        listing_digest=None,
     ):
         self._set_cached_flag(
-            distinct_id, flag_key, flag_result, flag_definition_version, is_remote=True
+            distinct_id,
+            flag_key,
+            flag_result,
+            flag_definition_version,
+            is_remote=True,
+            listing_digest=listing_digest,
         )
 
     def _set_cached_flag(
@@ -642,6 +701,7 @@ class RedisFlagCache:
         flag_result,
         flag_definition_version,
         is_remote=False,
+        listing_digest=None,
     ):
         try:
             cache_key = self._get_cache_key(distinct_id, flag_key)
@@ -658,6 +718,7 @@ class RedisFlagCache:
                 flag_definition_version,
                 fingerprint=fingerprint,
                 is_remote=is_remote,
+                listing_digest=listing_digest,
             )
 
             # Serialize writes so an old in-flight SETEX cannot overwrite a newer
