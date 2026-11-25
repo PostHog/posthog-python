@@ -1166,8 +1166,11 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
         self.assertIsNone(self.evaluate(groups=self._groups))
 
     def test_equivalent_listings_share_a_cached_result(self):
-        self.client.feature_flags = [self._group_flag]
-        self.assertIs(
+        # An unimplemented operator stays inconclusive, so both calls go remote.
+        self.client.feature_flags = [_flag("flag", [_person_filter("between", [1, 2])])]
+        self.flags.side_effect = None
+        self.flags.return_value = {"featureFlags": {"flag": REMOTE_VALUE}}
+        self.assertEqual(
             self.evaluate(
                 groups=self._groups,
                 person_property_keys_known_absent=["plan", "region"],
@@ -1176,9 +1179,10 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
                     "project": ["name"],
                 },
             ),
-            True,
+            REMOTE_VALUE,
         )
-        self.assertIs(
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
+        self.assertEqual(
             self.evaluate(
                 groups=self._groups,
                 person_property_keys_known_absent=["region", "plan", "plan"],
@@ -1187,8 +1191,15 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
                     "organization": ["size", "tier", "tier"],
                 },
             ),
-            True,
+            REMOTE_VALUE,
         )
+        self.assertEqual(self.flags.call_count, 2)
+
+    def test_listed_result_is_not_served_for_a_flag_named_like_its_cache_entry(self):
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        cache_flag_key = Client._fallback_cache_flag_key("flag", ["plan"], None)
+        self.assertIsNone(self.client.get_feature_flag(cache_flag_key, "user-1"))
 
 
 @pytest.mark.asyncio

@@ -4805,7 +4805,9 @@ class Client(object):
             stale_result = self.flag_cache.get_stale_cached_flag(
                 distinct_id, cache_flag_key or key
             )
-            if isinstance(stale_result, FeatureFlagResult):
+            # A listing's entry key can equal a literal flag key, so check the
+            # result belongs to the requested flag.
+            if isinstance(stale_result, FeatureFlagResult) and stale_result.key == key:
                 self.log.info(
                     f"[FEATURE FLAGS] Using stale cached value for flag {key}"
                 )
