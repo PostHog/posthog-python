@@ -9,7 +9,7 @@ from parameterized import parameterized
 
 from posthog import AsyncPosthog
 from posthog.client import Client
-from posthog.request import GetResponse
+from posthog.request import GetResponse, RequestsTimeout
 from posthog.feature_flags import (
     InconclusiveMatchError,
     _mark_known_absent_properties,
@@ -1112,6 +1112,83 @@ class TestKnownAbsentRemoteBody(unittest.TestCase):
         body = self.flags.call_args.kwargs
         self.assertEqual(body["person_property_keys_known_absent"], ["plan"])
         self.assertEqual(body["group_property_keys_known_absent"], {"org": ["tier"]})
+
+
+class TestKnownAbsentFallbackCache(unittest.TestCase):
+    """The outage fallback cache keeps results apart by the listed keys, since a
+    listing can change a flag's value."""
+
+    def setUp(self):
+        self.client = Client(
+            FAKE_TEST_API_KEY,
+            secret_key="test",
+            flag_fallback_cache_url="memory://local/?ttl=300&size=100",
+        )
+        self.client.capture = mock.Mock()
+        self.client.group_type_mapping = {"0": "organization"}
+        flags_patch = mock.patch("posthog.client.flags")
+        self.flags = flags_patch.start()
+        self.addCleanup(flags_patch.stop)
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
+
+    def evaluate(self, **kwargs):
+        return self.client.get_feature_flag("flag", "user-1", **kwargs)
+
+    _person_flag = _flag("flag", [_person_filter("is_not_set")])
+    _group_flag = _flag(
+        "flag", [_group_filter("is_not_set")], aggregation_group_type_index=0
+    )
+    _groups = {"organization": "org-1"}
+
+    def test_person_listing_result_is_not_served_to_an_unlisted_call(self):
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        self.assertIsNone(self.evaluate())
+
+    def test_unlisted_result_is_not_served_to_a_person_listing_call(self):
+        # An unimplemented operator stays inconclusive even for a listed key.
+        self.client.feature_flags = [_flag("flag", [_person_filter("between", [1, 2])])]
+        self.flags.side_effect = None
+        self.flags.return_value = {"featureFlags": {"flag": REMOTE_VALUE}}
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
+        self.assertIsNone(self.evaluate(person_property_keys_known_absent=["plan"]))
+
+    def test_group_listing_result_is_not_served_to_an_unlisted_call(self):
+        self.client.feature_flags = [self._group_flag]
+        self.assertIs(
+            self.evaluate(
+                groups=self._groups,
+                group_property_keys_known_absent={"organization": ["tier"]},
+            ),
+            True,
+        )
+        self.assertIsNone(self.evaluate(groups=self._groups))
+
+    def test_equivalent_listings_share_a_cached_result(self):
+        self.client.feature_flags = [self._group_flag]
+        self.assertIs(
+            self.evaluate(
+                groups=self._groups,
+                person_property_keys_known_absent=["plan", "region"],
+                group_property_keys_known_absent={
+                    "organization": ["tier", "size"],
+                    "project": ["name"],
+                },
+            ),
+            True,
+        )
+        self.assertIs(
+            self.evaluate(
+                groups=self._groups,
+                person_property_keys_known_absent=["region", "plan", "plan"],
+                group_property_keys_known_absent={
+                    "project": ["name"],
+                    "organization": ["size", "tier", "tier"],
+                },
+            ),
+            True,
+        )
 
 
 @pytest.mark.asyncio
