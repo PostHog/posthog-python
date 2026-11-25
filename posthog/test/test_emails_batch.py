@@ -67,7 +67,10 @@ class BatchPostHog(requests.adapters.BaseAdapter):
         status, body, headers = answer
         reply = requests.Response()
         reply.status_code = status
-        reply._content = b"" if body is None else json.dumps(body).encode()
+        if isinstance(body, bytes):
+            reply._content = body
+        else:
+            reply._content = b"" if body is None else json.dumps(body).encode()
         reply.headers.update(headers)
         reply.request = request
         return reply
@@ -768,7 +771,7 @@ def test_a_refusal_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
 
 @pytest.mark.parametrize(
     "body",
-    [None, "<html>Conflict</html>", {"code": []}],
+    [None, b"<html>Conflict</html>", {"code": []}],
     ids=["lost", "not_json", "code_not_text"],
 )
 def test_a_409_without_a_readable_code_leaves_the_batch_unconfirmed(body):
