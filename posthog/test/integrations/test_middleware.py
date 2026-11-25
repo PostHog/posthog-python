@@ -5,6 +5,7 @@ from posthog.contexts import (
     get_tags,
 )
 import unittest
+from contextlib import contextmanager
 from unittest.mock import Mock, patch
 import asyncio
 from parameterized import parameterized
@@ -869,6 +870,7 @@ class TestPosthogContextMiddlewareHybrid(unittest.TestCase):
 
 
 class TestCoroutineDetectionWithoutAsgiref(unittest.TestCase):
+    @contextmanager
     def _load_fallback(self):
         import builtins
         import importlib
@@ -884,21 +886,21 @@ class TestCoroutineDetectionWithoutAsgiref(unittest.TestCase):
             return real_import(name, *args, **kwargs)
 
         self.addCleanup(importlib.reload, module)
-        with (
-            patch("builtins.__import__", side_effect=import_without_asgiref),
-            warnings.catch_warnings(),
-        ):
+        # Python 3.14 warns when asyncio.iscoroutinefunction is called, not when
+        # it is imported, so the filter must stay active during the calls.
+        with warnings.catch_warnings():
             warnings.simplefilter("error", DeprecationWarning)
-            return importlib.reload(module).iscoroutinefunction
+            with patch("builtins.__import__", side_effect=import_without_asgiref):
+                iscoroutinefunction = importlib.reload(module).iscoroutinefunction
+            yield iscoroutinefunction
 
     def test_detects_async_functions(self):
-        iscoroutinefunction = self._load_fallback()
-
         async def view(request):
             return request
 
-        self.assertTrue(iscoroutinefunction(view))
-        self.assertFalse(iscoroutinefunction(lambda request: request))
+        with self._load_fallback() as iscoroutinefunction:
+            self.assertTrue(iscoroutinefunction(view))
+            self.assertFalse(iscoroutinefunction(lambda request: request))
 
     def test_detects_callables_marked_by_legacy_asgiref(self):
         marker = getattr(asyncio.coroutines, "_is_coroutine", None)
@@ -912,7 +914,8 @@ class TestCoroutineDetectionWithoutAsgiref(unittest.TestCase):
         handler = Handler()
         handler._is_coroutine = marker
 
-        self.assertTrue(self._load_fallback()(handler))
+        with self._load_fallback() as iscoroutinefunction:
+            self.assertTrue(iscoroutinefunction(handler))
 
 
 if __name__ == "__main__":
