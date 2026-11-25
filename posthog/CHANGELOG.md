@@ -1,5 +1,11 @@
 # posthog
 
+## 8.2.4 — 2026-11-25
+
+### Patch changes
+
+- [187b3771](https://github.com/posthog/posthog-python/commit/187b377174b9db1212f84f9a838f33e72d15f607) Spans that `PostHogSpanProcessor` and `PostHogTraceExporter` redact, in privacy mode or to mask remote MCP credentials, now keep the counts of attributes, events and links the SDK dropped under its span limits. The redacted copy previously reported 0, as the context copy did before #1266. — Thanks @fahad2932 for your first contribution 🎉!
+
 ## 8.2.3 — 2026-11-24
 
 ### Patch changes
