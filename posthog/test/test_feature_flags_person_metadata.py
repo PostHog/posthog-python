@@ -169,6 +169,16 @@ class TestPersonMetadataFilters(unittest.TestCase):
                 {},
             ),
             (
+                "empty_type",
+                _flag(_condition([{**FIRST_SEEN_FILTER, "type": ""}])),
+                {},
+            ),
+            (
+                "empty_type_cohort_leaf",
+                IN_COHORT_FLAG,
+                _cohort({**FIRST_SEEN_FILTER, "type": ""}),
+            ),
+            (
                 "negated_cohort_leaf",
                 IN_COHORT_FLAG,
                 _cohort({**FIRST_SEEN_FILTER, "negation": True}),

@@ -815,10 +815,10 @@ _PROPERTY_FILTER_TYPES = ("person", "group")
 
 
 def _assert_property_filter_type_supported(prop) -> None:
-    property_type = prop.get("type")
-    if property_type and property_type not in _PROPERTY_FILTER_TYPES:
+    # Only a filter without a type is a person filter. An empty type is unsupported.
+    if "type" in prop and prop["type"] not in _PROPERTY_FILTER_TYPES:
         raise _RequiresServerFilter(
-            f"Can't evaluate a '{property_type}' filter on '{prop.get('key')}' locally",
+            f"Can't evaluate a '{prop['type']}' filter on '{prop.get('key')}' locally",
             reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
         )
 
