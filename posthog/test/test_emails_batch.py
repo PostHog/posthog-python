@@ -766,6 +766,28 @@ def test_a_refusal_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
     assert len(posthog.requests) == 2
 
 
+@pytest.mark.parametrize(
+    "body",
+    [None, "<html>Conflict</html>", {"code": []}],
+    ids=["lost", "not_json", "code_not_text"],
+)
+def test_a_409_without_a_readable_code_leaves_the_batch_unconfirmed(body):
+    emails, posthog = emails_on([(409, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    results = raised.value.results
+    assert [(r.status, r.idempotency_key) for r in results] == [
+        ("unconfirmed", "key-0"),
+        ("unconfirmed", "key-1"),
+    ]
+    error = results[0].error
+    assert error is not None and error.fix is not None
+    assert "same idempotency_key" in error.fix
+    assert len(posthog.requests) == 1
+
+
 def test_an_in_flight_code_on_a_status_other_than_409_is_failed():
     emails, posthog = emails_on([whole_call(401, "idempotency_key_in_flight")])
 

@@ -1937,7 +1937,12 @@ class _BatchRun:
             failure = _batch_response_error(
                 fields, status, retry_after_header, len(self.members)
             )
-            if status >= 500 or _held_by_another_request(failure):
+            unreadable_conflict = status == 409 and not _text(fields.get("code"))
+            if (
+                status >= 500
+                or _held_by_another_request(failure)
+                or unreadable_conflict
+            ):
                 self.lost()
             raise failure
         slots = fields.get("results")
