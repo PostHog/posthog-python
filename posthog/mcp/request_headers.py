@@ -33,6 +33,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from .session_token import read_mcp_session_header
+
 __all__ = ["get_request_headers"]
 
 RequestHeaderBag = Dict[str, str]
@@ -70,6 +72,39 @@ def get_request_headers(extra: Any) -> Optional[RequestHeaderBag]:
     if source is None:
         return None
     return _to_header_bag(source)
+
+
+def read_transport_session_id(extra: Any, *, handshake: bool = False) -> Optional[str]:
+    """The transport session a request carries: its ``Mcp-Session-Id`` header, or
+    on the deprecated SSE transport the ``session_id`` query parameter.
+
+    The query parameter counts only on a connection that completed a legacy
+    handshake, or for the ``initialize`` request itself (``handshake``). The SSE
+    transport checks it against its open streams, while a stateless request never
+    completes a handshake, so adding the parameter to a request picks no session."""
+    header = read_mcp_session_header(get_request_headers(extra))
+    if header is not None:
+        return header
+    ctx = extra.get("ctx") if isinstance(extra, dict) else extra
+    try:
+        if not (handshake or _completed_a_handshake(ctx)):
+            return None
+        params = getattr(get_request(ctx), "query_params", None)
+        value = params.get("session_id") if params is not None else None
+    except Exception:  # noqa: BLE001 - a transport probe must never break a tool call
+        return None
+    return value if isinstance(value, str) and value else None
+
+
+def _completed_a_handshake(ctx: Any) -> bool:
+    params = getattr(getattr(ctx, "session", None), "client_params", None)
+    if params is None:
+        return False
+    # mcp 2.x builds client params from a 2026-07-28 request's own envelope.
+    version = getattr(params, "protocol_version", None) or getattr(
+        params, "protocolVersion", None
+    )
+    return version != "2026-07-28"
 
 
 def _to_header_bag(source: Any) -> Optional[RequestHeaderBag]:

@@ -51,6 +51,7 @@ from ._model_parameters import (
 from ._output_instructions import mirror_instructions_into_structured_content
 from ._tool_input import get_registered_tool_input_schema
 from .logger import log
+from .request_headers import read_transport_session_id
 from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
@@ -91,7 +92,7 @@ def _wrap_tool_manager_call(server: Any, data: MCPAnalyticsData) -> None:
     ) -> Any:
         client_name, client_version = _client_info(context)
         protocol_version = _protocol_version(context)
-        mcp_session_id = _mcp_session_id(context)
+        mcp_session_id = read_transport_session_id(_tool_call_request_context(context))
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
                 mcp_session_id, client_name, client_version, protocol_version
@@ -263,7 +264,7 @@ def _wrap_list_tools_handler(server: Any, data: MCPAnalyticsData) -> None:
 
         client_name, client_version = _low_level_client_info(server)
         protocol_version = _low_level_protocol_version(server)
-        mcp_session_id = _low_level_session_id(server)
+        mcp_session_id = read_transport_session_id(_low_level_request_context(server))
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
                 mcp_session_id, client_name, client_version, protocol_version
@@ -437,18 +438,6 @@ def _low_level_client_info(server: Any) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def _low_level_session_id(server: Any) -> Optional[str]:
-    ctx = _low_level_request_context(server)
-    try:
-        request = getattr(ctx, "request", None)
-        headers = getattr(request, "headers", None)
-        if headers is not None:
-            return headers.get("mcp-session-id")
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
 def _low_level_protocol_version(server: Any) -> Optional[str]:
     ctx = _low_level_request_context(server)
     try:
@@ -475,20 +464,6 @@ def _protocol_version(context: Any) -> Optional[str]:
         client_params = context.request_context.session.client_params
         if client_params:
             return client_params.protocolVersion
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
-def _mcp_session_id(context: Any) -> Optional[str]:
-    """Best-effort transport session id (e.g. the ``Mcp-Session-Id`` header on the
-    streamable-HTTP transport). Returns ``None`` for stdio, where the SDK-generated
-    session is used instead."""
-    try:
-        request = getattr(context.request_context, "request", None)
-        headers = getattr(request, "headers", None)
-        if headers is not None:
-            return headers.get("mcp-session-id")
     except Exception:  # noqa: BLE001
         pass
     return None

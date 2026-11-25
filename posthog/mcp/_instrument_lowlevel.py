@@ -56,6 +56,7 @@ from ._model_parameters import can_inject_model_parameter, is_capture_model_enab
 from ._output_instructions import mirror_instructions_into_structured_content
 from ._raised_tool_error import raised_tool_error, wrap_error_result
 from .logger import log, warn
+from .request_headers import read_transport_session_id
 from .tools import get_more_tools_result_text
 
 _WRAPPED_FLAG = "__posthog_mcp_wrapped__"
@@ -127,7 +128,7 @@ def _wrap_resource_request(
     async def handler(req: Any) -> Any:
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
-        mcp_session_id = _mcp_session_id(server)
+        mcp_session_id = read_transport_session_id(_request_context(server))
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
                 mcp_session_id, client_name, client_version, protocol_version
@@ -214,7 +215,7 @@ def _wrap_call_tool(
             )
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
-        mcp_session_id = _mcp_session_id(server)
+        mcp_session_id = read_transport_session_id(_request_context(server))
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
                 mcp_session_id, client_name, client_version, protocol_version
@@ -495,7 +496,7 @@ def _wrap_list_tools(
 
         client_name, client_version = _client_info(server)
         protocol_version = _protocol_version(server)
-        mcp_session_id = _mcp_session_id(server)
+        mcp_session_id = read_transport_session_id(_request_context(server))
         token, client_name, client_version, protocol_version = (
             resolve_session_and_client(
                 mcp_session_id, client_name, client_version, protocol_version
@@ -940,18 +941,6 @@ def _protocol_version(server: Any) -> Optional[str]:
         client_params = ctx.session.client_params
         if client_params:
             return client_params.protocolVersion
-    except Exception:  # noqa: BLE001
-        pass
-    return None
-
-
-def _mcp_session_id(server: Any) -> Optional[str]:
-    ctx = _request_context(server)
-    try:
-        request = getattr(ctx, "request", None)
-        headers = getattr(request, "headers", None)
-        if headers is not None:
-            return headers.get("mcp-session-id")
     except Exception:  # noqa: BLE001
         pass
     return None

@@ -80,6 +80,7 @@ from .session import (
     derive_session_id_from_client_conversation,
     derive_session_id_from_conversation,
     new_session_id,
+    transport_session_id,
 )
 from .tools import build_report_missing_descriptor
 from .types import (
@@ -642,9 +643,11 @@ class PostHogMCP(Client):
         the feedback tool's name is dispatched normally instead of being flagged
         as feedback.
 
-        ``session_id`` is a session carried by the request or transport. A valid
-        echoed ``conversation_id`` takes precedence. Otherwise the carried session
-        stays, and no new handle is minted.
+        ``session_id`` is the request's transport session id, such as its
+        ``Mcp-Session-Id``. A PostHog session token gives its session unchanged,
+        and any other id is derived, as instrumented servers derive it. A valid
+        echoed ``conversation_id`` takes precedence. Otherwise the transport
+        session stays, and no new handle is minted.
 
         ``request_meta`` is the request's ``_meta``. With the request's
         ``headers`` (its ``User-Agent``) or ``client_info`` (the ``initialize``
@@ -774,6 +777,8 @@ class PostHogMCP(Client):
         )
         handle_free = client is not None and client.handle_free
         client_conversation = read_client_conversation(client, request_meta)
+        if session_id:
+            session_id = transport_session_id(session_id)
         # Same order as instrument(): the client's id, then the handle, then the
         # carried session. A carried session or a handle-free client is minted
         # no handle.

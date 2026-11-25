@@ -360,13 +360,6 @@ async def test_resolve_session_id_uses_mcp_session():
     assert data.session_source == "mcp"
 
 
-async def test_resolve_session_id_keeps_mcp_session_without_fragmenting():
-    data = _session_data()
-    first = await resolve_session_id(data, "mcp-abc")
-    # a later request with no MCP session id must not fragment the session
-    assert await resolve_session_id(data, None) == first
-
-
 async def test_resolve_session_id_no_rollover_within_timeout():
     data = _session_data()
     before = data.session_id

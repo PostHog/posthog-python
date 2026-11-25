@@ -686,7 +686,7 @@ async def test_sessionless_http_calls_without_a_client_id_get_their_own_sessions
     assert bob["properties"]["$set"] == {"bob_only": "present"}
     assert bob["properties"]["$mcp_session_source"] == "generated"
     assert _events(client, "$mcp_initialize") == []
-    assert data.warned_no_stateless_session is (query is None)
+    assert data.warned_no_stateless_session is True
 
 
 async def test_a_one_client_connection_keeps_its_session_without_a_client_id():
@@ -791,8 +791,8 @@ async def test_custom_events_carry_the_instance_session_source(session_source, w
         ({"headers": {"user-agent": CHATGPT}}, None, False),
         ({"request_meta": CHATGPT_META}, None, True),
         (
-            {"headers": {"user-agent": CHATGPT}, "session_id": "ses_carried"},
-            "ses_carried",
+            {"headers": {"user-agent": CHATGPT}, "session_id": "transport-1"},
+            derive_session_id_from_mcp_session("transport-1"),
             False,
         ),
     ],
@@ -1057,12 +1057,11 @@ async def test_a_request_session_leaves_a_transport_session_in_place():
     data = MCPAnalyticsData(options=MCPAnalyticsOptions(), session_id="ses_init")
     transport = await resolve_session_id_with_source(data, "mcp-1")
 
-    one_request = await resolve_session_id_with_source(
-        data, None, request_session_id="ses_one_request"
-    )
+    one_request = await resolve_session_id_with_source(data, None, over_http=True)
 
-    assert one_request == ("ses_one_request", "request")
-    assert await resolve_session_id_with_source(data, None) == transport
+    assert one_request.source == "request"
+    assert one_request.session_id != transport.session_id
+    assert (data.session_id, data.session_source) == transport
 
 
 @pytest.mark.parametrize(

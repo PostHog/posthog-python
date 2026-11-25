@@ -28,7 +28,7 @@ from ._client_conversation import ClientConversation
 from ._ids import deterministic_prefixed_id, new_prefixed_id
 from .logger import log
 from ._internal import MCPAnalyticsData
-from .session_token import SessionTokenPayload
+from .session_token import SessionTokenPayload, decode_session_id
 
 __all__ = [
     "derive_session_id_from_mcp_session",
@@ -166,6 +166,15 @@ def derive_session_id_from_mcp_session(mcp_session_id: str) -> str:
     return deterministic_prefixed_id("ses", mcp_session_id)
 
 
+def transport_session_id(mcp_session_id: str) -> str:
+    """The session a transport session id names: a PostHog session token's ``sid``
+    unchanged, else the id derived."""
+    token = decode_session_id(mcp_session_id)
+    if token is not None:
+        return token.session_id
+    return derive_session_id_from_mcp_session(mcp_session_id)
+
+
 def derive_session_id_from_conversation(conversation_id: str) -> str:
     """Derive the SDK session id from the agent's conversation handle.
 
@@ -199,7 +208,7 @@ async def resolve_session_id(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    request_session_id: Optional[str] = None,
+    over_http: bool = False,
 ) -> str:
     """The session id for this request. See :func:`resolve_session_id_with_source`,
     which this wraps -- callers that need to know *where* the session came from
@@ -210,7 +219,7 @@ async def resolve_session_id(
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
-        request_session_id=request_session_id,
+        over_http=over_http,
     )
     return session_id
 
@@ -219,6 +228,7 @@ async def handshake_session(
     data: MCPAnalyticsData,
     mcp_session_id: Optional[str],
     token: Optional[SessionTokenPayload],
+    over_http: bool = False,
 ) -> ResolvedSession:
     """The session an ``initialize`` belongs to: the one the client's later requests
     resolve to through :func:`resolve_session_id_with_source`.
@@ -226,14 +236,14 @@ async def handshake_session(
     A token or a transport session id gives it directly, so this leaves the server's
     shared session alone. One server serves many clients, and a handshake must not
     move the session that ``McpAnalytics.capture()`` reads. Without either, the
-    session is this process's own, which only the resolver can hand out."""
+    session is the connection's own, which only the resolver can hand out."""
     if token is not None:
         return ResolvedSession(token.session_id, "token")
     if mcp_session_id:
         return ResolvedSession(
             derive_session_id_from_mcp_session(mcp_session_id), "mcp"
         )
-    return await resolve_session_id_with_source(data, None)
+    return await resolve_session_id_with_source(data, None, over_http=over_http)
 
 
 async def handshake_session_id(
@@ -270,7 +280,7 @@ async def resolve_session_id_with_source(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    request_session_id: Optional[str] = None,
+    over_http: bool = False,
 ) -> ResolvedSession:
     """Resolve the session id for a request. Mutates per-server state under a lock
     so concurrent async requests can't race on session rotation.
@@ -304,9 +314,9 @@ async def resolve_session_id_with_source(
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
 
-    ``request_session_id`` is a session the caller reserved for one HTTP request
-    in place of process memory, which belongs to a one-client connection and on a
-    shared HTTP server would group unrelated clients.
+    An HTTP request carrying none of these gets a session of its own (rule 4):
+    process memory belongs to a one-client connection, and on a shared HTTP server
+    it would group unrelated clients.
     """
     anchored = resolve_anchored_session(conversation_id, client_conversation)
     if anchored is not None:
@@ -326,21 +336,14 @@ async def resolve_session_id_with_source(
 
         if mcp_session_id:
             data.session_id = derive_session_id_from_mcp_session(mcp_session_id)
-            data.last_mcp_session_id = mcp_session_id
             data.session_source = "mcp"
             data.last_activity = now
             return ResolvedSession(data.session_id, "mcp")
 
-        if request_session_id:
+        if over_http:
             # One request's own: leaving it out of shared state keeps it from the
             # next request and from custom events captured outside any call.
-            return ResolvedSession(request_session_id, "request")
-
-        # Once a session is MCP-derived, keep it even if a later request arrives
-        # without the MCP session id, so the session doesn't fragment.
-        if data.session_source == "mcp" and data.last_mcp_session_id:
-            data.last_activity = now
-            return ResolvedSession(data.session_id, "mcp")
+            return ResolvedSession(new_session_id(), "request")
 
         # Memory fallback (single-owner transports like stdio). A leftover token
         # session must NOT leak to a credential-less request, so anything that
@@ -355,13 +358,13 @@ async def resolve_session_id_with_source(
 
 def _is_stale(data: MCPAnalyticsData, now: datetime) -> bool:
     timeout_seconds = INACTIVITY_TIMEOUT_IN_MINUTES * 60
-    return (now - data.last_activity).total_seconds() > timeout_seconds
+    return (now - data.last_activity).total_seconds() >= timeout_seconds
 
 
 async def touch_connection_session(data: MCPAnalyticsData) -> None:
-    """Count a finished call grouped by the client as connection activity, so a
-    later call without an id does not rotate a live one-client connection's id.
-    Rotation itself happens when a call arrives (see ``prime_session``).
+    """Count a finished call as connection activity: idle time runs from the end
+    of the previous call. Rotation itself happens when a call arrives (see
+    ``prime_session``).
 
     Only for a one-client connection (stdio): on a shared HTTP instance, keeping
     the instance's own session alive would group unrelated clients' requests."""

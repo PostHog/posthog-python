@@ -14,6 +14,7 @@ from posthog.mcp import (
     PostHogMCP,
     PreparedToolCall,
     derive_session_id_from_conversation,
+    derive_session_id_from_mcp_session,
     get_more_tools_result,
 )
 from posthog.mcp._output_instructions import MCP_INSTRUCTIONS_KEY
@@ -569,13 +570,16 @@ def test_prepare_tool_call_keeps_carried_session_unless_a_handle_is_echoed():
     client, _ = make_client()
     client.prepare_tool_list([_sql_tool()])
 
-    carried = client.prepare_tool_call("execute-sql", {}, session_id="ses_carried")
-    assert (carried.session_id, carried.conversation_id) == ("ses_carried", None)
+    carried = client.prepare_tool_call("execute-sql", {}, session_id="transport-1")
+    assert (carried.session_id, carried.conversation_id) == (
+        derive_session_id_from_mcp_session("transport-1"),
+        None,
+    )
 
     echoed = client.prepare_tool_call(
         "execute-sql",
         {"conversation_id": _CONVERSATION_ID},
-        session_id="ses_carried",
+        session_id="transport-1",
     )
     assert echoed.conversation_id == _CONVERSATION_ID
     assert echoed.session_id == derive_session_id_from_conversation(_CONVERSATION_ID)

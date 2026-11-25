@@ -19,6 +19,7 @@ from posthog.test.mcp._helpers import MCP_MAJOR
 from posthog.mcp import logger as logger_module
 from posthog.mcp._instrumentation import prepare_request
 from posthog.mcp.logger import set_logger
+from posthog.mcp.request_headers import read_transport_session_id
 from posthog.mcp.session import new_session_id, resolve_session_id
 from posthog.mcp.session_token import (
     MCP_SESSION_HEADER,
@@ -803,16 +804,18 @@ async def test_no_warning_when_session_is_anchored_by_conversation_id():
 
 
 async def test_no_warning_for_sse_transport():
-    """The deprecated SSE transport carries its session as a query param, and the
-    mint sets a response header an SSE client never replays -- so the middleware we
-    would be recommending cannot help. Stay quiet rather than give wrong advice."""
+    """The deprecated SSE transport carries its session as a query param, which
+    groups the connection's requests, so the middleware has nothing to add."""
     ctx = _http_ctx()
     ctx.request.query_params = {"session_id": "sse-session-1"}
+    ctx.session = SimpleNamespace(
+        client_params=SimpleNamespace(protocolVersion="2025-06-18")
+    )
 
     with _captured_logs() as logs:
         await prepare_request(
             _data(),
-            mcp_session_id=None,
+            mcp_session_id=read_transport_session_id(ctx),
             client_name=None,
             client_version=None,
             request={"method": "tools/call", "params": {}},
