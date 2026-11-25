@@ -9,6 +9,7 @@ from parameterized import parameterized
 
 from posthog import AsyncPosthog
 from posthog.client import Client
+from posthog.request import GetResponse
 from posthog.feature_flags import (
     InconclusiveMatchError,
     _mark_known_absent_properties,
@@ -789,6 +790,83 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
                 "user-1", person_property_keys_known_absent=["plan"]
             ),
             {"flag": True},
+        )
+        self.flags.assert_not_called()
+
+
+_COLD_START_DEFINITIONS = {
+    "flags": [
+        _flag(
+            "org-tier-flag",
+            [_group_filter("is_not_set")],
+            aggregation_group_type_index=0,
+        ),
+        {
+            **_flag(
+                "org-key-flag",
+                [_group_filter("is_set", key="$group_key")],
+                aggregation_group_type_index=0,
+            ),
+            "id": 2,
+        },
+    ],
+    "group_type_mapping": {"0": "organization"},
+    "cohorts": {},
+}
+
+
+class TestKnownAbsentColdStart(unittest.TestCase):
+    """A client that never called load_feature_flags() loads definitions on the
+    first evaluation and must mark group keys with the loaded group types."""
+
+    def setUp(self):
+        self.client = Client(
+            FAKE_TEST_API_KEY,
+            secret_key="phx_test",
+            send=False,
+            enable_local_evaluation=False,
+        )
+        self.client.capture = mock.Mock()
+        get_patch = mock.patch(
+            "posthog.client.get",
+            return_value=GetResponse(data=_COLD_START_DEFINITIONS),
+        )
+        flags_patch = mock.patch(
+            "posthog.client.flags",
+            side_effect=AssertionError("unexpected /flags call"),
+        )
+        get_patch.start()
+        self.flags = flags_patch.start()
+        self.addCleanup(get_patch.stop)
+        self.addCleanup(flags_patch.stop)
+        self.addCleanup(self.client.shutdown)
+        self.assertIsNone(self.client.feature_flags)
+
+    _kwargs = {
+        "groups": {"organization": "org-1"},
+        "group_properties": {"organization": {"tier": "gold"}},
+        "group_property_keys_known_absent": {"organization": ["tier", "$group_key"]},
+    }
+
+    def test_evaluate_flags_marks_group_keys_after_lazy_load(self):
+        snapshot = self.client.evaluate_flags(
+            "user-1", only_evaluate_locally=True, **self._kwargs
+        )
+        self.assertIs(snapshot.get_flag("org-tier-flag"), True)
+        self.assertIs(snapshot.get_flag("org-key-flag"), False)
+        self.assertEqual(snapshot.unresolved_flags, {})
+
+    def test_get_feature_flag_marks_group_keys_after_lazy_load(self):
+        self.assertIs(
+            self.client.get_feature_flag("org-tier-flag", "user-1", **self._kwargs),
+            True,
+        )
+        self.flags.assert_not_called()
+
+    def test_get_all_flags_marks_group_keys_after_lazy_load(self):
+        self.assertEqual(
+            self.client.get_all_flags("user-1", **self._kwargs),
+            {"org-tier-flag": True, "org-key-flag": False},
         )
         self.flags.assert_not_called()
 

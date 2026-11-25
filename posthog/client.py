@@ -4832,22 +4832,15 @@ class Client(object):
         if device_id is None:
             device_id = get_context_device_id()
 
-        local_person_properties, local_group_properties = (
-            self._properties_for_local_evaluation(
-                distinct_id,
-                person_properties,
-                group_properties,
-                person_keys_known_absent,
-                group_keys_known_absent,
-            )
-        )
         flag_value, snapshot = self._locally_evaluate_flag(
             key,
             distinct_id,
             groups,
-            local_person_properties,
-            local_group_properties,
+            person_properties,
+            group_properties,
             device_id,
+            person_keys_known_absent=person_keys_known_absent,
+            group_keys_known_absent=group_keys_known_absent,
         )
         local_definition_version = snapshot["flag_definition_version"]
         flag_was_locally_evaluated = flag_value is not None
@@ -5165,6 +5158,9 @@ class Client(object):
         person_properties: dict[str, str],
         group_properties: dict[str, dict[str, Any]],
         device_id: Optional[str] = None,
+        *,
+        person_keys_known_absent: Optional[list[str]] = None,
+        group_keys_known_absent: Optional[dict[str, list[str]]] = None,
     ) -> tuple[Optional[FlagValue], _LocalEvaluationSnapshot]:
         """Return the local value and its definitions for consistent payload lookup."""
         if self.feature_flags is None and self.personal_api_key:
@@ -5175,6 +5171,16 @@ class Client(object):
         if snapshot["flags"]:
             flag = snapshot["flags_by_key"].get(key)
             if flag:
+                person_properties, group_properties = (
+                    self._properties_for_local_evaluation(
+                        distinct_id,
+                        person_properties,
+                        group_properties,
+                        snapshot,
+                        person_keys_known_absent,
+                        group_keys_known_absent,
+                    )
+                )
                 try:
                     response = self._compute_flag_locally(
                         flag,
@@ -5615,22 +5621,15 @@ class Client(object):
 
         groups = groups or {}
 
-        local_person_properties, local_group_properties = (
-            self._properties_for_local_evaluation(
-                distinct_id,
-                person_properties,
-                group_properties,
-                person_keys_known_absent,
-                group_keys_known_absent,
-            )
-        )
         response, fallback_to_flags, _ = self._get_all_flags_and_payloads_locally(
             distinct_id,
             groups=groups,
-            person_properties=local_person_properties,
-            group_properties=local_group_properties,
+            person_properties=person_properties,
+            group_properties=group_properties,
             flag_keys_to_evaluate=flag_keys_to_evaluate,
             device_id=device_id,
+            person_keys_known_absent=person_keys_known_absent,
+            group_keys_known_absent=group_keys_known_absent,
         )
 
         if fallback_to_flags and not only_evaluate_locally:
@@ -5807,24 +5806,17 @@ class Client(object):
         locally_evaluated_keys: set[str] = set()
         unresolved: Dict[str, UnresolvedFlagReason] = {}
         # Try local evaluation first when the poller has loaded definitions.
-        local_person_properties, local_group_properties = (
-            self._properties_for_local_evaluation(
-                distinct_id,
-                person_properties,
-                group_properties,
-                person_keys_known_absent,
-                group_keys_known_absent,
-            )
-        )
         local_result, fallback_to_server, definition_snapshot = (
             self._get_all_flags_and_payloads_locally(
                 distinct_id,
                 groups=dict(groups),
-                person_properties=local_person_properties,
-                group_properties=local_group_properties,
+                person_properties=person_properties,
+                group_properties=group_properties,
                 flag_keys_to_evaluate=flag_keys,
                 device_id=device_id,
                 unresolved=unresolved,
+                person_keys_known_absent=person_keys_known_absent,
+                group_keys_known_absent=group_keys_known_absent,
             )
         )
 
@@ -5940,10 +5932,9 @@ class Client(object):
         flag_keys_to_evaluate: Optional[list[str]] = None,
         device_id: Optional[str] = None,
         unresolved: Optional[Dict[str, UnresolvedFlagReason]] = None,
+        person_keys_known_absent: Optional[list[str]] = None,
+        group_keys_known_absent: Optional[dict[str, list[str]]] = None,
     ) -> tuple[FlagsAndPayloads, bool, _LocalEvaluationSnapshot]:
-        person_properties = person_properties or {}
-        group_properties = group_properties or {}
-
         if self.feature_flags is None and self.personal_api_key:
             self.load_feature_flags()
 
@@ -5953,6 +5944,14 @@ class Client(object):
         snapshot = self._local_evaluation_snapshot()
         # If loading in previous line failed
         if snapshot["flags"]:
+            person_properties, group_properties = self._properties_for_local_evaluation(
+                distinct_id,
+                person_properties,
+                group_properties,
+                snapshot,
+                person_keys_known_absent,
+                group_keys_known_absent,
+            )
             # Filter flags based on flag_keys_to_evaluate if provided
             flags_to_process = snapshot["flags"]
             if flag_keys_to_evaluate:
@@ -6186,9 +6185,11 @@ class Client(object):
         distinct_id,
         person_properties,
         group_properties,
+        snapshot: _LocalEvaluationSnapshot,
         person_property_keys_known_absent=None,
         group_property_keys_known_absent=None,
     ):
+        """Mark listed keys with the group types of the definitions that evaluate them."""
         local_person_properties = dict(person_properties or {})
         local_person_properties.setdefault("distinct_id", distinct_id)
         return _mark_known_absent_properties(
@@ -6196,7 +6197,7 @@ class Client(object):
             group_properties or {},
             person_property_keys_known_absent,
             group_property_keys_known_absent,
-            self.group_type_mapping,
+            snapshot["group_type_mapping"],
         )
 
     def _add_local_person_and_group_properties(
