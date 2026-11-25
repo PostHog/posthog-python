@@ -60,9 +60,12 @@ def _group_filter(operator, value=None, key="tier", group_type_index=0):
     }
 
 
-def _group_filter_without_index(operator, value=None, key="tier"):
+def _group_filter_without_index(operator, value=None, key="tier", null_index=False):
     prop = _group_filter(operator, value, key=key)
-    del prop["group_type_index"]
+    if null_index:
+        prop["group_type_index"] = None
+    else:
+        del prop["group_type_index"]
     return prop
 
 
@@ -414,16 +417,19 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("exact", "enterprise", False),
-            ("is_not_set", None, True),
+            ("exact", "enterprise", "tier", False, False),
+            ("is_not_set", None, "tier", False, True),
+            ("is_not_set", None, "tier", True, True),
+            ("is_set", None, "$group_key", False, False),
+            ("is_set", None, "$group_key", True, False),
         ]
     )
     def test_group_filter_without_index_reads_the_condition_group_type(
-        self, operator, value, expected
+        self, operator, value, key, null_index, expected
     ):
         flag = _flag(
             "flag",
-            [_group_filter_without_index(operator, value)],
+            [_group_filter_without_index(operator, value, key, null_index)],
             aggregation_group_type_index=0,
         )
         self.assert_local(
@@ -431,7 +437,7 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             expected,
             groups={"organization": "acme"},
             group_properties={"organization": {"tier": "enterprise"}},
-            group_property_keys_known_absent={"organization": ["tier"]},
+            group_property_keys_known_absent={"organization": [key]},
         )
 
     def test_group_filter_without_index_reads_the_condition_level_group_type(self):
