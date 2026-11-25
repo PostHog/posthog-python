@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -26,6 +27,10 @@ from ._posthog_events import PostHogCaptureEvent, build_posthog_capture_events
 from ._sanitization import sanitize_event
 from ._truncation import truncate_event
 from .types import BeforeSendFn, Event, McpEvent
+
+# Flushes block for up to their timeout when ingest stalls, so they get their own
+# threads instead of filling the loop's default executor (which also serves DNS).
+_flush_executor = ThreadPoolExecutor(thread_name_prefix="posthog-mcp-flush")
 
 
 @dataclass
@@ -120,6 +125,8 @@ class McpEventSink:
 
     async def flush(self) -> None:
         try:
-            await asyncio.to_thread(self._posthog.flush)
+            await asyncio.get_running_loop().run_in_executor(
+                _flush_executor, self._posthog.flush
+            )
         except Exception as err:
             log(f"Failed to flush PostHog events: {err}")

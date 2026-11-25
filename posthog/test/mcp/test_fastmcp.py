@@ -1,6 +1,8 @@
 """End-to-end tests for the FastMCP adapter (Milestone 2)."""
 
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -211,6 +213,25 @@ async def test_analytics_flush_logs_a_failed_client_flush():
         set_logger(None)
 
     assert any("network down" in line for line in lines)
+
+
+async def test_analytics_flush_leaves_the_default_executor_free():
+    release = threading.Event()
+
+    class StalledFlushClient(FakeClient):
+        def flush(self, timeout_seconds=10):
+            release.wait(timeout=5)
+
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(ThreadPoolExecutor(max_workers=1))
+    analytics = instrument(make_server(), StalledFlushClient())
+    flushing = asyncio.ensure_future(analytics.flush())
+    await asyncio.sleep(0.05)
+    try:
+        assert await asyncio.wait_for(loop.run_in_executor(None, lambda: 1), 1) == 1
+    finally:
+        release.set()
+        await flushing
 
 
 async def test_initialize_emitted_once_per_session():
