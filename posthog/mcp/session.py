@@ -33,7 +33,6 @@ from .session_token import SessionTokenPayload
 __all__ = [
     "derive_session_id_from_mcp_session",
     "derive_session_id_from_conversation",
-    "derive_session_id_from_client_conversation",
 ]
 
 
@@ -46,7 +45,7 @@ class ResolvedSession(NamedTuple):
     source: str
 
 
-# A call holds its custom events until it settles; beyond this many, the rest are dropped.
+# A call holds this many custom events until it settles; the rest go out at once.
 MAX_DEFERRED_CUSTOM_EVENTS = 1000
 
 
@@ -61,7 +60,7 @@ class PendingCustomEvents:
     def __init__(self) -> None:
         self.events: List[Tuple[Context, Dict[str, Any]]] = []
         self.settled: Optional[ResolvedSession] = None
-        self.dropped = 0
+        self.overflowed = False
         self.fallback: Optional[ResolvedSession] = None
         # A tool's own threads may capture while its call settles.
         self.lock = threading.Lock()
@@ -76,13 +75,14 @@ class PendingCustomEvents:
             return events
 
     def defer(self, event_input: Dict[str, Any]) -> Optional[ResolvedSession]:
-        """Hold the event, or return the session the call settled with in the
-        meantime. It is copied before taking the lock: copying runs caller code."""
+        """Hold the event, or return the session to send it with now: the one the
+        call settled with, or, past the bound, the one it already knows. It is
+        copied before taking the lock: copying runs caller code."""
         try:
             snapshot = {
                 **event_input,
-                "properties": _top_level_copy(event_input.get("properties")),
-                "event_options": _top_level_copy(event_input.get("event_options")),
+                "properties": _copy(event_input.get("properties")),
+                "event_options": _copy(event_input.get("event_options")),
                 "duration": 0,
             }
         except Exception as err:  # noqa: BLE001 - analytics must never break a tool call
@@ -93,18 +93,20 @@ class PendingCustomEvents:
             if self.settled is not None:
                 return self.settled
             if len(self.events) >= MAX_DEFERRED_CUSTOM_EVENTS:
-                self.dropped += 1
-                if self.dropped == 1:
+                if not self.overflowed:
+                    self.overflowed = True
                     log(
                         f"Warning: a tool call captured more than {MAX_DEFERRED_CUSTOM_EVENTS} "
-                        "custom events; dropping the rest"
+                        "custom events; the rest are sent at once, with the session the call has so far"
                     )
-                return None
+                return self.fallback
             self.events.append((context, snapshot))
             return None
 
 
-def _top_level_copy(value: Any) -> Any:
+def _copy(value: Any) -> Any:
+    # Top level only: a deep copy of a large payload would block the event loop
+    # on every capture inside a tool.
     return dict(value) if isinstance(value, Mapping) else value
 
 
@@ -330,10 +332,8 @@ async def resolve_session_id_with_source(
             return ResolvedSession(data.session_id, "mcp")
 
         if request_session_id:
-            # Stored only so an in-tool custom event lands in this request's
-            # session. No later request reuses a "request" session.
-            data.session_id = request_session_id
-            data.session_source = "request"
+            # One request's own: leaving it out of shared state keeps it from the
+            # next request and from custom events captured outside any call.
             return ResolvedSession(request_session_id, "request")
 
         # Once a session is MCP-derived, keep it even if a later request arrives

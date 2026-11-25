@@ -160,7 +160,7 @@ async def test_a_custom_event_keeps_the_properties_it_was_captured_with(anchored
     ]
 
 
-async def test_a_call_sends_at_most_its_bound_of_custom_events():
+async def test_a_call_sends_every_custom_event_past_its_bound():
     client = FakeClient()
     server = FastMCP("t")
     analytics: list[McpAnalytics] = []
@@ -178,7 +178,7 @@ async def test_a_call_sends_at_most_its_bound_of_custom_events():
         await session.call_tool("chatty", {})
     await flush_background()
 
-    assert len(events_named(client, "tick")) == MAX_DEFERRED_CUSTOM_EVENTS
+    assert len(events_named(client, "tick")) == MAX_DEFERRED_CUSTOM_EVENTS + 5
 
 
 consent: ContextVar[str] = ContextVar("consent", default="unset")
@@ -341,3 +341,113 @@ async def test_a_flush_during_a_call_leaves_its_custom_events_to_the_call(flush)
     (tool_call,) = events_named(client, "$mcp_tool_call")
     (custom,) = events_named(client, "progress")
     assert session_and_person(custom) == session_and_person(tool_call)
+
+
+def counting_identify(calls: list, wait: "asyncio.Event | None" = None):
+    async def identify(request, extra):
+        calls.append(request)
+        if wait is not None and len(calls) == 1:
+            await wait.wait()
+        return UserIdentity(distinct_id="u1")
+
+    return identify
+
+
+@pytest.mark.parametrize(
+    "ending", ["cancelled", "no tool name", "cancelled while it identifies"]
+)
+async def test_a_call_that_records_nothing_runs_identify_no_more_than_once(ending):
+    client = FakeClient()
+    calls: list = []
+    hold = asyncio.Event()
+    entered = asyncio.Event()
+
+    if ending == "no tool name":
+        server = Server("t")
+
+        @server.list_tools()
+        async def list_tools():
+            return [mcp_types.Tool(name="echo", inputSchema={"type": "object"})]
+
+        @server.call_tool()
+        async def call_tool(name, arguments):
+            raise ValueError("no tool")
+
+        analytics = instrument(
+            server, client, MCPAnalyticsOptions(identify=counting_identify(calls))
+        )
+        async with create_connected_server_and_client_session(server) as session:
+            await session.call_tool("", {})
+        await analytics.flush()
+        assert len(calls) == 0
+        return
+
+    server = FastMCP("t")
+    identifies = ending == "cancelled while it identifies"
+
+    @server.tool()
+    async def job() -> str:
+        if not identifies:
+            entered.set()
+            await asyncio.sleep(10)
+        return "ok"
+
+    identify = counting_identify(calls, hold if identifies else None)
+    analytics = instrument(server, client, MCPAnalyticsOptions(identify=identify))
+    task = asyncio.create_task(
+        server._tool_manager.call_tool(
+            "job", {}, context=server.get_context(), convert_result=True
+        )
+    )
+    if identifies:
+        while not calls:
+            await asyncio.sleep(0)
+    else:
+        await entered.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await analytics.flush()
+
+    assert len(calls) == (1 if identifies else 0)
+
+
+async def test_a_flush_sends_a_cancelled_calls_custom_events_through_async_hooks():
+    client = FakeClient()
+    server = FastMCP("t")
+    analytics: list[McpAnalytics] = []
+    reached = asyncio.Event()
+
+    async def slow_before_send(event):
+        await asyncio.sleep(0.05)
+        return event
+
+    async def async_identify(request, extra):
+        await asyncio.sleep(0.01)
+        return UserIdentity(distinct_id="u1")
+
+    @server.tool()
+    async def slow() -> str:
+        await analytics[0].capture("inside_tool")
+        reached.set()
+        await asyncio.sleep(10)
+        return "ok"
+
+    options = MCPAnalyticsOptions(
+        enable_conversation_id=True,
+        identify=async_identify,
+        before_send=slow_before_send,
+    )
+    analytics.append(instrument(server, client, options))
+    task = asyncio.create_task(
+        server._tool_manager.call_tool(
+            "slow", {}, context=server.get_context(), convert_result=True
+        )
+    )
+    await reached.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    await analytics[0].flush()
+    assert len(events_named(client, "inside_tool")) == 1

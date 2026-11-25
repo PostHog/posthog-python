@@ -567,6 +567,7 @@ async def test_a_call_that_records_nothing_sends_its_custom_events_with_its_conv
 ):
     client = FakeClient()
     key, data = shared_http_server(client)
+    await run_call(data, user="alice", **call)
 
     lifecycle = start_call(data, user="alice", **call)
     with lifecycle.in_tool(await lifecycle.prime_session()):
@@ -1031,3 +1032,59 @@ async def test_chatgpt_calls_without_their_id_stay_apart_on_a_shared_pod(kind):
     alice, bob = _events(client, "$mcp_tool_call")
     assert alice["properties"]["$session_id"] != bob["properties"]["$session_id"]
     assert bob["properties"]["$set"] == {"bob_only": "present"}
+
+
+async def test_a_capture_outside_a_tool_never_takes_a_requests_own_session():
+    client = FakeClient()
+    key, data = shared_http_server(client)
+    await run_call(data, user_agent=CHATGPT, user="alice")
+    await McpAnalytics(key).capture("server_heartbeat")
+    await _flush()
+
+    (call,) = _events(client, "$mcp_tool_call")
+    (heartbeat,) = _events(client, "server_heartbeat")
+    assert heartbeat["distinct_id"] != "alice"
+    assert "alice_only" not in json.dumps(heartbeat["properties"])
+    assert heartbeat["properties"]["$session_id"] != call["properties"]["$session_id"]
+
+
+async def test_a_request_session_leaves_a_transport_session_in_place():
+    data = MCPAnalyticsData(options=MCPAnalyticsOptions(), session_id="ses_init")
+    transport = await resolve_session_id_with_source(data, "mcp-1")
+
+    one_request = await resolve_session_id_with_source(
+        data, None, request_session_id="ses_one_request"
+    )
+
+    assert one_request == ("ses_one_request", "request")
+    assert await resolve_session_id_with_source(data, None) == transport
+
+
+@pytest.mark.parametrize(
+    "client_info",
+    [{"name": "codex-mcp-client"}, SimpleNamespace(name="codex-mcp-client")],
+    ids=["a mapping", "an mcp-SDK model"],
+)
+async def test_prepare_and_capture_agree_on_a_client_known_from_its_handshake(
+    client_info,
+):
+    fake = FakeClient()
+    client = PostHogMCP("phc_test", host="https://us.i.posthog.com")
+    client.capture = fake.capture
+    meta = {"sessionId": CODEX_ID}
+
+    call = client.prepare_tool_call(
+        "search_docs", {}, request_meta=meta, client_info=client_info
+    )
+    client.capture_tool_call(
+        "search_docs",
+        session_id=call.session_id,
+        request_meta=meta,
+        client_info=client_info,
+    )
+    await _flush()
+
+    assert call.session_id == CODEX_SESSION
+    (event,) = _events(fake, "$mcp_tool_call")
+    assert event["properties"]["$session_id"] == CODEX_SESSION
+    assert event["properties"]["$mcp_session_source"] == "client_metadata"

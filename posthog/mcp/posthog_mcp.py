@@ -227,13 +227,15 @@ class PostHogMCP(Client):
         event_options: Optional[Dict[str, Any]] = None,
         timestamp: Optional[datetime] = None,
         request_meta: Optional[JsonRecord] = None,
+        client_info: Any = None,
     ) -> None:
         """Capture a tool invocation. Emits ``$mcp_tool_call`` (+ ``$exception`` on error).
 
         ``request_meta`` is the ``tools/call`` request's ``_meta``. With the
-        ``client_user_agent`` or ``_meta`` client name that recognizes the client,
-        its conversation id (such as ChatGPT's ``openai/session``) sets
-        ``$session_id`` in place of ``session_id``.
+        ``client_user_agent``, the ``_meta`` client name, or ``client_info`` (the
+        ``initialize`` ``clientInfo``, as passed to :meth:`prepare_tool_call`)
+        recognizing the client, its conversation id (such as ChatGPT's
+        ``openai/session``) sets ``$session_id`` in place of ``session_id``.
 
         ``event_options`` sets capture options, such as
         ``process_person_profile``, on the event. Without ``distinct_id`` the
@@ -252,7 +254,10 @@ class PostHogMCP(Client):
             vendor_client,
         )
         client_conversation = read_client_conversation(
-            recognize_client(client_user_agent, meta_client_name(request_meta)),
+            recognize_client(
+                client_user_agent,
+                meta_client_name(request_meta) or _client_info_name(client_info),
+            ),
             request_meta,
         )
         if client_conversation is not None:
@@ -514,7 +519,11 @@ class PostHogMCP(Client):
 
         A real tool already using a virtual tool's name wins: it is left alone,
         nothing is appended, and a warning names the option that renames
-        PostHog's tool."""
+        PostHog's tool.
+
+        ``headers`` is the listing request's HTTP headers. Pass them so a
+        handle-free client recognized by its ``User-Agent`` (such as ChatGPT)
+        gets its tools without ``conversation_id`` and ``_mcp_instructions``."""
         prepared = []
         context_description = get_context_description(context)
         for tool in tools:
@@ -600,7 +609,7 @@ class PostHogMCP(Client):
         original_tool: Any = None,
         session_id: Optional[str] = None,
         headers: Any = None,
-        client_info: Optional[Mapping[str, Any]] = None,
+        client_info: Any = None,
     ) -> PreparedToolCall:
         """Pull the agent's intent off the injected ``context`` argument, strip
         ``context`` from the arguments, and flag the ``get_more_tools`` and
@@ -661,7 +670,7 @@ class PostHogMCP(Client):
                 original_tool,
                 session_id,
                 recognize_manual_client(
-                    headers, request_meta, (client_info or {}).get("name")
+                    headers, request_meta, _client_info_name(client_info)
                 ),
                 request_meta,
             )
@@ -1150,3 +1159,12 @@ def _deliver_minted_handle(
     if injected is not prepared:
         delivered = True
     return injected, delivered
+
+
+def _client_info_name(client_info: Any) -> Optional[str]:
+    """The ``initialize`` ``clientInfo`` name, from a mapping or an mcp-SDK model."""
+    if isinstance(client_info, Mapping):
+        name = client_info.get("name")
+    else:
+        name = getattr(client_info, "name", None)
+    return name if isinstance(name, str) else None

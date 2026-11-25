@@ -819,7 +819,11 @@ def _wrap_v2_list_tools(
         )
         request = params_to_request_dict(_LIST_METHOD, params, by_alias=True)
         extra: Dict[str, Any] = {"session_id": mcp_session_id, "ctx": ctx}
-        advertise_conversation_id = lists_conversation_id(extra, client_name)
+        # The SDK's own listing feeds the tool cache every client's results are
+        # checked against, so it declares what any client may be sent.
+        advertise_conversation_id = _is_internal_dispatch(ctx) or lists_conversation_id(
+            extra, client_name
+        )
         # Resolve session, emit $mcp_initialize (once per session) and identify
         # here too — a client may list tools without ever calling one. The SDK's
         # own listing is no client request, so it records nothing, but its tools

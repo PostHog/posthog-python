@@ -658,21 +658,12 @@ class ToolCallLifecycle:
 
     def settle_left_over_custom_events(self) -> None:
         """Adapters call this once the call is over, for a call that ended without
-        recording anything (cancelled, or a path that records nothing). Recording
-        would have run identify, so it runs here first, in its own task: the call
-        may be cancelled, and the task keeps the call's context for identify."""
+        recording anything (cancelled, or a path that records nothing). Such a call
+        sends no event of its own and runs no identify, so its custom events carry
+        whatever identity its session already has."""
         pending = self.pending_custom_events
-        fallback = pending.fallback
-        if pending.settled is not None or fallback is None:
-            return
-
-        async def identify_then_settle() -> None:
-            await handle_identify(
-                self.data, fallback.session_id, self.request, self.extra
-            )
-            self._settle_custom_events(fallback)
-
-        fire_and_forget(identify_then_settle(), self.data)
+        if pending.settled is None and pending.fallback is not None:
+            self._settle_custom_events(pending.fallback)
 
     def _settle_custom_events(self, session: ResolvedSession) -> None:
         """Send the custom events this call held back, with its own event's session,
