@@ -24,13 +24,19 @@ except ImportError:
     )
 
 from .formatting import (
+    _append_assistant_output,
     _format_user_input,
-    format_assistant_blocks,
+    format_assistant_blocks as format_assistant_blocks,
     format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.claude_agent_sdk.processor import (
     PostHogClaudeAgentProcessor,
     _GenerationTracker,
+    _PendingToolSpan,
+    _from_subagent,
+    _promote_input,
+    _starts_generation,
+    _tool_result_blocks,
 )
 from posthog.client import Client
 
@@ -63,6 +69,7 @@ class PostHogClaudeSDKClient:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: bool = False,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a stateful Claude Agent SDK client with PostHog instrumentation.
@@ -79,6 +86,10 @@ class PostHogClaudeSDKClient:
             posthog_properties: Additional properties included on emitted AI events.
             posthog_privacy_mode: Whether to redact captured inputs, outputs, and tool data.
             posthog_groups: Optional PostHog groups to associate with emitted events.
+            posthog_options: Capture options for emitted AI events, such as
+                ``{"cookieless_mode": True}``. They win over context options and
+                ``super_options``. An event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
         from dataclasses import replace as dc_replace
 
@@ -95,6 +106,7 @@ class PostHogClaudeSDKClient:
             privacy_mode=posthog_privacy_mode,
             groups=posthog_groups,
             properties=posthog_properties or {},
+            options=posthog_options,
         )
         self._trace_id = posthog_trace_id or str(uuid.uuid4())
         self._distinct_id = posthog_distinct_id
@@ -109,6 +121,8 @@ class PostHogClaudeSDKClient:
         self._current_input: Optional[List[Dict[str, Any]]] = None
         self._next_input: Optional[List[Dict[str, Any]]] = None
         self._pending_output: List[Dict[str, Any]] = []
+        # Tool spans waiting for their result, keyed by tool_use_id
+        self._pending_tools: Dict[str, _PendingToolSpan] = {}
         self._query_start = time.time()
 
     async def connect(self, prompt: Any = None) -> None:
@@ -130,19 +144,37 @@ class PostHogClaudeSDKClient:
         """
         # Track the prompt as input for the next generation
         self._current_input = [{"role": "user", "content": prompt}]
+        self._next_input = None
+        self._pending_output = []
         await self._client.query(prompt, session_id)
 
     async def receive_response(self):
         """Instrumented receive_response -- yields all messages, emits PostHog events."""
-        async for message in self._client.receive_response():
+        try:
+            async for message in self._client.receive_response():
+                try:
+                    self._process_message(message)
+                except Exception as e:
+                    log.debug(f"PostHog instrumentation error (non-fatal): {e}")
+                yield message
+        finally:
+            # A turn that stops early (break, interrupt, no ResultMessage) would
+            # otherwise hold its unfinished tool spans until disconnect().
             try:
-                self._process_message(message)
+                self._processor._flush_tool_spans(self._pending_tools)
             except Exception as e:
                 log.debug(f"PostHog instrumentation error (non-fatal): {e}")
-            yield message
 
     def _process_message(self, message: Any) -> None:
         if isinstance(message, StreamEvent):
+            if _starts_generation(message):
+                if self._tracker.current_span_id is not None:
+                    # The previous request never finished (it was retried),
+                    # so its partial output is dropped.
+                    self._pending_output = []
+                self._current_input, self._next_input = _promote_input(
+                    self._current_input, self._next_input
+                )
             self._tracker.process_stream_event(message)
 
             if self._tracker.has_completed_generation():
@@ -160,19 +192,29 @@ class PostHogClaudeSDKClient:
                     self._privacy,
                     self._groups,
                 )
-                self._current_input = self._next_input
-                self._next_input = None
+                self._current_input = None
                 self._pending_output = []
 
         elif isinstance(message, AssistantMessage):
             self._process_assistant_message(message)
 
         elif isinstance(message, UserMessage):
-            self._next_input = _format_user_input(
-                message.content, self._processor._client, self._next_input
-            )
+            # Tool results close their tool spans, subagent ones included.
+            for block in _tool_result_blocks(message):
+                self._processor._finish_tool_span(
+                    self._pending_tools, block, self._privacy
+                )
+            if not _from_subagent(message):
+                if not self._tracker.had_any_stream_events:
+                    # Without stream events, a tool result ends the assistant
+                    # turn; the result fallback reports the final turn only.
+                    self._pending_output = []
+                self._next_input = _format_user_input(
+                    message.content, self._processor._client, self._next_input
+                )
 
         elif isinstance(message, ResultMessage):
+            self._processor._flush_tool_spans(self._pending_tools)
             if not self._tracker.had_any_stream_events:
                 self._processor._emit_generation_from_result(
                     message,
@@ -194,7 +236,8 @@ class PostHogClaudeSDKClient:
         parent_id = self._tracker.current_span_id or self._current_generation_span_id
         for block in message.content:
             if isinstance(block, ToolUseBlock):
-                self._processor._emit_tool_span(
+                self._processor._start_tool_span(
+                    self._pending_tools,
                     block,
                     self._trace_id,
                     parent_id,
@@ -203,9 +246,10 @@ class PostHogClaudeSDKClient:
                     self._privacy,
                     self._groups,
                 )
-        output_content = format_assistant_blocks(message.content)
-        if output_content:
-            self._pending_output = [{"role": "assistant", "content": output_content}]
+        if not _from_subagent(message):
+            self._pending_output = _append_assistant_output(
+                self._pending_output, message.content
+            )
 
     async def disconnect(self) -> None:
         """
@@ -213,6 +257,8 @@ class PostHogClaudeSDKClient:
         """
         # Emit the trace event covering the entire session
         try:
+            # Tool spans whose result never arrived are emitted without one.
+            self._processor._flush_tool_spans(self._pending_tools)
             latency = time.time() - self._query_start
             resolved_id = self._processor._resolve_distinct_id(self._distinct_id)
 
@@ -225,14 +271,12 @@ class PostHogClaudeSDKClient:
                 **self._extra_props,
             }
 
-            if resolved_id is None:
-                properties["$process_person_profile"] = False
-
             self._processor._capture_event(
                 "$ai_trace",
                 properties,
                 resolved_id or self._trace_id,
                 self._groups,
+                personless=resolved_id is None,
             )
 
             try:

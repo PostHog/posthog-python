@@ -41,7 +41,12 @@ from .feedback import (
     resolve_send_feedback_tool_name,
 )
 from ._intent import resolve_tool_call_intent, set_event_intent
-from ._internal import MCPAnalyticsData, handle_identify, resolve_event_properties
+from ._internal import (
+    MCPAnalyticsData,
+    handle_identify,
+    resolve_event_options,
+    resolve_event_properties,
+)
 from ._tool_input import get_tool_input_properties
 from ._model_parameters import (
     add_model_parameter_to_schema,
@@ -57,12 +62,7 @@ from ._transport_identity import stamp_transport_identity
 from .session import resolve_session_id, resolve_session_id_with_source
 from .session_token import SessionTokenPayload, decode_session_id
 from .tools import resolve_missing_capability_tool_name
-from .types import (
-    CollectFeedbackOptions,
-    FeedbackReport,
-    InputAliasMap,
-    ToolInputOptions,
-)
+from .types import CollectFeedbackOptions, FeedbackReport, ToolInputOptions
 
 # The virtual tools this SDK advertises into tools/list. Every piece of per-tool
 # policy -- enable switch, configured name, warning text, warn-once
@@ -290,6 +290,7 @@ async def record_initialize(
         "timestamp": timestamp,
     }
     await _apply_event_properties(data, event, request, extra)
+    await _apply_event_options(data, event, request, extra)
     stamp_transport_identity(event, extra)
     fire_and_forget(capture_event(data, event), data)
 
@@ -346,9 +347,9 @@ async def _maybe_emit_initialize(
         "protocol_version": protocol_version,
         "timestamp": datetime.now(timezone.utc),
     }
-    await _apply_event_properties(
-        data, event, {"method": "initialize", "params": {}}, extra
-    )
+    request = {"method": "initialize", "params": {}}
+    await _apply_event_properties(data, event, request, extra)
+    await _apply_event_options(data, event, request, extra)
     stamp_transport_identity(event, extra)
     fire_and_forget(capture_event(data, event), data)
 
@@ -364,6 +365,19 @@ async def _apply_event_properties(
     props = await resolve_event_properties(data, request, extra)
     if props is not None:
         event["properties"] = props
+
+
+async def _apply_event_options(
+    data: MCPAnalyticsData,
+    event: Dict[str, Any],
+    request: Dict[str, Any],
+    extra: Optional[Dict[str, Any]],
+) -> None:
+    """Resolve the customer's ``event_options`` callback onto the event, for the
+    same events as ``event_properties``."""
+    options = await resolve_event_options(data, request, extra)
+    if options is not None:
+        event["callback_event_options"] = options
 
 
 def resolve_session_and_client(
@@ -824,10 +838,23 @@ async def record_tool_call(
                 event["llm_model"] = model
                 event["llm_model_source"] = source
 
-        _set_tool_outcome(event, result, error)
+        if result is not None:
+            event["response"] = _wrap_response(result)
+        if error is None and is_tool_result_error(result):
+            error = result
+        if error is not None:
+            event["is_error"] = True
+            event["error"] = capture_exception(error)
+            event["error_status"] = http_status(error)
 
         props = await resolve_event_properties(data, request, extra)
-        input_aliases = _resolve_input_aliases(data, name)
+        await _apply_event_options(data, event, request, extra)
+        input_aliases = None
+        if data.options.resolve_input_aliases is not None:
+            try:
+                input_aliases = data.options.resolve_input_aliases(name)
+            except Exception as err:  # noqa: BLE001 - analytics callbacks are isolated
+                log(f"Warning: resolve_input_aliases failed for tool {name}: {err}")
         event["properties"] = {
             **(props or {}),
             **get_tool_input_properties(
@@ -1032,7 +1059,18 @@ def resolve_virtual_tool_injection(
     listed = advertised_tool_names(tools)
 
     if not is_first_page:
-        _warn_shadowed_virtual_tools(data, enabled, listed)
+        for kind, name in enabled.items():
+            # Only warn about a tool we actually shadowed. If this kind never
+            # made it onto the first page -- a real tool already held the name
+            # ("blocked"), or the other virtual tool won it ("duplicate") --
+            # then nothing of ours is advertised under it and the host's tool
+            # runs untouched. Telling them otherwise sends them chasing a bug
+            # that isn't there.
+            if name in listed and not any(
+                (kind, name, variant) in data.warned_virtual_tool_collisions
+                for variant in ("blocked", "duplicate")
+            ):
+                _warn_virtual_tool_collision(data, kind, name, "shadowed")
         return {}
 
     injectable: Dict[str, str] = {}
@@ -1203,7 +1241,11 @@ def mutate_tool_schema(
         schema, "conversation_id"
     ):
         schema = add_conversation_id_to_schema(schema, tool.name)
-    _write_tool_schema(tool, schema_attribute, original_schema, schema)
+    if schema is not original_schema:
+        try:
+            setattr(tool, schema_attribute, schema)
+        except Exception:  # noqa: BLE001 - some schema attrs may be read-only
+            log(f"WARN: could not set {schema_attribute} on tool {tool.name}")
     if data.options.enable_conversation_id:
         data.tool_output_instructions[tool.name] = add_instructions_to_output_schema(
             tool
@@ -1378,6 +1420,7 @@ async def record_missing_capability(
                 event["llm_model"] = model
                 event["llm_model_source"] = source
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
@@ -1466,6 +1509,7 @@ async def record_feedback(
             **(props or {}),
             **build_feedback_event_properties(report),
         }
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
@@ -1506,6 +1550,7 @@ async def record_tools_list(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the tool path
@@ -1558,57 +1603,8 @@ async def record_resource_request(
         if error is not None:
             event["error"] = capture_exception(error)
         await _apply_event_properties(data, event, request, extra)
+        await _apply_event_options(data, event, request, extra)
         stamp_transport_identity(event, extra)
         fire_and_forget(capture_event(data, event), data)
     except Exception as err:  # noqa: BLE001 - isolate analytics from the request path
         log(f"record_resource_request failed (event dropped): {err}")
-
-
-def _set_tool_outcome(event: Dict[str, Any], result: Any, error: Any) -> None:
-    if result is not None:
-        event["response"] = _wrap_response(result)
-    if error is None and is_tool_result_error(result):
-        error = result
-    if error is not None:
-        event["is_error"] = True
-        event["error"] = capture_exception(error)
-        event["error_status"] = http_status(error)
-
-
-def _resolve_input_aliases(
-    data: MCPAnalyticsData, name: str
-) -> Optional[InputAliasMap]:
-    input_aliases = None
-    if data.options.resolve_input_aliases is not None:
-        try:
-            input_aliases = data.options.resolve_input_aliases(name)
-        except Exception as err:  # noqa: BLE001 - analytics callbacks are isolated
-            log(f"Warning: resolve_input_aliases failed for tool {name}: {err}")
-    return input_aliases
-
-
-def _warn_shadowed_virtual_tools(
-    data: MCPAnalyticsData, enabled: Dict[str, str], listed: Set[str]
-) -> None:
-    for kind, name in enabled.items():
-        # Only warn about a tool we actually shadowed. If this kind never
-        # made it onto the first page -- a real tool already held the name
-        # ("blocked"), or the other virtual tool won it ("duplicate") --
-        # then nothing of ours is advertised under it and the host's tool
-        # runs untouched. Telling them otherwise sends them chasing a bug
-        # that isn't there.
-        if name in listed and not any(
-            (kind, name, variant) in data.warned_virtual_tool_collisions
-            for variant in ("blocked", "duplicate")
-        ):
-            _warn_virtual_tool_collision(data, kind, name, "shadowed")
-
-
-def _write_tool_schema(
-    tool: Any, schema_attribute: str, original_schema: Any, schema: Any
-) -> None:
-    if schema is not original_schema:
-        try:
-            setattr(tool, schema_attribute, schema)
-        except Exception:  # noqa: BLE001 - some schema attrs may be read-only
-            log(f"WARN: could not set {schema_attribute} on tool {tool.name}")

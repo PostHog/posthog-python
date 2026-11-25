@@ -18,8 +18,15 @@ from parameterized import parameterized
 import pytest
 
 from posthog.capture_compression import CaptureCompression
+from posthog.capture_send import _CAPTURE_AI_V1_PATH, _CAPTURE_V1_PATH
 from posthog.client import Client
-from posthog.contexts import get_context_session_id, new_context, set_context_session
+from posthog.contexts import (
+    get_context_session_id,
+    identify_context,
+    new_context,
+    set_context_option,
+    set_context_session,
+)
 from posthog.request import APIError, GetResponse
 from posthog.test.logging_helpers import capture_message_only_logs
 from posthog.test.test_utils import FAKE_TEST_API_KEY
@@ -27,6 +34,7 @@ from posthog.types import FeatureFlag, FeatureFlagResult, LegacyFlagMetadata
 from posthog.utils import RedisFlagCache
 from posthog.version import VERSION
 from posthog.contexts import tag
+from posthog.test.capture_helpers import patch_capture_send, sent_batch, sent_events
 
 
 # Legacy single-flag behavior remains covered here; warning emission itself is
@@ -54,8 +62,8 @@ class TestClient(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         # This ensures no real HTTP POST requests are made
-        cls.client_post_patcher = mock.patch("posthog.client.batch_post")
-        cls.consumer_post_patcher = mock.patch("posthog.consumer.batch_post")
+        cls.client_post_patcher = patch_capture_send("client")
+        cls.consumer_post_patcher = patch_capture_send("consumer")
         cls.client_post_patcher.start()
         cls.consumer_post_patcher.start()
 
@@ -78,23 +86,32 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand(
         [
-            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False, False),
-            ("whitespace_only", " \n\t ", "", True, True),
-            ("empty_string", "", "", True, True),
+            ("valid_key", " \nphc_validkey\t ", "phc_validkey", False, None),
+            ("whitespace_only", " \n\t ", "", True, "api_key is empty"),
+            ("empty_string", "", "", True, "api_key is empty"),
+            (
+                "personal_api_key",
+                " phx_secret ",
+                "phx_secret",
+                True,
+                "personal API key",
+            ),
         ]
     )
     def test_trims_api_key_whitespace(
-        self, _, raw_api_key, expected_api_key, expected_disabled, expect_error_log
+        self, _, raw_api_key, expected_api_key, expected_disabled, expected_error
     ):
         with mock.patch.object(Client.log, "error") as mock_error:
             client = Client(raw_api_key, send=False)
 
         self.assertEqual(client.api_key, expected_api_key)
         self.assertEqual(client.disabled, expected_disabled)
-        if expect_error_log:
-            mock_error.assert_called_once_with(
-                "api_key is empty after trimming whitespace; check your project API key"
-            )
+        if expected_error:
+            mock_error.assert_called_once()
+            message = " ".join(str(arg) for arg in mock_error.call_args.args)
+            self.assertIn(expected_error, message)
+            self.assertNotIn("secret", message)
+            self.assertIsNone(client.capture("event", distinct_id="user"))
         else:
             mock_error.assert_not_called()
 
@@ -293,7 +310,7 @@ class TestClient(unittest.TestCase):
         self.client.flush()
 
     def test_empty_flush_does_not_drain_a_later_event(self):
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_at=100, flush_interval=0.5)
 
             client.flush()
@@ -322,7 +339,7 @@ class TestClient(unittest.TestCase):
     def test_flush_does_not_wait_for_flush_interval(self):
         # flush() must attempt delivery now rather than letting the consumer sit
         # on a below-flush_at batch until flush_interval elapses.
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_interval=30)
             client.capture("event", distinct_id="distinct_id")
 
@@ -336,7 +353,7 @@ class TestClient(unittest.TestCase):
     def test_flush_delivers_when_flush_interval_exceeds_the_flush_timeout(self):
         # Waiting out flush_interval meant a flush_interval longer than the
         # flush timeout delivered nothing at all.
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_interval=30)
             client.capture("event", distinct_id="distinct_id")
 
@@ -347,7 +364,7 @@ class TestClient(unittest.TestCase):
 
     def test_flush_keeps_batches_whole(self):
         # Draining early must not turn a full queue into one request per event.
-        with mock.patch("posthog.consumer.batch_post") as mock_post:
+        with patch_capture_send("consumer") as mock_post:
             client = Client(FAKE_TEST_API_KEY, flush_at=10, flush_interval=30)
             for _ in range(30):
                 client.capture("event", distinct_id="distinct_id")
@@ -356,7 +373,8 @@ class TestClient(unittest.TestCase):
 
             self.assertTrue(client.queue.empty())
             batch_sizes = [
-                len(call.kwargs["batch"]) for call in mock_post.call_args_list
+                len(sent_batch(mock_post, index))
+                for index in range(mock_post.call_count)
             ]
             self.assertEqual(sum(batch_sizes), 30)
             self.assertLessEqual(len(batch_sizes), 5)
@@ -379,7 +397,7 @@ class TestClient(unittest.TestCase):
         client.queue.task_done()
 
     def test_basic_capture(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture("python test event", distinct_id="distinct_id")
             self.assertIsNotNone(msg_uuid)
@@ -387,7 +405,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -404,7 +422,7 @@ class TestClient(unittest.TestCase):
             assert msg["properties"]["$os_version"] == mock.ANY
 
     def test_capture_omits_is_server_when_disabled(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -414,26 +432,12 @@ class TestClient(unittest.TestCase):
             client.capture("python test event", distinct_id="distinct_id")
             self.assertFalse(self.failed)
 
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertNotIn("$is_server", msg["properties"])
 
-    def test_is_server_not_overridden_by_super_properties(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
-            client = Client(
-                FAKE_TEST_API_KEY,
-                on_error=self.set_fail,
-                sync_mode=True,
-                super_properties={"$is_server": False},
-            )
-            client.capture("python test event", distinct_id="distinct_id")
-            self.assertFalse(self.failed)
-
-            msg = mock_post.call_args[1]["batch"][0]
-            self.assertEqual(msg["properties"]["$is_server"], True)
-
     def test_basic_capture_with_uuid(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             uuid = str(uuid4())
             msg_uuid = client.capture(
@@ -444,7 +448,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -455,7 +459,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_capture_with_uuid_object(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             uuid = UUID("00000000-0000-4000-8000-000000000002")
             msg_uuid = client.capture(
@@ -465,54 +469,77 @@ class TestClient(unittest.TestCase):
             self.assertFalse(self.failed)
 
             mock_post.assert_called_once()
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["uuid"], str(uuid))
 
     @parameterized.expand(
         [
-            ("empty string", ""),
-            ("invalid string", "not-a-uuid"),
+            ("uppercase", "0190A3B4-C5D6-7E8F-9A0B-1C2D3E4F5A6B"),
+            ("no hyphens", "0190a3b4c5d67e8f9a0b1c2d3e4f5a6b"),
+            ("braced", "{0190a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b}"),
+        ]
+    )
+    def test_capture_sends_and_returns_canonical_uuid(self, _name, supplied):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            msg_uuid = client.capture(
+                "python test event", distinct_id="distinct_id", uuid=supplied
+            )
+
+        canonical = "0190a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b"
+        self.assertEqual(msg_uuid, canonical)
+        self.assertEqual(sent_batch(mock_post)[0]["uuid"], canonical)
+
+    @parameterized.expand(
+        [
+            ("invalid string", "not-a-uuid-secret-1"),
             ("short string", "1234"),
             ("integer", 123),
         ]
     )
-    def test_capture_with_invalid_uuid_logs_and_falls_back_to_generated_uuid(
+    def test_capture_with_invalid_uuid_warns_and_falls_back_to_generated_uuid(
         self, _name, invalid_uuid
     ):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR") as logs:
+            with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
 
             self.assertIsNotNone(msg_uuid)
-            UUID(msg_uuid)
+            self.assertEqual(UUID(msg_uuid).version, 7)
             mock_post.assert_called_once()
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["uuid"], msg_uuid)
             self.assertNotEqual(msg["uuid"], str(invalid_uuid))
-            self.assertTrue(
-                any(
-                    f"Invalid event uuid {invalid_uuid!r}" in message
-                    and "Expected a valid UUID string or uuid.UUID instance" in message
-                    and "Falling back to a generated UUID" in message
-                    for message in logs.output
+            uuid_warnings = [r for r in logs.records if "Event uuid" in r.getMessage()]
+            self.assertEqual(len(uuid_warnings), 1)
+            self.assertEqual(uuid_warnings[0].levelname, "WARNING")
+            self.assertNotIn(str(invalid_uuid), uuid_warnings[0].getMessage())
+
+    def test_capture_with_empty_uuid_generates_one_without_logging(self):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with self.assertNoLogs("posthog", level="WARNING"):
+                msg_uuid = client.capture(
+                    "python test event", distinct_id="distinct_id", uuid=""
                 )
-            )
+
+            self.assertEqual(UUID(msg_uuid).version, 7)
+            self.assertEqual(sent_batch(mock_post)[0]["uuid"], msg_uuid)
 
     @parameterized.expand(
         [
-            ("empty string", ""),
             ("invalid string", "not-a-uuid"),
             ("short string", "1234"),
             ("integer", 123),
         ]
     )
     def test_capture_with_invalid_uuid_falls_back_in_debug(self, _name, invalid_uuid):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, debug=True, sync_mode=True)
-            with self.assertLogs("posthog", level="ERROR"):
+            with self.assertLogs("posthog", level="WARNING"):
                 msg_uuid = client.capture(
                     "python test event", distinct_id="distinct_id", uuid=invalid_uuid
                 )
@@ -522,7 +549,7 @@ class TestClient(unittest.TestCase):
             mock_post.assert_called_once()
 
     def test_basic_capture_with_project_api_key(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 project_api_key=FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -535,7 +562,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -545,7 +572,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
 
     def test_basic_super_properties(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 super_properties={"source": "repo-name"},
@@ -557,7 +584,7 @@ class TestClient(unittest.TestCase):
 
             # Check the enqueued message
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -574,44 +601,47 @@ class TestClient(unittest.TestCase):
             self.assertEqual(capture_call[0][0], "$exception")
             self.assertEqual(capture_call[1]["distinct_id"], "distinct_id")
 
-    def test_reserved_exception_property_overrides_are_deprecated(self):
-        custom_exception_list = [{"type": "CustomError", "value": "custom"}]
+    def test_capture_exception_ignores_reserved_properties(self):
         properties = {
-            "$exception_list": custom_exception_list,
+            "$exception_list": [{"type": "CustomError", "value": "custom"}],
             "$exception_level": "warning",
             "$exception_source": "custom.source",
-            "$exception_issue_id": "legacy-issue-id",
+            "$exception_issue_id": "custom-issue-id",
+            "plan": "pro",
         }
 
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            self.assertWarnsRegex(
-                DeprecationWarning,
-                "Reserved exception properties.*next major version",
-            ),
-        ):
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"), properties=properties
             )
 
         captured_properties = patch_capture.call_args.kwargs["properties"]
-        self.assertIs(captured_properties["$exception_list"], custom_exception_list)
-        self.assertEqual(captured_properties["$exception_level"], "warning")
-        self.assertEqual(captured_properties["$exception_source"], "custom.source")
-        self.assertEqual(captured_properties["$exception_issue_id"], "legacy-issue-id")
+        self.assertEqual(captured_properties["$exception_list"][0]["type"], "Exception")
+        self.assertEqual(captured_properties["$exception_level"], "error")
+        self.assertNotIn("$exception_source", captured_properties)
+        self.assertNotIn("$exception_issue_id", captured_properties)
+        self.assertEqual(captured_properties["plan"], "pro")
 
-    def test_reserved_exception_property_warning_cannot_drop_the_event(self):
-        with (
-            mock.patch.object(Client, "capture", return_value=None) as patch_capture,
-            warnings.catch_warnings(),
-        ):
-            warnings.simplefilter("error", DeprecationWarning)
+    @parameterized.expand(
+        [
+            ("default", None, None, "error"),
+            ("caller_level", None, "warning", "warning"),
+            ("alias", None, "WARN", "warning"),
+            ("unknown_level", None, "loud", "error"),
+            ("integration_level_wins", "fatal", "warning", "fatal"),
+        ]
+    )
+    def test_capture_exception_level(self, _name, integration_level, level, expected):
+        capture_metadata = {"level": integration_level} if integration_level else {}
+        with mock.patch.object(Client, "capture", return_value=None) as patch_capture:
             self.client.capture_exception(
                 Exception("test exception"),
-                properties={"$exception_level": "warning"},
+                level=level,
+                _capture_metadata=capture_metadata,
             )
 
-        patch_capture.assert_called_once()
+        captured_properties = patch_capture.call_args.kwargs["properties"]
+        self.assertEqual(captured_properties["$exception_level"], expected)
 
     @parameterized.expand(
         [
@@ -651,13 +681,13 @@ class TestClient(unittest.TestCase):
         )
 
         with (
-            mock.patch("posthog.client.batch_post") as mock_post,
+            patch_capture_send("client") as mock_post,
             use_span(NonRecordingSpan(span_context)),
         ):
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
             client.capture_exception(Exception("test exception"), properties=properties)
 
-        event = mock_post.call_args.kwargs["batch"][0]
+        event = sent_batch(mock_post)[0]
         if expected_trace_id is None:
             self.assertNotIn("$trace_id", event["properties"])
             self.assertNotIn("$span_id", event["properties"])
@@ -725,7 +755,7 @@ class TestClient(unittest.TestCase):
         )
 
         with (
-            mock.patch("posthog.client.batch_post") as mock_post,
+            patch_capture_send("client") as mock_post,
             use_span(NonRecordingSpan(span_context)),
         ):
             client = Client(
@@ -734,7 +764,7 @@ class TestClient(unittest.TestCase):
             capture = getattr(client, entrypoint)
             capture("$ai_event", distinct_id="distinct_id", properties=properties)
 
-        event = mock_post.call_args.kwargs["batch"][0]
+        event = sent_batch(mock_post)[0]
         if expected_trace_id is None:
             self.assertNotIn("$trace_id", event["properties"])
             self.assertNotIn("$span_id", event["properties"])
@@ -752,14 +782,14 @@ class TestClient(unittest.TestCase):
         )
 
         with (
-            mock.patch("posthog.client.batch_post") as mock_post,
+            patch_capture_send("client") as mock_post,
             use_span(NonRecordingSpan(span_context)),
         ):
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
             capture = getattr(client, entrypoint)
             capture("$ai_event", distinct_id="distinct_id")
 
-        event = mock_post.call_args.kwargs["batch"][0]
+        event = sent_batch(mock_post)[0]
         self.assertNotIn("$trace_id", event["properties"])
         self.assertNotIn("$span_id", event["properties"])
 
@@ -896,7 +926,7 @@ class TestClient(unittest.TestCase):
     def test_basic_capture_with_feature_flags(self, patch_flags):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -911,7 +941,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1019,7 +1049,7 @@ class TestClient(unittest.TestCase):
             },
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1036,7 +1066,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1057,7 +1087,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(patch_flags.call_count, 0)
 
         # test that flags are not evaluated without local evaluation
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1071,7 +1101,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             assert "$feature/beta-feature" not in msg["properties"]
@@ -1189,7 +1219,7 @@ class TestClient(unittest.TestCase):
             },
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1209,7 +1239,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1239,7 +1269,7 @@ class TestClient(unittest.TestCase):
             }
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1254,7 +1284,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1323,7 +1353,7 @@ class TestClient(unittest.TestCase):
             }
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 host="https://app.posthog.com",
@@ -1344,13 +1374,13 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
             self.assertTrue(isinstance(msg["timestamp"], str))
             self.assertIsNotNone(msg.get("uuid"))
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
             self.assertEqual(msg["distinct_id"], "distinct_id")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -1383,7 +1413,7 @@ class TestClient(unittest.TestCase):
     ):
         patch_flags.return_value = {"featureFlags": {"beta-feature": "random-variant"}}
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1398,7 +1428,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1461,7 +1491,7 @@ class TestClient(unittest.TestCase):
             },
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1480,7 +1510,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1543,7 +1573,7 @@ class TestClient(unittest.TestCase):
             },
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1562,7 +1592,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -1589,7 +1619,7 @@ class TestClient(unittest.TestCase):
         self, patch_flags
     ):
         """Test that SendFeatureFlagsOptions with only_evaluate_locally=True uses local evaluation"""
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1631,7 +1661,7 @@ class TestClient(unittest.TestCase):
 
             # Check the message includes the local flag
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$feature/local-flag"], True)
@@ -1644,7 +1674,7 @@ class TestClient(unittest.TestCase):
         """Test that SendFeatureFlagsOptions with only_evaluate_locally=False forces remote evaluation"""
         patch_flags.return_value = {"featureFlags": {"remote-flag": "remote-value"}}
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1678,7 +1708,7 @@ class TestClient(unittest.TestCase):
 
             # Check the message includes the remote flag
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$feature/remote-flag"], "remote-value")
@@ -1690,7 +1720,7 @@ class TestClient(unittest.TestCase):
         """Test that SendFeatureFlagsOptions without only_evaluate_locally defaults to remote evaluation"""
         patch_flags.return_value = {"featureFlags": {"default-flag": "default-value"}}
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1716,7 +1746,7 @@ class TestClient(unittest.TestCase):
 
             # Check the message includes the flag
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(
@@ -1728,7 +1758,7 @@ class TestClient(unittest.TestCase):
         """Test that capture_exception also supports SendFeatureFlagsOptions"""
         patch_flags.return_value = {"featureFlags": {"exception-flag": True}}
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -1758,7 +1788,7 @@ class TestClient(unittest.TestCase):
 
             # Check the message includes the flag
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "$exception")
@@ -1767,7 +1797,7 @@ class TestClient(unittest.TestCase):
     def test_stringifies_distinct_id(self):
         # A large number that loses precision in node:
         # node -e "console.log(157963456373623802 + 1)" > 157963456373623800
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
                 "python test event", distinct_id=157963456373623802
@@ -1777,13 +1807,13 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["distinct_id"], "157963456373623802")
 
     def test_advanced_capture(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
                 "python test event",
@@ -1797,10 +1827,10 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["properties"]["property"], "value")
             self.assertEqual(msg["event"], "python test event")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
@@ -1810,7 +1840,7 @@ class TestClient(unittest.TestCase):
             self.assertTrue("$groups" not in msg["properties"])
 
     def test_capture_converts_aware_timestamp_to_utc_without_changing_instant(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             client.capture(
                 "python test event",
@@ -1820,11 +1850,11 @@ class TestClient(unittest.TestCase):
                 ),
             )
 
-            msg = mock_post.call_args[1]["batch"][0]
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            msg = sent_batch(mock_post)[0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     def test_capture_converts_parseable_timestamp_string_to_utc(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             client.capture(
                 "python test event",
@@ -1832,14 +1862,14 @@ class TestClient(unittest.TestCase):
                 timestamp="2014-09-03T05:30:00+05:30",
             )
 
-            msg = mock_post.call_args[1]["batch"][0]
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            msg = sent_batch(mock_post)[0]
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     @parameterized.expand(["2026-06-27", "not-an-iso-timestamp"])
     def test_capture_replaces_invalid_timestamp_with_current_utc_time(self, timestamp):
         now = datetime(2026, 6, 27, 12, 30, tzinfo=timezone.utc)
         with (
-            mock.patch("posthog.client.batch_post") as mock_post,
+            patch_capture_send("client") as mock_post,
             mock.patch("posthog.client.datetime", wraps=datetime) as mock_datetime,
             mock.patch.object(Client.log, "warning") as mock_warning,
         ):
@@ -1852,17 +1882,90 @@ class TestClient(unittest.TestCase):
             )
 
         self.assertIsNotNone(result)
-        msg = mock_post.call_args[1]["batch"][0]
-        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00+00:00")
-        mock_warning.assert_called_once_with(
-            "Invalid timestamp %r. Falling back to the current UTC time.", timestamp
+        msg = sent_batch(mock_post)[0]
+        self.assertEqual(msg["timestamp"], "2026-06-27T12:30:00.000000+00:00")
+        mock_warning.assert_called_once()
+        self.assertNotIn(timestamp, repr(mock_warning.call_args))
+
+    @parameterized.expand(
+        [
+            (f"{name}_{method}", event, hook_event, method)
+            for name, event, hook_event in [
+                ("missing", None, None),
+                ("non_string", 123, None),
+                ("empty", "", None),
+                ("set_by_before_send", "valid", 123),
+            ]
+            for method in ["capture", "capture_ai"]
+        ]
+    )
+    def test_capture_drops_an_invalid_event_name_and_logs_once(
+        self, _, event, hook_event, method
+    ):
+        def before_send(msg):
+            if hook_event is not None:
+                msg["event"] = hook_event
+            return msg
+
+        with (
+            patch_capture_send("client") as mock_post,
+            mock.patch("posthog.utils._warned_reasons", set()),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+            mock.patch.object(Client.log, "exception") as mock_exception,
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, before_send=before_send)
+            capture = getattr(client, method)
+            results = [capture(event, distinct_id="user") for _ in range(2)]
+
+        self.assertEqual(results, [None, None])
+        mock_post.assert_not_called()
+        mock_warning.assert_called_once()
+        mock_exception.assert_not_called()
+
+    @parameterized.expand(
+        [
+            ("int", 123),
+            ("float", 1.5),
+            ("none", None),
+            ("list", ["user"]),
+            ("dict", {"id": "user"}),
+        ]
+    )
+    def test_capture_drops_an_event_whose_before_send_distinct_id_is_not_a_string(
+        self, _, bad_id
+    ):
+        def before_send(msg):
+            if msg["event"] == "bad":
+                msg["distinct_id"] = bad_id
+            return msg
+
+        with (
+            patch_capture_send("client") as mock_post,
+            mock.patch("posthog.utils._warned_reasons", set()),
+            mock.patch.object(Client.log, "warning") as mock_warning,
+        ):
+            client = Client(FAKE_TEST_API_KEY, sync_mode=True, before_send=before_send)
+            results = [
+                client.capture(event, distinct_id="user")
+                for event in ("bad", "good", "bad")
+            ]
+
+        self.assertIsNone(results[0])
+        self.assertIsNotNone(results[1])
+        self.assertIsNone(results[2])
+        self.assertEqual(
+            [(m["event"], m["distinct_id"]) for m in sent_batch(mock_post)],
+            [("good", "user")],
         )
+        mock_warning.assert_called_once()
+        self.assertIn("distinct IDs must be strings", mock_warning.call_args[0][0])
+        self.assertNotIn(repr(bad_id), repr(mock_warning.call_args))
 
     def test_capture_does_not_normalize_datetime_properties(self):
         property_value = datetime(
             2014, 9, 3, 5, 30, tzinfo=timezone(timedelta(hours=5, minutes=30))
         )
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             client.capture(
                 "python test event",
@@ -1870,11 +1973,11 @@ class TestClient(unittest.TestCase):
                 properties={"caller_datetime": property_value},
             )
 
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             self.assertIs(msg["properties"]["caller_datetime"], property_value)
 
     def test_groups_capture(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.capture(
                 "test_event",
@@ -1886,7 +1989,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(
@@ -1895,7 +1998,7 @@ class TestClient(unittest.TestCase):
             )
 
     def test_basic_set(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set(
                 distinct_id="distinct_id", properties={"trait": "value"}
@@ -1905,7 +2008,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["$set"]["trait"], "value")
@@ -1914,7 +2017,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set(
                 distinct_id="distinct_id",
@@ -1927,10 +2030,10 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["$set"]["trait"], "value")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -1939,7 +2042,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_set_once(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set_once(
                 distinct_id="distinct_id", properties={"trait": "value"}
@@ -1949,7 +2052,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["$set_once"]["trait"], "value")
@@ -1958,7 +2061,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_advanced_set_once(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.set_once(
                 distinct_id="distinct_id",
@@ -1971,10 +2074,10 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
             self.assertEqual(msg["$set_once"]["trait"], "value")
             self.assertEqual(msg["properties"]["$lib"], "posthog-python")
             self.assertEqual(msg["properties"]["$lib_version"], VERSION)
@@ -1983,7 +2086,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(msg["distinct_id"], "distinct_id")
 
     def test_basic_group_identify(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.group_identify("organization", "id:5")
 
@@ -1991,7 +2094,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "$groupidentify")
@@ -2011,7 +2114,7 @@ class TestClient(unittest.TestCase):
             self.assertIsNotNone(msg.get("uuid"))
 
     def test_basic_group_identify_with_distinct_id(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.group_identify(
                 "organization", "id:5", distinct_id="distinct_id"
@@ -2020,7 +2123,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "$groupidentify")
@@ -2041,7 +2144,7 @@ class TestClient(unittest.TestCase):
             self.assertIsNotNone(msg.get("uuid"))
 
     def test_advanced_group_identify(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.group_identify(
                 "organization",
@@ -2055,7 +2158,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "$groupidentify")
@@ -2071,10 +2174,10 @@ class TestClient(unittest.TestCase):
                     "$is_server": True,
                 },
             )
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     def test_advanced_group_identify_with_distinct_id(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.group_identify(
                 "organization",
@@ -2089,7 +2192,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "$groupidentify")
@@ -2107,7 +2210,7 @@ class TestClient(unittest.TestCase):
                     "$is_server": True,
                 },
             )
-            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00+00:00")
+            self.assertEqual(msg["timestamp"], "2014-09-03T00:00:00.000000+00:00")
 
     @parameterized.expand(
         [
@@ -2116,7 +2219,7 @@ class TestClient(unittest.TestCase):
         ]
     )
     def test_group_identify_without_group_type_is_dropped(self, _name, group_type):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.group_identify(group_type, "id:5")
@@ -2132,7 +2235,7 @@ class TestClient(unittest.TestCase):
         ]
     )
     def test_group_identify_without_group_key_is_dropped(self, _name, group_key):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.group_identify("organization", group_key)
@@ -2142,18 +2245,18 @@ class TestClient(unittest.TestCase):
             self.assertIn("group_key", logs.output[0])
 
     def test_group_identify_accepts_falsy_non_string_group_key(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.group_identify("organization", 0)
             self.assertIsNotNone(msg_uuid)
 
             mock_post.assert_called_once()
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             # The group key is validated, not normalized - it goes out as passed.
             self.assertEqual(msg["properties"]["$group_key"], 0)
 
     def test_basic_alias(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.alias("previousId", "distinct_id")
             self.assertIsNotNone(msg_uuid)
@@ -2161,7 +2264,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
             self.assertEqual(msg["properties"]["distinct_id"], "previousId")
             self.assertEqual(msg["properties"]["alias"], "distinct_id")
@@ -2173,7 +2276,7 @@ class TestClient(unittest.TestCase):
         ]
     )
     def test_alias_without_previous_id_is_dropped(self, _name, previous_id):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.alias(previous_id, "distinct_id")
@@ -2183,18 +2286,95 @@ class TestClient(unittest.TestCase):
             self.assertIn("previous_id", logs.output[0])
 
     def test_alias_accepts_non_string_previous_id(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             msg_uuid = client.alias(0, "distinct_id")
             self.assertIsNotNone(msg_uuid)
 
             mock_post.assert_called_once()
-            msg = mock_post.call_args[1]["batch"][0]
+            msg = sent_batch(mock_post)[0]
             self.assertEqual(msg["distinct_id"], "0")
             self.assertEqual(msg["properties"]["distinct_id"], "0")
 
+    def _capture_in_request_context(self, call):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            with new_context(fresh=True):
+                identify_context("context-user")
+                set_context_session("context-session")
+                tag("tenant", "acme")
+                set_context_option("product_tour_id", "tour-1")
+                result = call(client)
+        return result, (sent_batch(mock_post)[0] if mock_post.called else None)
+
+    @parameterized.expand(
+        [
+            ("caller_id", "caller-user", "caller-user"),
+            ("whitespace_caller_id", "  ", "context-user"),
+        ]
+    )
+    def test_group_identify_takes_context_values_but_not_its_session(
+        self, _, distinct_id, expected_distinct_id
+    ):
+        _, msg = self._capture_in_request_context(
+            lambda client: client.group_identify(
+                "company", "acme-1", distinct_id=distinct_id
+            )
+        )
+
+        self.assertEqual(msg["distinct_id"], expected_distinct_id)
+        self.assertNotIn("$session_id", msg["properties"])
+        self.assertEqual(msg["properties"]["tenant"], "acme")
+        self.assertEqual(msg["options"]["product_tour_id"], "tour-1")
+
+    def test_group_identify_without_any_distinct_id_uses_the_group_id(self):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.group_identify("company", "acme-1")
+            client.group_identify("company", "acme-1")
+
+        self.assertEqual(
+            [msg["distinct_id"] for msg in sent_events(mock_post)],
+            ["$company_acme-1", "$company_acme-1"],
+        )
+
+    @parameterized.expand(
+        [
+            ("caller_target", "user-1", "user-1"),
+            ("context_only_target", None, None),
+            ("whitespace_target", "  ", None),
+        ]
+    )
+    def test_alias_takes_its_target_only_from_the_caller(
+        self, _, distinct_id, expected_alias
+    ):
+        result, msg = self._capture_in_request_context(
+            lambda client: client.alias("anon-1", distinct_id)
+        )
+
+        if expected_alias is None:
+            self.assertIsNone(result)
+            self.assertIsNone(msg)
+            return
+        self.assertEqual(msg["properties"]["alias"], expected_alias)
+        self.assertEqual(msg["properties"]["$session_id"], "context-session")
+        self.assertEqual(msg["properties"]["tenant"], "acme")
+        self.assertEqual(msg["options"]["product_tour_id"], "tour-1")
+
+    @parameterized.expand([("none", None), ("empty", ""), ("whitespace", " \t ")])
+    def test_capture_without_a_distinct_id_sends_a_personless_v7_id(
+        self, _, distinct_id
+    ):
+        with patch_capture_send("client") as mock_post:
+            client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
+            client.capture("event", distinct_id=distinct_id)
+
+        msg = sent_batch(mock_post)[0]
+        self.assertEqual(UUID(msg["distinct_id"]).version, 7)
+        self.assertEqual(msg["options"]["process_person_profile"], False)
+
     def test_alias_without_distinct_id_is_dropped(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with self.assertLogs("posthog", level="WARNING") as logs:
                 msg_uuid = client.alias("previousId", None)
@@ -2230,7 +2410,7 @@ class TestClient(unittest.TestCase):
     def test_capture_with_session_id_variations(
         self, test_name, session_id, additional_properties, expected_properties
     ):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             properties = {"$session_id": session_id, **additional_properties}
@@ -2243,7 +2423,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], "python test event")
@@ -2257,7 +2437,7 @@ class TestClient(unittest.TestCase):
                 self.assertEqual(msg["properties"][key], value)
 
     def test_session_id_preserved_with_groups(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             session_id = "group-session-101"
 
@@ -2272,7 +2452,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$session_id"], session_id)
@@ -2282,7 +2462,7 @@ class TestClient(unittest.TestCase):
             )
 
     def test_session_id_with_anonymous_event(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             session_id = "anonymous-session-202"
 
@@ -2299,7 +2479,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$session_id"], session_id)
@@ -2379,7 +2559,7 @@ class TestClient(unittest.TestCase):
         additional_properties,
         expected_additional_properties,
     ):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             properties = {"$session_id": session_id, **additional_properties}
@@ -2391,7 +2571,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["event"], event_name)
@@ -2409,10 +2589,10 @@ class TestClient(unittest.TestCase):
         [
             # test_name, super_properties, event_session_id, expected_session_id, expected_super_props
             (
-                "super_properties_override_session_id",
+                "event_session_id_overrides_super_properties",
                 {"$session_id": "super-session", "source": "test"},
                 "event-session-808",
-                "super-session",
+                "event-session-808",
                 {"source": "test"},
             ),
             (
@@ -2446,7 +2626,7 @@ class TestClient(unittest.TestCase):
         expected_session_id,
         expected_super_props,
     ):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY, super_properties=super_properties, sync_mode=True
             )
@@ -2461,7 +2641,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$session_id"], expected_session_id)
@@ -2779,22 +2959,94 @@ class TestClient(unittest.TestCase):
 
         self.assertEqual(timeouts, [0, None])
 
-    def test_sync_send_failure_does_not_invoke_async_on_error(self):
-        on_error = mock.Mock()
-        client = Client(
-            FAKE_TEST_API_KEY,
-            sync_mode=True,
-            on_error=on_error,
-        )
+    def test_sync_send_failure_invokes_on_error_after_releasing_send_slot(self):
+        error = Exception("upload failed")
+        active_sends_in_callback = []
+        client: Client
 
-        with mock.patch(
-            "posthog.client.batch_post", side_effect=Exception("upload failed")
-        ):
+        def on_error(err, batch):
+            active_sends_in_callback.append(client._analytics_lane._active_sync_sends)
+            self.assertIs(err, error)
+            self.assertEqual([event["event"] for event in batch], ["event"])
+            client.shutdown()
+
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True, on_error=on_error)
+
+        with patch_capture_send("client", side_effect=error):
             result = client.capture("event", distinct_id="distinct_id")
 
         self.assertIsNone(result)
-        on_error.assert_not_called()
-        self.assertEqual(client._analytics_lane._active_sync_sends, 0)
+        self.assertEqual(active_sends_in_callback, [0])
+
+    def test_sync_send_failure_inside_on_error_logs_instead_of_recursing(self):
+        calls = []
+        client: Client
+
+        def on_error(err, batch):
+            calls.append(batch[0]["event"])
+            client.capture("from_callback", distinct_id="distinct_id")
+
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True, on_error=on_error)
+
+        with patch_capture_send("client", side_effect=Exception("upload failed")):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                client.capture("event", distinct_id="distinct_id")
+
+        self.assertEqual(calls, ["event"])
+        self.assertIn(
+            "1 event(s) not persisted by /i/v1/analytics/events: Exception",
+            "\n".join(logs.output),
+        )
+
+    @parameterized.expand([("capture",), ("capture_ai",)])
+    def test_sync_send_failure_in_debug_reports_once_then_raises(self, method_name):
+        errors = []
+        client = Client(
+            FAKE_TEST_API_KEY,
+            sync_mode=True,
+            debug=True,
+            on_error=lambda err, batch: errors.append(err),
+        )
+        failure = APIError(503, "unavailable")
+
+        with patch_capture_send("client", side_effect=failure):
+            with self.assertRaises(APIError) as raised:
+                getattr(client, method_name)("event", distinct_id="distinct_id")
+
+        self.assertIs(raised.exception, failure)
+        self.assertEqual(errors, [failure])
+
+    @parameterized.expand(
+        [
+            ("analytics", "capture", _CAPTURE_V1_PATH),
+            ("ai", "capture_ai", _CAPTURE_AI_V1_PATH),
+        ]
+    )
+    def test_sync_send_failure_without_on_error_logs_aggregate_line(
+        self, _name, method_name, path
+    ):
+        client = Client(FAKE_TEST_API_KEY, sync_mode=True)
+
+        with patch_capture_send(
+            "client", side_effect=APIError(400, "password=server-secret")
+        ):
+            with self.assertLogs("posthog", level="ERROR") as logs:
+                result = getattr(client, method_name)(
+                    "$ai_generation", distinct_id="distinct_id"
+                )
+
+        self.assertIsNone(result)
+        output = "\n".join(logs.output)
+        loss_lines = [
+            r.getMessage()
+            for r in logs.records
+            if "event(s) not persisted by" in r.getMessage()
+        ]
+        self.assertEqual(
+            loss_lines,
+            [f"[PostHog] 1 event(s) not persisted by {path}: APIError (status=400)"],
+        )
+        self.assertNotIn("server-secret", output)
 
     def test_on_error_can_request_shutdown_with_pending_work(self):
         first_send_started = threading.Event()
@@ -3416,12 +3668,21 @@ class TestClient(unittest.TestCase):
 
         self.assertLess(time.monotonic() - start, 1)
 
-    def test_shutdown_waits_for_racing_enqueue_before_draining(self):
+    @parameterized.expand(
+        [
+            ("analytics", "capture", "_analytics_lane", _CAPTURE_V1_PATH),
+            ("ai_first_event", "capture_ai", "_ai_lane", _CAPTURE_AI_V1_PATH),
+        ]
+    )
+    def test_shutdown_waits_for_racing_enqueue_before_draining(
+        self, _name, method_name, lane_attr, path
+    ):
         client = Client(FAKE_TEST_API_KEY, flush_interval=0.01)
+        lane = getattr(client, lane_attr)
         put_started = threading.Event()
         release_put = threading.Event()
         shutdown_done = threading.Event()
-        original_put = client.queue.put
+        original_put = lane.queue.put
         capture_result = []
 
         def blocking_put(*args, **kwargs):
@@ -3431,14 +3692,17 @@ class TestClient(unittest.TestCase):
 
         capture_thread = threading.Thread(
             target=lambda: capture_result.append(
-                client.capture("racing event", distinct_id="distinct_id")
+                getattr(client, method_name)("$ai_racing", distinct_id="distinct_id")
             )
         )
         shutdown_thread = threading.Thread(
             target=lambda: (client.shutdown(), shutdown_done.set())
         )
 
-        with mock.patch.object(client.queue, "put", side_effect=blocking_put):
+        with (
+            patch_capture_send("consumer") as mock_send,
+            mock.patch.object(lane.queue, "put", side_effect=blocking_put),
+        ):
             capture_thread.start()
             self.assertTrue(put_started.wait(2))
             shutdown_thread.start()
@@ -3454,7 +3718,17 @@ class TestClient(unittest.TestCase):
         self.assertFalse(shutdown_thread.is_alive())
         self.assertTrue(shutdown_done.is_set())
         self.assertIsNotNone(capture_result[0])
-        self.assertTrue(client.queue.empty())
+        self.assertTrue(lane.queue.empty())
+        self.assertEqual(
+            [
+                (call.kwargs["path"], len(sent_batch(mock_send, i)))
+                for i, call in enumerate(mock_send.call_args_list)
+            ],
+            [(path, 1)],
+        )
+        self.assertFalse(
+            any(c.is_alive() for lane in client._lanes for c in lane.consumers)
+        )
 
     def test_shutdown_waits_for_sync_send_and_rejects_later_sends(self):
         client = Client(FAKE_TEST_API_KEY, sync_mode=True)
@@ -3476,7 +3750,7 @@ class TestClient(unittest.TestCase):
             target=lambda: (client.shutdown(), shutdown_done.set())
         )
 
-        with mock.patch("posthog.client.batch_post", side_effect=blocking_post) as post:
+        with patch_capture_send("client", side_effect=blocking_post) as post:
             capture_thread.start()
             self.assertTrue(send_started.wait(2))
             shutdown_thread.start()
@@ -3499,7 +3773,7 @@ class TestClient(unittest.TestCase):
         post.assert_called_once()
 
     def test_synchronous(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, sync_mode=True)
 
             msg_uuid = client.capture("test event", distinct_id="distinct_id")
@@ -3577,8 +3851,12 @@ class TestClient(unittest.TestCase):
     def test_debug(self):
         Client("bad_key", debug=True)
 
-    def test_gzip(self):
-        client = Client(FAKE_TEST_API_KEY, on_error=self.fail, gzip=True)
+    def test_gzip_compression(self):
+        client = Client(
+            FAKE_TEST_API_KEY,
+            on_error=self.fail,
+            capture_compression=CaptureCompression.GZIP,
+        )
         for _ in range(10):
             client.capture(
                 "event", distinct_id="distinct_id", properties={"trait": "value"}
@@ -3591,14 +3869,12 @@ class TestClient(unittest.TestCase):
             FAKE_TEST_API_KEY, on_error=self.fail, flush_at=10, flush_interval=3
         )
 
-        def mock_post_fn(*args, **kwargs):
-            self.assertEqual(len(kwargs["batch"]), 10)
+        def mock_post_fn(api_key, host, batch, **kwargs):
+            self.assertEqual(len(batch), 10)
 
         # the post function should be called 2 times, with a batch size of 10
         # each time.
-        with mock.patch(
-            "posthog.consumer.batch_post", side_effect=mock_post_fn
-        ) as mock_post:
+        with patch_capture_send("consumer", side_effect=mock_post_fn) as mock_post:
             for _ in range(20):
                 client.capture(
                     "event", distinct_id="distinct_id", properties={"trait": "value"}
@@ -3651,7 +3927,7 @@ class TestClient(unittest.TestCase):
         self.assertTrue(client.queue.empty())
 
     def test_enabled_to_disabled(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -3665,7 +3941,7 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
             self.assertEqual(msg["event"], "python test event")
 
@@ -3675,7 +3951,7 @@ class TestClient(unittest.TestCase):
             self.assertFalse(self.failed)
 
     def test_disable_geoip_default_on_events(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -3687,12 +3963,12 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             capture_msg = batch_data[0]
             self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
 
     def test_disable_geoip_override_on_events(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -3718,17 +3994,17 @@ class TestClient(unittest.TestCase):
             self.assertEqual(mock_post.call_count, 2)
 
             # Check set event
-            set_batch = mock_post.call_args_list[0][1]["batch"]
+            set_batch = sent_batch(mock_post, 0)
             capture_msg = set_batch[0]
             self.assertEqual(capture_msg["properties"]["$geoip_disable"], True)
 
             # Check page event
-            page_batch = mock_post.call_args_list[1][1]["batch"]
+            page_batch = sent_batch(mock_post, 1)
             identify_msg = page_batch[0]
-            self.assertEqual("$geoip_disable" not in identify_msg["properties"], True)
+            self.assertIs(identify_msg["properties"]["$geoip_disable"], False)
 
     def test_disable_geoip_method_overrides_init_on_events(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -3742,9 +4018,9 @@ class TestClient(unittest.TestCase):
 
             # Get the enqueued message from the mock
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
-            self.assertTrue("$geoip_disable" not in msg["properties"])
+            self.assertIs(msg["properties"]["$geoip_disable"], False)
 
     @mock.patch("posthog.client.flags")
     def test_disable_geoip_default_on_decide(self, patch_flags):
@@ -4194,7 +4470,7 @@ class TestClient(unittest.TestCase):
         }
 
     def test_set_context_session_with_capture(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with new_context():
                 set_context_session("context-session-123")
@@ -4209,7 +4485,7 @@ class TestClient(unittest.TestCase):
 
                 # Get the enqueued message from the mock
                 mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
+                batch_data = sent_batch(mock_post)
                 msg = batch_data[0]
 
                 self.assertEqual(
@@ -4218,7 +4494,7 @@ class TestClient(unittest.TestCase):
 
     @parameterized.expand([("new_context",), ("scoped",)])
     def test_client_context_helpers_apply_to_capture(self, context_helper):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             def capture_in_context():
@@ -4246,7 +4522,7 @@ class TestClient(unittest.TestCase):
 
             self.assertIsNotNone(msg_uuid)
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["distinct_id"], "context-user")
@@ -4257,7 +4533,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.get_tags(), {})
 
     def test_client_scoped_context_helpers_apply_to_capture_async(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             @client.scoped(fresh=True)
@@ -4272,7 +4548,7 @@ class TestClient(unittest.TestCase):
 
             self.assertIsNotNone(msg_uuid)
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["distinct_id"], "async-scoped-user")
@@ -4288,7 +4564,7 @@ class TestClient(unittest.TestCase):
             self.assertEqual(client.get_tags(), {})
 
     def test_set_context_session_with_page_explicit_properties(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with new_context():
                 set_context_session("page-explicit-session-789")
@@ -4305,7 +4581,7 @@ class TestClient(unittest.TestCase):
 
                 # Get the enqueued message from the mock
                 mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
+                batch_data = sent_batch(mock_post)
                 msg = batch_data[0]
 
                 self.assertEqual(
@@ -4316,7 +4592,7 @@ class TestClient(unittest.TestCase):
         """Test that explicit session ID overrides context session ID in capture"""
         from posthog.contexts import new_context, set_context_session
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
             with new_context():
                 set_context_session("context-session-override")
@@ -4334,7 +4610,7 @@ class TestClient(unittest.TestCase):
 
                 # Get the enqueued message from the mock
                 mock_post.assert_called_once()
-                batch_data = mock_post.call_args[1]["batch"]
+                batch_data = sent_batch(mock_post)
                 msg = batch_data[0]
 
                 self.assertEqual(
@@ -4537,7 +4813,7 @@ class TestClient(unittest.TestCase):
             }
         }
 
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(
                 FAKE_TEST_API_KEY,
                 on_error=self.set_fail,
@@ -4565,7 +4841,7 @@ class TestClient(unittest.TestCase):
 
             # Check the message includes only the filtered flags
             mock_post.assert_called_once()
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
 
             self.assertEqual(msg["properties"]["$feature/flag1"], "value1")
@@ -4573,7 +4849,7 @@ class TestClient(unittest.TestCase):
             # flag2 should not be included since it wasn't requested
             self.assertNotIn("$feature/flag2", msg["properties"])
 
-    @mock.patch("posthog.client.batch_post")
+    @patch_capture_send("client")
     def test_get_feature_flag_result_with_empty_string_payload(self, patch_batch_post):
         """Test that get_feature_flag_result returns a FeatureFlagResult when payload is empty string"""
         client = Client(
@@ -4624,7 +4900,7 @@ class TestClient(unittest.TestCase):
         self.assertEqual(result.get_value(), "empty-variant")
         self.assertIsNone(result.payload)
 
-    @mock.patch("posthog.client.batch_post")
+    @patch_capture_send("client")
     def test_get_all_flags_and_payloads_with_empty_string(self, patch_batch_post):
         """Test that get_all_flags_and_payloads includes flags with empty string payloads"""
         client = Client(
@@ -4680,14 +4956,14 @@ class TestClient(unittest.TestCase):
         )
 
     def test_context_tags_added(self):
-        with mock.patch("posthog.client.batch_post") as mock_post:
+        with patch_capture_send("client") as mock_post:
             client = Client(FAKE_TEST_API_KEY, on_error=self.set_fail, sync_mode=True)
 
             with new_context():
                 tag("random_tag", 12345)
                 client.capture("python test event", distinct_id="distinct_id")
 
-            batch_data = mock_post.call_args[1]["batch"]
+            batch_data = sent_batch(mock_post)
             msg = batch_data[0]
             self.assertEqual(msg["properties"]["$context_tags"], ["random_tag"])
 
@@ -4736,30 +5012,18 @@ class TestClient(unittest.TestCase):
 
 
 class TestClientCaptureRetrySemantics(unittest.TestCase):
-    @parameterized.expand(
-        [
-            ("v0_sync", "v0", True),
-            ("v1_sync", "v1", True),
-            ("v0_async", "v0", False),
-            ("v1_async", "v1", False),
-        ]
-    )
-    def test_negative_max_retries_still_attempts_delivery_once(
-        self, _name, capture_mode, sync_mode
-    ):
+    @parameterized.expand([("sync", True), ("async", False)])
+    def test_negative_max_retries_still_attempts_delivery_once(self, _name, sync_mode):
         response = mock.Mock(status_code=200, headers={}, text="")
         response.json.return_value = {"results": {}}
         client = None
 
-        with (
-            mock.patch("posthog.client.batch_post") as sync_v0_post,
-            mock.patch("posthog.consumer.batch_post") as async_v0_post,
-            mock.patch("posthog.capture_v1._post_v1", return_value=response) as v1_post,
-        ):
+        with mock.patch(
+            "posthog.capture_send._post_v1", return_value=response
+        ) as v1_post:
             try:
                 client = Client(
                     FAKE_TEST_API_KEY,
-                    capture_mode=capture_mode,
                     sync_mode=sync_mode,
                     max_retries=-1,
                     flush_at=1,
@@ -4770,59 +5034,30 @@ class TestClientCaptureRetrySemantics(unittest.TestCase):
                     client.flush()
 
                 self.assertEqual(client.max_retries, 0)
-                if capture_mode == "v1":
-                    v1_post.assert_called_once()
-                    sync_v0_post.assert_not_called()
-                    async_v0_post.assert_not_called()
-                elif sync_mode:
-                    sync_v0_post.assert_called_once()
-                    async_v0_post.assert_not_called()
-                    v1_post.assert_not_called()
-                else:
-                    async_v0_post.assert_called_once()
-                    sync_v0_post.assert_not_called()
-                    v1_post.assert_not_called()
+                v1_post.assert_called_once()
             finally:
                 if client is not None and not sync_mode:
                     client.shutdown()
 
 
-class TestClientSyncCaptureMode(unittest.TestCase):
-    """Sync-mode `_enqueue` selects the analytics submitter by `capture_mode`."""
+class TestClientSyncCapture(unittest.TestCase):
+    """Sync-mode `_enqueue` sends analytics events through the v1 submitter."""
 
     def _client(self, **kwargs):
         return Client(FAKE_TEST_API_KEY, sync_mode=True, **kwargs)
 
-    @parameterized.expand(
-        [
-            ("v0", None, False),
-            ("v1", "v1", True),
-        ]
-    )
-    def test_capture_mode_selects_sync_submitter(self, _name, capture_mode, expects_v1):
-        kwargs = {"capture_mode": capture_mode} if capture_mode else {}
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            self._client(**kwargs).capture("evt", distinct_id="d")
-        if expects_v1:
-            mock_post.assert_not_called()
-            mock_v1.assert_called_once()
-            sent_batch = mock_v1.call_args.args[2]
-            self.assertEqual(len(sent_batch), 1)
-            self.assertEqual(sent_batch[0]["event"], "evt")
-        else:
-            mock_v1.assert_not_called()
-            mock_post.assert_called_once()
+    def test_sync_capture_posts_to_analytics_endpoint(self):
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
+            self._client().capture("evt", distinct_id="d")
+        mock_v1.assert_called_once()
+        batch = mock_v1.call_args.args[2]
+        self.assertEqual(len(batch), 1)
+        self.assertEqual(batch[0]["event"], "evt")
+        self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)
 
-    def test_v1_sync_forwards_config_to_submitter(self):
-        with (
-            mock.patch("posthog.client.batch_post"),
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
+    def test_sync_forwards_config_to_submitter(self):
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
             self._client(
-                capture_mode="v1",
                 capture_compression=CaptureCompression.GZIP,
                 max_retries=4,
                 historical_migration=True,
@@ -4832,29 +5067,15 @@ class TestClientSyncCaptureMode(unittest.TestCase):
             self.assertEqual(kwargs["max_retries"], 4)
             self.assertEqual(kwargs["historical_migration"], True)
 
-    def test_v1_sync_gzip_flag_falls_back_to_gzip_compression(self):
-        # Legacy `gzip=True` with no explicit capture_compression -> GZIP on v1.
-        with (
-            mock.patch("posthog.client.batch_post"),
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            self._client(capture_mode="v1", gzip=True).capture("evt", distinct_id="d")
-            self.assertEqual(
-                mock_v1.call_args.kwargs["compression"], CaptureCompression.GZIP
-            )
-
-    def test_v1_sync_ai_named_event_through_capture_uses_v1(self):
+    def test_sync_ai_named_event_through_capture_uses_analytics_endpoint(self):
         # `capture()` never special-cases AI events: an `$ai_*`-named event
-        # follows `capture_mode` and rides the v1 submitter like any analytics
-        # event. Only `capture_ai()` reaches the AI lane.
-        with (
-            mock.patch("posthog.client.batch_post") as mock_post,
-            mock.patch("posthog.client._send_v1_batch") as mock_v1,
-        ):
-            client = self._client(capture_mode="v1")
+        # rides the analytics endpoint like any other event. Only
+        # `capture_ai()` reaches the AI lane.
+        with mock.patch("posthog.client._send_v1_batch") as mock_v1:
+            client = self._client()
             client.capture("$ai_generation", distinct_id="d")
-            mock_post.assert_not_called()
             mock_v1.assert_called_once()
-            sent_batch = mock_v1.call_args.args[2]
-            self.assertEqual(len(sent_batch), 1)
-            self.assertEqual(sent_batch[0]["event"], "$ai_generation")
+            batch = mock_v1.call_args.args[2]
+            self.assertEqual(len(batch), 1)
+            self.assertEqual(batch[0]["event"], "$ai_generation")
+            self.assertEqual(mock_v1.call_args.kwargs["path"], _CAPTURE_V1_PATH)

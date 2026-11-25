@@ -9,6 +9,8 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
+from posthog.test.ai.utils import POSTHOG_OPTIONS_CASES, assert_captured_options
+
 try:
     from langchain_anthropic.chat_models import ChatAnthropic
     from langchain_community.chat_models.fake import FakeMessagesListChatModel
@@ -185,15 +187,15 @@ def test_basic_chat_chain(mock_client, stream):
         result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    span_args = mock_client.capture.call_args_list[0][1]
+    span_args = mock_client.capture_ai.call_args_list[0][1]
     span_props = span_args["properties"]
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     # Span is first
@@ -262,13 +264,13 @@ async def test_async_basic_chat_chain(mock_client, stream):
     else:
         result = await chain.ainvoke({}, config={"callbacks": callbacks})
     assert result.content == "The Los Angeles Dodgers won the World Series in 2020."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    span_args = mock_client.capture.call_args_list[0][1]
+    span_args = mock_client.capture_ai.call_args_list[0][1]
     span_props = span_args["properties"]
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     # Span is first
@@ -349,7 +351,7 @@ def _capture_anthropic_usage(
     )
 
     cb._pop_run_and_capture_generation(run_id, None, response)
-    return mock_client.capture.call_args.kwargs["properties"]
+    return mock_client.capture_ai.call_args.kwargs["properties"]
 
 
 @pytest.mark.parametrize(
@@ -380,8 +382,8 @@ def test_basic_llm_chain(mock_client, Model, stream):
         )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args_list[0][1]
+    assert mock_client.capture_ai.call_count == 1
+    args = mock_client.capture_ai.call_args_list[0][1]
     props = args["properties"]
 
     assert args["event"] == "$ai_generation"
@@ -425,8 +427,8 @@ async def test_async_basic_llm_chain(mock_client, Model, stream):
         )
     assert result == "The Los Angeles Dodgers won the World Series in 2020."
 
-    assert mock_client.capture.call_count == 1
-    args = mock_client.capture.call_args_list[0][1]
+    assert mock_client.capture_ai.call_count == 1
+    args = mock_client.capture_ai.call_args_list[0][1]
     props = args["properties"]
 
     assert args["event"] == "$ai_generation"
@@ -455,21 +457,21 @@ def test_trace_id_and_inputs_for_multiple_chains(mock_client):
 
     assert result.content == "Bar"
     # span, generation, span, generation, trace
-    assert mock_client.capture.call_count == 5
+    assert mock_client.capture_ai.call_count == 5
 
-    first_span_args = mock_client.capture.call_args_list[0][1]
+    first_span_args = mock_client.capture_ai.call_args_list[0][1]
     first_span_props = first_span_args["properties"]
 
-    first_generation_args = mock_client.capture.call_args_list[1][1]
+    first_generation_args = mock_client.capture_ai.call_args_list[1][1]
     first_generation_props = first_generation_args["properties"]
 
-    second_span_args = mock_client.capture.call_args_list[2][1]
+    second_span_args = mock_client.capture_ai.call_args_list[2][1]
     second_span_props = second_span_args["properties"]
 
-    second_generation_args = mock_client.capture.call_args_list[3][1]
+    second_generation_args = mock_client.capture_ai.call_args_list[3][1]
     second_generation_props = second_generation_args["properties"]
 
-    trace_args = mock_client.capture.call_args_list[4][1]
+    trace_args = mock_client.capture_ai.call_args_list[4][1]
     trace_props = trace_args["properties"]
 
     # Prompt span
@@ -536,39 +538,49 @@ def test_personless_mode(mock_client):
     prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
     chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
     chain.invoke({}, config={"callbacks": [CallbackHandler(mock_client)]})
-    assert mock_client.capture.call_count == 3
-    span_args = mock_client.capture.call_args_list[0][1]
-    generation_args = mock_client.capture.call_args_list[1][1]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    assert mock_client.capture_ai.call_count == 3
+    span_args = mock_client.capture_ai.call_args_list[0][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert span_args["properties"]["$process_person_profile"] is False
+    assert span_args["options"] == {"process_person_profile": False}
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert generation_args["properties"]["$process_person_profile"] is False
+    assert generation_args["options"] == {"process_person_profile": False}
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$process_person_profile"] is False
+    assert trace_args["options"] == {"process_person_profile": False}
 
     id = uuid.uuid4()
     chain.invoke(
         {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
     )
-    assert mock_client.capture.call_count == 6
-    span_args = mock_client.capture.call_args_list[3][1]
-    generation_args = mock_client.capture.call_args_list[4][1]
-    trace_args = mock_client.capture.call_args_list[5][1]
+    assert mock_client.capture_ai.call_count == 6
+    span_args = mock_client.capture_ai.call_args_list[3][1]
+    generation_args = mock_client.capture_ai.call_args_list[4][1]
+    trace_args = mock_client.capture_ai.call_args_list[5][1]
 
     # span
-    assert "$process_person_profile" not in span_args["properties"]
+    assert "options" not in span_args
     assert span_args["distinct_id"] == id
     # generation
-    assert "$process_person_profile" not in generation_args["properties"]
+    assert "options" not in generation_args
     assert generation_args["distinct_id"] == id
     # trace
-    assert "$process_person_profile" not in trace_args["properties"]
+    assert "options" not in trace_args
     assert trace_args["distinct_id"] == id
+
+    # An empty or whitespace distinct id counts as missing.
+    for blank in ("", "  "):
+        mock_client.capture_ai.reset_mock()
+        chain.invoke(
+            {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=blank)]}
+        )
+        for call in mock_client.capture_ai.call_args_list:
+            assert call[1]["options"] == {"process_person_profile": False}
+            assert call[1]["distinct_id"] not in ("", "  ")
 
 
 @pytest.fixture
@@ -595,44 +607,44 @@ def test_personless_mode_exception(mock_client, unauthorized_http_client):
     callbacks = CallbackHandler(mock_client)
     with pytest.raises(AuthenticationError):
         chain.invoke({}, config={"callbacks": [callbacks]})
-    assert mock_client.capture.call_count == 3
-    span_args = mock_client.capture.call_args_list[0][1]
-    generation_args = mock_client.capture.call_args_list[1][1]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    assert mock_client.capture_ai.call_count == 3
+    span_args = mock_client.capture_ai.call_args_list[0][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert span_args["properties"]["$process_person_profile"] is False
+    assert span_args["options"] == {"process_person_profile": False}
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert generation_args["properties"]["$process_person_profile"] is False
+    assert generation_args["options"] == {"process_person_profile": False}
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert trace_args["properties"]["$process_person_profile"] is False
+    assert trace_args["options"] == {"process_person_profile": False}
 
     id = uuid.uuid4()
     with pytest.raises(AuthenticationError):
         chain.invoke(
             {}, config={"callbacks": [CallbackHandler(mock_client, distinct_id=id)]}
         )
-    assert mock_client.capture.call_count == 6
-    span_args = mock_client.capture.call_args_list[3][1]
-    generation_args = mock_client.capture.call_args_list[4][1]
-    trace_args = mock_client.capture.call_args_list[5][1]
+    assert mock_client.capture_ai.call_count == 6
+    span_args = mock_client.capture_ai.call_args_list[3][1]
+    generation_args = mock_client.capture_ai.call_args_list[4][1]
+    trace_args = mock_client.capture_ai.call_args_list[5][1]
 
     # span
     assert span_args["event"] == "$ai_span"
-    assert "$process_person_profile" not in span_args["properties"]
+    assert "options" not in span_args
     assert span_args["distinct_id"] == id
 
     # generation
     assert generation_args["event"] == "$ai_generation"
-    assert "$process_person_profile" not in generation_args["properties"]
+    assert "options" not in generation_args
     assert generation_args["distinct_id"] == id
 
     # trace
     assert trace_args["event"] == "$ai_trace"
-    assert "$process_person_profile" not in trace_args["properties"]
+    assert "options" not in trace_args
     assert trace_args["distinct_id"] == id
 
 
@@ -655,9 +667,9 @@ def test_metadata(mock_client):
     result = chain.invoke({"plan": None}, config={"callbacks": callbacks})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    span_call_args = mock_client.capture.call_args_list[0][1]
+    span_call_args = mock_client.capture_ai.call_args_list[0][1]
     span_call_props = span_call_args["properties"]
     assert span_call_args["distinct_id"] == "test_id"
     assert span_call_args["event"] == "$ai_span"
@@ -666,7 +678,7 @@ def test_metadata(mock_client):
     assert "$ai_parent_id" in span_call_props
     assert "$ai_span_id" in span_call_props
 
-    generation_call_args = mock_client.capture.call_args_list[1][1]
+    generation_call_args = mock_client.capture_ai.call_args_list[1][1]
     generation_call_props = generation_call_args["properties"]
     assert generation_call_args["distinct_id"] == "test_id"
     assert generation_call_args["event"] == "$ai_generation"
@@ -679,7 +691,7 @@ def test_metadata(mock_client):
     assert generation_call_props["$ai_http_status"] == 200
     assert isinstance(generation_call_props["$ai_latency"], float)
 
-    trace_call_args = mock_client.capture.call_args_list[2][1]
+    trace_call_args = mock_client.capture_ai.call_args_list[2][1]
     trace_call_props = trace_call_args["properties"]
     assert trace_call_args["distinct_id"] == "test_id"
     assert trace_call_args["event"] == "$ai_trace"
@@ -742,8 +754,8 @@ def test_graph_state(mock_client):
     assert isinstance(result["messages"][2], AIMessage)
     assert result["messages"][2].content == "It's a type of greeble."
 
-    assert mock_client.capture.call_count == 6
-    calls = [call[1] for call in mock_client.capture.call_args_list]
+    assert mock_client.capture_ai.call_count == 6
+    calls = [call[1] for call in mock_client.capture_ai.call_args_list]
 
     # The trace event is captured at the end
     trace_args = calls[-1]
@@ -867,8 +879,8 @@ def test_exception_in_chain(mock_client):
 
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
-    assert mock_client.capture.call_count == 1
-    trace_call_args = mock_client.capture.call_args_list[0][1]
+    assert mock_client.capture_ai.call_count == 1
+    trace_call_args = mock_client.capture_ai.call_args_list[0][1]
     assert trace_call_args["event"] == "$ai_trace"
     assert trace_call_args["properties"]["$ai_span_name"] == "runnable"
 
@@ -895,8 +907,8 @@ def test_openai_error(mock_client):
 
     assert callbacks._runs == {}
     assert callbacks._parent_tree == {}
-    assert mock_client.capture.call_count == 3
-    generation_args = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     props = generation_args["properties"]
     assert props["$ai_http_status"] == 401
     assert props["$ai_input"] == [{"role": "user", "content": "Foo"}]
@@ -928,9 +940,9 @@ def test_openai_chain(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
     assert gen_args["event"] == "$ai_generation"
     assert gen_props["$ai_trace_id"] == "test-trace-id"
@@ -990,11 +1002,11 @@ def test_openai_captures_multiple_generations(mock_client):
     result = chain.invoke({}, config={"callbacks": [callbacks]})
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     assert gen_args["event"] == "$ai_generation"
@@ -1053,11 +1065,11 @@ def test_openai_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     assert gen_args["event"] == "$ai_generation"
@@ -1097,11 +1109,11 @@ async def test_async_openai_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     assert gen_args["event"] == "$ai_generation"
@@ -1135,8 +1147,8 @@ def test_base_url_retrieval(mock_client, unauthorized_http_client):
     with pytest.raises(AuthenticationError):
         chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 3
-    generation_call = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_call = mock_client.capture_ai.call_args_list[1][1]
     assert generation_call["properties"]["$ai_base_url"] == "https://test.posthog.com"
 
 
@@ -1152,8 +1164,8 @@ def test_groups(mock_client):
     callbacks = CallbackHandler(mock_client, groups={"company": "test_company"})
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 3
-    generation_call = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_call = mock_client.capture_ai.call_args_list[1][1]
     assert generation_call["groups"] == {"company": "test_company"}
 
 
@@ -1169,8 +1181,8 @@ def test_privacy_mode_local(mock_client):
     callbacks = CallbackHandler(mock_client, privacy_mode=True)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 3
-    generation_call = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_call = mock_client.capture_ai.call_args_list[1][1]
     assert generation_call["properties"]["$ai_input"] is None
     assert generation_call["properties"]["$ai_output_choices"] is None
 
@@ -1188,8 +1200,8 @@ def test_privacy_mode_global(mock_client):
     callbacks = CallbackHandler(mock_client)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 3
-    generation_call = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_call = mock_client.capture_ai.call_args_list[1][1]
     assert generation_call["properties"]["$ai_input"] is None
     assert generation_call["properties"]["$ai_output_choices"] is None
 
@@ -1219,11 +1231,11 @@ def test_anthropic_chain(mock_client):
     approximate_latency = math.floor(time.time() - start_time)
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     assert gen_args["event"] == "$ai_generation"
@@ -1279,11 +1291,11 @@ async def test_async_anthropic_streaming(mock_client):
     result = sum(result[1:], result[0])
 
     assert result.content == "Bar"
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    gen_args = mock_client.capture.call_args_list[1][1]
+    gen_args = mock_client.capture_ai.call_args_list[1][1]
     gen_props = gen_args["properties"]
-    trace_args = mock_client.capture.call_args_list[2][1]
+    trace_args = mock_client.capture_ai.call_args_list[2][1]
     trace_props = trace_args["properties"]
 
     assert gen_args["event"] == "$ai_generation"
@@ -1385,8 +1397,8 @@ def test_tool_calls(mock_client):
     callbacks = CallbackHandler(mock_client)
     chain.invoke({}, config={"callbacks": [callbacks]})
 
-    assert mock_client.capture.call_count == 3
-    generation_call = mock_client.capture.call_args_list[1][1]
+    assert mock_client.capture_ai.call_count == 3
+    generation_call = mock_client.capture_ai.call_args_list[1][1]
     assert generation_call["properties"]["$ai_output_choices"][0]["tool_calls"] == [
         {
             "type": "function",
@@ -1421,9 +1433,9 @@ async def test_async_traces(mock_client, delay):
         chain2.ainvoke({}, config={"callbacks": [cb]}),
     )
     approximate_latency = math.floor(time.time() - start_time)
-    assert mock_client.capture.call_count == 4
+    assert mock_client.capture_ai.call_count == 4
 
-    calls = [call.kwargs for call in mock_client.capture.call_args_list]
+    calls = [call.kwargs for call in mock_client.capture_ai.call_args_list]
     assert sorted(call["event"] for call in calls) == [
         "$ai_generation",
         "$ai_span",
@@ -1465,7 +1477,7 @@ def test_langgraph_agent(mock_client):
         mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id"
     )
     graph.invoke(inputs, config={"callbacks": [cb]})
-    calls = [call[1] for call in mock_client.capture.call_args_list]
+    calls = [call[1] for call in mock_client.capture_ai.call_args_list]
     assert len(calls) == 15
     for call in calls:
         assert call["properties"]["$ai_trace_id"] == "test-trace-id"
@@ -1491,15 +1503,15 @@ def test_span_set_parent_ids(mock_client, trace_id):
     chain = prompt | model
     chain.invoke({}, config={"callbacks": callbacks})
 
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    span_props = mock_client.capture.call_args_list[0][1]
+    span_props = mock_client.capture_ai.call_args_list[0][1]
     assert (
         span_props["properties"]["$ai_trace_id"]
         == span_props["properties"]["$ai_parent_id"]
     )
 
-    generation_props = mock_client.capture.call_args_list[1][1]
+    generation_props = mock_client.capture_ai.call_args_list[1][1]
     assert (
         generation_props["properties"]["$ai_trace_id"]
         == generation_props["properties"]["$ai_parent_id"]
@@ -1521,9 +1533,9 @@ def test_span_set_parent_ids_for_third_level_run(mock_client, trace_id):
     chain = RunnableLambda(span_1)
     chain.invoke({}, config={"callbacks": callbacks})
 
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    calls = mock_client.capture.call_args_list
+    calls = mock_client.capture_ai.call_args_list
     span_props_2 = calls[0][1]["properties"]
     span_props_1 = calls[1][1]["properties"]
     trace_props = calls[2][1]["properties"]
@@ -1543,12 +1555,12 @@ def test_captures_error_with_details_in_span(mock_client):
     except ValueError:
         pass
 
-    assert mock_client.capture.call_count == 2
+    assert mock_client.capture_ai.call_count == 2
     assert (
-        mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"]
+        mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_error"]
         == "ValueError: test"
     )
-    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
+    assert mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_is_error"]
 
 
 def test_captures_error_without_details_in_span(mock_client):
@@ -1562,12 +1574,140 @@ def test_captures_error_without_details_in_span(mock_client):
     except ValueError:
         pass
 
-    assert mock_client.capture.call_count == 2
+    assert mock_client.capture_ai.call_count == 2
     assert (
-        mock_client.capture.call_args_list[1][1]["properties"]["$ai_error"]
+        mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_error"]
         == "ValueError"
     )
-    assert mock_client.capture.call_args_list[1][1]["properties"]["$ai_is_error"]
+    assert mock_client.capture_ai.call_args_list[1][1]["properties"]["$ai_is_error"]
+
+
+def _tool_spans(mock_client):
+    return [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_span"
+        and call[1]["properties"].get("$ai_span_type") == "tool"
+    ]
+
+
+def _invoke_tool_in_chain(mock_client, tool_to_call, args, privacy_mode=False):
+    # A ToolCall input makes the tool return a ToolMessage.
+    chain = RunnableLambda(
+        lambda x, config: tool_to_call.invoke(
+            {"name": tool_to_call.name, "args": x, "id": "call_1", "type": "tool_call"},
+            config,
+        )
+    )
+    callbacks = [CallbackHandler(mock_client, privacy_mode=privacy_mode)]
+    return chain.invoke(args, config={"callbacks": callbacks})
+
+
+def test_tool_span_has_tool_span_type(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        return f"Sunny in {city}"
+
+    _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_span_name"] == "get_weather"
+    assert "$ai_is_error" not in spans[0]
+    # Only tool runs are typed.
+    other_events = [
+        call[1]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["properties"].get("$ai_span_type") is None
+    ]
+    assert [event["event"] for event in other_events] == ["$ai_trace"]
+
+
+def test_tool_span_marks_handled_tool_error(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException(f"weather service unavailable for {city}")
+
+    get_weather.handle_tool_error = True
+
+    output = _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+    assert output.status == "error"
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "weather service unavailable for Paris"
+    # The chain that returns the error ToolMessage didn't fail itself.
+    trace = [
+        call[1]["properties"]
+        for call in mock_client.capture_ai.call_args_list
+        if call[1]["event"] == "$ai_trace"
+    ]
+    assert len(trace) == 1
+    assert "$ai_is_error" not in trace[0]
+    assert "$ai_error" not in trace[0]
+
+
+def test_tool_span_handled_tool_error_respects_privacy_mode(mock_client):
+    from langchain_core.tools import ToolException
+
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ToolException("secret details")
+
+    get_weather.handle_tool_error = True
+
+    _invoke_tool_in_chain(
+        mock_client, get_weather, {"city": "Paris"}, privacy_mode=True
+    )
+
+    spans = _tool_spans(mock_client)
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] is None
+    assert spans[0]["$ai_output_state"] is None
+
+
+def test_tool_span_unhandled_tool_error(mock_client):
+    @tool
+    def get_weather(city: str) -> str:
+        """Get the weather for a city."""
+        raise ValueError("boom")
+
+    with pytest.raises(ValueError):
+        _invoke_tool_in_chain(mock_client, get_weather, {"city": "Paris"})
+
+    spans = _tool_spans(mock_client)
+    assert len(spans) == 1
+    assert spans[0]["$ai_is_error"] is True
+    assert spans[0]["$ai_error"] == "ValueError: boom"
+
+
+def test_convert_message_to_dict_tool_message():
+    from langchain_core.messages import ToolMessage
+
+    from posthog.ai.langchain.callbacks import _convert_message_to_dict
+
+    assert _convert_message_to_dict(
+        ToolMessage(content="Sunny", tool_call_id="call_1", name="get_weather")
+    ) == {
+        "role": "tool",
+        "content": "Sunny",
+        "tool_call_id": "call_1",
+        "name": "get_weather",
+    }
+    assert _convert_message_to_dict(
+        ToolMessage(content="boom", tool_call_id="call_2", status="error")
+    ) == {
+        "role": "tool",
+        "content": "boom",
+        "tool_call_id": "call_2",
+        "status": "error",
+    }
 
 
 def test_openai_reasoning_tokens(mock_client):
@@ -1596,9 +1736,9 @@ def test_openai_reasoning_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Let me think through this step by step..."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -1631,9 +1771,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "I've analyzed the document and cached the context."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -1666,9 +1806,9 @@ def test_anthropic_cache_write_and_read_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Using cached analysis to provide quick response."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -1719,7 +1859,7 @@ def test_anthropic_provider_subtracts_cache_tokens(mock_client):
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    generation_args = mock_client.capture.call_args_list[0][1]
+    generation_args = mock_client.capture_ai.call_args_list[0][1]
     assert generation_args["properties"]["$ai_input_tokens"] == 400  # 1200 - 800
     assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
 
@@ -1766,7 +1906,7 @@ def test_chat_anthropic_invoke_does_not_subtract_cache_tokens_twice(mock_client)
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    props = mock_client.capture.call_args_list[0][1]["properties"]
+    props = mock_client.capture_ai.call_args_list[0][1]["properties"]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_output_tokens"] == 7
     assert props["$ai_cache_read_input_tokens"] == 1000
@@ -1805,10 +1945,89 @@ def test_claude_on_vertex_subtracts_cache_tokens(mock_client):
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    props = mock_client.capture.call_args_list[0][1]["properties"]
+    props = mock_client.capture_ai.call_args_list[0][1]["properties"]
     assert props["$ai_input_tokens"] == 10
     assert props["$ai_cache_read_input_tokens"] == 1000
     assert props["$ai_cache_creation_input_tokens"] == 100
+
+
+def _capture_usage_metadata(mock_client, metadata, usage_metadata):
+    from langchain_core.outputs import LLMResult, ChatGeneration
+    from langchain_core.messages import AIMessage
+    from uuid import uuid4
+
+    cb = CallbackHandler(mock_client)
+    run_id = uuid4()
+    cb._set_llm_metadata(
+        serialized={},
+        run_id=run_id,
+        messages=[{"role": "user", "content": "test"}],
+        metadata=metadata,
+    )
+    message = AIMessage(content="Response", usage_metadata=usage_metadata)
+    response = LLMResult(generations=[[ChatGeneration(message=message)]])
+
+    cb._pop_run_and_capture_generation(run_id, None, response)
+
+    return mock_client.capture_ai.call_args_list[0][1]["properties"]
+
+
+def test_gemini_output_tokens_exclude_reasoning_tokens(mock_client):
+    """ChatGoogleGenerativeAI folds thoughts_token_count into usage_metadata
+    output_tokens. PostHog prices Gemini reasoning on top of the output count,
+    as the Gemini wrapper reports it, so the handler reports output without it."""
+    # The usage ChatGoogleGenerativeAI.invoke returns for a thinking response
+    # with candidates_token_count=49 and thoughts_token_count=777
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_genai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "input_token_details": {"cache_read": 0},
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_input_tokens"] == 12
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_gemini_output_tokens_already_excluding_reasoning_are_kept(mock_client):
+    """ChatVertexAI (and older langchain-google-genai) report candidates only
+    in output_tokens, so the output count is left as reported."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "google_vertexai", "ls_model_name": "gemini-2.5-pro"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 49,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 49
+    assert props["$ai_reasoning_tokens"] == 777
+
+
+def test_non_gemini_output_tokens_keep_reasoning_tokens(mock_client):
+    """Only Gemini reasoning is priced on top of the output count."""
+    props = _capture_usage_metadata(
+        mock_client,
+        {"ls_provider": "openai", "ls_model_name": "o4-mini"},
+        {
+            "input_tokens": 12,
+            "output_tokens": 826,
+            "total_tokens": 838,
+            "output_token_details": {"reasoning": 777},
+        },
+    )
+
+    assert props["$ai_output_tokens"] == 826
+    assert props["$ai_reasoning_tokens"] == 777
 
 
 def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
@@ -1849,7 +2068,7 @@ def test_anthropic_provider_subtracts_cache_write_tokens(mock_client):
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    generation_args = mock_client.capture.call_args_list[0][1]
+    generation_args = mock_client.capture_ai.call_args_list[0][1]
     assert generation_args["properties"]["$ai_input_tokens"] == 200  # 1000 - 800
     assert generation_args["properties"]["$ai_cache_creation_input_tokens"] == 800
 
@@ -2022,7 +2241,7 @@ def test_anthropic_provider_subtracts_both_cache_read_and_write_tokens(mock_clie
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    generation_args = mock_client.capture.call_args_list[0][1]
+    generation_args = mock_client.capture_ai.call_args_list[0][1]
     # 2000 - 800 (read) - 500 (write) = 700
     assert generation_args["properties"]["$ai_input_tokens"] == 700
     assert generation_args["properties"]["$ai_cache_read_input_tokens"] == 800
@@ -2058,9 +2277,9 @@ def test_openai_cache_read_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Response using cached prompt context."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2102,9 +2321,9 @@ def test_openai_cache_creation_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Created cache for the prompt context."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2144,9 +2363,9 @@ def test_combined_reasoning_and_cache_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Let me reason through this using cached context..."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2166,7 +2385,7 @@ def test_openai_reasoning_tokens_o4_mini(mock_client):
         mock_client, trace_id="test-trace-id", distinct_id="test-distinct-id"
     )
     model.invoke("what is the weather in sf", config={"callbacks": [cb]})
-    call = mock_client.capture.call_args_list[0][1]
+    call = mock_client.capture_ai.call_args_list[0][1]
     assert call["properties"]["$ai_reasoning_tokens"] is not None
     assert call["properties"]["$ai_input_tokens"] is not None
     assert call["properties"]["$ai_output_tokens"] is not None
@@ -2174,7 +2393,7 @@ def test_openai_reasoning_tokens_o4_mini(mock_client):
 
 def test_callback_handler_without_client():
     """Test that CallbackHandler works properly when no PostHog client is passed."""
-    with patch("posthog.ai.langchain.callbacks.setup") as mock_setup:
+    with patch("posthog.ai.utils.setup") as mock_setup:
         mock_client = mock_setup.return_value
 
         callbacks = CallbackHandler()
@@ -2195,7 +2414,7 @@ def test_callback_handler_without_client():
         assert result.content == "Bar"
 
         # Verify that the mock client was used for capturing events
-        assert mock_client.capture.call_count == 3
+        assert mock_client.capture_ai.call_count == 3
 
 
 def test_convert_message_to_dict_tool_calls():
@@ -2302,8 +2521,8 @@ def test_tool_definition(mock_client):
         parent_run_id=None,
     )
 
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["distinct_id"] == run_id
@@ -2353,9 +2572,9 @@ def test_cache_read_tokens_subtraction_from_input_tokens(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Response using cached prompt context."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2395,9 +2614,9 @@ def test_cache_read_tokens_subtraction_prevents_negative(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Response with edge case token counts."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2436,9 +2655,9 @@ def test_no_cache_read_tokens_no_subtraction(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Response without cache."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2475,9 +2694,9 @@ def test_zero_input_tokens_with_cache_read(mock_client):
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Response."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2516,9 +2735,9 @@ def test_non_anthropic_cache_write_tokens_not_subtracted_from_input(mock_client)
     result = chain.invoke({}, config={"callbacks": callbacks})
 
     assert result.content == "Creating cache."
-    assert mock_client.capture.call_count == 3
+    assert mock_client.capture_ai.call_count == 3
 
-    generation_args = mock_client.capture.call_args_list[1][1]
+    generation_args = mock_client.capture_ai.call_args_list[1][1]
     generation_props = generation_args["properties"]
 
     assert generation_args["event"] == "$ai_generation"
@@ -2567,8 +2786,8 @@ def test_agent_action_and_finish_imports():
     callbacks.on_agent_finish(finish, run_id=run_id, parent_run_id=parent_run_id)
 
     # Verify capture was called
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     assert call_args["event"] == "$ai_span"
 
 
@@ -2675,8 +2894,8 @@ def test_billable_property_in_generation_event(mock_client):
         parent_run_id=None,
     )
 
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["event"] == "$ai_generation"
@@ -2695,7 +2914,7 @@ def test_billable_defaults_to_false_in_event(mock_client):
     chain.invoke({}, config={"callbacks": callbacks})
 
     generation_call = None
-    for call in mock_client.capture.call_args_list:
+    for call in mock_client.capture_ai.call_args_list:
         if call[1]["event"] == "$ai_generation":
             generation_call = call
             break
@@ -2739,8 +2958,8 @@ def test_billable_with_real_chain(mock_client):
         parent_run_id=None,
     )
 
-    assert mock_client.capture.call_count == 1
-    call_args = mock_client.capture.call_args[1]
+    assert mock_client.capture_ai.call_count == 1
+    call_args = mock_client.capture_ai.call_args[1]
     props = call_args["properties"]
 
     assert call_args["event"] == "$ai_generation"
@@ -2798,7 +3017,7 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
     # Find the span event (should have $ai_is_error=True)
     span_calls = [
         call
-        for call in mock_client.capture.call_args_list
+        for call in mock_client.capture_ai.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
@@ -2810,7 +3029,7 @@ def test_exception_autocapture_adds_exception_id_to_span_event():
 
 def test_exception_autocapture_absent_on_client_still_sends_the_span():
     """A client without the autocapture setting, such as AsyncPosthog, still gets the failed span."""
-    mock_client = MagicMock(spec=["capture", "capture_exception", "privacy_mode"])
+    mock_client = MagicMock(spec=["capture_ai", "capture_exception", "privacy_mode"])
     mock_client.privacy_mode = False
 
     def failing_span(_):
@@ -2821,8 +3040,8 @@ def test_exception_autocapture_absent_on_client_still_sends_the_span():
         RunnableLambda(failing_span).invoke({}, config={"callbacks": callbacks})
 
     assert mock_client.capture_exception.call_count == 0
-    assert mock_client.capture.call_count == 1
-    span_props = mock_client.capture.call_args[1]["properties"]
+    assert mock_client.capture_ai.call_count == 1
+    span_props = mock_client.capture_ai.call_args[1]["properties"]
     assert span_props["$ai_is_error"] is True
     assert span_props["$ai_error"] == "ValueError: test error"
     assert "$exception_event_id" not in span_props
@@ -2861,7 +3080,7 @@ def test_exception_autocapture_disabled_does_not_capture(
     # But the span event should still have error info
     span_calls = [
         call
-        for call in mock_client.capture.call_args_list
+        for call in mock_client.capture_ai.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
@@ -2899,7 +3118,7 @@ def test_exception_autocapture_on_llm_generation_error(mock_client):
     # Verify the generation event has $exception_event_id
     generation_calls = [
         call
-        for call in mock_client.capture.call_args_list
+        for call in mock_client.capture_ai.call_args_list
         if call[1].get("event") == "$ai_generation"
     ]
     assert len(generation_calls) == 1
@@ -2907,6 +3126,53 @@ def test_exception_autocapture_on_llm_generation_error(mock_client):
     gen_props = generation_calls[0][1]["properties"]
     assert gen_props["$exception_event_id"] == "exception-uuid-789"
     assert gen_props["$ai_is_error"] is True
+
+
+@pytest.mark.parametrize(
+    "distinct_id, handler_options, run_options, expected_options",
+    [
+        # No user: person processing stays off, as on the AI event.
+        (None, {}, None, {"process_person_profile": False}),
+        (
+            None,
+            {"process_person_profile": True, "cookieless_mode": True},
+            None,
+            {"process_person_profile": False, "cookieless_mode": True},
+        ),
+        # A user: the options are sent as set, the handler's winning over the run's.
+        ("user-123", {}, None, None),
+        (
+            "user-123",
+            {"cookieless_mode": True},
+            {"cookieless_mode": False, "product_tour_id": "tour-1"},
+            {"cookieless_mode": True, "product_tour_id": "tour-1"},
+        ),
+    ],
+)
+def test_exception_autocapture_sends_ai_event_options(
+    distinct_id, handler_options, run_options, expected_options
+):
+    """The `$exception` event carries the same options as its generation."""
+    mock_client = MagicMock()
+    mock_client.privacy_mode = False
+    mock_client.enable_exception_autocapture = True
+    mock_client.capture_exception.return_value = "exception-uuid-opt"
+
+    callbacks = CallbackHandler(
+        mock_client, distinct_id=distinct_id, options=handler_options
+    )
+    run_id = uuid.uuid4()
+    metadata = {"posthog_options": run_options} if run_options is not None else None
+    callbacks.on_llm_start(
+        serialized={"kwargs": {"openai_api_base": "https://api.openai.com"}},
+        prompts=["Hello"],
+        run_id=run_id,
+        metadata=metadata,
+    )
+    callbacks.on_llm_error(Exception("boom"), run_id=run_id)
+
+    assert mock_client.capture_exception.call_count == 1
+    assert mock_client.capture_exception.call_args[1].get("options") == expected_options
 
 
 def test_exception_autocapture_passes_ai_properties_to_exception():
@@ -2973,27 +3239,13 @@ def test_exception_autocapture_none_return_no_exception_id():
     # Span event should NOT have $exception_event_id
     span_calls = [
         call
-        for call in mock_client.capture.call_args_list
+        for call in mock_client.capture_ai.call_args_list
         if call[1].get("properties", {}).get("$ai_is_error") is True
     ]
     assert len(span_calls) >= 1
 
     span_props = span_calls[0][1]["properties"]
     assert "$exception_event_id" not in span_props
-
-
-def test_ai_lane_client_routes_through_capture_ai(mock_client):
-    prompt = ChatPromptTemplate.from_messages([("user", "Who won the world series?")])
-    model = FakeMessagesListChatModel(responses=[AIMessage(content="The Dodgers.")])
-    mock_client.enable_full_ai_capture = True
-    callbacks = [CallbackHandler(mock_client)]
-
-    (prompt | model).invoke({}, config={"callbacks": callbacks})
-
-    mock_client.capture.assert_not_called()
-    events = [c[1]["event"] for c in mock_client.capture_ai.call_args_list]
-    assert "$ai_generation" in events
-    assert "$ai_trace" in events
 
 
 def test_served_service_tier_merges_into_model_parameters(mock_client):
@@ -3016,7 +3268,7 @@ def test_served_service_tier_merges_into_model_parameters(mock_client):
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    props = mock_client.capture.call_args.kwargs["properties"]
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props["$ai_model_parameters"]["service_tier"] == "flex"
     assert props["$ai_model_parameters"]["temperature"] == 0.5
     assert props["$ai_service_tier"] == "flex"
@@ -3073,7 +3325,7 @@ def test_stop_reason_resolution(
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    props = mock_client.capture.call_args.kwargs["properties"]
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props.get("$ai_stop_reason") == expected
 
 
@@ -3124,7 +3376,7 @@ def test_web_search_count(mock_client, server_tool_use, expected):
 
     cb._pop_run_and_capture_generation(run_id, None, response)
 
-    props = mock_client.capture.call_args.kwargs["properties"]
+    props = mock_client.capture_ai.call_args.kwargs["properties"]
     assert props.get("$ai_web_search_count") == expected
 
 
@@ -3185,5 +3437,73 @@ class TestGetHttpStatus:
 
         callback._pop_run_and_capture_generation(run_id, None, error)
 
-        properties = client.capture.call_args_list[0][1]["properties"]
+        properties = client.capture_ai.call_args_list[0][1]["properties"]
         assert properties["$ai_http_status"] == 0
+
+
+def _invoke_fake_chain(handler, metadata=None):
+    prompt = ChatPromptTemplate.from_messages([("user", "Foo")])
+    chain = prompt | FakeMessagesListChatModel(responses=[AIMessage(content="Bar")])
+    config = {"callbacks": [handler]}
+    if metadata is not None:
+        config["metadata"] = metadata
+    chain.invoke({}, config=config)
+
+
+@pytest.mark.parametrize(
+    "case", POSTHOG_OPTIONS_CASES, ids=[case[0] for case in POSTHOG_OPTIONS_CASES]
+)
+def test_handler_options_reach_every_event(mock_client, caplog, case):
+    _, distinct_id, options, expected, warns = case
+
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client, distinct_id=distinct_id, options=options)
+        )
+
+    calls = mock_client.capture_ai.call_args_list
+    assert [call.kwargs["event"] for call in calls] == [
+        "$ai_span",
+        "$ai_generation",
+        "$ai_trace",
+    ]
+    for call in calls:
+        assert_captured_options(call.kwargs, expected, warns, caplog)
+
+
+def test_run_metadata_posthog_options_reach_the_generation(mock_client):
+    _invoke_fake_chain(
+        CallbackHandler(
+            mock_client, distinct_id="user-1", options={"cookieless_mode": True}
+        ),
+        metadata={
+            "posthog_options": {
+                "cookieless_mode": False,
+                "disable_skew_correction": True,
+            }
+        },
+    )
+
+    options_by_event = {
+        call.kwargs["event"]: call.kwargs["options"]
+        for call in mock_client.capture_ai.call_args_list
+    }
+    # The handler's options win over the run's, like its properties.
+    assert options_by_event == {
+        "$ai_span": {"cookieless_mode": True},
+        "$ai_generation": {"cookieless_mode": True, "disable_skew_correction": True},
+        "$ai_trace": {"cookieless_mode": True},
+    }
+
+
+def test_non_dict_run_metadata_posthog_options_are_ignored(mock_client, caplog):
+    with caplog.at_level(logging.WARNING, logger="posthog"):
+        _invoke_fake_chain(
+            CallbackHandler(mock_client),
+            metadata={"posthog_options": "cookieless_mode"},
+        )
+
+    generation = mock_client.capture_ai.call_args_list[1].kwargs
+    assert generation["event"] == "$ai_generation"
+    assert generation["options"] == {"process_person_profile": False}
+    assert "posthog_options must be a dict" in caplog.text

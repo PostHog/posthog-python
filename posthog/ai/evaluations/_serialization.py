@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 from datetime import datetime, timezone
-from typing import Any, Callable, Iterable, TypeVar, Union, cast
+from typing import Any, Callable, Collection, Iterable, TypeVar, Union, cast
 from urllib.parse import parse_qs, urlsplit
 from uuid import UUID
 
@@ -151,13 +151,17 @@ def _payload(
     if not isinstance(explicit, _Unset):
         if supplied:
             raise ValueError("Supply payload or individual payload fields, not both.")
-        if not isinstance(explicit, dict) or set(explicit) - set(fields):
-            raise ValueError(
-                "payload must be an object containing supported fields only."
-            )
         supplied = explicit
     elif not supplied:
         return _UNSET
+    return _checked_payload(supplied, fields.keys(), limit)
+
+
+def _checked_payload(
+    supplied: dict[str, JSONValue], allowed: Collection[str], limit: int
+) -> dict[str, JSONValue]:
+    if not isinstance(supplied, dict) or supplied.keys() - allowed:
+        raise ValueError("payload must be an object containing supported fields only.")
     _validate_payload_fields(supplied)
     _validate_json(supplied)
     encoded = _encode(supplied)

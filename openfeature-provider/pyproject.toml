@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openfeature-provider-posthog"
-version = "0.1.163"
+version = "0.2.8"
 description = "Official PostHog provider for the OpenFeature Python SDK."
 readme = "README.md"
 authors = [{ name = "PostHog", email = "engineering@posthog.com" }]
@@ -27,7 +27,7 @@ dependencies = [
     # single-call API. Pinned to the posthog major this provider is released and
     # tested against (both ship from this repo); bump the upper bound when moving
     # the provider to a new posthog major.
-    "posthog>=7.0.0,<8.0.0",
+    "posthog>=7.0.0,<9.0.0",
     "openfeature-sdk>=0.8.0",
 ]
 

@@ -211,8 +211,8 @@ def test_a_failed_record_never_renders_its_value(client):
     response["flags"]["garden-layout"]["value"] = "compact"
     snapshot = _evaluate(client, response)
 
-    assert snapshot.get_flag("garden-layout") is False
-    assert snapshot.is_enabled("garden-layout", True) is False
+    assert snapshot.get_flag("garden-layout") is None
+    assert snapshot.is_enabled("garden-layout", True) is True
 
 
 @pytest.mark.parametrize(
@@ -764,7 +764,7 @@ def _failed_with_payload(shape: str) -> Dict[str, Any]:
 
 @pytest.mark.parametrize("shape", ["v4", "older"])
 def test_a_failed_record_has_no_payload_on_any_read(shape, client):
-    # A failed flag reads as disabled, so a payload on it would surprise the caller.
+    # A failed flag has no evaluated result or payload.
     response = _failed_with_payload(shape)
     [flag] = normalize_flags_response(copy.deepcopy(response))["flags"].values()
     assert flag._failed is True
@@ -772,7 +772,7 @@ def test_a_failed_record_has_no_payload_on_any_read(shape, client):
 
     with mock.patch("posthog.client.flags", return_value=copy.deepcopy(response)):
         result = client.get_feature_flag_result("garden-layout", DISTINCT_ID)
-        assert result is not None and result.payload is None
+        assert result is None
         assert client.get_feature_flag_payload("garden-layout", DISTINCT_ID) is None
         assert (
             client.get_feature_flag_payload(
@@ -951,7 +951,8 @@ def test_v1_flags_render_the_same_legacy_values_from_both_shapes(case):
         "flags": v4_flags,
     }
     expected = {
-        "featureFlags": v1_maps["featureFlags"],
+        # Flat legacy maps retain their interpretation, but detailed failures do not.
+        "featureFlags": {} if outcome["failed"] else v1_maps["featureFlags"],
         "featureFlagPayloads": {
             key: json.loads(value)
             for key, value in v1_maps["featureFlagPayloads"].items()
@@ -1147,15 +1148,17 @@ def _legacy_outputs(shape: str) -> Dict[str, Any]:
     def response(*args: Any, **kwargs: Any) -> Dict[str, Any]:
         return _parity_response(shape)
 
-    def enqueue(message: Dict[str, Any], *args: Any, **kwargs: Any) -> Optional[str]:
+    # Read the built event in before_send: v1 layers flag properties inside _enqueue.
+    def record(message: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         events.append((message["event"], _flag_event_properties(message)))
-        # Accept the event, as the real queue does, by returning an event UUID.
-        return "70000000-0000-4000-8000-000000000000"
+        # Keep the event, so capture accepts it and returns its UUID as the real
+        # queue does; flag events dedupe only events that were accepted.
+        return message
 
     try:
         with (
             mock.patch("posthog.client.flags", side_effect=response),
-            mock.patch.object(client, "_enqueue", side_effect=enqueue),
+            mock.patch.object(client, "before_send", record),
             pytest.warns(DeprecationWarning),
         ):
             outputs["get_feature_variants"] = client.get_feature_variants(DISTINCT_ID)

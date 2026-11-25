@@ -24,15 +24,17 @@ except ImportError:
         "Please install the Claude Agent SDK to use this feature: 'pip install claude-agent-sdk'"
     )
 
-from posthog import setup
-from .formatting import (
+from posthog.ai.claude_agent_sdk.formatting import (
+    _append_assistant_output,
     _format_user_input,
-    format_assistant_blocks,
+    format_assistant_blocks as format_assistant_blocks,
     format_tool_result_content as format_tool_result_content,
 )
 from posthog.ai.media import ensure_serializable as _ensure_serializable
 from posthog.ai.utils import (
+    _ai_event_options,
     _capture_processor_event,
+    _resolve_ai_client,
     finalize_ai_content,
     with_privacy_mode as _with_privacy_mode,
 )
@@ -58,6 +60,36 @@ class _GenerationData:
     end_time: float = 0.0
     span_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     stop_reason: Optional[str] = None
+
+
+@dataclass
+class _PendingToolSpan:
+    """A tool span waiting for its ToolResultBlock."""
+
+    properties: Dict[str, Any]
+    start_time: float
+    distinct_id: Any
+    groups: Dict[str, Any]
+    extra_options: Optional[Dict[str, Any]] = None
+    privacy: bool = False
+
+
+_TOOL_SPAN_CONTENT_PROPERTIES = ("$ai_input_state", "$ai_output_state", "$ai_error")
+
+
+def _tool_error_text(content: Any) -> str:
+    """The `$ai_error` text for an errored tool result's content."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = [
+            item["text"]
+            for item in content
+            if isinstance(item, dict) and isinstance(item.get("text"), str)
+        ]
+        if texts:
+            return "\n".join(texts)
+    return "" if content is None else str(content)
 
 
 class _GenerationTracker:
@@ -92,45 +124,37 @@ class _GenerationTracker:
             self._current.raw_usage = dict(usage)
 
         elif event_type == "message_delta" and self._current is not None:
-            self._process_usage_delta(raw)
+            usage = raw.get("usage", {})
+            self._current.raw_usage = {**(self._current.raw_usage or {}), **usage}
+            # message_delta usage is cumulative: output tokens, and with server
+            # tools (web search, ...) the input and cache counts grow past the
+            # message_start values. Keep the larger count; a field the delta
+            # omits keeps the message_start value.
+            if usage.get("output_tokens"):
+                self._current.output_tokens = usage["output_tokens"]
+            for field_name in (
+                "input_tokens",
+                "cache_read_input_tokens",
+                "cache_creation_input_tokens",
+            ):
+                delta_value = usage.get(field_name)
+                current_value = getattr(self._current, field_name)
+                if isinstance(delta_value, int) and delta_value > (current_value or 0):
+                    setattr(self._current, field_name, delta_value)
+            server_tool_use = usage.get("server_tool_use") or {}
+            web_search_requests = server_tool_use.get("web_search_requests")
+            if isinstance(web_search_requests, int) and web_search_requests > 0:
+                self._current.web_search_count = web_search_requests
+            # Extract stop reason from message_delta
+            delta_stop_reason = raw.get("delta", {}).get("stop_reason")
+            if delta_stop_reason is not None:
+                self._current.stop_reason = delta_stop_reason
 
         elif event_type == "message_stop" and self._current is not None:
             self._current.end_time = time.time()
             self._completed.append(self._current)
             self._last_model = self._current.model
             self._current = None
-
-    def _process_usage_delta(self, raw: Dict[str, Any]) -> None:
-        assert self._current is not None
-        usage = raw.get("usage", {})
-        self._current.raw_usage = {**(self._current.raw_usage or {}), **usage}
-        # message_delta usage is cumulative: output tokens, and with server
-        # tools (web search, ...) the input and cache counts grow past the
-        # message_start values. Keep the larger count; a field the delta
-        # omits keeps the message_start value.
-        if usage.get("output_tokens"):
-            self._current.output_tokens = usage["output_tokens"]
-        self._update_cumulative_input_counts(usage)
-        server_tool_use = usage.get("server_tool_use") or {}
-        web_search_requests = server_tool_use.get("web_search_requests")
-        if isinstance(web_search_requests, int) and web_search_requests > 0:
-            self._current.web_search_count = web_search_requests
-        # Extract stop reason from message_delta
-        delta_stop_reason = raw.get("delta", {}).get("stop_reason")
-        if delta_stop_reason is not None:
-            self._current.stop_reason = delta_stop_reason
-
-    def _update_cumulative_input_counts(self, usage: Dict[str, Any]) -> None:
-        assert self._current is not None
-        for field_name in (
-            "input_tokens",
-            "cache_read_input_tokens",
-            "cache_creation_input_tokens",
-        ):
-            delta_value = usage.get(field_name)
-            current_value = getattr(self._current, field_name)
-            if isinstance(delta_value, int) and delta_value > (current_value or 0):
-                setattr(self._current, field_name, delta_value)
 
     def set_model(self, model: str) -> None:
         self._last_model = model
@@ -168,7 +192,9 @@ class PostHogClaudeAgentProcessor:
 
     Emits:
     - $ai_generation: one per Anthropic API call (reconstructed from StreamEvents)
-    - $ai_span: one per tool use (ToolUseBlock in AssistantMessage)
+    - $ai_span: one per tool use (ToolUseBlock in AssistantMessage), emitted
+      when its ToolResultBlock arrives so it carries the result, error flag
+      and latency
     - $ai_trace: one per query() call (on ResultMessage)
     """
 
@@ -181,6 +207,7 @@ class PostHogClaudeAgentProcessor:
         privacy_mode: bool = False,
         groups: Optional[Dict[str, Any]] = None,
         properties: Optional[Dict[str, Any]] = None,
+        options: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize a Claude Agent SDK query processor.
@@ -192,12 +219,18 @@ class PostHogClaudeAgentProcessor:
             privacy_mode: Whether to redact captured inputs, outputs, and tool data.
             groups: Optional PostHog groups to associate with emitted events.
             properties: Additional properties included on emitted AI events.
+            options: Capture options for emitted AI events, such as
+                ``{"cookieless_mode": True}``. They win over a query's
+                ``posthog_options``, context options and ``super_options``. An
+                event without a distinct ID always sends
+                ``process_person_profile: False``.
         """
-        self._client = client or setup()
+        self._client = _resolve_ai_client(client)
         self._distinct_id = distinct_id
         self._privacy_mode = privacy_mode
         self._groups = groups or {}
         self._properties = properties or {}
+        self._options = _ai_event_options(options)
 
     def _get_distinct_id(
         self, result: Optional["ResultMessage"] = None
@@ -218,6 +251,8 @@ class PostHogClaudeAgentProcessor:
         properties: Dict[str, Any],
         distinct_id: Optional[str] = None,
         groups: Optional[Dict[str, Any]] = None,
+        personless: bool = False,
+        options: Optional[Dict[str, Any]] = None,
     ) -> None:
         _capture_processor_event(
             self._client,
@@ -226,6 +261,9 @@ class PostHogClaudeAgentProcessor:
             default_properties=self._properties,
             distinct_id=distinct_id,
             groups=groups if groups is not None else self._groups,
+            personless=personless,
+            options=options,
+            default_options=self._options,
         )
 
     async def query(
@@ -241,6 +279,7 @@ class PostHogClaudeAgentProcessor:
         posthog_properties: Optional[Dict[str, Any]] = None,
         posthog_privacy_mode: Optional[bool] = None,
         posthog_groups: Optional[Dict[str, Any]] = None,
+        posthog_options: Optional[Dict[str, Any]] = None,
     ):
         """Drop-in replacement for claude_agent_sdk.query() with PostHog instrumentation.
 
@@ -256,6 +295,9 @@ class PostHogClaudeAgentProcessor:
             posthog_properties: Extra properties merged into all events for this query
             posthog_privacy_mode: Override privacy mode for this query
             posthog_groups: Override groups for this query
+            posthog_options: Capture options for all events of this query, such
+                as ``{"cookieless_mode": True}``. Named so it does not clash with
+                ``options``, the Claude Agent SDK options.
         """
         from dataclasses import replace
 
@@ -263,6 +305,7 @@ class PostHogClaudeAgentProcessor:
         distinct_id_override = posthog_distinct_id or self._distinct_id
         trace_id = posthog_trace_id or str(uuid.uuid4())
         extra_props = posthog_properties or {}
+        extra_options = _ai_event_options(posthog_options)
         # Per-call privacy can enable redaction, but cannot disable the
         # processor-level setting. This preserves the existing precedence.
         privacy = self._privacy_mode or posthog_privacy_mode is True
@@ -274,191 +317,162 @@ class PostHogClaudeAgentProcessor:
         elif not options.include_partial_messages:
             options = replace(options, include_partial_messages=True)
 
-        async for message in self._instrument_query(
-            prompt,
-            options,
-            transport,
-            distinct_id_override,
-            trace_id,
-            extra_props,
-            privacy,
-            groups,
-        ):
-            yield message
-
-    async def _instrument_query(
-        self,
-        prompt: Any,
-        options: ClaudeAgentOptions,
-        transport: Any,
-        distinct_id_override: Any,
-        trace_id: str,
-        extra_props: Dict[str, Any],
-        privacy: bool,
-        groups: Dict[str, Any],
-    ):
         tracker = _GenerationTracker()
         query_start = time.time()
         generation_index = 0
         current_generation_span_id: Optional[str] = None
 
         # Track input/output for generation events
-        initial_input, current_input = _query_inputs(prompt, options)
+        initial_input: List[Dict[str, Any]] = []
+        if isinstance(prompt, str):
+            initial_input = [{"role": "user", "content": prompt}]
+        if options and options.system_prompt and isinstance(options.system_prompt, str):
+            initial_input = [
+                {"role": "system", "content": options.system_prompt}
+            ] + initial_input
 
         # Two-slot input tracking:
         # - current_input: input for the generation currently in progress
-        # - next_input: tool results that arrive mid-turn, queued for the next generation
+        # - next_input: tool results queued for the next generation
         #
-        # Message ordering from the SDK is:
-        #   message_start → content_blocks → AssistantMessage → UserMessage(tool result) → message_stop
-        # So UserMessage arrives *before* message_stop. When message_stop fires we emit
-        # with current_input, then promote next_input → current_input for the next turn.
+        # The CLI sends each content block as its own AssistantMessage before
+        # message_stop, and each tool result as its own UserMessage after it.
+        # Queued input is promoted when the next generation starts, so it
+        # does not matter which side of message_stop the tool results land on.
+        # Input is used by one generation only: a generation with nothing
+        # queued has no input.
+        current_input: Optional[List[Dict[str, Any]]] = initial_input or None
         next_input: Optional[List[Dict[str, Any]]] = None
 
         # Accumulate assistant output per generation
         pending_output: List[Dict[str, Any]] = []
 
-        async for message in original_query(
-            prompt=prompt, options=options, transport=transport
-        ):
-            # All instrumentation is wrapped in try/except so PostHog errors
-            # never interrupt the underlying Claude Agent SDK query.
-            try:
-                if isinstance(message, StreamEvent):
-                    tracker.process_stream_event(message)
+        # Tool spans waiting for their result, keyed by tool_use_id
+        pending_tools: Dict[str, _PendingToolSpan] = {}
 
-                    # Emit $ai_generation when a turn completes
-                    if tracker.has_completed_generation():
-                        gen = tracker.pop_generation()
-                        generation_index += 1
-                        current_generation_span_id = gen.span_id
-                        self._emit_generation(
-                            gen,
+        try:
+            async for message in original_query(
+                prompt=prompt, options=options, transport=transport
+            ):
+                # All instrumentation is wrapped in try/except so PostHog errors
+                # never interrupt the underlying Claude Agent SDK query.
+                try:
+                    if isinstance(message, StreamEvent):
+                        if _starts_generation(message):
+                            if tracker.current_span_id is not None:
+                                # The previous request never finished (it was
+                                # retried), so its partial output is dropped.
+                                pending_output = []
+                            current_input, next_input = _promote_input(
+                                current_input, next_input
+                            )
+                        tracker.process_stream_event(message)
+
+                        # Emit $ai_generation when a turn completes
+                        if tracker.has_completed_generation():
+                            gen = tracker.pop_generation()
+                            generation_index += 1
+                            current_generation_span_id = gen.span_id
+                            self._emit_generation(
+                                gen,
+                                trace_id,
+                                generation_index,
+                                current_input,
+                                pending_output or None,
+                                distinct_id_override,
+                                extra_props,
+                                privacy,
+                                groups,
+                                extra_options=extra_options,
+                            )
+                            current_input = None
+                            pending_output = []
+
+                    elif isinstance(message, AssistantMessage):
+                        tracker.set_model(message.model)
+                        # Use the in-progress generation's span_id as parent for tool spans.
+                        # AssistantMessage arrives before message_stop, so current_generation_span_id
+                        # would be stale (from the previous turn). tracker.current_span_id gives us
+                        # the correct in-progress generation.
+                        parent_id = (
+                            tracker.current_span_id or current_generation_span_id
+                        )
+                        for block in message.content:
+                            if isinstance(block, ToolUseBlock):
+                                self._start_tool_span(
+                                    pending_tools,
+                                    block,
+                                    trace_id,
+                                    parent_id,
+                                    distinct_id_override,
+                                    extra_props,
+                                    privacy,
+                                    groups,
+                                    extra_options=extra_options,
+                                )
+                        if not _from_subagent(message):
+                            # A subagent's own API calls are not this query's generations.
+                            pending_output = _append_assistant_output(
+                                pending_output, message.content
+                            )
+
+                    elif isinstance(message, UserMessage):
+                        # Tool results close their tool spans, subagent ones included.
+                        for block in _tool_result_blocks(message):
+                            self._finish_tool_span(pending_tools, block, privacy)
+                        if not _from_subagent(message):
+                            # UserMessages carry tool results; queue them as input
+                            # for the *next* generation.
+                            if not tracker.had_any_stream_events:
+                                # Without stream events, a tool result ends the
+                                # assistant turn; the result fallback reports the
+                                # final turn only.
+                                pending_output = []
+                            next_input = _format_user_input(
+                                message.content, self._client, next_input
+                            )
+
+                    elif isinstance(message, ResultMessage):
+                        self._flush_tool_spans(pending_tools)
+                        # Fallback: if no StreamEvents were received, emit a single
+                        # generation from ResultMessage aggregate data
+                        if not tracker.had_any_stream_events:
+                            self._emit_generation_from_result(
+                                message,
+                                trace_id,
+                                tracker.last_model,
+                                query_start,
+                                initial_input,
+                                pending_output,
+                                distinct_id_override,
+                                extra_props,
+                                privacy,
+                                groups,
+                                extra_options=extra_options,
+                            )
+
+                        self._emit_trace(
+                            message,
                             trace_id,
-                            generation_index,
-                            current_input,
-                            pending_output or None,
+                            query_start,
                             distinct_id_override,
                             extra_props,
                             privacy,
                             groups,
+                            extra_options=extra_options,
                         )
-                        # Promote: tool results from this turn become input for next turn
-                        current_input = next_input
-                        next_input = None
-                        pending_output = []
 
-                elif isinstance(message, AssistantMessage):
-                    pending_output = self._process_assistant_message(
-                        message,
-                        tracker,
-                        current_generation_span_id,
-                        trace_id,
-                        distinct_id_override,
-                        extra_props,
-                        privacy,
-                        groups,
-                        pending_output,
-                    )
+                except Exception as e:
+                    log.debug(f"PostHog instrumentation error (non-fatal): {e}")
 
-                elif isinstance(message, UserMessage):
-                    # UserMessages carry tool results. They arrive *before* message_stop
-                    # for the current turn, so queue them as input for the *next* generation.
-                    next_input = _format_user_input(
-                        message.content, self._client, next_input
-                    )
-
-                elif isinstance(message, ResultMessage):
-                    self._process_query_result(
-                        message,
-                        tracker,
-                        trace_id,
-                        query_start,
-                        initial_input,
-                        pending_output,
-                        distinct_id_override,
-                        extra_props,
-                        privacy,
-                        groups,
-                    )
-
+                yield message
+        finally:
+            # Tool spans still waiting for a result (the query ended
+            # early, failed or was cancelled) are emitted without one.
+            try:
+                self._flush_tool_spans(pending_tools)
             except Exception as e:
                 log.debug(f"PostHog instrumentation error (non-fatal): {e}")
-
-            yield message
-
-    def _process_query_result(
-        self,
-        message: "ResultMessage",
-        tracker: _GenerationTracker,
-        trace_id: str,
-        query_start: float,
-        initial_input: List[Dict[str, Any]],
-        pending_output: List[Dict[str, Any]],
-        distinct_id_override: Any,
-        extra_props: Dict[str, Any],
-        privacy: bool,
-        groups: Dict[str, Any],
-    ) -> None:
-        # Fallback: if no StreamEvents were received, emit a single
-        # generation from ResultMessage aggregate data
-        if not tracker.had_any_stream_events:
-            self._emit_generation_from_result(
-                message,
-                trace_id,
-                tracker.last_model,
-                query_start,
-                initial_input,
-                pending_output,
-                distinct_id_override,
-                extra_props,
-                privacy,
-                groups,
-            )
-
-        self._emit_trace(
-            message,
-            trace_id,
-            query_start,
-            distinct_id_override,
-            extra_props,
-            privacy,
-            groups,
-        )
-
-    def _process_assistant_message(
-        self,
-        message: "AssistantMessage",
-        tracker: _GenerationTracker,
-        current_generation_span_id: Optional[str],
-        trace_id: str,
-        distinct_id: Any,
-        extra_props: Dict[str, Any],
-        privacy: bool,
-        groups: Dict[str, Any],
-        pending_output: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        tracker.set_model(message.model)
-        # Use the in-progress generation's span_id as parent for tool spans.
-        # AssistantMessage arrives before message_stop, so current_generation_span_id
-        # would be stale (from the previous turn). tracker.current_span_id gives us
-        # the correct in-progress generation.
-        parent_id = tracker.current_span_id or current_generation_span_id
-        for block in message.content:
-            if isinstance(block, ToolUseBlock):
-                self._emit_tool_span(
-                    block,
-                    trace_id,
-                    parent_id,
-                    distinct_id,
-                    extra_props,
-                    privacy,
-                    groups,
-                )
-        output_content = format_assistant_blocks(message.content)
-        if output_content:
-            pending_output = [{"role": "assistant", "content": output_content}]
-        return pending_output
 
     def _emit_generation(
         self,
@@ -471,6 +485,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id)
         latency = (
@@ -498,26 +513,6 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        self._add_generation_content(
-            properties, input_messages, output_choices, privacy
-        )
-
-        _add_generation_usage(properties, gen)
-
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
-        )
-
-    def _add_generation_content(
-        self,
-        properties: Dict[str, Any],
-        input_messages: Optional[List[Dict[str, Any]]],
-        output_choices: Optional[List[Dict[str, Any]]],
-        privacy: bool,
-    ) -> None:
         if input_messages is not None:
             properties["$ai_input"] = _with_privacy_mode(
                 self._client,
@@ -531,6 +526,29 @@ class PostHogClaudeAgentProcessor:
                 finalize_ai_content(output_choices, self._client),
             )
 
+        if gen.cache_read_input_tokens:
+            properties["$ai_cache_read_input_tokens"] = gen.cache_read_input_tokens
+        if gen.cache_creation_input_tokens:
+            properties["$ai_cache_creation_input_tokens"] = (
+                gen.cache_creation_input_tokens
+            )
+        if gen.web_search_count:
+            properties["$ai_web_search_count"] = gen.web_search_count
+        if gen.raw_usage:
+            properties["$ai_usage"] = gen.raw_usage
+
+        if gen.stop_reason is not None:
+            properties["$ai_stop_reason"] = gen.stop_reason
+
+        self._capture_event(
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
+        )
+
     def _emit_generation_from_result(
         self,
         result: "ResultMessage",
@@ -543,6 +561,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Fallback: emit a single generation from ResultMessage aggregate data."""
         resolved_id = self._resolve_distinct_id(distinct_id)
@@ -572,21 +591,43 @@ class PostHogClaudeAgentProcessor:
             **extra_props,
         }
 
-        self._add_generation_content(
-            properties, input_messages, output_choices, privacy
-        )
+        if input_messages is not None:
+            properties["$ai_input"] = _with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(input_messages, self._client),
+            )
+        if output_choices is not None:
+            properties["$ai_output_choices"] = _with_privacy_mode(
+                self._client,
+                privacy,
+                finalize_ai_content(output_choices, self._client),
+            )
 
-        _add_result_usage(properties, usage, result)
+        cache_read = usage.get("cache_read_input_tokens")
+        cache_creation = usage.get("cache_creation_input_tokens")
+        if cache_read:
+            properties["$ai_cache_read_input_tokens"] = cache_read
+        if cache_creation:
+            properties["$ai_cache_creation_input_tokens"] = cache_creation
+        if usage:
+            properties["$ai_usage"] = dict(usage)
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
+        if result.total_cost_usd is not None:
+            properties["$ai_total_cost_usd"] = result.total_cost_usd
 
         self._capture_event(
-            "$ai_generation", properties, resolved_id or trace_id, groups
+            "$ai_generation",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
         )
 
-    def _emit_tool_span(
+    def _start_tool_span(
         self,
+        pending: Dict[str, _PendingToolSpan],
         block: "ToolUseBlock",
         trace_id: str,
         parent_span_id: Optional[str],
@@ -594,9 +635,14 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
-        resolved_id = self._resolve_distinct_id(distinct_id)
+        """Hold a tool span until its ToolResultBlock arrives.
 
+        The span is emitted by ``_finish_tool_span`` with the result, error
+        flag and latency, or by ``_flush_tool_spans`` without them if the
+        result never arrives.
+        """
         properties: Dict[str, Any] = {
             "$ai_trace_id": trace_id,
             "$ai_span_id": str(uuid.uuid4()),
@@ -613,10 +659,69 @@ class PostHogClaudeAgentProcessor:
                 _ensure_serializable(block.input), self._client
             )
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
+        span = _PendingToolSpan(
+            properties=properties,
+            start_time=time.time(),
+            distinct_id=distinct_id,
+            groups=groups,
+            extra_options=extra_options,
+            privacy=privacy,
+        )
+        tool_use_id = getattr(block, "id", None)
+        if tool_use_id is None:
+            # Nothing can match a result to this span, so emit it now.
+            self._capture_tool_span(span)
+            return
+        # A repeated id would orphan the earlier span; emit it first.
+        previous = pending.pop(tool_use_id, None)
+        if previous is not None:
+            self._capture_tool_span(previous)
+        pending[tool_use_id] = span
 
-        self._capture_event("$ai_span", properties, resolved_id or trace_id, groups)
+    def _finish_tool_span(
+        self,
+        pending: Dict[str, _PendingToolSpan],
+        block: Any,
+        privacy: bool,
+    ) -> None:
+        """Emit the held tool span for a ToolResultBlock with its outcome."""
+        tool_use_id = getattr(block, "tool_use_id", None)
+        span = pending.pop(tool_use_id, None) if tool_use_id is not None else None
+        if span is None:
+            return
+        properties = span.properties
+        properties["$ai_latency"] = time.time() - span.start_time
+        is_error = bool(getattr(block, "is_error", False))
+        properties["$ai_is_error"] = is_error
+        if _with_privacy_mode(self._client, privacy, True):
+            content = format_tool_result_content(block, self._client)
+            properties["$ai_output_state"] = finalize_ai_content(content, self._client)
+            if is_error:
+                properties["$ai_error"] = _tool_error_text(content)
+        self._capture_tool_span(span)
+
+    def _flush_tool_spans(self, pending: Dict[str, _PendingToolSpan]) -> None:
+        """Emit tool spans whose result never arrived, without an outcome."""
+        while pending:
+            _, span = pending.popitem()
+            self._capture_tool_span(span)
+
+    def _capture_tool_span(self, span: _PendingToolSpan) -> None:
+        if _with_privacy_mode(self._client, span.privacy, True) is None:
+            # Privacy may have been enabled while the tool ran; drop content
+            # buffered before then.
+            for key in _TOOL_SPAN_CONTENT_PROPERTIES:
+                span.properties.pop(key, None)
+        resolved_id = self._resolve_distinct_id(span.distinct_id)
+        trace_id = span.properties["$ai_trace_id"]
+        self._capture_event(
+            "$ai_span",
+            span.properties,
+            resolved_id or trace_id,
+            span.groups,
+            personless=resolved_id is None,
+            options=span.extra_options,
+        )
 
     def _emit_trace(
         self,
@@ -627,6 +732,7 @@ class PostHogClaudeAgentProcessor:
         extra_props: Dict[str, Any],
         privacy: bool,
         groups: Dict[str, Any],
+        extra_options: Optional[Dict[str, Any]] = None,
     ) -> None:
         resolved_id = self._resolve_distinct_id(distinct_id, result)
         latency = (
@@ -648,10 +754,14 @@ class PostHogClaudeAgentProcessor:
         if result.total_cost_usd is not None:
             properties["$ai_total_cost_usd"] = result.total_cost_usd
 
-        if resolved_id is None:
-            properties["$process_person_profile"] = False
-
-        self._capture_event("$ai_trace", properties, resolved_id or trace_id, groups)
+        self._capture_event(
+            "$ai_trace",
+            properties,
+            resolved_id or trace_id,
+            groups,
+            personless=resolved_id is None,
+            options=extra_options,
+        )
 
         # Flush to ensure events are sent before process exits
         try:
@@ -678,45 +788,30 @@ class PostHogClaudeAgentProcessor:
         return self._get_distinct_id(result)
 
 
-def _query_inputs(
-    prompt: Any, options: ClaudeAgentOptions
-) -> tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
-    initial_input: List[Dict[str, Any]] = []
-    if isinstance(prompt, str):
-        initial_input = [{"role": "user", "content": prompt}]
-    if options and options.system_prompt and isinstance(options.system_prompt, str):
-        initial_input = [
-            {"role": "system", "content": options.system_prompt}
-        ] + initial_input
-
-    return initial_input, initial_input or None
+def _from_subagent(message: Any) -> bool:
+    return getattr(message, "parent_tool_use_id", None) is not None
 
 
-def _add_generation_usage(properties: Dict[str, Any], gen: _GenerationData) -> None:
-    if gen.cache_read_input_tokens:
-        properties["$ai_cache_read_input_tokens"] = gen.cache_read_input_tokens
-    if gen.cache_creation_input_tokens:
-        properties["$ai_cache_creation_input_tokens"] = gen.cache_creation_input_tokens
-    if gen.web_search_count:
-        properties["$ai_web_search_count"] = gen.web_search_count
-    if gen.raw_usage:
-        properties["$ai_usage"] = gen.raw_usage
-
-    if gen.stop_reason is not None:
-        properties["$ai_stop_reason"] = gen.stop_reason
+def _tool_result_blocks(message: "UserMessage") -> List[Any]:
+    """The ToolResultBlocks in a UserMessage."""
+    content = message.content
+    if not isinstance(content, list):
+        return []
+    return [block for block in content if hasattr(block, "tool_use_id")]
 
 
-def _add_result_usage(
-    properties: Dict[str, Any], usage: Dict[str, Any], result: "ResultMessage"
-) -> None:
-    cache_read = usage.get("cache_read_input_tokens")
-    cache_creation = usage.get("cache_creation_input_tokens")
-    if cache_read:
-        properties["$ai_cache_read_input_tokens"] = cache_read
-    if cache_creation:
-        properties["$ai_cache_creation_input_tokens"] = cache_creation
-    if usage:
-        properties["$ai_usage"] = dict(usage)
+def _starts_generation(message: "StreamEvent") -> bool:
+    """Whether a main-agent API call is starting (subagent calls are skipped)."""
+    return (
+        not _from_subagent(message)
+        and isinstance(message.event, dict)
+        and message.event.get("type") == "message_start"
+    )
 
-    if result.total_cost_usd is not None:
-        properties["$ai_total_cost_usd"] = result.total_cost_usd
+
+def _promote_input(
+    current_input: Optional[List[Dict[str, Any]]],
+    next_input: Optional[List[Dict[str, Any]]],
+) -> tuple[Optional[List[Dict[str, Any]]], None]:
+    """Make queued input the input of the generation that is starting."""
+    return (current_input if next_input is None else next_input), None

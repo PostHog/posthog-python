@@ -517,18 +517,28 @@ def _attribution_response(source: str) -> Dict[str, Any]:
     "source, expected", ATTRIBUTION_CASES, ids=[c[0] for c in ATTRIBUTION_CASES]
 )
 def test_flag_called_attribution_follows_the_record(source, expected, path):
-    events = _read_events(path, _attribution_response(source), key="garden-layout")
+    response = _attribution_response(source)
+    failed = response["flags"]["garden-layout"].get("failed") is True
+    events = _read_events(path, response, key="garden-layout")
 
     [called] = _named(events, FLAG_CALLED, "garden-layout")
     assert _attribution(called.properties) == expected
-    FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
+    if failed:
+        # The vendored schema rejects the null $feature_flag_response a failed record reports.
+        assert called.properties["$feature_flag_response"] is None
+        assert set(called.properties["$feature_flag_error"].split(",")) == {
+            "evaluation_failed",
+            "errors_while_computing_flags",
+        }
+    else:
+        FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
     exposures = _named(events, EXPOSURE, "garden-layout")
     assert len(exposures) == (1 if "$feature_flag_variant_key" in expected else 0)
 
 
 # A record whose reason names no rule, or that failed, reports no rule even when it
-# carries one. Neither sends an exposure. The last element says whether the record is
-# a valid server outcome, which the contract's event schema then accepts.
+# carries one. Neither sends an exposure. The last element says whether a successful
+# record is a valid server outcome, which the contract's event schema then accepts.
 STRAY_RULE_CASES = [
     ("no_rule_match", {}, True),
     ("missing_group_key", {}, True),
@@ -569,7 +579,10 @@ def test_rule_fields_are_sent_only_for_reasons_that_name_a_rule(
         "$feature_flag_reason_code": code,
     }
     assert _named(events, EXPOSURE) == []
-    if valid_outcome:
+    if fields.get("failed") is True:
+        assert called.properties["$feature_flag_response"] is None
+        assert called.properties["$feature_flag_error"] == "evaluation_failed"
+    elif valid_outcome:
         FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
 
 
@@ -1510,14 +1523,16 @@ async def test_async_an_event_dropped_by_before_send_keeps_its_dedupe_key():
         return None if message["event"] == EXPOSURE else message
 
     async def batch_post(*args: Any, **kwargs: Any) -> None:
-        batches.append(kwargs["batch"])
+        batches.append(args[2] if len(args) > 2 else kwargs["batch"])
 
     with (
         mock.patch(
             "posthog.async_client._async_flags",
             new=mock.AsyncMock(return_value=_response(_split())),
         ),
-        mock.patch("posthog._async_consumer.async_batch_post", side_effect=batch_post),
+        mock.patch(
+            "posthog._async_consumer.async_send_v1_batch", side_effect=batch_post
+        ),
     ):
         client = AsyncPosthog("project-key", before_send=before_send, flush_interval=30)
         for _ in range(2):
@@ -1652,13 +1667,13 @@ def test_a_read_during_a_sync_mode_send_does_not_send_it_again(delivered):
     # The second read runs while the first read's exposure is on the wire. It sends
     # neither event. A send that fails releases the key, so a third read sends the
     # exposure.
-    client = Client(FAKE_TEST_API_KEY, sync_mode=True, capture_mode="v0")
+    client = Client(FAKE_TEST_API_KEY, sync_mode=True)
     sending = threading.Event()
     finish = threading.Event()
     posted: List[str] = []
 
-    def batch_post(*args: Any, batch: List[Dict[str, Any]], **kwargs: Any) -> None:
-        [message] = batch
+    def batch_post(*args: Any, **kwargs: Any) -> None:
+        [message] = args[2] if len(args) > 2 else kwargs["batch"]
         posted.append(message["event"])
         if message["event"] == EXPOSURE and posted.count(EXPOSURE) == 1:
             sending.set()
@@ -1669,7 +1684,7 @@ def test_a_read_during_a_sync_mode_send_does_not_send_it_again(delivered):
     try:
         with (
             _serving(_response(_split())),
-            mock.patch("posthog.client.batch_post", side_effect=batch_post),
+            mock.patch("posthog.client._send_v1_batch", side_effect=batch_post),
         ):
             first = threading.Thread(target=_read, args=(client, "get_feature_flag"))
             first.start()
@@ -1740,7 +1755,9 @@ def _flag_identity(properties: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _messages_with_super_properties(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+def _messages_with_super_properties(
+    record: Dict[str, Any], super_properties: Optional[Dict[str, Any]] = None
+) -> List[Dict[str, Any]]:
     messages: List[Dict[str, Any]] = []
 
     def before_send(message: Dict[str, Any]) -> Dict[str, Any]:
@@ -1751,7 +1768,9 @@ def _messages_with_super_properties(record: Dict[str, Any]) -> List[Dict[str, An
         FAKE_TEST_API_KEY,
         send=False,
         before_send=before_send,
-        super_properties=dict(SPOOFED_SUPER_PROPERTIES),
+        super_properties=dict(
+            SPOOFED_SUPER_PROPERTIES if super_properties is None else super_properties
+        ),
     )
     try:
         with _serving(_response(record)):
@@ -1803,32 +1822,42 @@ def test_super_properties_cannot_add_rule_fields_a_config_version_2_call_omits()
 def test_super_properties_still_apply_to_config_version_1_calls():
     record = _record("condition_match", "annual", config_version=1)
     [called] = _messages_with_super_properties(record)
+    [own] = _messages_with_super_properties(record, super_properties={})
 
+    # Nothing is pinned: super properties fill every key the event leaves unset,
+    # and the event's own values win, as on every event since 8.0.
+    filled = [
+        name for name in SPOOFED_SUPER_PROPERTIES if name not in own["properties"]
+    ]
+    assert filled
     for name, value in SPOOFED_SUPER_PROPERTIES.items():
-        assert called["properties"][name] == value, name
+        expected = own["properties"].get(name, value)
+        assert called["properties"][name] == expected, name
 
 
 async def test_async_super_properties_cannot_change_config_version_2_attribution():
     messages: List[Dict[str, Any]] = []
-    with mock.patch(
-        "posthog.async_client._async_flags",
-        new=mock.AsyncMock(return_value=_response(_split())),
+
+    # Super properties and the pinned attribution fill in before before_send.
+    def before_send(message: Dict[str, Any]) -> Dict[str, Any]:
+        messages.append(copy.deepcopy(message))
+        return message
+
+    with (
+        mock.patch(
+            "posthog.async_client._async_flags",
+            new=mock.AsyncMock(return_value=_response(_split())),
+        ),
+        mock.patch("posthog._async_consumer.async_send_v1_batch", new=mock.AsyncMock()),
     ):
         client = AsyncPosthog(
             "project-key",
-            send=False,
+            before_send=before_send,
             super_properties=dict(SPOOFED_SUPER_PROPERTIES),
         )
-        prepare = client._prepare_event
-
-        def record(*args: Any, **kwargs: Any) -> Any:
-            prepared, uuid = prepare(*args, **kwargs)
-            messages.append(copy.deepcopy(prepared))
-            return prepared, uuid
-
-        with mock.patch.object(client, "_prepare_event", side_effect=record):
-            snapshot = await client.evaluate_flags(DISTINCT_ID)
-            snapshot.get_flag(FLAG)
+        snapshot = await client.evaluate_flags(DISTINCT_ID)
+        snapshot.get_flag(FLAG)
+        await client.flush(timeout_seconds=1)
         await client.shutdown()
 
     [called] = [m for m in messages if m["event"] == FLAG_CALLED]
