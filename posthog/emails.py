@@ -158,10 +158,12 @@ Check each result's ``status``:
 More than 100 recipients raises ``ValueError`` before anything is sent. A request
 that fails as a whole, such as a rate limit past its retries, raises
 :class:`EmailBatchError`, whose ``results`` hold every recipient. ``code``
-``content_too_large`` on a 413 means the request was too large for PostHog:
-split the recipients into smaller batches, as its ``fix`` says. On a 400 it means
-the shared content or ``template_data`` is too large, which splitting doesn't
-help, and its ``message`` says what to send less of. ``batch_unavailable`` (409) means the project
+``content_too_large`` on a 413 means the request was larger than PostHog takes
+at once: split the recipients into smaller batches, as its ``fix`` says, and
+when the shared content or ``template_data`` alone passes the limit, which
+splitting doesn't help, send less of it. On a 400 it means the shared content or
+``template_data`` is too large to copy to every recipient, and its ``message``
+says what to send less of. ``batch_unavailable`` (409) means the project
 can't send batches yet: send each email the batch didn't queue with ``send``
 and its recipient's ``idempotency_key``. A 404 ``not_found`` that names no
 ``field`` means PostHog found no template with that ``template_id``, or batch
@@ -1834,9 +1836,13 @@ _BATCH_NOT_FOUND = {
 }
 
 
+def _said(value: Any) -> Optional[str]:
+    text = _text(value)
+    return text if text and text.strip() else None
+
+
 def _readable_code(fields: Mapping[str, Any]) -> Optional[str]:
-    code = _text(fields.get("code"))
-    return code if code and code.strip() else None
+    return _said(fields.get("code"))
 
 
 def _batch_response_error(
@@ -1854,7 +1860,7 @@ def _batch_response_error(
         and not _text(fields.get("attr"))
     ):
         fields = {"code": "not_found", **_BATCH_NOT_FOUND[template_form]}
-    if status == 413 and not _text(fields.get("fix")):
+    if status == 413 and not _said(fields.get("fix")):
         fields = {
             **fields,
             "fix": "Split the recipients into smaller batches and send each with batch()."
@@ -2279,10 +2285,11 @@ class Emails(_EmailsBase):
         Raises:
             EmailBatchError: The request failed as a whole. ``results`` holds
                 every recipient. ``code`` is ``content_too_large`` on a 413 when
-                the request was too large for PostHog: split the recipients
-                into smaller batches. On a 400 the shared content or
-                ``template_data`` is too large, and ``message`` says what to
-                send less of. ``batch_unavailable`` means the project
+                the request was larger than PostHog takes at once: split the
+                recipients into smaller batches, or send less shared content
+                or ``template_data`` when that alone passes the limit. On a 400
+                the shared content or ``template_data`` is too large to copy to
+                every recipient, and ``message`` says what to send less of. ``batch_unavailable`` means the project
                 can't send batches yet: send each email the batch didn't
                 queue with :meth:`send` and its recipient's
                 ``idempotency_key``. ``client_closed`` means the client shut

@@ -449,7 +449,9 @@ def test_a_body_over_4_mib_goes_out_whole_in_one_request():
     [(2, "smaller batches"), (1, "template_data")],
     ids=["many", "one"],
 )
-@pytest.mark.parametrize("fix", [None, "", ["split"]], ids=["absent", "empty", "list"])
+@pytest.mark.parametrize(
+    "fix", [None, "", "   ", ["split"]], ids=["absent", "empty", "blank", "list"]
+)
 def test_a_413_without_a_usable_fix_says_to_split_or_send_less(count, says, fix):
     body: dict[str, Any] = {"code": "content_too_large", "detail": "Big."}
     if fix is not None:
