@@ -66,6 +66,16 @@ def _group_filter_without_index(operator, value=None, key="tier"):
     return prop
 
 
+def _depends_on(key, value=True):
+    return {
+        "key": key,
+        "operator": "flag_evaluates_to",
+        "value": value,
+        "type": "flag",
+        "dependency_chain": [key],
+    }
+
+
 class TestKnownAbsentLocalEvaluation(unittest.TestCase):
     def setUp(self):
         self.client = Client(FAKE_TEST_API_KEY, secret_key="test")
@@ -618,6 +628,111 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         )
         self.assertEqual(value, REMOTE_VALUE)
         self.assertEqual(self.flags.call_count, 1)
+
+    def evaluate_dependency_pair(self, parent, child, **kwargs):
+        """Evaluate the parent directly and through the child's dependency, with
+        the same inputs, in each local entry point."""
+        self.client.feature_flags = [parent, child]
+        direct = self.client.get_feature_flag(parent["key"], "user-1", **kwargs)
+        through_dependency = self.client.get_feature_flag(
+            child["key"], "user-1", **kwargs
+        )
+        snapshot = self.client.evaluate_flags(
+            "user-1", only_evaluate_locally=True, **kwargs
+        )
+        self.assertEqual(snapshot.get_flag(child["key"]), through_dependency)
+        self.assertEqual(snapshot.unresolved_flags, {})
+        self.flags.assert_not_called()
+        return direct, through_dependency
+
+    def test_dependency_is_evaluated_with_its_own_aggregation(self):
+        parent = _flag(
+            "org-parent",
+            [_group_filter("exact", "us", key="region")],
+            aggregation_group_type_index=0,
+        )
+        child = _flag("person-child", [_depends_on("org-parent")])
+        child["id"] = 2
+
+        direct, through_dependency = self.evaluate_dependency_pair(
+            parent,
+            child,
+            groups={"organization": "acme"},
+            person_properties={"region": "us"},
+            group_properties={"organization": {"region": "eu"}},
+        )
+        self.assertIs(direct, False)
+        self.assertIs(through_dependency, False)
+
+        direct, through_dependency = self.evaluate_dependency_pair(
+            parent,
+            child,
+            groups={"organization": "acme"},
+            person_properties={"region": "eu"},
+            group_properties={"organization": {"region": "us"}},
+        )
+        self.assertIs(direct, True)
+        self.assertIs(through_dependency, True)
+
+    def test_group_dependency_without_its_group_resolves_as_false(self):
+        parent = _flag(
+            "org-parent",
+            [_group_filter("is_not_set")],
+            aggregation_group_type_index=0,
+        )
+        child = _flag("person-child", [_depends_on("org-parent")])
+        child["id"] = 2
+
+        direct, through_dependency = self.evaluate_dependency_pair(
+            parent,
+            child,
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+        self.assertIs(direct, False)
+        self.assertIs(through_dependency, False)
+
+    def test_group_dependency_is_bucketed_by_the_group_key(self):
+        # "user-1" hashes into the 50% rollout of "org-parent", "org-0" does not
+        # and "org-1" does.
+        parent = {
+            "id": 1,
+            "key": "org-parent",
+            "active": True,
+            "filters": {
+                "aggregation_group_type_index": 0,
+                "groups": [{"properties": [], "rollout_percentage": 50}],
+            },
+        }
+        child = _flag("person-child", [_depends_on("org-parent")])
+        child["id"] = 2
+
+        for group_key, expected in (("org-0", False), ("org-1", True)):
+            direct, through_dependency = self.evaluate_dependency_pair(
+                parent, child, groups={"organization": group_key}
+            )
+            self.assertIs(direct, expected)
+            self.assertIs(through_dependency, expected)
+
+    def test_person_dependency_of_a_group_flag_reads_person_context(self):
+        # "user-1" hashes into the 50% rollout of "person-parent", "org-0" does not.
+        parent = _flag("person-parent", [_person_filter("exact", "us", key="region")])
+        parent["filters"]["groups"][0]["rollout_percentage"] = 50
+        child = _flag(
+            "org-child",
+            [_depends_on("person-parent")],
+            aggregation_group_type_index=0,
+        )
+        child["id"] = 2
+
+        direct, through_dependency = self.evaluate_dependency_pair(
+            parent,
+            child,
+            groups={"organization": "org-0"},
+            person_properties={"region": "us"},
+            group_properties={"organization": {"region": "eu"}},
+        )
+        self.assertIs(direct, True)
+        self.assertIs(through_dependency, True)
 
     def test_listed_enrollment_key_continues_to_release_conditions(self):
         flag = _flag("beta-feature", [], feature_enrollment=True)

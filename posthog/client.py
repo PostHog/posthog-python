@@ -123,12 +123,13 @@ from posthog.feature_flag_evaluations import (
 from posthog.feature_flags import (
     InconclusiveMatchError,
     RequiresServerEvaluation,
+    _compute_flag_locally,
+    _FlagEvaluationContext,
     _get_definition_unresolved_reason,
-    _group_key_to_string,
     _mark_known_absent_properties,
     _validate_known_absent_keys,
-    match_feature_flag_properties,
-    resolve_bucketing_value,
+    match_feature_flag_properties as match_feature_flag_properties,
+    resolve_bucketing_value as resolve_bucketing_value,
 )
 from posthog.flag_definition_cache import (
     FlagDefinitionCacheData,
@@ -4675,107 +4676,22 @@ class Client(object):
             if _definition_snapshot is not None
             else self._local_evaluation_snapshot()
         )
-        flags_by_key = snapshot["flags_by_key"]
-        property_matching_version = snapshot.get("property_matching_version", 1)
-        groups = groups or {}
-        person_properties = person_properties or {}
-        group_properties = group_properties or {}
-
-        # Create evaluation cache for flag dependencies
-        evaluation_cache: dict[str, Optional[FlagValue]] = {}
-
-        if not feature_flag.get("active"):
-            return False
-
-        if feature_flag.get("ensure_experience_continuity", False):
-            raise InconclusiveMatchError(
-                "Flag has experience continuity enabled",
-                reason=UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
-            )
-
-        flag_filters = feature_flag.get("filters") or {}
-        aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
-        group_type_mapping = snapshot["group_type_mapping"]
-
-        if aggregation_group_type_index is not None:
-            group_name = group_type_mapping.get(str(aggregation_group_type_index))
-
-            if not group_name:
-                self.log.warning(
-                    f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {feature_flag['key']}"
-                )
-                # failover to `/flags`
-                raise InconclusiveMatchError(
-                    "Flag has unknown group type index",
-                    reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
-                )
-
-            if group_name not in groups:
-                # Group flags are never enabled in `groups` aren't passed in
-                # don't failover to `/flags`, since response will be the same
-                if warn_on_unknown_groups:
-                    self.log.warning(
-                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
-                    )
-                else:
-                    self.log.debug(
-                        f"[FEATURE FLAGS] Can't compute group feature flag: {feature_flag['key']} without group names passed in"
-                    )
-                return False
-
-            if group_name not in group_properties:
-                raise InconclusiveMatchError(
-                    f"Flag has no group properties for group '{group_name}'",
-                    reason=UnresolvedFlagReason.MISSING_CONTEXT,
-                )
-            focused_group_properties = group_properties[group_name]
-            group_key = _group_key_to_string(groups[group_name])
-            return match_feature_flag_properties(
-                feature_flag,
-                group_key,
-                focused_group_properties,
-                cohort_properties=snapshot["cohorts"],
-                flags_by_key=flags_by_key,
-                property_matching_version=property_matching_version,
-                evaluation_cache=evaluation_cache,
+        return _compute_flag_locally(
+            feature_flag,
+            _FlagEvaluationContext(
+                distinct_id=distinct_id,
+                groups=groups or {},
+                person_properties=person_properties or {},
+                group_properties=group_properties or {},
+                group_type_mapping=snapshot["group_type_mapping"],
                 device_id=device_id,
-                bucketing_value=group_key,
-                group_type_mapping=group_type_mapping,
-                groups=groups,
-                group_properties=group_properties,
-            )
-        else:
-            try:
-                bucketing_value = resolve_bucketing_value(
-                    feature_flag, distinct_id, device_id
-                )
-            except InconclusiveMatchError as e:
-                # No condition is checked without a bucketing value, so a cause in
-                # the definition also applies and outranks missing_context.
-                e.reason = (
-                    _get_definition_unresolved_reason(
-                        feature_flag,
-                        flags_by_key,
-                        snapshot["cohorts"],
-                        group_type_mapping,
-                    )
-                    or e.reason
-                )
-                raise
-            return match_feature_flag_properties(
-                feature_flag,
-                distinct_id,
-                person_properties,
-                cohort_properties=snapshot["cohorts"],
-                flags_by_key=flags_by_key,
-                property_matching_version=property_matching_version,
-                evaluation_cache=evaluation_cache,
-                device_id=device_id,
-                bucketing_value=bucketing_value,
-                group_type_mapping=group_type_mapping,
-                groups=groups,
-                group_properties=group_properties,
-            )
+            ),
+            cohort_properties=snapshot["cohorts"],
+            flags_by_key=snapshot["flags_by_key"],
+            property_matching_version=snapshot.get("property_matching_version", 1),
+            evaluation_cache={},
+            warn_on_unknown_groups=warn_on_unknown_groups,
+        )
 
     def feature_enabled(
         self,

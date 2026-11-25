@@ -398,6 +398,8 @@ def evaluate_flag_dependency(
     cohort_properties,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ):
     """
     Evaluate a flag dependency condition under local evaluation.
@@ -408,6 +410,10 @@ def evaluate_flag_dependency(
     against the condition's expected value; ancestors influence it only through
     the referenced flag's own recursive evaluation.
 
+    The referenced flag is evaluated as if it were evaluated directly with the
+    top-level inputs in ``_evaluation_context``, using its own aggregation, property
+    context and bucketing identifier, as the flags service does.
+
     Args:
         property: Flag property with type="flag" and dependency_chain
         flags_by_key: Dictionary of all flags by their key
@@ -416,6 +422,9 @@ def evaluate_flag_dependency(
         properties: Person properties for evaluation
         cohort_properties: Cohort properties for evaluation
         device_id: The device ID for bucketing (optional)
+        _evaluation_context: The top-level inputs of the evaluation. Without it,
+            the referenced flag reads ``properties`` as person properties and no
+            groups.
 
     Returns:
         bool: Whether the referenced flag's evaluated value matches the
@@ -452,14 +461,21 @@ def evaluate_flag_dependency(
     _assert_dependency_definitions_loaded(
         dependency_chain, flags_by_key, evaluation_cache
     )
+    if _evaluation_context is None:
+        _evaluation_context = _FlagEvaluationContext(
+            distinct_id=distinct_id,
+            groups={},
+            person_properties=properties,
+            group_properties={},
+            group_type_mapping={},
+            device_id=device_id,
+        )
     _evaluate_dependency_chain(
         dependency_chain,
         flags_by_key,
         evaluation_cache,
-        distinct_id,
-        properties,
+        _evaluation_context,
         cohort_properties,
-        device_id,
         property_matching_version,
     )
 
@@ -536,10 +552,8 @@ def _evaluate_dependency_chain(
     dependency_chain,
     flags_by_key,
     evaluation_cache,
-    distinct_id,
-    properties,
+    _evaluation_context: "_FlagEvaluationContext",
     cohort_properties,
-    device_id,
     property_matching_version,
 ):
     # Evaluate and cache each flag in the chain; members already cached are
@@ -551,10 +565,8 @@ def _evaluate_dependency_chain(
             dep_flag_key,
             flags_by_key,
             evaluation_cache,
-            distinct_id,
-            properties,
+            _evaluation_context,
             cohort_properties,
-            device_id,
             property_matching_version,
         )
 
@@ -563,16 +575,14 @@ def _evaluate_dependency(
     dep_flag_key,
     flags_by_key,
     evaluation_cache,
-    distinct_id,
-    properties,
+    _evaluation_context: "_FlagEvaluationContext",
     cohort_properties,
-    device_id,
     property_matching_version,
 ):
     dep_flag = flags_by_key[dep_flag_key]
 
-    # Same order as client._compute_flag_locally: an inactive flag is false
-    # whatever its experience continuity setting.
+    # Same order as _compute_flag_locally: an inactive flag is false whatever its
+    # experience continuity setting.
     if not dep_flag.get("active"):
         evaluation_cache[dep_flag_key] = False
         return
@@ -584,30 +594,17 @@ def _evaluate_dependency(
             reason=UnresolvedFlagReason.UNRESOLVED_DEPENDENCY,
         )
 
-    # Recursively evaluate the dependency
+    # Evaluate the dependency as if it were evaluated directly with the same
+    # inputs, so it reads its own aggregation's properties and bucketing value.
     try:
-        dep_flag_filters = dep_flag.get("filters") or {}
-        dep_aggregation_group_type_index = dep_flag_filters.get(
-            "aggregation_group_type_index"
-        )
-        if dep_aggregation_group_type_index is not None:
-            # Group flags should continue bucketing by the group key
-            # from the current evaluation context.
-            dep_bucketing_value = distinct_id
-        else:
-            dep_bucketing_value = resolve_bucketing_value(
-                dep_flag, distinct_id, device_id
-            )
-        dep_result = match_feature_flag_properties(
+        dep_result = _compute_flag_locally(
             dep_flag,
-            distinct_id,
-            properties,
+            _evaluation_context,
             cohort_properties=cohort_properties,
             flags_by_key=flags_by_key,
-            evaluation_cache=evaluation_cache,
-            device_id=device_id,
             property_matching_version=property_matching_version,
-            bucketing_value=dep_bucketing_value,
+            evaluation_cache=evaluation_cache,
+            warn_on_unknown_groups=False,
         )
         evaluation_cache[dep_flag_key] = dep_result
     except RequiresServerEvaluation as e:
@@ -684,6 +681,121 @@ def resolve_bucketing_value(flag, distinct_id, device_id=None):
     return distinct_id
 
 
+class _FlagEvaluationContext(NamedTuple):
+    """The top-level inputs of a local flag evaluation. A flag dependency is
+    evaluated from them as if it were evaluated directly."""
+
+    distinct_id: Any
+    groups: Mapping[str, Any]
+    person_properties: dict[str, Any]
+    group_properties: dict[str, dict[str, Any]]
+    group_type_mapping: Mapping[str, str]
+    device_id: Optional[str]
+
+
+def _compute_flag_locally(
+    flag,
+    _evaluation_context: _FlagEvaluationContext,
+    *,
+    cohort_properties,
+    flags_by_key,
+    property_matching_version: int,
+    evaluation_cache: dict[str, Optional[FlagValue]],
+    warn_on_unknown_groups: bool,
+) -> FlagValue:
+    """Evaluate ``flag`` locally with its own aggregation, property context and
+    bucketing value."""
+    if not flag.get("active"):
+        return False
+
+    if flag.get("ensure_experience_continuity", False):
+        raise InconclusiveMatchError(
+            "Flag has experience continuity enabled",
+            reason=UnresolvedFlagReason.EXPERIENCE_CONTINUITY,
+        )
+
+    distinct_id = _evaluation_context.distinct_id
+    groups = _evaluation_context.groups
+    group_properties = _evaluation_context.group_properties
+    group_type_mapping = _evaluation_context.group_type_mapping
+    device_id = _evaluation_context.device_id
+    flag_filters = flag.get("filters") or {}
+    aggregation_group_type_index = flag_filters.get("aggregation_group_type_index")
+
+    if aggregation_group_type_index is not None:
+        group_name = group_type_mapping.get(str(aggregation_group_type_index))
+
+        if not group_name:
+            log.warning(
+                f"[FEATURE FLAGS] Unknown group type index {aggregation_group_type_index} for feature flag {flag['key']}"
+            )
+            # failover to `/flags`
+            raise InconclusiveMatchError(
+                "Flag has unknown group type index",
+                reason=UnresolvedFlagReason.UNSUPPORTED_DEFINITION,
+            )
+
+        if group_name not in groups:
+            # Group flags are never enabled if `groups` aren't passed in.
+            # Don't fall back to `/flags`, since the response will be the same.
+            message = f"[FEATURE FLAGS] Can't compute group feature flag: {flag['key']} without group names passed in"
+            if warn_on_unknown_groups:
+                log.warning(message)
+            else:
+                log.debug(message)
+            return False
+
+        if group_name not in group_properties:
+            raise InconclusiveMatchError(
+                f"Flag has no group properties for group '{group_name}'",
+                reason=UnresolvedFlagReason.MISSING_CONTEXT,
+            )
+        group_key = _group_key_to_string(groups[group_name])
+        return match_feature_flag_properties(
+            flag,
+            group_key,
+            group_properties[group_name],
+            cohort_properties=cohort_properties,
+            flags_by_key=flags_by_key,
+            property_matching_version=property_matching_version,
+            evaluation_cache=evaluation_cache,
+            device_id=device_id,
+            bucketing_value=group_key,
+            group_type_mapping=group_type_mapping,
+            groups=groups,
+            group_properties=group_properties,
+            _evaluation_context=_evaluation_context,
+        )
+
+    try:
+        bucketing_value = resolve_bucketing_value(flag, distinct_id, device_id)
+    except InconclusiveMatchError as e:
+        # No condition is checked without a bucketing value, so a cause in
+        # the definition also applies and outranks missing_context.
+        e.reason = (
+            _get_definition_unresolved_reason(
+                flag, flags_by_key, cohort_properties, group_type_mapping
+            )
+            or e.reason
+        )
+        raise
+    return match_feature_flag_properties(
+        flag,
+        distinct_id,
+        _evaluation_context.person_properties,
+        cohort_properties=cohort_properties,
+        flags_by_key=flags_by_key,
+        property_matching_version=property_matching_version,
+        evaluation_cache=evaluation_cache,
+        device_id=device_id,
+        bucketing_value=bucketing_value,
+        group_type_mapping=group_type_mapping,
+        groups=groups,
+        group_properties=group_properties,
+        _evaluation_context=_evaluation_context,
+    )
+
+
 def match_feature_flag_properties(
     flag,
     distinct_id,
@@ -698,6 +810,7 @@ def match_feature_flag_properties(
     groups=None,
     group_properties=None,
     property_matching_version: int = 1,
+    _evaluation_context=None,
 ) -> FlagValue:
     if bucketing_value is None:
         warnings.warn(
@@ -721,6 +834,16 @@ def match_feature_flag_properties(
     if holdout_variant is not None:
         return holdout_variant
 
+    if _evaluation_context is None:
+        _evaluation_context = _FlagEvaluationContext(
+            distinct_id=distinct_id,
+            groups=groups or {},
+            person_properties=properties,
+            group_properties=group_properties or {},
+            group_type_mapping=group_type_mapping or {},
+            device_id=device_id,
+        )
+
     return _match_flag_conditions(
         flag,
         flag_filters,
@@ -735,6 +858,7 @@ def match_feature_flag_properties(
         groups or {},
         group_properties or {},
         property_matching_version,
+        _evaluation_context,
     )
 
 
@@ -752,6 +876,7 @@ def _match_flag_conditions(
     groups,
     group_properties,
     property_matching_version,
+    _evaluation_context,
 ) -> FlagValue:
     flag_conditions = flag_filters.get("groups") or []
     flag_aggregation = flag_filters.get("aggregation_group_type_index")
@@ -777,6 +902,7 @@ def _match_flag_conditions(
                 property_matching_version,
                 flag_aggregation,
                 valid_variant_keys,
+                _evaluation_context,
             )
         except RequiresServerEvaluation as e:
             _enrich_server_evaluation_reason(
@@ -899,6 +1025,7 @@ def _match_flag_condition(
     property_matching_version,
     flag_aggregation,
     valid_variant_keys,
+    _evaluation_context,
 ):
     context = _get_condition_context(
         flag,
@@ -927,6 +1054,7 @@ def _match_flag_condition(
         bucketing_value=effective_bucketing,
         device_id=device_id,
         property_matching_version=property_matching_version,
+        _evaluation_context=_evaluation_context,
     )
     if match_result == ConditionMatch.MATCH:
         variant_override = condition.get("variant")
@@ -991,6 +1119,7 @@ def _match_condition_filter(
     *,
     device_id,
     property_matching_version: int,
+    _evaluation_context,
 ) -> bool:
     property_type = prop.get("type")
     if property_type == "cohort":
@@ -1003,6 +1132,7 @@ def _match_condition_filter(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
     if property_type == "flag":
         return evaluate_flag_dependency(
@@ -1014,6 +1144,7 @@ def _match_condition_filter(
             cohort_properties,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
     return match_property(prop, properties, property_matching_version)
 
@@ -1030,6 +1161,7 @@ def is_condition_match(
     bucketing_value,
     device_id=None,
     property_matching_version: int = 1,
+    _evaluation_context=None,
 ) -> ConditionMatch:
     rollout_percentage = condition.get("rollout_percentage")
     if len(condition.get("properties") or []) > 0:
@@ -1043,6 +1175,7 @@ def is_condition_match(
             evaluation_cache,
             device_id,
             property_matching_version,
+            _evaluation_context,
         ):
             return ConditionMatch.NO_MATCH
 
@@ -1069,6 +1202,7 @@ def _match_condition_properties(
     evaluation_cache,
     device_id,
     property_matching_version,
+    _evaluation_context,
 ) -> bool:
     # Filters in a condition have no defined order, so an inconclusive filter does
     # not stop the loop: a later filter can still rule the condition out or carry a
@@ -1086,6 +1220,7 @@ def _match_condition_properties(
                 distinct_id,
                 device_id=device_id,
                 property_matching_version=property_matching_version,
+                _evaluation_context=_evaluation_context,
             )
         except RequiresServerEvaluation as e:
             # Fall back to the server only when this is the first filter that could
@@ -1850,6 +1985,8 @@ def match_cohort(
     distinct_id=None,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ) -> bool:
     # Cohort properties are in the form of property groups like this:
     # {
@@ -1885,6 +2022,7 @@ def match_cohort(
         distinct_id,
         device_id=device_id,
         property_matching_version=property_matching_version,
+        _evaluation_context=_evaluation_context,
     )
     return not matches if operator == "not_in" else matches
 
@@ -1903,6 +2041,8 @@ def match_property_group(
     distinct_id=None,
     device_id=None,
     property_matching_version: int = 1,
+    *,
+    _evaluation_context=None,
 ) -> bool:
     is_and, properties = _get_property_group_values(property_group)
     if not properties:
@@ -1922,6 +2062,7 @@ def match_property_group(
                 distinct_id,
                 device_id,
                 property_matching_version,
+                _evaluation_context,
             )
             if effective_match != is_and:
                 decisive_result = effective_match
@@ -1971,6 +2112,7 @@ def _match_property_group_entry(
     distinct_id,
     device_id,
     property_matching_version,
+    _evaluation_context,
 ):
     if not isinstance(prop, dict):
         raise RequiresServerEvaluation("Cohort property group entry must be an object")
@@ -1984,6 +2126,7 @@ def _match_property_group_entry(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
         negation = False
     else:
@@ -1996,6 +2139,7 @@ def _match_property_group_entry(
             distinct_id,
             device_id=device_id,
             property_matching_version=property_matching_version,
+            _evaluation_context=_evaluation_context,
         )
         negation = prop.get("negation", False)
     return matches != bool(negation)
