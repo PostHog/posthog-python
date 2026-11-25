@@ -325,6 +325,9 @@ class PreparedToolResult(Generic[TResult]):
     session_id: Optional[str] = None
     # The conversation handle to capture, set only if it reached the client.
     conversation_id: Optional[str] = None
+    # Set when the result is an `input_required` round: the method of each of its
+    # requests, to pass to `capture_input_required`. `None` for every other result.
+    input_request_methods: Optional[List[str]] = None
 
 
 @dataclass

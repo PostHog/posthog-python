@@ -34,7 +34,10 @@ from ._conversation_id import (
 )
 from ._event_types import MCPAnalyticsEventType
 from ._exceptions import capture_exception, http_status
-from ._input_required import bound_input_request_methods
+from ._input_required import (
+    bound_input_request_methods,
+    input_request_methods as _round_request_methods,
+)
 from ._instrumentation import (
     VIRTUAL_TOOL_FEEDBACK,
     VIRTUAL_TOOL_MISSING_CAPABILITY,
@@ -798,14 +801,17 @@ class PostHogMCP(Client):
         Return the prepared ``result`` to the client, and capture with its
         ``session_id`` and ``conversation_id``. If a new handle could not reach
         the client, ``conversation_id`` is omitted and the input ``session_id``
-        stays unchanged."""
+        stays unchanged. When the result is an ``input_required`` round,
+        ``input_request_methods`` is set: capture it with
+        :meth:`capture_input_required` instead of :meth:`capture_tool_call`."""
+        methods = _round_request_methods(result)
         conversation_id = prepared_call.conversation_id
         session_id = prepared_call.session_id
         state = prepared_call._conversation_state or PreparedConversationState()
         minted_conversation_id = state.minted_conversation_id
         handle = conversation_id or minted_conversation_id
         if not handle:
-            return PreparedToolResult(result, session_id, None)
+            return PreparedToolResult(result, session_id, None, methods)
 
         prepared: Any = result
         delivered = False
@@ -822,6 +828,7 @@ class PostHogMCP(Client):
             prepared,
             session_id,
             None if minted_conversation_id and not delivered else conversation_id,
+            methods,
         )
 
     # --- internals -----------------------------------------------------------

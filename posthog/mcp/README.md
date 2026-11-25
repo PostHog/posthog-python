@@ -422,16 +422,16 @@ A client on an earlier revision cannot receive the round, so the framework
 answers with an error. The SDK records that as a failed `$mcp_tool_call` with
 `$mcp_error_type: "input_required"`.
 
-A custom dispatcher records the round with `capture_input_required()`:
+In a custom dispatcher, `prepare_tool_result()` sets `input_request_methods`
+when the result is a round. Record it with `capture_input_required()`:
 
 ```python
 call = posthog.prepare_tool_call(name, raw_args, original_tool=tool)
-result = dispatch(name, call.args)
-prepared = posthog.prepare_tool_result(result, call)
-if getattr(result, "result_type", None) == "input_required":
+prepared = posthog.prepare_tool_result(dispatch(name, call.args), call)
+if prepared.input_request_methods is not None:
     posthog.capture_input_required(
         name,
-        input_request_methods=["elicitation/create"],
+        input_request_methods=prepared.input_request_methods,
         duration_ms=duration_ms,
         session_id=prepared.session_id,
         conversation_id=prepared.conversation_id,
