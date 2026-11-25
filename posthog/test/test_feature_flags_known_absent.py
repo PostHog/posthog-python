@@ -479,6 +479,55 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
             group_property_keys_known_absent={"project": ["tier"]},
         )
 
+    @parameterized.expand(
+        [
+            ("omitted_index", None, False),
+            ("null_index", None, True),
+            ("same_index", 0, None),
+        ]
+    )
+    def test_group_cohort_leaf_reads_the_condition_group_type(
+        self, _name, group_type_index, null_index
+    ):
+        leaf = (
+            _group_filter("exact", "enterprise", group_type_index=group_type_index)
+            if group_type_index is not None
+            else _group_filter_without_index("exact", "enterprise", "tier", null_index)
+        )
+        self.client.cohorts = {"5": {"type": "AND", "values": [leaf]}}
+        flag = _flag(
+            "flag",
+            [{"key": "id", "value": 5, "type": "cohort"}],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            False,
+            groups={"organization": "acme"},
+            group_properties={"organization": {"tier": "enterprise"}},
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
+    def test_group_cohort_leaf_with_another_index_ignores_the_condition_keys(self):
+        self.client.cohorts = {
+            "5": {
+                "type": "AND",
+                "values": [_group_filter("exact", "enterprise", group_type_index=1)],
+            }
+        }
+        flag = _flag(
+            "flag",
+            [{"key": "id", "value": 5, "type": "cohort"}],
+            aggregation_group_type_index=0,
+        )
+        self.assert_local(
+            flag,
+            True,
+            groups={"organization": "acme"},
+            group_properties={"organization": {"tier": "enterprise"}},
+            group_property_keys_known_absent={"organization": ["tier"]},
+        )
+
     def test_group_key_overrides_the_sdk_added_group_key(self):
         flag = _flag(
             "flag",

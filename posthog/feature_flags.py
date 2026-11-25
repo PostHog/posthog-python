@@ -57,8 +57,10 @@ class _KnownAbsent:
 
     Only a filter on the listing's own properties reads the key as absent: a
     ``person`` filter for a person listing, and a ``group`` filter of the same
-    group type for a group listing. Any other filter reads the value the listing
-    replaced, as if the key were not listed.
+    group type for a group listing. A ``group`` filter without a group type reads
+    the condition's group type, whose properties are the map it is evaluated
+    against, at the top level of a condition and in its cohorts alike. Any other
+    filter reads the value the listing replaced, as if the key were not listed.
     """
 
     __slots__ = ("filter_type", "group_type_index", "replaced_value")
@@ -78,8 +80,11 @@ class _KnownAbsent:
             return False
         if self.filter_type == "person":
             return True
+        filter_group_type_index = prop.get("group_type_index")
+        if filter_group_type_index is None:
+            return True
         return self.group_type_index is not None and self.group_type_index == str(
-            prop.get("group_type_index")
+            filter_group_type_index
         )
 
     def __repr__(self) -> str:
@@ -987,28 +992,6 @@ def _get_condition_context(
     return effective_properties, effective_bucketing
 
 
-def _with_condition_group_type(condition, condition_aggregation):
-    """Return the condition with each group filter that omits group_type_index
-    reading the condition's group type, as the flags service does."""
-    if condition_aggregation is None:
-        return condition
-    properties = condition.get("properties") or []
-    if not any(
-        prop.get("type") == "group" and prop.get("group_type_index") is None
-        for prop in properties
-    ):
-        return condition
-    return {
-        **condition,
-        "properties": [
-            {**prop, "group_type_index": condition_aggregation}
-            if prop.get("type") == "group" and prop.get("group_type_index") is None
-            else prop
-            for prop in properties
-        ],
-    }
-
-
 def _match_flag_condition(
     flag,
     distinct_id,
@@ -1043,10 +1026,7 @@ def _match_flag_condition(
     match_result = is_condition_match(
         flag,
         distinct_id,
-        _with_condition_group_type(
-            condition,
-            condition.get("aggregation_group_type_index", flag_aggregation),
-        ),
+        condition,
         effective_properties,
         cohort_properties,
         flags_by_key,
