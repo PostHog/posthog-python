@@ -767,6 +767,48 @@ def test_otel_masks_mcp_credentials_without_privacy_mode(
 
 
 @pytest.mark.parametrize("privacy_mode", [True, False])
+def test_otel_redacted_span_keeps_counts_dropped_by_span_limits(
+    privacy_mode: bool,
+) -> None:
+    pytest.importorskip("opentelemetry.exporter.otlp.proto.http")
+    from opentelemetry.sdk.trace import SpanLimits, TracerProvider
+    from opentelemetry.trace import Link
+
+    from posthog.ai.otel import PostHogTraceExporter
+
+    tracer = TracerProvider(
+        span_limits=SpanLimits(max_attributes=2, max_events=1, max_links=1)
+    ).get_tracer("test")
+    linked = [Link(tracer.start_span("linked").get_span_context()) for _ in range(3)]
+    # The limit evicts the oldest attributes, so the MCP tools go last to survive it.
+    span = tracer.start_span(
+        "gen_ai.chat",
+        attributes={
+            "gen_ai.input.messages": "user prompt",
+            "gen_ai.request.model": "gpt-4o",
+            "ai.prompt.tools": json.dumps(_MCP_OTEL_TOOL),
+        },
+        links=linked,
+    )
+    span.add_event("first")
+    # Privacy mode keeps exception events, and opentelemetry-sdk < 1.22 reports 0
+    # dropped events for a span left with none.
+    span.record_exception(ValueError(CANARY))
+    span.end()
+
+    with patch("posthog.ai.otel.exporter.OTLPSpanExporter") as otlp:
+        PostHogTraceExporter(api_key="phc_test", privacy_mode=privacy_mode).export(
+            [span]
+        )
+
+    [[exported]] = otlp.return_value.export.call_args.args
+    assert exported is not span
+    assert exported.dropped_attributes == 1
+    assert exported.dropped_events == 1
+    assert exported.dropped_links == 2
+
+
+@pytest.mark.parametrize("privacy_mode", [True, False])
 def test_otel_exporter_drops_only_the_span_that_fails_redaction(
     privacy_mode: bool,
 ) -> None:
