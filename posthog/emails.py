@@ -1821,19 +1821,28 @@ def _batch_members(recipients: Any, is_template_form: bool) -> list[_BatchMember
 
 
 _BATCH_NOT_FOUND = {
-    True: {
-        "detail": "PostHog found no template with this template_id, or batch sends "
-        "aren't available for this project, so it sent no email of this request.",
-        "fix": "Check template_id. If it's right, send each recipient on its own with "
+    True: (
+        "PostHog found no template with this template_id, or batch sends aren't "
+        "available for this project",
+        "Check template_id. If it's right, send each recipient on its own with "
         "send() and its idempotency_key until batch sends are available.",
-    },
-    False: {
-        "detail": "Batch sends or sending from code aren't available for this project, "
-        "so PostHog sent no email of this request.",
-        "fix": "Send each recipient on its own with send() and its idempotency_key "
-        "until batch sends are available.",
-    },
+    ),
+    False: (
+        "Batch sends or sending from code aren't available for this project",
+        "If the project can send email from code, send each recipient on its own "
+        "with send() and its idempotency_key until batch sends are available.",
+    ),
 }
+
+
+def _batch_not_found(template_form: bool, maybe_queued: bool) -> dict[str, str]:
+    cause, fix = _BATCH_NOT_FOUND[template_form]
+    outcome = (
+        ". An earlier attempt got no answer, so these emails may still go out."
+        if maybe_queued
+        else ", so PostHog sent no email of this request."
+    )
+    return {"code": "not_found", "detail": cause + outcome, "fix": fix}
 
 
 def _said(value: Any) -> Optional[str]:
@@ -1851,6 +1860,7 @@ def _batch_response_error(
     retry_after_header: Optional[str],
     recipient_count: int,
     template_form: bool,
+    maybe_queued: bool,
 ) -> EmailError:
     fields = {key: value for key, value in fields.items() if value is not None}
     code = _readable_code(fields)
@@ -1859,7 +1869,7 @@ def _batch_response_error(
         and code in (None, "not_found", "api_error")
         and not _text(fields.get("attr"))
     ):
-        fields = {"code": "not_found", **_BATCH_NOT_FOUND[template_form]}
+        fields = _batch_not_found(template_form, maybe_queued)
     if status == 413 and not _said(fields.get("fix")):
         fields = {
             **fields,
@@ -1968,6 +1978,7 @@ class _BatchRun:
                 retry_after_header,
                 len(self.members),
                 self.template_form,
+                self.maybe_queued,
             )
             unreadable_conflict = status == 409 and not _readable_code(fields)
             if (

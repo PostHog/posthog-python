@@ -910,7 +910,7 @@ def test_a_404_without_a_field_says_the_template_id_is_wrong_or_batches_are_off(
     assert (error.code, error.status_code, error.field) == ("not_found", 404, None)
     assert error.message == (
         "PostHog found no template with this template_id, or batch sends aren't "
-        "available for this project, so it sent no email of this request."
+        "available for this project, so PostHog sent no email of this request."
     )
     assert error.fix == (
         "Check template_id. If it's right, send each recipient on its own with send() "
@@ -942,14 +942,58 @@ def test_a_code_batch_404_without_a_field_says_batches_from_code_are_off(body):
         "PostHog sent no email of this request."
     )
     assert error.fix == (
-        "Send each recipient on its own with send() and its idempotency_key until "
-        "batch sends are available."
+        "If the project can send email from code, send each recipient on its own "
+        "with send() and its idempotency_key until batch sends are available."
     )
     assert "template_id" not in " ".join(
         filter(None, [error.message, error.why, error.fix])
     )
     assert_no_update_advice(error)
     assert [r.status for r in raised.value.results] == ["failed"]
+
+
+SEND_AGAIN = (
+    "Send it again with the same idempotency_key within 24 hours of the first "
+    "request that used it, so it goes out once."
+)
+
+
+@pytest.mark.parametrize(
+    "form",
+    [
+        {"template_id": TEMPLATE_ID},
+        {"template_key": "digest", "subject": "Hi", "html": "<p>Hi</p>"},
+    ],
+    ids=["template", "code"],
+)
+@pytest.mark.parametrize(
+    "lost", [requests.ConnectionError("reset"), (503, None, {})], ids=["dropped", "503"]
+)
+def test_a_404_after_a_lost_answer_leaves_every_recipient_unconfirmed(form, lost):
+    body = {
+        "type": "invalid_request",
+        "code": "not_found",
+        "attr": None,
+        "detail": "Not found.",
+    }
+    emails, posthog = emails_on([lost, (404, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        emails.batch(recipients=recipients(2), **form)
+
+    error = raised.value
+    assert len(posthog.requests) == 2
+    assert (error.code, error.status_code) == ("not_found", 404)
+    assert "sent no email" not in error.message
+    assert "may still go out" in error.message
+    assert [(r.status, r.idempotency_key) for r in error.results] == [
+        ("unconfirmed", "key-0"),
+        ("unconfirmed", "key-1"),
+    ]
+    for result in error.results:
+        assert result.error is not None
+        assert result.error.fix == SEND_AGAIN
+        assert "sent no email" not in result.error.message
 
 
 def test_a_404_that_names_a_field_keeps_what_posthog_said():
