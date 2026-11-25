@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import functools
 import logging
 import re
 import time
@@ -1108,26 +1109,24 @@ def _is_mcp_provider_tool(tool: Dict[str, Any]) -> bool:
     )
 
 
-# google-genai `Tool` fields whose configs can hold credentials: a retrieval
-# backend's auth, Google Maps auth, the Parallel search key, MCP server headers.
-# Dict tools may use the API's camelCase names.
-_GEMINI_CREDENTIAL_TOOL_ATTRIBUTES = (
-    "retrieval",
-    "google_maps",
-    "parallel_ai_search",
-    "mcp_servers",
-)
-_GEMINI_CREDENTIAL_TOOL_FIELDS = frozenset(
-    {
-        *_GEMINI_CREDENTIAL_TOOL_ATTRIBUTES,
-        "googleMaps",
-        "parallelAiSearch",
-        "mcpServers",
-    }
-)
+# Credential keys in google-genai `Tool` configs, such as retrieval and Maps
+# auth, search provider API keys, and MCP server headers. Function declarations
+# hold the caller's own parameter schemas and are never masked.
 _GEMINI_CREDENTIAL_KEYS = frozenset(
     {"api_auth", "apiAuth", "auth_config", "authConfig", "api_key", "apiKey", "headers"}
 )
+_GEMINI_SCHEMA_FIELDS = frozenset({"function_declarations", "functionDeclarations"})
+
+
+@functools.lru_cache(maxsize=1)
+def _gemini_tool_fields() -> frozenset:
+    # Read from the installed SDK so tools Google adds later are covered too.
+    try:
+        from google.genai import types
+    except ImportError:
+        return frozenset()
+    fields = types.Tool.model_fields
+    return frozenset({*fields, *(f.alias for f in fields.values() if f.alias)})
 
 
 def _without_gemini_credentials(value: Any) -> Any:
@@ -1145,16 +1144,23 @@ def _without_gemini_credentials(value: Any) -> Any:
     return value
 
 
-def _is_gemini_tool_with_credential_fields(tool: Any) -> bool:
+def _is_gemini_tool_with_config(tool: Any) -> bool:
     return type(tool).__module__.startswith("google.genai") and any(
-        getattr(tool, field, None) is not None
-        for field in _GEMINI_CREDENTIAL_TOOL_ATTRIBUTES
+        value is not None
+        for name, value in getattr(tool, "__dict__", {}).items()
+        if name in _gemini_tool_fields() and name not in _GEMINI_SCHEMA_FIELDS
+    )
+
+
+def _is_gemini_tool_dict(tool: Dict[str, Any]) -> bool:
+    return tool.keys() <= _gemini_tool_fields() and not (
+        tool.keys() <= _GEMINI_SCHEMA_FIELDS
     )
 
 
 def _redact_mcp_tool(tool: Any) -> Any:
     if not isinstance(tool, dict):
-        if _is_gemini_tool_with_credential_fields(tool):
+        if _is_gemini_tool_with_config(tool):
             return _redact_mcp_tool(tool.model_dump())
         if getattr(tool, "type", None) != "mcp":
             return tool
@@ -1173,12 +1179,12 @@ def _redact_mcp_tool(tool: Any) -> Any:
         return _without_mcp_credentials(tool)
     if _is_mcp_provider_tool(tool):
         return {**tool, "args": _without_mcp_credentials(tool["args"])}
-    if not _GEMINI_CREDENTIAL_TOOL_FIELDS.isdisjoint(tool):
+    if _is_gemini_tool_dict(tool):
         return {
             key: (
-                _without_gemini_credentials(value)
-                if key in _GEMINI_CREDENTIAL_TOOL_FIELDS
-                else value
+                value
+                if key in _GEMINI_SCHEMA_FIELDS
+                else _without_gemini_credentials(value)
             )
             for key, value in tool.items()
         }
@@ -1188,9 +1194,8 @@ def _redact_mcp_tool(tool: Any) -> Any:
 def _redact_mcp_tool_credentials(tools: Any) -> Any:
     """
     Mask the credentials in tool definitions: the `headers` and `authorization`
-    of MCP tools, and the API keys and auth configs of Gemini retrieval, Google
-    Maps, Parallel search, and MCP server tools. Returns copies; the caller's
-    tools are left untouched.
+    of MCP tools, and the API keys, auth configs, and headers in Gemini tool
+    configs. Returns copies; the caller's tools are left untouched.
     """
     if not isinstance(tools, (list, tuple)):
         return tools

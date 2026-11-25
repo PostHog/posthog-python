@@ -277,6 +277,10 @@ def test_mcp_tool_credentials_are_masked_without_mutating_caller_tools(
             id="camel-case-google-maps",
         ),
         pytest.param(
+            {"exa_ai_search": {"api_key": CANARY}},
+            id="exa-ai-search-api-key",
+        ),
+        pytest.param(
             {"parallel_ai_search": {"api_key": CANARY}},
             id="parallel-ai-search-api-key",
         ),
