@@ -733,8 +733,7 @@ async def test_sse_transport_handshake_then_calls():
 
 async def test_a_route_without_the_middleware_gives_each_request_its_own_session():
     # One process, one server, two routes: the autowired app with the bound
-    # middleware, and the session manager mounted by hand without it. Nothing
-    # groups the unwired route's requests, so each is a session of its own.
+    # middleware, and the session manager mounted by hand without it.
     client = FakeClient()
     app, lifespan, server = make_pod(client)
     async with lifespan:

@@ -1,8 +1,3 @@
-"""The transport rules of the spec's "Session identity" requirement: rule 3 (a
-transport session, or a one-client connection's generated id that rotates after
-30 idle minutes) and rule 4 (a sessionless HTTP request gets a session of its
-own). Runs under both MCP majors."""
-
 from datetime import timedelta
 from types import SimpleNamespace
 

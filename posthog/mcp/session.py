@@ -167,8 +167,6 @@ def derive_session_id_from_mcp_session(mcp_session_id: str) -> str:
 
 
 def transport_session_id(mcp_session_id: str) -> str:
-    """The session a transport session id names: a PostHog session token's ``sid``
-    unchanged, else the id derived."""
     token = decode_session_id(mcp_session_id)
     if token is not None:
         return token.session_id
@@ -313,10 +311,6 @@ async def resolve_session_id_with_source(
     for a request that didn't replay the token would merge unrelated clients under
     one ``$session_id``. A compliant client replays the header on every request, so
     a genuine token session never needs the fallback.
-
-    An HTTP request carrying none of these gets a session of its own (rule 4):
-    process memory belongs to a one-client connection, and on a shared HTTP server
-    it would group unrelated clients.
     """
     anchored = resolve_anchored_session(conversation_id, client_conversation)
     if anchored is not None:

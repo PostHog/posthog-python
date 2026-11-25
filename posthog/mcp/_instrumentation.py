@@ -578,8 +578,6 @@ class ToolCallLifecycle:
         return self.feedback_name is not None and self.name == self.feedback_name
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
-        """The session the call's events go out with: its client id or a handle
-        the agent holds, else the one it resolved on arrival."""
         arrival = await self.prime_session()
         if get_request(self.extra) is None and arrival.source == "generated":
             await touch_connection_session(self.data)
@@ -599,9 +597,7 @@ class ToolCallLifecycle:
         return session
 
     async def prime_session(self) -> ResolvedSession:
-        """Point the shared per-server session at *this* request before the tool
-        body runs, once: every event of the call uses the session resolved when it
-        arrived.
+        """Point the shared per-server session at *this* request before the tool body runs.
 
         ``McpAnalytics.capture()`` reads ``data.session_id`` for custom in-tool
         events. The conversation anchor can only be resolved after the call (we
