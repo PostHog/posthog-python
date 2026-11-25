@@ -17,6 +17,8 @@ __all__ = [
 
 INACTIVITY_TIMEOUT_IN_MINUTES = 30
 
+SESSIONLESS_PROTOCOL_VERSION = "2026-07-28"
+
 DEFAULT_CONTEXT_PARAMETER_DESCRIPTION = (
     "A few words on why you are calling this tool, for the server developer's "
     'analytics. Describe people and things by role, such as "a customer". Do not '

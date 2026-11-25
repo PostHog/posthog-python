@@ -33,6 +33,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Optional
 
+from .constants import SESSIONLESS_PROTOCOL_VERSION
 from .session_token import read_mcp_session_header
 
 __all__ = ["get_request_headers"]
@@ -53,9 +54,7 @@ def get_request(extra: Any) -> Optional[Any]:
     (e.g. query params) -- one place that knows how to unwrap ``extra``/``ctx``
     down to the request, instead of each caller re-deriving it.
     """
-    ctx = extra
-    if isinstance(extra, dict):
-        ctx = extra.get("ctx")
+    ctx = _request_context(extra)
     if ctx is None:
         return None
     return getattr(ctx, "request", None)
@@ -81,7 +80,7 @@ def read_transport_session_id(extra: Any, *, handshake: bool = False) -> Optiona
     header = read_mcp_session_header(get_request_headers(extra))
     if header is not None:
         return header
-    ctx = extra.get("ctx") if isinstance(extra, dict) else extra
+    ctx = _request_context(extra)
     try:
         if not (handshake or _completed_a_handshake(ctx)):
             return None
@@ -100,7 +99,11 @@ def _completed_a_handshake(ctx: Any) -> bool:
     version = getattr(params, "protocol_version", None) or getattr(
         params, "protocolVersion", None
     )
-    return version != "2026-07-28"
+    return version != SESSIONLESS_PROTOCOL_VERSION
+
+
+def _request_context(extra: Any) -> Any:
+    return extra.get("ctx") if isinstance(extra, dict) else extra
 
 
 def _to_header_bag(source: Any) -> Optional[RequestHeaderBag]:

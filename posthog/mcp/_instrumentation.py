@@ -66,6 +66,7 @@ from ._model_parameters import (
 )
 from ._output_instructions import add_instructions_to_output_schema
 from .logger import log, warn
+from .constants import SESSIONLESS_PROTOCOL_VERSION
 from .request_headers import get_request
 from ._sanitization import build_captured_mcp_parameters
 from ._transport_identity import stamp_transport_identity
@@ -521,7 +522,7 @@ async def _open_request(
     extra: Optional[Dict[str, Any]],
     protocol_version: Optional[str],
 ) -> None:
-    if session.source == "request" and protocol_version != "2026-07-28":
+    if session.source == "request" and protocol_version != SESSIONLESS_PROTOCOL_VERSION:
         _warn_stateless_session_not_wired(data)
     await handle_identify(data, session.session_id, request, extra)
     await _maybe_emit_initialize(
@@ -579,7 +580,7 @@ class ToolCallLifecycle:
 
     async def prepare_session(self, conversation_id: Optional[str]) -> ResolvedSession:
         arrival = await self.prime_session()
-        if get_request(self.extra) is None and arrival.source == "generated":
+        if arrival.source == "generated":
             await touch_connection_session(self.data)
         session = (
             resolve_anchored_session(conversation_id, self.client_conversation)

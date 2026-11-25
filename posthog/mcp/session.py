@@ -199,7 +199,6 @@ async def resolve_session_id(
     token: Optional[SessionTokenPayload] = None,
     conversation_id: Optional[str] = None,
     client_conversation: Optional[ClientConversation] = None,
-    over_http: bool = False,
 ) -> str:
     """The session id for this request. See :func:`resolve_session_id_with_source`,
     which this wraps -- callers that need to know *where* the session came from
@@ -210,7 +209,6 @@ async def resolve_session_id(
         token=token,
         conversation_id=conversation_id,
         client_conversation=client_conversation,
-        over_http=over_http,
     )
     return session_id
 
