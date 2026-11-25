@@ -1037,6 +1037,19 @@ class TestRedisFlagCache(unittest.TestCase):
         assert default_cache.key_prefix == "posthog:flags:"
         assert default_cache.version_key == "posthog:flags:version"
 
+    def test_listed_cache_key_is_outside_the_unlisted_prefix(self):
+        for key_prefix in ("test:flags:", "test_flags_", "x"):
+            cache = utils.RedisFlagCache(self.redis, key_prefix=key_prefix)
+            listed_key = cache._get_cache_key("user", "beta", "digest")
+            assert not listed_key.startswith(key_prefix)
+            assert cache._get_cache_key("user", "beta").startswith(key_prefix)
+        assert (
+            utils.RedisFlagCache(self.redis, key_prefix="")._get_cache_key(
+                "user", "beta", "digest"
+            )
+            is None
+        )
+
     def test_cache_key_and_serialization(self):
         assert self.cache._get_cache_key("user123", "beta") == "test:flags:user123:beta"
 
@@ -1363,20 +1376,26 @@ class TestRedisFlagCache(unittest.TestCase):
         )
         original_scan = self.redis.scan
 
-        def scan_page(*args, **kwargs):
-            assert len(self.redis.scan_calls) < 2, "scan restarted after final page"
-            return original_scan(*args, **kwargs)
+        def scan_page(cursor, match=None, count=None):
+            unlisted_scans = [
+                call for call in self.redis.scan_calls if call[1] == "test:flags:*"
+            ]
+            assert match != "test:flags:*" or len(unlisted_scans) < 2, (
+                "scan restarted after final page"
+            )
+            return original_scan(cursor, match=match, count=count)
 
         with (
             mock.patch.object(self.redis, "get", wraps=self.redis.get) as get,
             mock.patch.object(self.redis, "scan", side_effect=scan_page) as scan,
         ):
             self.cache._invalidate_snapshot("snapshot-a")
-        assert scan.call_count == 2
+        assert scan.call_count == 3
         assert last_key not in self.redis.store
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
+            (0, "test:flags_known_absent:*", 100),
         ]
         assert self.cache._get_cache_key("user", "old") not in self.redis.store
         assert len(self.redis.store) == 5
@@ -1476,6 +1495,7 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
+            (0, "test:flags_known_absent:*", 100),
         ]
         assert old_key not in self.redis.store
         assert invalid_key not in self.redis.store
@@ -1507,5 +1527,6 @@ class TestRedisFlagCache(unittest.TestCase):
         assert self.redis.scan_calls == [
             (0, "test:flags:*", 100),
             (1, "test:flags:*", 100),
+            (0, "test:flags_known_absent:*", 100),
         ]
         assert self.redis.store == {"other:key": "value"}

@@ -1219,17 +1219,25 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
         return sum(len(user_flags) for user_flags in cache.cache.values())
 
     @parameterized.expand([("memory",), ("redis",)])
-    def test_distinct_listings_keep_one_entry_per_flag_and_user(self, backend):
+    def test_distinct_listings_keep_at_most_two_entries_per_flag_and_user(
+        self, backend
+    ):
         if backend == "redis":
             self._use_redis_cache()
+        self.client.feature_flags = []
+        self.flags.side_effect = None
+        self.flags.return_value = {"featureFlags": {"flag": REMOTE_VALUE}}
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
         self.client.feature_flags = [self._person_flag]
         for index in range(2000):
             self.assertIs(
                 self.evaluate(person_property_keys_known_absent=["plan", f"k{index}"]),
                 True,
             )
-        self.assertEqual(self._cached_entry_count(), 1)
-        # Only the latest listing keeps a fallback.
+        # One unlisted and one listed entry.
+        self.assertEqual(self._cached_entry_count(), 2)
+        # Only the latest listing keeps a fallback, and the unlisted one stays.
         self.client.feature_flags = []
         self.assertIs(
             self.evaluate(person_property_keys_known_absent=["k1999", "plan"]), True
@@ -1237,6 +1245,46 @@ class TestKnownAbsentFallbackCache(unittest.TestCase):
         self.assertIsNone(
             self.evaluate(person_property_keys_known_absent=["plan", "k0"])
         )
+        self.assertEqual(self.evaluate(), REMOTE_VALUE)
+
+    def test_redis_listed_entry_is_outside_the_unlisted_namespace(self):
+        cache = self._use_redis_cache()
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        [listed_key] = [key for key in cache.redis.store if key != cache.version_key]
+        self.assertFalse(listed_key.startswith(cache.key_prefix))
+        # SDK versions that ignore the listing digest read only unlisted keys.
+        self.assertIsNone(
+            RedisFlagCache(cache.redis).get_stale_cached_flag("user-1", "flag")
+        )
+
+    @parameterized.expand([("_known_absent:user-1",), ("known_absent:user-1",)])
+    def test_redis_distinct_id_named_like_the_listed_namespace_stays_apart(
+        self, colliding_id
+    ):
+        cache = self._use_redis_cache()
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        self.assertNotIn(cache._get_cache_key(colliding_id, "flag"), cache.redis.store)
+        self.client.feature_flags = []
+        self.flags.side_effect = None
+        self.flags.return_value = {"featureFlags": {"flag": REMOTE_VALUE}}
+        self.assertEqual(
+            self.client.get_feature_flag("flag", colliding_id), REMOTE_VALUE
+        )
+        self.flags.side_effect = RequestsTimeout("flags unavailable")
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        self.assertIsNone(self.evaluate())
+
+    def test_redis_clear_and_invalidation_reach_listed_entries(self):
+        cache = self._use_redis_cache()
+        self.client.feature_flags = [self._person_flag]
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        cache.invalidate_version(self.client.flag_definition_version)
+        self.assertEqual(self._cached_entry_count(), 0)
+        self.assertIs(self.evaluate(person_property_keys_known_absent=["plan"]), True)
+        cache.clear()
+        self.assertEqual(self._cached_entry_count(), 0)
 
     @parameterized.expand([("memory",), ("redis",)])
     def test_different_listing_gets_no_fallback(self, backend):

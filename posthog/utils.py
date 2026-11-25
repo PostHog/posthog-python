@@ -327,6 +327,7 @@ CACHE_STALE_TTL = 3600
 CACHE_KEY_PREFIX = "posthog:flags:"
 _FEATURE_FLAG_RESULT_TYPE = "FeatureFlagResult"
 _FEATURE_FLAG_RESULT_SCHEMA_VERSION = 1
+_KNOWN_ABSENT_LISTING = "known_absent"
 
 
 class FlagCacheEntry:
@@ -382,6 +383,15 @@ class FlagCache:
     def _is_version_current(self, version):
         return self._minimum_version is None or version >= self._minimum_version
 
+    @staticmethod
+    def _entry_key(flag_key, listing_digest):
+        # Listed results share one slot per user and flag, so a new listing
+        # replaces the old one. A tuple key never equals a string flag key,
+        # so a listed write never replaces the unlisted fallback.
+        if listing_digest is None:
+            return flag_key
+        return (flag_key, _KNOWN_ABSENT_LISTING)
+
     def get_cached_flag(self, distinct_id, flag_key, current_flag_version):
         current_time = time.time()
 
@@ -390,7 +400,7 @@ class FlagCache:
             return None
 
         entry = user_flags.get(flag_key)
-        if entry is None or entry._listing_digest is not None:
+        if entry is None:
             return None
 
         if self._is_version_current(entry.flag_definition_version) and entry.is_valid(
@@ -418,7 +428,7 @@ class FlagCache:
         if user_flags is None:
             return None
 
-        entry = user_flags.get(flag_key)
+        entry = user_flags.get(self._entry_key(flag_key, listing_digest))
         if entry is None or entry._listing_digest != listing_digest:
             return None
 
@@ -462,10 +472,9 @@ class FlagCache:
                 if self._is_version_current(entry.flag_definition_version)
             }
 
-            # One entry per user and flag: a new listing replaces the old one.
             entry = FlagCacheEntry(flag_result, flag_definition_version)
             entry._listing_digest = listing_digest
-            self.cache[distinct_id][flag_key] = entry
+            self.cache[distinct_id][self._entry_key(flag_key, listing_digest)] = entry
             self.access_times[distinct_id] = current_time
 
     def invalidate_version(self, old_version):
@@ -529,6 +538,15 @@ class RedisFlagCache:
         self.stale_ttl = stale_ttl
         self.key_prefix = key_prefix
         self.version_key = f"{key_prefix}version"
+        # Listed results live outside the key_prefix namespace, so SDK versions
+        # that ignore the listing digest never read them as unlisted results.
+        # Changing the prefix's last character keeps the two disjoint.
+        self._listed_key_prefix = (
+            f"{key_prefix[:-1]}{'-' if key_prefix[-1] == '_' else '_'}"
+            f"{_KNOWN_ABSENT_LISTING}:"
+            if key_prefix
+            else None
+        )
         self._snapshot = None
         self._minimum_version = None
         self._write_lock = threading.Lock()
@@ -552,8 +570,19 @@ class RedisFlagCache:
     def _is_version_current(self, version):
         return self._minimum_version is None or version >= self._minimum_version
 
-    def _get_cache_key(self, distinct_id, flag_key):
-        return f"{self.key_prefix}{distinct_id}:{flag_key}"
+    def _get_cache_key(self, distinct_id, flag_key, listing_digest=None):
+        if listing_digest is None:
+            return f"{self.key_prefix}{distinct_id}:{flag_key}"
+        if self._listed_key_prefix is None:
+            return None
+        # One listed slot per user and flag: a new listing replaces the old one.
+        return f"{self._listed_key_prefix}{distinct_id}:{flag_key}"
+
+    def _key_patterns(self):
+        patterns = [f"{self.key_prefix}*"]
+        if self._listed_key_prefix is not None:
+            patterns.append(f"{self._listed_key_prefix}*")
+        return patterns
 
     def _serialize_entry(
         self,
@@ -580,7 +609,6 @@ class RedisFlagCache:
         if is_remote:
             entry["evaluation_source"] = "remote"
         if listing_digest is not None:
-            # Optional field: entries without it read as unlisted.
             entry["known_absent_listing_digest"] = listing_digest
         if isinstance(flag_result, _FeatureFlagResult):
             # Additive metadata keeps the existing entry shape readable by older SDKs.
@@ -619,11 +647,7 @@ class RedisFlagCache:
 
             if data:
                 entry = self._deserialize_entry(data)
-                if (
-                    entry
-                    and entry._listing_digest is None
-                    and self._is_entry_current(entry)
-                ):
+                if entry and self._is_entry_current(entry):
                     if self._snapshot is not None:
                         valid = current_flag_version == self._snapshot[
                             0
@@ -652,7 +676,9 @@ class RedisFlagCache:
             if max_stale_age is None:
                 max_stale_age = self.stale_ttl
 
-            cache_key = self._get_cache_key(distinct_id, flag_key)
+            cache_key = self._get_cache_key(distinct_id, flag_key, listing_digest)
+            if cache_key is None:
+                return None
             data = self.redis.get(cache_key)
 
             if data:
@@ -704,7 +730,9 @@ class RedisFlagCache:
         listing_digest=None,
     ):
         try:
-            cache_key = self._get_cache_key(distinct_id, flag_key)
+            cache_key = self._get_cache_key(distinct_id, flag_key, listing_digest)
+            if cache_key is None:
+                return
             # Capture provenance before any blocking work. Never stamp an old
             # evaluation with the fingerprint installed by a concurrent refresh.
             snapshot = self._snapshot
@@ -739,15 +767,14 @@ class RedisFlagCache:
         try:
             # For Redis, scan for keys with old version and delete them. This could
             # be expensive with many keys, but it's necessary for correctness.
-            cursor = 0
-            pattern = f"{self.key_prefix}*"
+            for pattern in self._key_patterns():
+                cursor = 0
+                while True:
+                    cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+                    self._delete_keys_with_version(keys, old_version)
 
-            while True:
-                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
-                self._delete_keys_with_version(keys, old_version)
-
-                if cursor == 0:
-                    break
+                    if cursor == 0:
+                        break
 
         except Exception:
             # Redis error - silently fail
@@ -759,8 +786,9 @@ class RedisFlagCache:
         if not fingerprint or fingerprint.startswith("remote-only:"):
             return
         try:
-            for key in self.redis.scan_iter(match=f"{self.key_prefix}*", count=100):
-                self._delete_snapshot_entry(key, fingerprint)
+            for pattern in self._key_patterns():
+                for key in self.redis.scan_iter(match=pattern, count=100):
+                    self._delete_snapshot_entry(key, fingerprint)
         except Exception:
             # This cannot revoke later stale-worker writes or reach an offline
             # Redis. Snapshot-aware readers still enforce their local fences.
@@ -810,16 +838,15 @@ class RedisFlagCache:
 
     def clear(self):
         try:
-            # Delete all keys matching our pattern
-            cursor = 0
-            pattern = f"{self.key_prefix}*"
-
-            while True:
-                cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
-                if keys:
-                    self.redis.delete(*keys)
-                if cursor == 0:
-                    break
+            # Delete all keys matching our patterns
+            for pattern in self._key_patterns():
+                cursor = 0
+                while True:
+                    cursor, keys = self.redis.scan(cursor, match=pattern, count=100)
+                    if keys:
+                        self.redis.delete(*keys)
+                    if cursor == 0:
+                        break
         except Exception:
             # Redis error - silently fail
             pass
