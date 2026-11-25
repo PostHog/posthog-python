@@ -1,5 +1,29 @@
 # posthog
 
+## 8.2.5 — 2026-11-25
+
+### Patch changes
+
+- [7366e5b2](https://github.com/posthog/posthog-python/commit/7366e5b229a85bb87aff47ebd049775ea6b867ee) `posthog.ai.anthropic`: keep server tool blocks (`server_tool_use`, `web_search_tool_result`, and other block types the wrapper doesn't format) in `$ai_output_choices` for streamed responses, with the server tool's streamed input. Non-streamed responses already recorded these blocks, so a streamed web search generation showed only the final text and lost the query and results. — Thanks @sarankumar1325!
+
+## 8.2.4 — 2026-11-25
+
+### Patch changes
+
+- [187b3771](https://github.com/posthog/posthog-python/commit/187b377174b9db1212f84f9a838f33e72d15f607) Spans that `PostHogSpanProcessor` and `PostHogTraceExporter` redact, in privacy mode or to mask remote MCP credentials, now keep the counts of attributes, events and links the SDK dropped under its span limits. The redacted copy previously reported 0, as the context copy did before #1266. — Thanks @fahad2932 for your first contribution 🎉!
+
+## 8.2.3 — 2026-11-24
+
+### Patch changes
+
+- [82c9004c](https://github.com/posthog/posthog-python/commit/82c9004c0f64dc0d437dbcc6a59ae73a63699c8b) `posthog.ai.langchain`: stop double-counting Gemini thinking tokens. langchain-google-genai reports `usage_metadata.output_tokens` with reasoning included (it adds `thoughts_token_count`), and PostHog prices Gemini 2.5/3 reasoning on top of `$ai_output_tokens`, so thinking was billed twice. For Gemini models whose output includes reasoning (input plus output reach `total_tokens`), the handler now reports `$ai_output_tokens` without it, as the Gemini wrapper does. Integrations that already report candidates only, such as ChatVertexAI, are unchanged. — Thanks @MaiAditya!
+
+## 8.2.2 — 2026-11-24
+
+### Patch changes
+
+- [6f4cccc3](https://github.com/posthog/posthog-python/commit/6f4cccc33b125656879c36f20dd153ee4dff25e9) `posthog.ai.claude_agent_sdk` and `posthog.ai.langchain`: tool spans now carry the tool's outcome, so per-tool failure rates can be computed. The Claude Agent SDK integration emits each tool `$ai_span` when its `ToolResultBlock` arrives, with `$ai_output_state`, `$ai_is_error`, `$ai_error` and `$ai_latency` (a tool use whose result never arrives is still emitted when the query or session ends). The LangChain callback handler sets `$ai_span_type: "tool"` on tool spans, marks a tool error handled by `handle_tool_error` (a `ToolMessage` with `status="error"`) with `$ai_is_error` and `$ai_error`, and keeps `tool_call_id`, `name` and an error `status` on tool messages in `$ai_input`. — Thanks @DanielVisca!
+
 ## 8.2.1 — 2026-11-23
 
 ### Patch changes
