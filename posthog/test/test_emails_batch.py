@@ -494,6 +494,24 @@ def test_a_longer_client_timeout_applies_to_a_batch_too():
     assert result.status == "queued"
 
 
+def test_a_retry_after_a_lost_answer_resends_the_key_the_sdk_generated():
+    emails, posthog = emails_on(
+        [requests.ConnectionError("reset"), ok(queued("m0"), queued("m1"))]
+    )
+    people = [
+        {"to": "user0@example.com"},
+        {"to": "user1@example.com", "idempotency_key": "key-1"},
+    ]
+
+    result = batch(emails, people)
+
+    first, second = posthog.batch_bodies()
+    generated = first["recipients"][0]["idempotency_key"]
+    assert generated and second["recipients"][0]["idempotency_key"] == generated
+    assert [r.idempotency_key for r in result.results] == [generated, "key-1"]
+    assert [r.status for r in result.results] == ["queued", "queued"]
+
+
 def test_a_retry_after_a_lost_answer_keeps_a_refused_slot_unconfirmed():
     emails, posthog = emails_on(
         [
@@ -771,8 +789,8 @@ def test_a_refusal_after_an_in_flight_answer_keeps_the_batch_unconfirmed():
 
 @pytest.mark.parametrize(
     "body",
-    [None, b"<html>Conflict</html>", {"code": []}],
-    ids=["lost", "not_json", "code_not_text"],
+    [None, b"<html>Conflict</html>", {"code": []}, {"code": "   "}],
+    ids=["lost", "not_json", "code_not_text", "code_blank"],
 )
 def test_a_409_without_a_readable_code_leaves_the_batch_unconfirmed(body):
     emails, posthog = emails_on([(409, body, {})])

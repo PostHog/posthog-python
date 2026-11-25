@@ -166,8 +166,8 @@ can't send batches yet: send each email the batch didn't queue with ``send``
 and its recipient's ``idempotency_key``. A 404 ``not_found`` that names no
 ``field`` means PostHog found no template with that ``template_id``, or batch
 sends aren't available for the project: check the template ID, and if it's
-right, send each recipient on its own with ``send`` until batch sends are
-available. A batch takes no ``cc``, ``bcc``,
+right, send each recipient on its own with ``send``, the same content and its
+recipient's ``idempotency_key``, until batch sends are available. A batch takes no ``cc``, ``bcc``,
 ``attachments`` or ``scheduled_at``.
 
 ```python
@@ -1834,6 +1834,11 @@ _BATCH_NOT_FOUND = {
 }
 
 
+def _readable_code(fields: Mapping[str, Any]) -> Optional[str]:
+    code = _text(fields.get("code"))
+    return code if code and code.strip() else None
+
+
 def _batch_response_error(
     fields: Mapping[str, Any],
     status: int,
@@ -1842,7 +1847,7 @@ def _batch_response_error(
     template_form: bool,
 ) -> EmailError:
     fields = {key: value for key, value in fields.items() if value is not None}
-    code = _text(fields.get("code"))
+    code = _readable_code(fields)
     if (
         status == 404
         and code in (None, "not_found", "api_error")
@@ -1958,7 +1963,7 @@ class _BatchRun:
                 len(self.members),
                 self.template_form,
             )
-            unreadable_conflict = status == 409 and not _text(fields.get("code"))
+            unreadable_conflict = status == 409 and not _readable_code(fields)
             if (
                 status >= 500
                 or _held_by_another_request(failure)
