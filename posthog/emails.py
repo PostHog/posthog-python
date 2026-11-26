@@ -2144,7 +2144,7 @@ class _EmailsBase:
         ):
             return
         raise EmailError(
-            name="validation_error",
+            name="application_error",
             code="scheduling_requires_cloud",
             message="Scheduled sends work only on PostHog Cloud (us.posthog.com or "
             f"eu.posthog.com), and this client sends to {self.host}, so no email was sent.",

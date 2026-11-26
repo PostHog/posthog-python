@@ -3035,6 +3035,23 @@ def test_schedules_only_on_posthog_cloud(_name, options):
     assert options["host"] in raised.value.message
 
 
+def test_a_scheduled_send_off_cloud_is_an_application_error():
+    adapter = FakeAdapter([])
+    session = requests.Session()
+    session.mount("https://", adapter)
+    emails = Emails(SECRET_KEY, host="https://posthog.example.com", session=session)
+
+    with pytest.raises(EmailError) as raised:
+        send(emails, scheduled_at=datetime(2026, 12, 1, 9, tzinfo=timezone.utc))
+
+    assert adapter.requests == []
+    assert (raised.value.name, raised.value.code, raised.value.field) == (
+        "application_error",
+        "scheduling_requires_cloud",
+        "scheduled_at",
+    )
+
+
 def test_a_client_with_a_custom_app_host_refuses_to_schedule_but_still_sends():
     client = Posthog(
         "phc_test",
