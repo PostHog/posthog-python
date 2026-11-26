@@ -12,6 +12,7 @@ from uuid import UUID
 from ._scorer_types import (
     BooleanScorerConfig,
     CategoricalScorerConfig,
+    ExperimentScorerComposition,
     NumericScorerConfig,
     Scorer,
     ScorerCalculation,
@@ -21,6 +22,7 @@ from ._scorer_types import (
     ScorerKind,
     ScorerOrder,
     ScorerPage,
+    ScorerScope,
     ScorerVersion,
     ScorerVersionPage,
 )
@@ -39,7 +41,7 @@ _ResultT = TypeVar("_ResultT")
 _ConfigT = TypeVar("_ConfigT", bound=ScorerConfig)
 
 
-def _uuid(value: str | UUID) -> str:
+def _uuid(value: object) -> str:
     if isinstance(value, UUID):
         return str(value)
     if not isinstance(value, str):
@@ -66,6 +68,18 @@ def _calculation(value: Any) -> ScorerCalculation:
     return cast(ScorerCalculation, value)
 
 
+def _scope(value: Any) -> ScorerScope:
+    if value not in ("item", "experiment"):
+        raise ValueError("Unsupported scorer scope.")
+    return cast(ScorerScope, value)
+
+
+def _suite_keys(value: Sequence[str]) -> list[str]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise ValueError("Expected a sequence of suite keys.")
+    return [_text(key) for key in value]
+
+
 def _alias(value: Any) -> str:
     value = _text(value)
     if not re.fullmatch(r"[a-z][a-z0-9_]{0,31}", value) or value in {
@@ -88,35 +102,63 @@ def _alias(value: Any) -> str:
     return value
 
 
-def _composition(value: Any) -> ScorerComposition:
+def _composition_input(row: Any, scope: ScorerScope | None) -> dict[str, str]:
+    data = _mapping(row)
+    prepared = {
+        "alias": _alias(data.get("alias")),
+        "scorer_version_id": _uuid(data.get("scorer_version_id")),
+    }
+    experiment_fields = {"statistic", "version_policy", "category"}.intersection(data)
+    if scope == "experiment" or experiment_fields:
+        if scope == "item":
+            raise ValueError("Statistics apply to experiment scorers.")
+        statistic = data.get("statistic")
+        if statistic not in ("pass_rate", "mean", "true_rate", "category_rate"):
+            raise ValueError("Expected an experiment score statistic.")
+        prepared["statistic"] = statistic
+        if "version_policy" in data:
+            policy = data["version_policy"]
+            if policy not in ("run", "exact", "combine"):
+                raise ValueError("Unsupported experiment score version policy.")
+            prepared["version_policy"] = policy
+        if statistic == "category_rate":
+            category = _text(data.get("category"))
+            if not category.strip() or len(category) > 128:
+                raise ValueError("Expected a category key of 1–128 characters.")
+            prepared["category"] = category
+        elif "category" in data:
+            raise ValueError("Only category_rate accepts a category key.")
+    return prepared
+
+
+def _composition(
+    value: Any, scope: ScorerScope | None = None
+) -> ScorerComposition | ExperimentScorerComposition:
     data = _mapping(value)
     expression = _text(data.get("expression"))
     if not expression.strip() or len(expression) > 1024:
         raise ValueError("A formula must contain 1–1024 characters.")
     inputs = data.get("inputs")
     if not isinstance(inputs, list) or not 1 <= len(inputs) <= 16:
-        raise ValueError("A composite requires 1–16 reported inputs.")
-    prepared = [
-        {
-            "alias": _alias(_mapping(row).get("alias")),
-            "scorer_version_id": _uuid(row.get("scorer_version_id")),
-        }
-        for row in inputs
-    ]
+        raise ValueError("A composite requires 1–16 inputs.")
+    prepared = [_composition_input(row, scope) for row in inputs]
     if len({row["alias"] for row in prepared}) != len(prepared):
         raise ValueError("Composite input aliases must be unique.")
-    return cast(ScorerComposition, {"expression": expression, "inputs": prepared})
+    return cast(
+        ScorerComposition | ExperimentScorerComposition,
+        {"expression": expression, "inputs": prepared},
+    )
 
 
 def _scoring(
-    data: dict[str, Any],
-) -> tuple[ScorerCalculation, ScorerComposition | None]:
+    data: dict[str, Any], scope: ScorerScope
+) -> tuple[ScorerCalculation, ScorerComposition | ExperimentScorerComposition | None]:
     calculation = _calculation(data.get("calculation", "reported"))
     composition = data.get("composition")
     if calculation == "composite":
-        return calculation, _composition(composition)
-    if composition is not None:
-        raise ValueError("Reported scorers cannot contain a composition.")
+        return calculation, _composition(composition, scope)
+    if scope == "experiment" or composition is not None:
+        raise ValueError("Expected a formula-based scorer.")
     return calculation, None
 
 
@@ -157,7 +199,8 @@ def _mapping(value: Any) -> dict[str, Any]:
 
 
 def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
-    calculation, composition = _scoring(data)
+    scope = _scope(data.get("scope", "item"))
+    calculation, composition = _scoring(data, scope)
     archived = data["archived"]
     if not isinstance(archived, bool):
         raise ValueError("Expected boolean archived state.")
@@ -179,6 +222,11 @@ def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
         tags=_response_tags(data.get("tags", [])),
         calculation=calculation,
         composition=composition,
+        scope=scope,
+        suite_keys=tuple(_suite_keys(data.get("suite_keys", []))),
+        assigned_suite_keys=tuple(_suite_keys(data["assigned_suite_keys"]))
+        if "assigned_suite_keys" in data
+        else None,
         input_scorers=_input_scorers(data.get("input_scorers", [])),
         dependent_composite_count=_integer(
             data.get("dependent_composite_count", 0), minimum=0
@@ -187,7 +235,8 @@ def _scorer(data: dict[str, Any]) -> Scorer[ScorerConfig]:
 
 
 def _version(data: dict[str, Any]) -> ScorerVersion[ScorerConfig]:
-    calculation, composition = _scoring(data)
+    scope = _scope(data.get("scope", "item"))
+    calculation, composition = _scoring(data, scope)
     created_by = data["created_by"]
     return ScorerVersion(
         id=_uuid(data["id"]),
@@ -199,6 +248,8 @@ def _version(data: dict[str, Any]) -> ScorerVersion[ScorerConfig]:
         created_by=None if created_by is None else _mapping(created_by),
         calculation=calculation,
         composition=composition,
+        scope=scope,
+        suite_keys=tuple(_suite_keys(data.get("suite_keys", []))),
     )
 
 
@@ -252,16 +303,24 @@ def _create_body(
     description: str | None | _Omitted,
     tags: Sequence[str] | _Omitted,
     calculation: ScorerCalculation,
-    composition: ScorerComposition | None,
+    composition: ScorerComposition | ExperimentScorerComposition | None,
+    scope: ScorerScope,
+    apply_to_suite_keys: Sequence[str] | _Omitted,
 ) -> bytes:
     data: dict[str, Any] = {
         "name": name,
         "kind": _kind(kind),
         "config": _mapping(config),
     }
+    if _scope(scope) == "experiment":
+        data["scope"] = scope
+        if calculation != "composite":
+            raise ValueError("Experiment scorers require a composite formula.")
+    if not isinstance(apply_to_suite_keys, _Omitted):
+        data["apply_to_suite_keys"] = _suite_keys(apply_to_suite_keys)
     if _calculation(calculation) == "composite":
         data["calculation"] = calculation
-        data["composition"] = _composition(composition)
+        data["composition"] = _composition(composition, scope)
         _composite_config(kind, config)
     elif composition is not None:
         raise ValueError("Only composite scorers accept a composition.")
@@ -277,6 +336,8 @@ def _metadata(
     description: str | None | _Omitted,
     archived: bool | _Omitted = _OMITTED,
     tags: Sequence[str] | _Omitted = _OMITTED,
+    apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
+    suite_version_id: str | UUID | None = None,
 ) -> dict[str, Any]:
     data: dict[str, Any] = {
         key: value
@@ -289,6 +350,10 @@ def _metadata(
     }
     if not isinstance(tags, _Omitted):
         data["tags"] = _tag_names(tags)
+    if not isinstance(apply_to_suite_keys, _Omitted):
+        data["apply_to_suite_keys"] = _suite_keys(apply_to_suite_keys)
+    if suite_version_id is not None:
+        data["suite_version_id"] = _uuid(suite_version_id)
     return data
 
 
@@ -297,9 +362,10 @@ def _version_body(
     base_version: int | None,
     name: str | _Omitted,
     description: str | None | _Omitted,
-    composition: ScorerComposition | None,
+    composition: ScorerComposition | ExperimentScorerComposition | None,
+    apply_to_suite_keys: Sequence[str] | _Omitted,
 ) -> bytes:
-    data = _metadata(name, description)
+    data = _metadata(name, description, apply_to_suite_keys=apply_to_suite_keys)
     data["config"] = _mapping(config)
     if composition is not None:
         data["composition"] = _composition(composition)
@@ -321,6 +387,7 @@ def _list_params(
     tag_match: Literal["any", "all"],
     calculation: ScorerCalculation | None,
     input_definition_id: str | UUID | None,
+    scope: ScorerScope | None,
 ) -> dict[str, str | int]:
     tag_params = _tag_params(tags, tag_match)
     params: dict[str, str | int] = {
@@ -335,6 +402,8 @@ def _list_params(
         params["calculation"] = _calculation(calculation)
     if input_definition_id is not None:
         params["input_definition_id"] = _uuid(input_definition_id)
+    if scope is not None:
+        params["scope"] = _scope(scope)
     if archived is not None:
         if not isinstance(archived, bool):
             raise ValueError("archived must be a boolean.")
@@ -351,12 +420,17 @@ def _composite_config(kind: ScorerKind, config: ScorerConfig) -> None:
 
 
 def _validation_body(
-    kind: ScorerKind, composition: ScorerComposition, config: ScorerConfig | None
+    kind: ScorerKind,
+    composition: ScorerComposition | ExperimentScorerComposition,
+    config: ScorerConfig | None,
+    scope: ScorerScope,
 ) -> bytes:
     data: dict[str, Any] = {
         "kind": _kind(kind),
-        "composition": _composition(composition),
+        "composition": _composition(composition, scope),
     }
+    if _scope(scope) == "experiment":
+        data["scope"] = scope
     if config is not None:
         data["config"] = _mapping(config)
         _composite_config(kind, config)
@@ -403,7 +477,9 @@ class Scorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -416,7 +492,9 @@ class Scorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -429,7 +507,9 @@ class Scorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     def create(
@@ -441,13 +521,17 @@ class Scorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
         """Create a scorer and its first version, optionally assigning tags.
 
         Tag names are trimmed, lowercased, deduplicated, and sorted by the server.
-        Set calculation="composite" with a composition to calculate item scores
-        on the server. Calculation and output kind cannot change after creation.
+        Set calculation="composite" to define a server-calculated formula.
+        Use scope="experiment" for a formula over item score statistics.
+        apply_to_suite_keys selects suites that default to this experiment version.
+        Scope, calculation, and output kind are fixed at creation.
         """
         return _parse(
             _scorer,
@@ -455,7 +539,15 @@ class Scorers:
                 "POST",
                 self._base,
                 body=_create_body(
-                    name, kind, config, description, tags, calculation, composition
+                    name,
+                    kind,
+                    config,
+                    description,
+                    tags,
+                    calculation,
+                    composition,
+                    scope,
+                    apply_to_suite_keys,
                 ),
                 retry_safe=False,
             ),
@@ -478,6 +570,7 @@ class Scorers:
         tag_match: Literal["any", "all"] = "any",
         calculation: ScorerCalculation | None = None,
         input_definition_id: str | UUID | None = None,
+        scope: ScorerScope | None = None,
     ) -> ScorerPage:
         """Fetch one page. Omit ``archived`` to list active scorers.
 
@@ -487,6 +580,7 @@ class Scorers:
         all selected tags; an empty sequence disables tag filtering.
         Use calculation to select reported/composite scorers, and
         input_definition_id to find composites depending on a source scorer.
+        Use scope to filter item or experiment scorers.
         """
         return _parse(
             _scorer_page,
@@ -504,6 +598,7 @@ class Scorers:
                     tag_match,
                     calculation,
                     input_definition_id,
+                    scope,
                 ),
             ),
         )
@@ -516,19 +611,31 @@ class Scorers:
         description: str | None | _Omitted = _OMITTED,
         archived: bool | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
+        suite_version_id: str | UUID | None = None,
     ) -> Scorer[ScorerConfig]:
         """Update metadata. Use ``create_version`` to change configuration.
 
         Omitted fields are preserved. An explicit null description clears it.
         ``tags`` replaces the current tags; pass [] to clear them. Tag changes
-        do not create a scorer version.
+        do not create a scorer version. apply_to_suite_keys replaces the
+        assignments on suite_version_id, which defaults to the current version.
         """
         return _parse(
             _scorer,
             self._transport.request(
                 "PATCH",
                 self._path(scorer_id),
-                body=_encode(_metadata(name, description, archived, tags)),
+                body=_encode(
+                    _metadata(
+                        name,
+                        description,
+                        archived,
+                        tags,
+                        apply_to_suite_keys,
+                        suite_version_id,
+                    )
+                ),
                 retry_safe=False,
             ),
         )
@@ -541,7 +648,8 @@ class Scorers:
         base_version: int | None = None,
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[_ConfigT]:
         """Create an immutable version and return the updated scorer.
 
@@ -549,7 +657,10 @@ class Scorers:
         concurrent writes. Conflicts are surfaced without automatic refresh.
         Identical configuration is allowed, for example after a prompt change.
         Composite versions require composition, including every pinned input,
-        even when only changing the output configuration.
+        even when only changing the output configuration. Omit
+        apply_to_suite_keys to preserve suite defaults. An explicit selection
+        moves selected suites to the new version and releases deselected suites
+        from the previous current version.
         """
         return cast(
             Scorer[_ConfigT],
@@ -559,7 +670,12 @@ class Scorers:
                     "POST",
                     self._path(scorer_id) + "new_version/",
                     body=_version_body(
-                        config, base_version, name, description, composition
+                        config,
+                        base_version,
+                        name,
+                        description,
+                        composition,
+                        apply_to_suite_keys,
                     ),
                     retry_safe=False,
                 ),
@@ -581,8 +697,9 @@ class Scorers:
         self,
         *,
         kind: ScorerKind,
-        composition: ScorerComposition,
+        composition: ScorerComposition | ExperimentScorerComposition,
         config: ScorerConfig | None = None,
+        scope: ScorerScope = "item",
     ) -> bool:
         """Validate a formula without saving, using llm_analytics:read access.
 
@@ -595,7 +712,7 @@ class Scorers:
             self._transport.request(
                 "POST",
                 self._base + "validate_composition/",
-                body=_validation_body(kind, composition, config),
+                body=_validation_body(kind, composition, config, scope),
             ),
         )
 
@@ -633,7 +750,9 @@ class AsyncScorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[BooleanScorerConfig]: ...
 
     @overload
@@ -646,7 +765,9 @@ class AsyncScorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[NumericScorerConfig]: ...
 
     @overload
@@ -659,7 +780,9 @@ class AsyncScorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[CategoricalScorerConfig]: ...
 
     async def create(
@@ -671,7 +794,9 @@ class AsyncScorers:
         description: str | None | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
         calculation: ScorerCalculation = "reported",
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        scope: ScorerScope = "item",
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[ScorerConfig]:
         """Create a scorer with optional tags. See Scorers.create."""
         return _parse(
@@ -680,7 +805,15 @@ class AsyncScorers:
                 "POST",
                 self._base,
                 body=_create_body(
-                    name, kind, config, description, tags, calculation, composition
+                    name,
+                    kind,
+                    config,
+                    description,
+                    tags,
+                    calculation,
+                    composition,
+                    scope,
+                    apply_to_suite_keys,
                 ),
                 retry_safe=False,
             ),
@@ -705,6 +838,7 @@ class AsyncScorers:
         tag_match: Literal["any", "all"] = "any",
         calculation: ScorerCalculation | None = None,
         input_definition_id: str | UUID | None = None,
+        scope: ScorerScope | None = None,
     ) -> ScorerPage:
         """Fetch one page with optional tag filters. See Scorers.list."""
         return _parse(
@@ -723,6 +857,7 @@ class AsyncScorers:
                     tag_match,
                     calculation,
                     input_definition_id,
+                    scope,
                 ),
             ),
         )
@@ -735,6 +870,8 @@ class AsyncScorers:
         description: str | None | _Omitted = _OMITTED,
         archived: bool | _Omitted = _OMITTED,
         tags: Sequence[str] | _Omitted = _OMITTED,
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
+        suite_version_id: str | UUID | None = None,
     ) -> Scorer[ScorerConfig]:
         """Update metadata, including replacement tags. See Scorers.update."""
         return _parse(
@@ -742,7 +879,16 @@ class AsyncScorers:
             await self._transport.request(
                 "PATCH",
                 self._path(scorer_id),
-                body=_encode(_metadata(name, description, archived, tags)),
+                body=_encode(
+                    _metadata(
+                        name,
+                        description,
+                        archived,
+                        tags,
+                        apply_to_suite_keys,
+                        suite_version_id,
+                    )
+                ),
                 retry_safe=False,
             ),
         )
@@ -755,7 +901,8 @@ class AsyncScorers:
         base_version: int | None = None,
         name: str | _Omitted = _OMITTED,
         description: str | None | _Omitted = _OMITTED,
-        composition: ScorerComposition | None = None,
+        composition: ScorerComposition | ExperimentScorerComposition | None = None,
+        apply_to_suite_keys: Sequence[str] | _Omitted = _OMITTED,
     ) -> Scorer[_ConfigT]:
         """Create a version; ``base_version`` detects concurrent configuration edits.
 
@@ -769,7 +916,12 @@ class AsyncScorers:
                     "POST",
                     self._path(scorer_id) + "new_version/",
                     body=_version_body(
-                        config, base_version, name, description, composition
+                        config,
+                        base_version,
+                        name,
+                        description,
+                        composition,
+                        apply_to_suite_keys,
                     ),
                     retry_safe=False,
                 ),
@@ -791,8 +943,9 @@ class AsyncScorers:
         self,
         *,
         kind: ScorerKind,
-        composition: ScorerComposition,
+        composition: ScorerComposition | ExperimentScorerComposition,
         config: ScorerConfig | None = None,
+        scope: ScorerScope = "item",
     ) -> bool:
         """Validate without saving. See Scorers.validate_composition."""
         return _parse(
@@ -800,7 +953,7 @@ class AsyncScorers:
             await self._transport.request(
                 "POST",
                 self._base + "validate_composition/",
-                body=_validation_body(kind, composition, config),
+                body=_validation_body(kind, composition, config, scope),
             ),
         )
 

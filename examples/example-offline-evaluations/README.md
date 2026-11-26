@@ -172,6 +172,39 @@ uv run python examples/example-offline-evaluations/main.py \
 
 The state file includes both reported and calculation declarations and the combined expected count. Reusing the file replays that saved run regardless of newly supplied scorer flags.
 
+## Experiment scores
+
+An experiment scorer combines item score statistics into one value for a completed run.
+Create a formula and assign it to a suite to apply it to future runs in this environment.
+
+```python
+formula = evaluations.scorers.create(
+    name="Overall quality",
+    scope="experiment",
+    kind="numeric",
+    config={"min": 0, "max": 1},
+    calculation="composite",
+    composition={
+        "expression": "correct",
+        "inputs": [
+            {
+                "alias": "correct",
+                "scorer_version_id": correctness.current_version_id,
+                "statistic": "pass_rate",
+            }
+        ],
+    },
+    apply_to_suite_keys=["agent-ci"],
+)
+
+experiment = evaluations.create_experiment(name="Baseline", suite_key="agent-ci")
+```
+
+Here `correctness` is an existing item scorer. Upload its item results normally and complete the run.
+The server pins the suite default on first creation. Pass
+`experiment_scorer_version_id=formula.current_version_id` to select a specific version.
+The experiment score appears in PostHog after the run completes.
+
 ## Datasets and reproducible evaluations
 
 Use `evaluations.datasets` to manage PostHog-hosted datasets with the same client configuration as scorers and experiments. Dataset names are unique within a project; keep the returned UUID for subsequent operations.
