@@ -15,7 +15,11 @@ from unittest import mock
 from parameterized import parameterized
 
 from posthog.client import Client
-from posthog.feature_flags import RequiresServerEvaluation, match_property_group
+from posthog.feature_flags import (
+    InconclusiveMatchError,
+    RequiresServerEvaluation,
+    match_property_group,
+)
 from posthog.request import GetResponse
 from posthog.test.test_utils import FAKE_TEST_API_KEY
 from posthog.types import UnresolvedFlagReason
@@ -82,8 +86,8 @@ UNSUPPORTED_REGEX = {
 }
 IN_STATIC_COHORT = {"key": "id", "value": 404, "type": "cohort"}
 
-# Flags whose first condition only /flags can check, and what /flags answers.
-SERVER_ONLY_FIRST_CONDITION = [
+# Flags whose first condition can't be checked locally, followed by a catch-all.
+LATER_CONDITION_DECIDES = [
     (
         "another_variant",
         [
@@ -94,19 +98,7 @@ SERVER_ONLY_FIRST_CONDITION = [
                 multivariate=VARIANTS,
             )
         ],
-        "new-user",
-    ),
-    (
-        "early_exit",
-        [
-            _flag(
-                _condition(IN_COHORT, rollout_percentage=0),
-                _condition([]),
-                key="target",
-                early_exit=True,
-            )
-        ],
-        False,
+        "existing-user",
     ),
     (
         "dependency",
@@ -119,7 +111,7 @@ SERVER_ONLY_FIRST_CONDITION = [
                 multivariate=VARIANTS,
             ),
         ],
-        "new-user",
+        "existing-user",
     ),
 ]
 
@@ -169,16 +161,6 @@ class TestPersonMetadataFilters(unittest.TestCase):
                 {},
             ),
             (
-                "empty_type",
-                _flag(_condition([{**FIRST_SEEN_FILTER, "type": ""}])),
-                {},
-            ),
-            (
-                "empty_type_cohort_leaf",
-                IN_COHORT_FLAG,
-                _cohort({**FIRST_SEEN_FILTER, "type": ""}),
-            ),
-            (
                 "negated_cohort_leaf",
                 IN_COHORT_FLAG,
                 _cohort({**FIRST_SEEN_FILTER, "negation": True}),
@@ -219,21 +201,41 @@ class TestPersonMetadataFilters(unittest.TestCase):
             )
         )
 
-    @parameterized.expand(SERVER_ONLY_FIRST_CONDITION)
+    @parameterized.expand(LATER_CONDITION_DECIDES)
     @mock.patch("posthog.client.flags")
-    def test_later_condition_does_not_decide_the_flag(
-        self, _, flags, remote, patch_flags
-    ):
-        patch_flags.return_value = {"featureFlags": {"target": remote}}
+    def test_later_condition_decides_the_flag(self, _, flags, expected, patch_flags):
         client = self._client(flags)
 
         for person_properties in (CREATED_IN_2026, {}):
-            patch_flags.reset_mock()
             snapshot = client.evaluate_flags(
                 "user-123", person_properties=person_properties, flag_keys=["target"]
             )
-            self.assertEqual(snapshot.get_flag("target"), remote)
-            self.assertEqual(patch_flags.call_count, 1)
+            self.assertEqual(snapshot.get_flag("target"), expected)
+        self.assertEqual(patch_flags.call_count, 0)
+
+    @mock.patch("posthog.client.flags")
+    def test_early_exit_after_unsupported_condition_stays_inconclusive(
+        self, patch_flags
+    ):
+        patch_flags.return_value = {"featureFlags": {"target": True}}
+        client = self._client(
+            [
+                _flag(
+                    _condition(IN_COHORT),
+                    _condition([], rollout_percentage=0),
+                    _condition([]),
+                    key="target",
+                    early_exit=True,
+                )
+            ]
+        )
+
+        snapshot = client.evaluate_flags(
+            "user-123", person_properties=CREATED_IN_2026, flag_keys=["target"]
+        )
+
+        self.assertIs(snapshot.get_flag("target"), True)
+        self.assertEqual(patch_flags.call_count, 1)
 
     @parameterized.expand(
         [
@@ -385,7 +387,7 @@ class TestPersonMetadataFilters(unittest.TestCase):
             "dependency": _flag(_condition([FIRST_SEEN_FILTER]), key="dependency")
         }
         for ordered in (filters, filters[::-1]):
-            with self.assertRaises(RequiresServerEvaluation) as raised:
+            with self.assertRaises(InconclusiveMatchError) as raised:
                 match_property_group(
                     {"type": "AND", "values": ordered},
                     {"name": "foo\n"},
@@ -405,17 +407,15 @@ class TestPersonMetadataFilters(unittest.TestCase):
         ]
     )
     @mock.patch("posthog.client.flags")
-    def test_undecided_cohort_blocks_later_conditions(
+    def test_undecided_cohort_lets_a_later_condition_decide(
         self, _, group_type, plan, patch_flags
     ):
-        patch_flags.return_value = {"featureFlags": {"target": "new-user"}}
         for filters in (
             (PLAN_PAID, FIRST_SEEN_FILTER),
             (FIRST_SEEN_FILTER, PLAN_PAID),
         ):
-            patch_flags.reset_mock()
             client = self._client(
-                SERVER_ONLY_FIRST_CONDITION[0][1],
+                LATER_CONDITION_DECIDES[0][1],
                 _cohort(*filters, group_type=group_type),
             )
 
@@ -423,8 +423,8 @@ class TestPersonMetadataFilters(unittest.TestCase):
                 "user-123", person_properties={"plan": plan}, flag_keys=["target"]
             )
 
-            self.assertEqual(snapshot.get_flag("target"), "new-user")
-            self.assertEqual(patch_flags.call_count, 1)
+            self.assertEqual(snapshot.get_flag("target"), "existing-user")
+        self.assertEqual(patch_flags.call_count, 0)
 
     @mock.patch("posthog.client.flags")
     def test_another_filter_still_rules_the_condition_out(self, patch_flags):
@@ -435,7 +435,14 @@ class TestPersonMetadataFilters(unittest.TestCase):
         self.assertIs(snapshot.get_flag("first-seen-flag"), False)
         self.assertEqual(patch_flags.call_count, 0)
 
-    @parameterized.expand([("person", {"type": "person"}), ("untyped", {})])
+    @parameterized.expand(
+        [
+            ("person", {"type": "person"}),
+            ("untyped", {}),
+            ("null_type", {"type": None}),
+            ("empty_type", {"type": ""}),
+        ]
+    )
     @mock.patch("posthog.client.flags")
     def test_person_filter_on_created_at_is_still_local(
         self, _, filter_type, patch_flags
