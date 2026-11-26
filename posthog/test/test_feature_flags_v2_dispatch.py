@@ -14,6 +14,7 @@ invented.
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import datetime
 import hashlib
@@ -250,10 +251,14 @@ def _load(
     )
 
 
-def _no_remote_request() -> Any:
-    return mock.patch(
+@contextlib.contextmanager
+def _no_remote_request() -> Iterator[None]:
+    with mock.patch(
         "posthog.client.flags", side_effect=AssertionError("unexpected /flags request")
-    )
+    ) as remote:
+        yield
+    # The client catches the error of a failed request, so check after the reads.
+    assert remote.call_count == 0, "unexpected /flags request"
 
 
 def _result(client: Client, key: str, **kwargs: Any) -> Optional[FeatureFlagResult]:
@@ -727,6 +732,16 @@ def test_an_undecided_flag_is_unresolved_when_evaluating_only_locally(client, ca
     assert flags == {"legacy-shelf": True}
 
 
+def test_the_no_request_check_sees_a_request_the_client_recovers_from(client):
+    # The client catches the error of a failed /flags request, so the check must not
+    # rely on that error reaching the test.
+    _load(client, NEEDS_PLAN)
+
+    with pytest.raises(AssertionError, match="unexpected /flags request"):
+        with _no_remote_request():
+            _result(client, "plan-gate")
+
+
 def test_a_rule_that_needs_a_missing_property_ends_the_evaluation(client):
     # The second rule would match everyone, but a rule that matches is terminal, so
     # the evaluator cannot skip the first one.
@@ -1003,6 +1018,38 @@ def test_a_local_split_sends_both_events_as_locally_evaluated(client, read):
     }
     FLAG_CALLED_SCHEMA.validate(_projection(FLAG_CALLED_SCHEMA, called.properties))
     EXPOSURE_SCHEMA.validate(_projection(EXPOSURE_SCHEMA, exposure.properties))
+
+
+@pytest.mark.parametrize("read", list(READS))
+@pytest.mark.parametrize(
+    "stored, sent",
+    [
+        (41.0, {"$feature_flag_id": 41, "$feature_flag_version": 41}),
+        (41.5, {}),
+        ("41", {}),
+    ],
+    ids=["integral_float", "fraction", "string"],
+)
+def test_the_events_send_the_id_and_version_of_the_local_record(
+    client, read, stored, sent
+):
+    # Both reads send what the record holds: an integral float as an integer, and no
+    # other value that is not an integer.
+    _load(client, {**SPLIT, "id": stored, "version": stored})
+
+    recording, events = _record_events(client)
+    with _no_remote_request(), recording:
+        READS[read](client)
+
+    assert [event.name for event in events] == [FLAG_CALLED, EXPOSURE]
+    for event in events:
+        carried = {
+            key: event.properties[key]
+            for key in ("$feature_flag_id", "$feature_flag_version")
+            if key in event.properties
+        }
+        # As JSON text, so that 41.0 differs from 41.
+        assert json.dumps(carried, sort_keys=True) == json.dumps(sent, sort_keys=True)
 
 
 @pytest.mark.parametrize("read", list(READS))

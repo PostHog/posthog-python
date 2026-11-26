@@ -5047,8 +5047,9 @@ class Client(object):
             # Source the gate the same way as has_experiment above; see
             # _capture_feature_flag_called_if_needed for why.
             minimal_flag_called_events = self._minimal_flag_called_events
-            # Remotely-evaluated flags carry id and version in the response metadata;
-            # locally-evaluated flags read them from the definition that produced the value.
+            # Remotely-evaluated flags and the local record of a config version 2 flag
+            # carry id and version in the record metadata; locally-evaluated version 1
+            # flags read them from the definition that produced the value.
             local_flag_id: Optional[int] = None
             local_flag_version: Optional[int] = None
             if flag_was_locally_evaluated:
@@ -5057,8 +5058,9 @@ class Client(object):
                     has_experiment = _parse_has_experiment(
                         local_def.get("has_experiment")
                     )
-                    local_flag_id = local_def.get("id")
-                    local_flag_version = local_def.get("version")
+                    if flag_details is None:
+                        local_flag_id = local_def.get("id")
+                        local_flag_version = local_def.get("version")
             elif isinstance(flag_details, FeatureFlag):
                 has_experiment = _metadata_has_experiment(flag_details.metadata)
                 minimal_flag_called_events = remote_minimal_flag_called_events
