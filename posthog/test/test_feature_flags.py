@@ -592,6 +592,38 @@ class TestGroupConditionsWithoutGroupKey(unittest.TestCase):
         self.assertIs(self.evaluate("group-only", groups, "pro"), False)
         patch_flags.assert_not_called()
 
+    @parameterized.expand([*MISSING_GROUP_KEYS, ("usable", {"company": "acme"})])
+    @mock.patch("posthog.client.flags")
+    def test_person_condition_buckets_on_distinct_id(self, _name, groups, patch_flags):
+        self.client.feature_flags = [
+            _company_flag(
+                "person-rollout",
+                [
+                    {
+                        "aggregation_group_type_index": None,
+                        "properties": [],
+                        "rollout_percentage": 50,
+                    }
+                ],
+            )
+        ]
+        kwargs = {"groups": groups} if groups is not None else {}
+        # "user-0" hashes below 50% for this flag, "user-1" above it. The empty
+        # and "acme" group keys both hash above it.
+        for distinct_id, expected in (("user-0", True), ("user-1", False)):
+            with self.subTest(distinct_id=distinct_id):
+                self.assertIs(
+                    self.client.get_feature_flag(
+                        "person-rollout",
+                        distinct_id,
+                        group_properties={"company": {}},
+                        send_feature_flag_events=False,
+                        **kwargs,
+                    ),
+                    expected,
+                )
+        patch_flags.assert_not_called()
+
     @mock.patch("posthog.client.flags")
     def test_person_condition_reads_person_properties_with_group_key(self, patch_flags):
         for plan, expected in (("pro", True), ("free", False)):
