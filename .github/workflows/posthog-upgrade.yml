@@ -126,9 +126,10 @@ jobs:
 
           queue_status() {
               local pr="$1" status
+              # gh rejects --slurp together with --jq, so filter the slurped pages with jq.
               if status=$(gh api "repos/PostHog/posthog/issues/${pr}/comments?per_page=100" \
                   --paginate --slurp \
-                  --jq '[.[][] | select(.user.login == "trunk-io[bot]") | .body] | last // ""'); then
+                  | jq -r '[.[][] | select(.user.login == "trunk-io[bot]") | .body] | last // ""'); then
                   printf '%s' "$status" \
                       | grep -oE "Running tests on this pull request|waiting to start tests" | head -n 1 || true
               else
