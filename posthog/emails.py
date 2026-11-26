@@ -152,8 +152,11 @@ Check each result's ``status``:
 - ``failed``: PostHog refused it, and ``error`` says why, such as a suppressed
   address.
 - ``unconfirmed``: the client can't tell whether PostHog accepted it, such as
-  after a lost answer. Send it again with the same key within 24 hours of the
-  first request that used it, so it goes out once.
+  after a lost answer or a 409 other than ``batch_unavailable``. Send it again
+  with the same key within 24 hours of the first request that used it, so it
+  goes out once. After a lost answer, a later refusal of the whole request
+  leaves every recipient ``unconfirmed`` too, and its error says some emails
+  may still go out.
 
 More than 100 recipients raises ``ValueError`` before anything is sent. A request
 that fails as a whole, such as a rate limit past its retries, raises
@@ -670,8 +673,9 @@ class BatchEmailResult:
         replayed: ``True`` when an earlier send with the same key had already
             queued the email, so no new email was sent.
         error: Why the email is not ``queued``. For an ``unconfirmed``
-            email, it is the last answer, and ``fix`` says to send it again
-            with the same key.
+            email, ``message`` says PostHog didn't confirm it and it may
+            still go out, ``code`` and ``status_code`` are the last answer's,
+            and ``fix`` says to send it again with the same key.
     """
 
     index: int
@@ -701,7 +705,10 @@ class EmailBatchError(EmailError):
 
     The fields describe that request's error. ``results`` holds every
     recipient, as ``failed``, or as ``unconfirmed`` when an attempt got no
-    answer and may have queued them.
+    answer and may have queued them, or PostHog answered 409 with a code other
+    than ``batch_unavailable``. Then ``message`` says some emails may still
+    go out, whatever PostHog answered last, and ``fix`` says to send each
+    recipient again with the same key and read each recipient's result.
 
     Attributes:
         results: One result per recipient, in the order of ``recipients``.
@@ -1835,14 +1842,13 @@ _BATCH_NOT_FOUND = {
 }
 
 
-def _batch_not_found(template_form: bool, maybe_queued: bool) -> dict[str, str]:
+def _batch_not_found(template_form: bool) -> dict[str, str]:
     cause, fix = _BATCH_NOT_FOUND[template_form]
-    outcome = (
-        ". An earlier attempt got no answer, so these emails may still go out."
-        if maybe_queued
-        else ", so PostHog sent no email of this request."
-    )
-    return {"code": "not_found", "detail": cause + outcome, "fix": fix}
+    return {
+        "code": "not_found",
+        "detail": cause + ", so PostHog sent no email of this request.",
+        "fix": fix,
+    }
 
 
 def _said(value: Any) -> Optional[str]:
@@ -1860,7 +1866,6 @@ def _batch_response_error(
     retry_after_header: Optional[str],
     recipient_count: int,
     template_form: bool,
-    maybe_queued: bool,
 ) -> EmailError:
     fields = {key: value for key, value in fields.items() if value is not None}
     code = _readable_code(fields)
@@ -1869,7 +1874,7 @@ def _batch_response_error(
         and code in (None, "not_found", "api_error")
         and not _text(fields.get("attr"))
     ):
-        fields = _batch_not_found(template_form, maybe_queued)
+        fields = _batch_not_found(template_form)
     if status == 413 and not _said(fields.get("fix")):
         fields = {
             **fields,
@@ -1915,13 +1920,19 @@ _SEND_AGAIN = (
 )
 
 
+_SEND_EACH_AGAIN = (
+    "Send each recipient again with the same idempotency_key within 24 hours of the "
+    "first request that used it, so each email goes out once, and read each "
+    "recipient's result."
+)
+
+
 def _unconfirmed(message_id: Optional[str], cause: EmailError) -> EmailError:
     return EmailError(
         name=cause.name,
         code=cause.code,
-        message=cause.message,
+        message="PostHog didn't confirm this email, so it may still go out.",
         status_code=cause.status_code,
-        why=cause.why,
         fix=_SEND_AGAIN,
         docs_url=cause.docs_url,
         field=cause.field,
@@ -1978,14 +1989,11 @@ class _BatchRun:
                 retry_after_header,
                 len(self.members),
                 self.template_form,
-                self.maybe_queued,
             )
-            unreadable_conflict = status == 409 and not _readable_code(fields)
-            if (
-                status >= 500
-                or _held_by_another_request(failure)
-                or unreadable_conflict
-            ):
+            unsettled_conflict = (
+                status == 409 and _readable_code(fields) != "batch_unavailable"
+            )
+            if status >= 500 or unsettled_conflict:
                 self.lost()
             raise failure
         slots = fields.get("results")
@@ -2035,6 +2043,17 @@ class _BatchRun:
             results = tuple(
                 self._result(member, "unconfirmed", error=_unconfirmed(None, error))
                 for member in self.members
+            )
+            error = EmailError(
+                name=error.name,
+                code=error.code,
+                message="PostHog didn't confirm this batch, so some of its emails "
+                "may still go out.",
+                status_code=error.status_code,
+                fix=_SEND_EACH_AGAIN,
+                docs_url=error.docs_url,
+                field=error.field,
+                retry_after=error.retry_after,
             )
         else:
             results = tuple(

@@ -732,7 +732,7 @@ def test_a_batch_that_succeeds_reads_no_unconfirmed_email_back():
 def test_an_unconfirmed_recipient_holds_the_last_answer():
     emails, posthog = emails_on(
         [
-            (503, {"code": "delivery_unavailable", "detail": "First."}, {}),
+            (503, {"code": "service_unavailable", "detail": "First."}, {}),
             whole_call(409, "idempotency_key_in_flight"),
             (503, {"code": "delivery_unavailable", "detail": "Last."}, {}),
         ]
@@ -746,7 +746,7 @@ def test_an_unconfirmed_recipient_holds_the_last_answer():
     assert result.error is not None
     assert (result.error.code, result.error.message) == (
         "delivery_unavailable",
-        "Last.",
+        UNCONFIRMED,
     )
     assert result.error.fix is not None and "same idempotency_key" in result.error.fix
     assert len(posthog.requests) == 3
@@ -994,6 +994,145 @@ def test_a_404_after_a_lost_answer_leaves_every_recipient_unconfirmed(form, lost
         assert result.error is not None
         assert result.error.fix == SEND_AGAIN
         assert "sent no email" not in result.error.message
+
+
+UNCONFIRMED = "PostHog didn't confirm this email, so it may still go out."
+BATCH_UNCONFIRMED = (
+    "PostHog didn't confirm this batch, so some of its emails may still go out."
+)
+SEND_EACH_AGAIN = (
+    "Send each recipient again with the same idempotency_key within 24 hours of the "
+    "first request that used it, so each email goes out once, and read each "
+    "recipient's result."
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"code": "conflict", "detail": "Conflict."},
+        {"code": "api_error", "detail": "Something went wrong."},
+        {
+            "code": "idempotency_key_reused",
+            "detail": "This key was used for another email.",
+        },
+    ],
+    ids=["conflict", "api_error", "key_reused"],
+)
+def test_a_409_with_a_code_other_than_batch_unavailable_leaves_the_batch_unconfirmed(
+    body,
+):
+    emails, _ = emails_on([(409, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    error = raised.value
+    assert (error.status_code, error.code) == (409, body["code"])
+    assert error.fix == SEND_EACH_AGAIN
+    assert [(r.status, r.idempotency_key) for r in error.results] == [
+        ("unconfirmed", "key-0"),
+        ("unconfirmed", "key-1"),
+    ]
+    assert all(r.error is not None and r.error.fix == SEND_AGAIN for r in error.results)
+
+
+@pytest.mark.parametrize(
+    "status, body",
+    [
+        (
+            400,
+            {
+                "code": "content_too_large",
+                "detail": "The template_data is too large, so PostHog didn't send it.",
+            },
+        ),
+        (404, {"code": "not_found", "detail": "Not found."}),
+        (
+            409,
+            {
+                "code": "batch_unavailable",
+                "detail": "Batch sends aren't on, so nothing was sent.",
+            },
+        ),
+        (
+            413,
+            {
+                "code": "content_too_large",
+                "detail": "The batch is larger than PostHog can send at once, so PostHog didn't send it.",
+                "fix": "Split the recipients into smaller batches.",
+            },
+        ),
+    ],
+    ids=["400", "404", "409_batch_unavailable", "413"],
+)
+def test_a_refused_retry_after_a_lost_answer_never_says_nothing_was_sent(status, body):
+    emails, posthog = emails_on([requests.ConnectionError("reset"), (status, body, {})])
+
+    with pytest.raises(EmailBatchError) as raised:
+        batch(emails, recipients(2))
+
+    error = raised.value
+    assert len(posthog.requests) == 2
+    assert (error.status_code, error.code) == (status, body["code"])
+    assert error.message == BATCH_UNCONFIRMED
+    assert error.fix == SEND_EACH_AGAIN
+    said = " ".join(filter(None, [error.message, error.why, error.fix])).lower()
+    assert "split" not in said and "didn't send" not in said and "nothing" not in said
+    assert [(r.status, r.idempotency_key) for r in error.results] == [
+        ("unconfirmed", "key-0"),
+        ("unconfirmed", "key-1"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "answers",
+    [
+        pytest.param([requests.ConnectionError("reset")] * 4, id="network"),
+        pytest.param(
+            [(503, {"code": "delivery_unavailable", "detail": "Delivery failed."}, {})]
+            * 4,
+            id="503",
+        ),
+        pytest.param(
+            [ok(refused("m0", "idempotency_key_in_flight", status=409), queued("m1"))],
+            id="in_flight_slot",
+        ),
+        pytest.param(
+            [ok({"message_id": "m0", "error": {"code": "api_error"}}, queued("m1"))],
+            id="api_error_slot_without_detail",
+        ),
+        pytest.param(
+            [
+                requests.ConnectionError("reset"),
+                ok(refused("m0", "invalid_recipient"), queued("m1")),
+            ],
+            id="refused_slot_after_a_lost_answer",
+        ),
+    ],
+)
+def test_an_unconfirmed_recipient_is_never_told_its_email_was_not_sent(answers):
+    emails, _ = emails_on(answers)
+
+    try:
+        results = batch(emails, recipients(2)).results
+    except EmailBatchError as raised:
+        results = raised.results
+
+    unconfirmed = [r for r in results if r.status == "unconfirmed"]
+    assert unconfirmed
+    for result in unconfirmed:
+        assert result.error is not None
+        assert result.error.message == UNCONFIRMED
+        said = " ".join(filter(None, [result.error.message, result.error.why])).lower()
+        for words in (
+            "not queued",
+            "didn't queue",
+            "not sent",
+            "didn't send",
+            "failed",
+        ):
+            assert words not in said
 
 
 def test_a_404_that_names_a_field_keeps_what_posthog_said():
