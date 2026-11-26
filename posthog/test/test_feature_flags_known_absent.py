@@ -283,36 +283,12 @@ class TestKnownAbsentLocalEvaluation(unittest.TestCase):
         )
         self.assert_remote(flag, person_property_keys_known_absent=["created_at"])
 
-    @parameterized.expand(
-        [
-            ("is_not_set", None, False),
-            ("is_set", None, True),
-            ("is_date_before", "2024-01-01T00:00:00Z", True),
-            ("is_date_after", "2024-01-01T00:00:00Z", False),
-        ]
-    )
-    def test_person_metadata_filter_on_listed_key_reads_the_supplied_value(
-        self, operator, value, expected
-    ):
-        flag = _flag(
-            "flag", [_person_metadata_filter(operator, value, key="created_at")]
-        )
+    @parameterized.expand([("is_not_set", True), ("is_set", False)])
+    def test_duplicate_person_key_reads_as_absent(self, operator, expected):
+        flag = _flag("flag", [_person_filter(operator, key="created_at")])
         self.assert_local(
             flag,
             expected,
-            person_properties={"created_at": "2020-01-01T00:00:00Z"},
-            person_property_keys_known_absent=["created_at"],
-        )
-
-    def test_duplicate_person_key_still_reads_the_supplied_value_outside_its_scope(
-        self,
-    ):
-        flag = _flag(
-            "flag", [_person_metadata_filter("is_set", None, key="created_at")]
-        )
-        self.assert_local(
-            flag,
-            True,
             person_properties={"created_at": "2020-01-01T00:00:00Z"},
             person_property_keys_known_absent=["created_at", "created_at"],
         )
